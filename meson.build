@@ -59,6 +59,8 @@ reac_pw_src = [
   'src/reac_ring.c',
   'src/reac_rx.c',
   'src/reac_tx.c',
+  'src/reac_ctrl.c',
+  'src/reac_fsm.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
 ]
@@ -84,3 +86,17 @@ tx_test = executable('test_reac_tx',
   include_directories : [reac_aes67_inc, include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
+
+# --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
+ctrl_test = executable('test_reac_ctrl',
+  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_ctrl', ctrl_test)
+
+# --- unit test: the JOIN/HOLD connection FSM (pure state machine) -------------
+fsm_test = executable('test_reac_fsm',
+  ['tests/test_reac_fsm.c', 'src/reac_fsm.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_fsm', fsm_test)
