@@ -58,6 +58,7 @@ reac_pw_src = [
   'src/main.c',
   'src/reac_ring.c',
   'src/reac_rx.c',
+  'src/reac_tx.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
 ]
@@ -73,3 +74,13 @@ ring_test = executable('test_reac_ring',
   ['tests/test_reac_ring.c', 'src/reac_ring.c'],
   dependencies : [threads_dep])
 test('reac_ring', ring_test)
+
+# --- unit test: TX encoder round-trips through the reac-aes67 decode core -----
+# No PipeWire, no socket — pure encode->decode bit-compare. Compiles reac_tx.c +
+# reac_decode.c with both include trees (<reac/reac.h> from libreac_dep, the
+# reac_decode/reac_mode headers from reac_aes67_inc).
+tx_test = executable('test_reac_tx',
+  ['tests/test_reac_tx.c', 'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
+  include_directories : [reac_aes67_inc, include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_tx', tx_test)
