@@ -110,3 +110,14 @@ uint32_t reac_ring_read_planar(struct reac_ring *r, float *const *dst,
 		atomic_fetch_add_explicit(&r->underruns, n - real, memory_order_relaxed);
 	return real;
 }
+
+uint32_t reac_ring_trim(struct reac_ring *r, uint32_t keep)
+{
+	uint32_t avail = reac_ring_readable(r);
+	if (avail <= keep)
+		return 0;
+	uint32_t drop = avail - keep;
+	uint32_t t = atomic_load_explicit(&r->tail, memory_order_relaxed);
+	atomic_store_explicit(&r->tail, (t + drop) & r->mask, memory_order_release);
+	return drop;
+}
