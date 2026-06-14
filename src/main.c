@@ -42,7 +42,7 @@ static void usage(const char *p)
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
-	  "  --tx IFNAME   scaffold the (inert) reac:playback sink on this NIC\n", p);
+	  "  --tx IFNAME   register the reac:playback sink (encodes + emits REAC 0x8819) on this NIC\n", p);
 }
 
 int main(int argc, char **argv)
@@ -100,7 +100,10 @@ int main(int argc, char **argv)
 		struct reac_sink_cfg scfg = { .ifname = tx_if, .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = roland_oui_mac, .master_mac = NULL };
-		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* inert skeleton */
+		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
+		if (!sink)
+			fprintf(stderr, "reac-pw: reac:playback sink not created "
+			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
 	}
 
 	if (reac_rx_start(&rx) != 0) {
