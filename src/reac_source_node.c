@@ -66,6 +66,14 @@ static void on_process(void *data, struct spa_io_position *position)
 	if (got_ports == 0)
 		return; /* nothing linked — leave the ring untouched for a real consumer */
 
+	/* Bound latency + keep audio fresh: if the producer over-filled (it paces to
+	 * the wire and can outrun a just-started/quantum-bursty consumer), drop the
+	 * oldest excess down to a few quanta. Without this the ring pegs full and the
+	 * producer's drop-newest chops the stream once per cycle (a quantum-rate buzz).
+	 * SPSC-safe — the consumer owns tail. The clock loop handles fine drift; this
+	 * only catches gross over-fill. */
+	reac_ring_trim(n->ring, nframes * 4);
+
 	reac_ring_read_planar(n->ring, dst, n->channels, nframes);
 
 	/* FOLLOWER drift correction (Tier-A clock bridge). io_rate_match.rate is the

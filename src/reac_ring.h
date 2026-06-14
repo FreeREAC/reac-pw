@@ -58,4 +58,12 @@ uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n);
  * real audio (n - shortfall). REALTIME-SAFE: no locks, no syscalls. */
 uint32_t reac_ring_read_planar(struct reac_ring *r, float *const *dst, uint32_t channels, uint32_t n);
 
+/* CONSUMER-side latency trim. Drop the OLDEST samples so at most `keep`
+ * per-channel remain. SPSC-safe — only the consumer moves `tail`. Call from
+ * process() BEFORE reading: when the producer over-fills (the ring would
+ * otherwise peg full and the producer's drop-newest would chop the stream every
+ * cycle), this bounds buffer latency and keeps the data fresh. Returns frames
+ * dropped. REALTIME-SAFE. */
+uint32_t reac_ring_trim(struct reac_ring *r, uint32_t keep);
+
 #endif /* REAC_RING_H */

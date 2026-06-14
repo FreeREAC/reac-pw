@@ -113,8 +113,14 @@ static void *rx_loop(void *arg)
 			n = reac_capture_next(&cap, frame, sizeof frame);
 		} else {
 			n = pcap_source_next(&ps, frame, sizeof frame, &pcap_ts);
-			if (n == 0) /* EOF: loop the fixture for a steady offline source */
-				{ pcap_source_close(&ps); pcap_source_open(&ps, rx->cfg.source); have_counter = 0; continue; }
+			if (n == 0) { /* EOF: loop the fixture for a steady offline source.
+			               * Reset the pacing baseline (wall_first_ns) so the new
+			               * loop re-paces from its first timestamp — otherwise
+			               * every loop after the first replays FLAT OUT (targets
+			               * land in the past), flooding the ring. */
+				pcap_source_close(&ps); pcap_source_open(&ps, rx->cfg.source);
+				have_counter = 0; wall_first_ns = 0; continue;
+			}
 		}
 		if (n <= 0)
 			continue;
