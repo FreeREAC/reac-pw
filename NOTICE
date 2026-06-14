@@ -1,0 +1,27 @@
+reac-pw
+Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+
+Licensed under GPL-3.0-or-later (see LICENSE).
+
+A PipeWire-native Roland REAC endpoint: a libpipewire-0.3 client that puts a REAC
+fabric into the PipeWire graph as nodes. An original implementation of public,
+reverse-engineered protocol facts (see the FreeREAC reac-protocol reference); no
+third-party code is embedded directly in this repository.
+
+It builds against and reuses these FreeREAC components:
+
+  - libreac (https://github.com/FreeREAC/libreac) — RX/measure core, header
+    <reac/reac.h>. Pulled as a meson subproject. GPL-3.0-or-later.
+
+  - reac-aes67 (https://github.com/FreeREAC/reac-aes67) — the plain-LE decode
+    core (src/reac_decode.c), AF_PACKET capture (src/reac_capture.c) and pcap
+    reader (src/pcap_source.c), compiled in from a sibling checkout.
+    GPL-3.0-or-later.
+
+reac-aes67's decode core carries portions derived from obs-h8819-source,
+Copyright (C) 2022 Norihiro Kamae <norihiro@nagater.net> (GPL-3.0-or-later); REAC
+wire framing per github.com/per-gron/reacdriver (GPL-3.0). Those attributions
+travel with that source.
+
+REAC is a Roland trademark; FreeREAC is not affiliated with or endorsed by
+Roland.
