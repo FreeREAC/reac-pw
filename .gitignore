@@ -12,3 +12,6 @@
 *.o
 *.a
 *.swp
+
+# rpm build artifact
+reac-pw-*.tar.gz

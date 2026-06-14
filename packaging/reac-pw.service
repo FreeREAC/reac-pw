@@ -1,0 +1,23 @@
+[Unit]
+Description=PipeWire-native REAC endpoint (reac-pw)
+Documentation=https://github.com/FreeREAC/reac-aes67
+After=pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+# Edit /etc/reac-pw/reac-pw.conf to set REAC_IFACE / REAC_RATE.
+EnvironmentFile=/etc/reac-pw/reac-pw.conf
+ExecStart=/usr/bin/reac-pw --live ${REAC_IFACE} --rate ${REAC_RATE}
+# raw 0x8819 capture/emit without running as root
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+# run in the operator's PipeWire session bus
+Restart=on-failure
+RestartSec=2
+# realtime scheduling for the audio path (MiniPC PREEMPT_RT)
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=default.target
