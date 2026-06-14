@@ -15,6 +15,11 @@ project('reac-pw', 'c',
 
 cc = meson.get_compiler('c')
 
+# SPA's inline string.h uses newlocale()/uselocale()/locale_t (LC_ALL_MASK),
+# which are GNU/XPG extensions — define _GNU_SOURCE project-wide so every TU that
+# includes a PipeWire/SPA header gets them (PipeWire itself builds this way).
+add_project_arguments('-D_GNU_SOURCE', language : 'c')
+
 # --- system deps: PipeWire + SPA (the only external libs) -------------------
 pipewire_dep = dependency('libpipewire-0.3', version : '>=0.3.65')
 spa_dep      = dependency('libspa-0.2')
