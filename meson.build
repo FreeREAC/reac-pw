@@ -32,8 +32,12 @@ m_dep        = cc.find_library('m', required : false)
 # exposes `libreac_dep` (see subprojects/packagefiles/libreac/meson.build, which
 # the wrap drops in via patch_directory since upstream libreac ships only a
 # hand Makefile). The header is <reac/reac.h>.
-libreac_proj = subproject('libreac')
-libreac_dep  = libreac_proj.get_variable('libreac_dep')
+# Prefer the system libreac (Fedora libreac-devel -> found via pkg-config and
+# linked dynamically). Fall back to the bundled subproject where there is no
+# system lib (OpenWrt SDK / a plain dev checkout).
+libreac_dep = dependency('libreac',
+  fallback : ['libreac', 'libreac_dep'],
+  required : true)
 
 # --- reac-aes67 decode/capture/pcap core: reuse the sibling checkout ---------
 # These three files are dependency-free and already proven on-rig (plain-LE

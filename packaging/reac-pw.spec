@@ -15,6 +15,7 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
+BuildRequires:  pkgconfig(libreac)
 BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 
