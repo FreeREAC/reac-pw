@@ -7,10 +7,12 @@
  * audio and is checksum-exempt), a zero 32-byte control block, 1440 B audio
  * (40 ch x 12 samples x 3 B, plain-LE sample-major (s*40+ch)*3), 0xC2 0xEA tail.
  *
- * First cut for the loopback demo (Rhythmbox -> reac:playback -> wire ->
- * reac:capture). Emits a downstream master broadcast; it does NOT yet drive the
- * connection handshake, so a real Roland desk will not link to it — that is the
- * separate JOIN/HOLD + master-role work. */
+ * This is the ENCODER only (reac_tx_build) + a standalone direct emitter
+ * (reac_tx_emit). It writes a zero control block (FILLER): audio, no link grant.
+ * The master JOIN/HOLD handshake that makes a real Roland desk link lives in
+ * reac_master (it stamps the cdea/cfea control block over a frame built here);
+ * the SCHED_FIFO cadence pacer that clocks the wire lives in reac_pacer. The
+ * sink node (reac_sink_node) uses reac_tx_build + the pacer, not reac_tx_emit. */
 #ifndef REAC_TX_H
 #define REAC_TX_H
 

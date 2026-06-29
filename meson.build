@@ -65,6 +65,8 @@ reac_pw_src = [
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
+  'src/reac_master.c',
+  'src/reac_pacer.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
 ]
@@ -104,3 +106,24 @@ fsm_test = executable('test_reac_fsm',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_fsm', fsm_test)
+
+# --- unit test: the MASTER-role handshake (cdea/cfea bytes vs the captures) ----
+# Asserts the established channel-map / cfea announce / probe / grant blocks the
+# master stamps match the captured M-5000 bytes + satisfy the checksum, the chan-
+# map cursor walks the full 40-ch map, and the FSM sequences IDLE->...->ESTABLISHED.
+master_test = executable('test_reac_master',
+  ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
+   'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
+  include_directories : [reac_aes67_inc, include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_master', master_test)
+
+# --- unit test: the SCHED_FIFO cadence pacer (ring + interval) -----------------
+# No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
+# per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
+pacer_test = executable('test_reac_pacer',
+  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_master.c',
+   'src/reac_ctrl.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_pacer', pacer_test)
