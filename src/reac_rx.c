@@ -41,7 +41,14 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		atomic_fetch_add_explicit(&rx->frames_bad, 1, memory_order_relaxed);
 		return;
 	}
-	const int nch = mode->n_channels;
+	/* Bound ns/nch to the stack-buffer sizes before the conversion loop: a decoder
+	 * returning ns > 12 or nch > 40 would overrun s24[]/planar[]. This is the
+	 * producer thread, so the branch cost is irrelevant. */
+	if (ns > REAC_SAMPLES_PER_PKT)
+		ns = REAC_SAMPLES_PER_PKT;
+	int nch = mode->n_channels;
+	if (nch > REAC_MAX_CHANNELS)
+		nch = REAC_MAX_CHANNELS;
 	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT];
 	for (int ch = 0; ch < nch; ch++)
 		for (int s = 0; s < ns; s++)
