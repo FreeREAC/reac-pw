@@ -67,6 +67,7 @@ reac_pw_src = [
   'src/reac_fsm.c',
   'src/reac_master.c',
   'src/reac_pacer.c',
+  'src/reac_slave.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
 ]
@@ -127,3 +128,27 @@ pacer_test = executable('test_reac_pacer',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
+
+# --- unit test: the SLAVE-role establishment decision core (pure, no socket) ----
+# Drives the slave decision core (reac_slave_step_* over the reac_fsm brain) through
+# the gold §13d slave sequence: PHY-up -> flood presence -> RX the master's
+# probe/grant -> TX-mute dwell -> ESTABLISHED unicast upstream + heartbeat -> HOLD
+# re-arm on master heartbeat -> peer-gone drop. The master frames are synthesized
+# the way reac_ctrl_parse would yield them from a real master broadcast (the same
+# byte layout as the captured M-5000 in reac-captures), so the establishment is
+# exercised correct-by-construction against the capture-derived control kinds.
+slave_test = executable('test_reac_slave',
+  ['tests/test_reac_slave.c', 'src/reac_slave.c', 'src/reac_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_ring.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_slave', slave_test)
+
+# --- unit test: --role selection parsing (master default, slave needs --tx) -----
+# Compiles a tiny harness that exercises the same role-parse + validation logic
+# main.c uses, with no PipeWire / socket. Asserts: default is master; --role slave
+# is parsed; --role slave without --tx is rejected; an unknown role is rejected.
+role_test = executable('test_reac_role',
+  ['tests/test_reac_role.c'],
+  include_directories : [include_directories('src')])
+test('reac_role', role_test)
