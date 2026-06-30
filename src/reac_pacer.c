@@ -15,6 +15,7 @@
 #include <sched.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -150,6 +151,13 @@ static void *pacer_loop(void *arg)
 		fprintf(stderr, "reac_pacer: SCHED_FIFO denied (need CAP_SYS_NICE / rtprio); "
 		                "running SCHED_OTHER — cadence may jitter\n");
 
+	/* Block all signals on this thread. SIGINT/SIGTERM are serviced by the pw/main
+	 * loop, not here; a signal delivered to this thread would only cut the slot
+	 * sleep short (EINTR) and emit a frame ahead of cadence. */
+	sigset_t allsig;
+	sigfillset(&allsig);
+	pthread_sigmask(SIG_BLOCK, &allsig, NULL);
+
 	uint8_t frame[REAC_FRAME_BYTES];
 	uint8_t popbuf[2048];
 
@@ -165,7 +173,12 @@ static void *pacer_loop(void *arg)
 
 	while (atomic_load_explicit(&p->running, memory_order_acquire)) {
 		struct timespec d = { deadline / 1000000000ull, deadline % 1000000000ull };
-		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL);
+		/* Re-arm the SAME absolute deadline if interrupted (belt-and-braces: we
+		 * also block all signals above). An EINTR return means the slot sleep was
+		 * cut short — sleeping again to the same absolute target keeps cadence;
+		 * just emitting would put a frame ahead of the beat. */
+		while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL) == EINTR)
+			;
 
 		/* Apply a pending box-present change on THIS thread (the FSM owner) so we
 		 * never mutate struct reac_master from the submit side. */
