@@ -48,15 +48,37 @@ int main(void)
 	}
 	assert(atomic_load(&r.underruns) == 6);
 
-	/* overrun: fill the ring past capacity, oldest dropped, newest kept */
+	/* over-capacity write: request 200 into an empty 128-slot ring. The write
+	 * count is bounded to writable (mask == 127) and the remainder is dropped as
+	 * overrun, but the SOURCE stride stays 200 — so channel c is read from
+	 * big[c*200 + s], NOT from a clamped stride. Distinct per-channel marker
+	 * (c*1000 + s) catches the old clamp bug, which would have made channels c>0
+	 * read each other's samples. */
 	float big[CH * 200];
 	for (int c = 0; c < CH; c++)
 		for (int s = 0; s < 200; s++)
-			big[c * 200 + s] = (float)s;
-	/* a single write clamps to mask (127): request 200, write 127 (ring is empty
-	 * here so this exercises the per-write clamp, not the overrun-drop path) */
+			big[c * 200 + s] = (float)(c * 1000 + s);
+	uint64_t ovbig = atomic_load(&r.overruns);
 	uint32_t w = reac_ring_write(&r, big, 200);
-	assert(w == r.mask);                /* clamped to one ring's worth */
+	assert(w == r.mask);                /* wrote one ring's worth (127) */
+	assert(reac_ring_readable(&r) == r.mask);
+	assert(atomic_load(&r.overruns) == ovbig + (200 - r.mask)); /* 73 dropped */
+	/* read it all back and verify NO cross-channel corruption: channel c must hold
+	 * big[c*200 + s] for s in [0,127). */
+	float v0[128], v1[128], v2[128], v3[128];
+	float *vdst[CH] = { v0, v1, v2, v3 };
+	uint32_t vg = reac_ring_read_planar(&r, vdst, CH, r.mask);
+	assert(vg == r.mask);
+	for (int c = 0; c < CH; c++)
+		for (uint32_t s = 0; s < r.mask; s++)
+			assert(fabsf(vdst[c][s] - (float)(c * 1000 + (int)s)) < 1e-6f);
+
+	/* refill to full to exercise the transient drop-newest overrun path below */
+	for (int c = 0; c < CH; c++)
+		for (int s = 0; s < 200; s++)
+			big[c * 200 + s] = (float)s;
+	w = reac_ring_write(&r, big, 200);
+	assert(w == r.mask);                /* fills the empty ring back to full */
 	assert(reac_ring_readable(&r) == r.mask);
 
 	/* real overrun: ring is now full (readable == mask, writable == 0). A further
