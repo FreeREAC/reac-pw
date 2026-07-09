@@ -41,7 +41,14 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		atomic_fetch_add_explicit(&rx->frames_bad, 1, memory_order_relaxed);
 		return;
 	}
-	const int nch = mode->n_channels;
+	/* Bound ns/nch to the stack-buffer sizes before the conversion loop: a decoder
+	 * returning ns > 12 or nch > 40 would overrun s24[]/planar[]. This is the
+	 * producer thread, so the branch cost is irrelevant. */
+	if (ns > REAC_SAMPLES_PER_PKT)
+		ns = REAC_SAMPLES_PER_PKT;
+	int nch = mode->n_channels;
+	if (nch > REAC_MAX_CHANNELS)
+		nch = REAC_MAX_CHANNELS;
 	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT];
 	for (int ch = 0; ch < nch; ch++)
 		for (int s = 0; s < ns; s++)
@@ -57,27 +64,22 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
  * Tier-A loop). */
 static void update_ppm(struct reac_rx *rx, uint16_t counter, uint64_t now_ns)
 {
-	static uint64_t win_start_ns;
-	static uint32_t win_frames;
-	static uint16_t last_counter;
-	static int have_last;
-
-	if (have_last) {
-		win_frames += reac_counter_gap(last_counter, counter) + 1;
+	if (rx->ppm_have_last) {
+		rx->ppm_win_frames += reac_counter_gap(rx->ppm_last_counter, counter) + 1;
 	} else {
-		win_start_ns = now_ns;
-		have_last = 1;
+		rx->ppm_win_start_ns = now_ns;
+		rx->ppm_have_last = 1;
 	}
-	last_counter = counter;
+	rx->ppm_last_counter = counter;
 
-	uint64_t dt = now_ns - win_start_ns;
+	uint64_t dt = now_ns - rx->ppm_win_start_ns;
 	if (dt >= 250000000ull) { /* recompute ~4x/s */
-		double obs_pps = (double)win_frames * 1e9 / (double)dt;
+		double obs_pps = (double)rx->ppm_win_frames * 1e9 / (double)dt;
 		double nom_pps = (double)rx->sample_rate / REAC_SAMPLES_PER_PKT;
 		double ppm = (obs_pps - nom_pps) / nom_pps * 1e6;
 		atomic_store_explicit(&rx->ppm_error_milli, (int)(ppm * 1000.0), memory_order_relaxed);
-		win_start_ns = now_ns;
-		win_frames = 0;
+		rx->ppm_win_start_ns = now_ns;
+		rx->ppm_win_frames = 0;
 	}
 }
 
@@ -119,7 +121,11 @@ static void *rx_loop(void *arg)
 			               * every loop after the first replays FLAT OUT (targets
 			               * land in the past), flooding the ring. */
 				pcap_source_close(&ps); pcap_source_open(&ps, rx->cfg.source);
-				have_counter = 0; wall_first_ns = 0; continue;
+				have_counter = 0; wall_first_ns = 0;
+				rx->ppm_have_last = 0; rx->ppm_win_frames = 0; /* drop the stale ppm
+				               * window so the next loop doesn't spike one bogus ppm
+				               * off a counter discontinuity across the seam */
+				continue;
 			}
 		}
 		if (n <= 0)

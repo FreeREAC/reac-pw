@@ -51,9 +51,15 @@ uint32_t reac_ring_writable(const struct reac_ring *r)
 
 uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n)
 {
-	if (n > r->mask)
-		n = r->mask; /* a single frame can't exceed the ring */
-	const uint32_t stride = n; /* per-channel stride in `planar` (never shrinks) */
+	/* `n` is BOTH the count to write AND the per-channel stride of the source:
+	 * planar[c*n + s]. The two must never diverge — clamping `n` to fit the ring
+	 * would shrink the stride too and make every channel c>0 read the wrong source
+	 * samples (silent cross-channel corruption). So keep the real stride and let
+	 * the overrun path below bound how many we actually write. A single write of
+	 * n > capacity can't fully fit; that's an overrun, handled like a transient
+	 * full ring (short write, drop the newest remainder). Callers are expected to
+	 * keep n <= ring capacity (the REAC quantum is 12). */
+	const uint32_t stride = n;
 
 	uint32_t free_slots = reac_ring_writable(r);
 	uint32_t w = n;
