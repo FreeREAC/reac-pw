@@ -39,15 +39,21 @@ is read from a sibling checkout (`../reac-aes67-pub` by default — override wit
 ```
 meson setup   build
 meson compile -C build
-meson test    -C build                              # ring unit test, no PipeWire needed
+meson test    -C build                              # unit tests, no PipeWire needed
 ./build/reac-pw --pcap capture.pcap --rate 48000    # offline replay
-sudo ./build/reac-pw --live reac0                   # live wire (needs CAP_NET_RAW)
+sudo ./build/reac-pw --live reac0 --tx reac0        # MASTER (default): a box slaves to us
+sudo ./build/reac-pw --live reac0 --role slave --tx reac0   # SLAVE: we slave to a desk
 ```
 
-`--rate` forces 44100/48000/96000; omit it to auto-detect from packet cadence on
-a live wire. `--tx IFNAME` registers the `reac:playback` master sink, which emits
-REAC `0x8819` downstream on that NIC (needs `CAP_NET_RAW`; `CAP_SYS_NICE` lets the
-pacer take SCHED_FIFO).
+REAC has no fixed master — any box can be the master. `--role master` (default)
+makes openmixer the master (we drive the cdea/cfea handshake + own the clock; a
+stagebox slaves to us). `--role slave` makes us a box slaved to an external master
+(it drives the handshake + owns the clock; we lock to its cadence and return our
+inputs upstream). `--rate` forces 44100/48000/96000; omit it to auto-detect from
+packet cadence on a live wire. `--tx IFNAME` is the REAC TX NIC (the master's
+downstream sink, or the slave's upstream-return + handshake socket; needs
+`CAP_NET_RAW`, plus `CAP_SYS_NICE` for the master pacer's SCHED_FIFO). The slave
+role requires `--tx`.
 
 ## Node model
 
@@ -95,8 +101,15 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   on the bench; built correct-by-construction against the captures. The
   hardware-verify gate (does `RCQ` go `establishing`→`established`, does audio
   reach the box) is in [DESIGN.md](DESIGN.md).
-- **Virtual-stagebox slave half** (`reac_ctrl`/`reac_fsm`) — the inverse role
-  (respond to a real master); offline-tested, JOIN behind a rig-capture gate.
+- **SLAVE role** (`--role slave`, `reac_slave` over `reac_ctrl`/`reac_fsm`) —
+  implemented: we respond to an external master, lock to its cadence (the master
+  owns the clock — no own pacer), RX its audio via `reac:capture`, and return our
+  input channels upstream at the box's slots. The establishment + HOLD FSM is
+  offline-tested from the captured master control kinds (`test_reac_slave`); the
+  JOIN cold-connect bytes + a real link both ways are behind the slave hardware-
+  verify gate in [DESIGN.md](DESIGN.md).
+- **Role selection** (`--role master|slave`, `reac_role.h`) — default master
+  preserves the original behaviour; parse + validation unit-tested.
 
 Target: Fedora + PipeWire 1.4.
 
