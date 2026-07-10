@@ -166,6 +166,20 @@ slave_test = executable('test_reac_slave',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
 
+# --- unit test: the full offline COURTSHIP (our master <-> our slave) ----------
+# Both establishment cores are pure, so the whole M-5000 <-> S-1608 sequence runs
+# as a frame-by-frame simulation with no socket: master emissions (next+stamp on
+# reac_tx_build FILLERs) feed reac_slave_step_rx; slave emissions (the reac_ctrl
+# builders) feed reac_ctrl_classify_box_frame + reac_master_rx. Pins the golden
+# ordering (probe -> box JOIN -> echoed grant -> box unicast -> both ESTABLISHED
+# -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
+courtship_test = executable('test_reac_courtship',
+  ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_slave.c',
+   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_courtship', courtship_test)
+
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
 # main.c uses, with no PipeWire / socket. Asserts: default is master; --role slave
