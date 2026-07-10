@@ -63,15 +63,20 @@ int main(void)
 	CHK(s.fsm.state == FSM_PHY_DOWN);
 	CHK(!atomic_load(&s.established));
 
-	/* §13d step 1: PHY up -> begin the presence-flood. */
+	/* §13d step 1 / §13p.3: PHY up -> begin the presence-flood, WITH the
+	 * cold-connect burst riding alongside it (#130 fix 1: a real box announces
+	 * by flooding broadcast FILLER continuously; the burst is not a
+	 * replacement for the flood). */
 	d = reac_slave_step_phy(&s, 1);
 	CHK(d.state == FSM_FLOOD_ANNOUNCE);
 	CHK(d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER);   /* announce by flooding FILLER */
+	CHK(d.with_join);                              /* cold-connect burst 1/3 */
 
-	/* announcing ticks: we keep emitting the JOIN cold-connect burst (sub-cmd 04,
-	 * the §13b trigger) while unlinked. */
+	/* announcing ticks: we keep FLOODING (never cold-connect-only) while the
+	 * burst/retry-grid rides alongside. */
 	d = reac_slave_step_tick(&s);
-	CHK(d.emit == REAC_SLAVE_EMIT_JOIN);
+	CHK(d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER);
+	CHK(d.with_join);                              /* burst 2/3 */
 
 	/* §13d step 2: the master cycles cdea 01 sub-states (PROBE). We learn the master
 	 * from the L2 source and keep announcing (no grant yet -> stay flooding). */
@@ -79,13 +84,17 @@ int main(void)
 	d = reac_slave_step_rx(&s, &probe);
 	CHK(s.fsm.have_master && memcmp(s.fsm.master_mac, MASTER, 6) == 0);  /* learned */
 	CHK(d.state == FSM_FLOOD_ANNOUNCE);
-	CHK(d.emit == REAC_SLAVE_EMIT_JOIN);            /* still announcing, not linked */
+	CHK(d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER);    /* still flooding, not linked */
+	CHK(d.with_join);                               /* burst 3/3 */
 	CHK(!atomic_load(&s.established));
 
-	/* a master heartbeat/announce before the grant is also just "still negotiating". */
+	/* a master heartbeat/announce before the grant is also just "still negotiating".
+	 * The burst is spent (3/3 sent); we're in the retry-grid gap, still flooding. */
 	struct reac_ctrl_parsed ann = master_frame(REAC_CTRL_MASTER_ANNOUNCE, MASTER);
 	d = reac_slave_step_rx(&s, &ann);
 	CHK(d.state == FSM_FLOOD_ANNOUNCE);
+	CHK(d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER);
+	CHK(!d.with_join);
 
 	/* §13d step 3: the master GRANTS with a cdea 04 03 burst -> we accept + enter the
 	 * TX-mute settle window. §13d step 4: we STOP broadcasting (emit nothing). */
@@ -159,8 +168,51 @@ int main(void)
 	d = reac_slave_step_phy(&s, 0);
 	CHK(d.state == FSM_PHY_DOWN && d.emit == REAC_SLAVE_EMIT_NONE);
 
+	/* #130 fix 1 regression: `reac-pw --live IF --role slave --tx IF` used to emit
+	 * ONLY the unicast cold-connect at wire rate and NEVER the broadcast FILLER
+	 * presence-flood (the master never registers/displays the box without the
+	 * flood — §13p.3). Soak several retry cycles ungranted and assert (a) EVERY
+	 * tick floods (never cold-connect-only, never idle), and (b) the cold-connect
+	 * rides as bounded bursts of exactly REAC_FSM_JOIN_BURST_COUNT frames on a
+	 * fixed REAC_FSM_JOIN_RETRY_PERIOD-tick grid, NOT a continuous per-tick spam. */
+	{
+		reac_slave_fsm_init(&s, &cfg);
+
+		const int gap = REAC_FSM_JOIN_BURST_COUNT - 1 + REAC_FSM_JOIN_RETRY_PERIOD;
+		const int n_cycles = 3;              /* retries to observe beyond the initial burst */
+		const int soak_ticks = n_cycles * gap + REAC_FSM_JOIN_BURST_COUNT + 5;
+		int join_frames = 0, burst_starts = 0, run_len = 0, prev_with_join = 0;
+		int last_burst_start = -1;
+
+		for (int i = 0; i < soak_ticks; i++) {
+			d = (i == 0) ? reac_slave_step_phy(&s, 1) : reac_slave_step_tick(&s);
+			CHK(d.state == FSM_FLOOD_ANNOUNCE);
+			CHK(d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER);   /* ALWAYS flooding */
+			if (d.with_join) {
+				join_frames++;
+				run_len++;
+				if (!prev_with_join) {
+					burst_starts++;
+					if (last_burst_start >= 0)
+						CHK(i - last_burst_start == gap);  /* fixed retry grid */
+					last_burst_start = i;
+				}
+			} else {
+				if (prev_with_join)
+					CHK(run_len == REAC_FSM_JOIN_BURST_COUNT);  /* each burst is exactly N */
+				run_len = 0;
+			}
+			prev_with_join = d.with_join;
+		}
+		CHK(burst_starts == n_cycles + 1);       /* the initial burst + n_cycles retries */
+		/* the flood dominates: cold-connect frames are a small minority of ticks,
+		 * not a per-tick spam (the literal #130 bug). */
+		CHK(join_frames * 4 < soak_ticks);
+	}
+
 	printf("OK: slave establishment §13d (flood -> probe -> grant -> mute -> established "
 	       "unicast upstream + heartbeat) + HOLD (re-arm / peer-gone / mac-change / phy-down) "
-	       "locked to the master cadence\n");
+	       "locked to the master cadence; #130 fix 1: continuous flood + bounded "
+	       "cold-connect burst/retry-grid (never cold-connect-only)\n");
 	return 0;
 }

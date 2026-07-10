@@ -90,17 +90,24 @@ struct reac_slave {
  * frame-emission granularity the slave TX path needs. */
 enum reac_slave_emit {
 	REAC_SLAVE_EMIT_NONE = 0,       /* emit nothing (PHY down / idle / mute) */
-	REAC_SLAVE_EMIT_FLOOD_FILLER,   /* broadcast FILLER presence-flood (announcing) */
-	REAC_SLAVE_EMIT_JOIN,           /* cold-connect + config-announce JOIN burst   */
+	REAC_SLAVE_EMIT_FLOOD_FILLER,   /* broadcast FILLER presence-flood (announcing;
+	                                 * continuous — see with_join below) */
 	REAC_SLAVE_EMIT_UPSTREAM_AUDIO, /* established: unicast our input channels up   */
 	REAC_SLAVE_EMIT_HEARTBEAT,      /* established: the cdea 01 03 0001 81 keep-alive */
 };
 
-/* The decision a slave tick yields: an emit kind + (when EMIT_UPSTREAM_AUDIO) a
- * flag that a heartbeat must accompany this frame, and the resolved FSM state. */
+/* The decision a slave tick yields: an emit kind + a side flag that an EXTRA
+ * frame must accompany the primary emission, and the resolved FSM state.
+ * `with_join` (valid when emit == FLOOD_FILLER): also send the cold-connect
+ * JOIN burst frame this tick — a real box announces by flooding broadcast
+ * FILLER continuously (§13p.3) while a short cold-connect burst + ~100 ms
+ * retry grid rides alongside it (§13p.multi), never a cold-connect-only
+ * stream (#130 fix 1). `with_heartbeat` (valid when emit ==
+ * UPSTREAM_AUDIO): also emit a heartbeat alongside the audio. */
 struct reac_slave_decision {
 	enum reac_slave_emit emit;
 	int with_heartbeat;          /* 1 -> also emit a heartbeat alongside the audio */
+	int with_join;               /* 1 -> also emit the cold-connect burst this tick */
 	enum reac_fsm_state state;
 };
 
