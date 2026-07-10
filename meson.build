@@ -62,6 +62,7 @@ reac_pw_src = [
   'src/main.c',
   'src/reac_ring.c',
   'src/reac_rx.c',
+  'src/reac_upstream.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
@@ -93,6 +94,14 @@ tx_test = executable('test_reac_tx',
   include_directories : [reac_aes67_inc, include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
+
+# --- unit test: the UPSTREAM (stagebox->master) frame decode -------------------
+# Captured-frame fixtures (MAC-sanitized) + the resolved braid layout; no I/O.
+upstream_test = executable('test_reac_upstream',
+  ['tests/test_reac_upstream.c', 'src/reac_upstream.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_upstream', upstream_test)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
