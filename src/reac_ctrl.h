@@ -63,7 +63,7 @@ enum reac_ctrl_kind reac_ctrl_parse(const uint8_t *frame, size_t len,
 
 /* MASTER-side box-frame classifier (PURE — no socket): decide whether a raw
  * received frame is a box frame the master FSM cares about, and which
- * reac_master_rx_event it is. Returns 0 with *out/*ev filled, or -1 for
+ * reac_master_rx_event it is. Returns 0 with out + ev filled, or -1 for
  * anything else (not 0x8819 / not Roland OUI / our own echo / another
  * master's broadcast). Matcher rules (byte-verified zoneA-48k JOIN):
  *   - broadcast type-0000 -> BCAST_FILLER (the presence-flood; diagnostic);
