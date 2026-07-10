@@ -118,7 +118,7 @@ test('reac_rx_gate', rx_gate_test)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
-  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_upstream.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)
