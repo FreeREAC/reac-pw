@@ -180,14 +180,6 @@ static void *pacer_loop(void *arg)
 		while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL) == EINTR)
 			;
 
-		/* Apply a pending box-present change on THIS thread (the FSM owner) so we
-		 * never mutate struct reac_master from the submit side. */
-		int want = atomic_load_explicit(&p->box_present_req, memory_order_acquire);
-		if (want != p->box_present_seen) {
-			reac_master_set_box_present(&p->master, want);
-			p->box_present_seen = want;
-		}
-
 		/* Pull the next encoded frame; on underrun emit a silent FILLER so the
 		 * slot — and the master sequence — never stalls. */
 		uint16_t n = reac_frame_ring_pop(&p->ring, popbuf);
@@ -205,7 +197,7 @@ static void *pacer_loop(void *arg)
 		enum reac_master_emit emit = reac_master_next(&p->master, &counter, &tmpl_idx);
 		frame[REAC_HDR_COUNTER_OFF]     = (uint8_t)(counter & 0xFF);
 		frame[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)((counter >> 8) & 0xFF);
-		reac_master_stamp(frame, emit, tmpl_idx);
+		reac_master_stamp(&p->master, frame, emit, tmpl_idx);
 
 		/* Non-blocking send (the socket carries SOCK_NONBLOCK). The pacer runs
 		 * SCHED_FIFO: a blocking sendto() on a backed-up NIC tx queue would stall
@@ -287,12 +279,6 @@ int reac_pacer_start(struct reac_pacer *p)
 int reac_pacer_submit(struct reac_pacer *p, const uint8_t *frame, uint16_t n)
 {
 	return reac_frame_ring_push(&p->ring, frame, n);
-}
-
-void reac_pacer_set_box_present(struct reac_pacer *p, int present)
-{
-	/* Stage it; the pacer thread (the FSM owner) applies it on its next tick. */
-	atomic_store_explicit(&p->box_present_req, present ? 1 : 0, memory_order_release);
 }
 
 void reac_pacer_stop(struct reac_pacer *p)

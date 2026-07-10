@@ -77,10 +77,6 @@ struct reac_pacer {
 	pthread_t thread;
 	_Atomic int running;
 	_Atomic int started;             /* thread reached its RT loop */
-	_Atomic int box_present_req;     /* set by submit-side; the pacer thread owns
-	                                  * the FSM, so it applies this each tick (no
-	                                  * cross-thread mutation of struct reac_master) */
-	int box_present_seen;            /* pacer-thread-local last-applied value */
 
 	/* diagnostics (read from any thread) */
 	_Atomic uint64_t tx_frames;
@@ -102,9 +98,6 @@ int  reac_pacer_start(struct reac_pacer *p);
 /* PRODUCER side (call from the graph thread): hand one encoded downstream frame
  * to the pacer. Returns 1 if queued, 0 if dropped (ring full). */
 int  reac_pacer_submit(struct reac_pacer *p, const uint8_t *frame, uint16_t n);
-
-/* Tell the master FSM a box is present (drives IDLE -> PROBING -> ... ). */
-void reac_pacer_set_box_present(struct reac_pacer *p, int present);
 
 void reac_pacer_stop(struct reac_pacer *p);
 void reac_pacer_close(struct reac_pacer *p);

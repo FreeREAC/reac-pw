@@ -182,11 +182,11 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	}
 
-	/* Start the SCHED_FIFO pacer thread and drive the master sequence. We assume
-	 * a box is present so the FSM walks IDLE -> PROBING -> GRANTING -> ESTABLISHED
-	 * and begins emitting the cdea/cfea handshake (a real deployment would gate
-	 * this on RX presence-flood detection; for the loopback demo + a single desk
-	 * on the bench, present=1 is correct). */
+	/* Start the SCHED_FIFO pacer thread. The master FSM probes immediately and
+	 * unconditionally (a real unlinked M-5000 always hunts) and only GRANTS on
+	 * the box's own cold-connect — no presence assumption, no timer advance
+	 * (defect #130). Audio FILLER flows in every state, so the loopback demo
+	 * still hears the stream while the FSM stays honestly in PROBING. */
 	if (reac_pacer_start(&n->pacer) != 0) {
 		pw_log_warn("reac:playback — cannot start cadence pacer thread");
 		pw_filter_destroy(n->filter);
@@ -194,10 +194,9 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		free(n);
 		return NULL;
 	}
-	reac_pacer_set_box_present(&n->pacer, 1);
 
 	pw_log_info("reac:playback MASTER on '%s' (%d ch, %d Hz, %d fps pacer) — "
-	            "driving cdea/cfea JOIN/HOLD handshake",
+	            "probing; establishment is event-driven on the box's JOIN",
 	            cfg->ifname, n->channels, n->sample_rate,
 	            n->sample_rate / REAC_SAMPLES_PER_PKT);
 	return n;
