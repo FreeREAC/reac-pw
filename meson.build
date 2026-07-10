@@ -131,15 +131,28 @@ fsm_test = executable('test_reac_fsm',
 test('reac_fsm', fsm_test)
 
 # --- unit test: the MASTER-role handshake (cdea/cfea bytes vs the captures) ----
-# Asserts the established channel-map / cfea announce / probe / grant blocks the
-# master stamps match the captured M-5000 bytes + satisfy the checksum, the chan-
-# map cursor walks the full 40-ch map, and the FSM sequences IDLE->...->ESTABLISHED.
+# Asserts the GENERATED channel-map / cfea (from the S-1608 console config) match
+# the captured M-300 bytes + satisfy the checksum, the fixed probe/sub01/sub02
+# constants are byte-exact, the grant echoes the JOIN, and the FSM sequences
+# IDLE->...->ESTABLISHED with the continuous 5-message cadence in both states.
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
    'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
   include_directories : [reac_aes67_inc, include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master', master_test)
+
+# --- acceptance test: the S-1608 downstream is byte-exact vs the M-300 capture -
+# Feeds the generator the S-1608 config and asserts the generated CHANMAP equals
+# the captured M-300 chanmap EXACTLY, the generated CFEA equals it except our MAC
+# + checksum (and is fully byte-exact when our MAC is the M-300's), and every
+# generated control block sums to 0 mod 256. The #130 hardware-verify gate.
+s1608_test = executable('test_reac_s1608',
+  ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_ctrl.c',
+   'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_s1608', s1608_test)
 
 # --- unit test: the SCHED_FIFO cadence pacer (ring + interval) -----------------
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the

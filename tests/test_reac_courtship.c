@@ -48,7 +48,7 @@ struct court {
 	struct reac_slave  s;
 	uint16_t m_counter_next;   /* free-run oracle for the master counter */
 	/* tallies */
-	long m_probes, m_announces, m_grants, m_chanmaps;
+	long m_probes, m_subs, m_announces, m_grants, m_chanmaps;
 	long s_joins_fed, s_unicasts_fed, s_heartbeats_fed, s_floods_fed;
 	int  m_granted_before_join;    /* the #130 regression flag */
 	int  slave_on;                 /* feed slave frames into the master? */
@@ -73,6 +73,8 @@ static int step(struct court *c)
 
 	switch (e) {
 	case REAC_M_EMIT_PROBE:    c->m_probes++;    break;
+	case REAC_M_EMIT_SUB01:    c->m_subs++;      break;
+	case REAC_M_EMIT_SUB02:    c->m_subs++;      break;
 	case REAC_M_EMIT_ANNOUNCE: c->m_announces++; break;
 	case REAC_M_EMIT_GRANT:
 		c->m_grants++;
@@ -143,7 +145,7 @@ int main(void)
 {
 	struct court c;
 	memset(&c, 0, sizeof c);
-	reac_master_init(&c.m, M_SRC, FPS);
+	reac_master_init(&c.m, M_SRC, NULL, FPS);   /* S-1608 downstream (default) */
 	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = 16,
 	                               .sample_rate = 96000, .src_mac = S_SRC };
 	reac_slave_fsm_init(&c.s, &scfg);
@@ -158,6 +160,7 @@ int main(void)
 	CHK(c.m_probes > 0 && c.m_announces > 0);
 	CHK(c.m_grants == 0);          /* no grant until the box's cold-connect JOIN */
 	CHK(c.m_chanmaps > 0);         /* §4: chanmap advertised while unlinked too */
+	CHK(c.m_subs > 0);             /* the sub01/sub02 keepalives flow too */
 
 	/* 2. the box PHY comes up: it floods + JOINs; the master grants ONLY
 	 * after the cold-connect, both sides walk the golden ordering. */

@@ -138,6 +138,8 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		.prio = 0,        /* default 79 */
 		.cpu = -1,        /* no pin by default (set on a dedicated rig host) */
 		.src_mac = n->src,
+		/* Advertise the S-1608 downstream (8 out / 16 in, emulated M-300). */
+		.console = REAC_CONSOLE_CFG_S1608,
 	};
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
 		pw_log_warn("reac:playback — cannot open AF_PACKET TX on '%s' "

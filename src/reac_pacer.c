@@ -505,7 +505,11 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 	memcpy(p->src, cfg->src_mac ? cfg->src_mac : standin, 6);
 
-	reac_master_init(&p->master, p->src, cfg->fps);
+	/* A zero out_channels means the caller left the console cfg unset -> the
+	 * S-1608 default (reac_master_init(NULL)). */
+	const struct reac_console_cfg *ccfg =
+		cfg->console.out_channels ? &cfg->console : NULL;
+	reac_master_init(&p->master, p->src, ccfg, cfg->fps);
 
 	/* ~250 ms of frame ring at this rate (power-of-two rounded inside init). */
 	uint32_t depth = (uint32_t)(cfg->fps / 4);

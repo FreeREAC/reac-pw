@@ -97,6 +97,8 @@ struct reac_pacer_cfg {
 	int prio;             /* SCHED_FIFO priority (0 -> default 79) */
 	int cpu;              /* CPU to pin to (<0 -> no affinity) */
 	const uint8_t *src_mac;   /* our master MAC (Roland OUI); NULL -> a stand-in */
+	struct reac_console_cfg console;  /* box I/O advertised downstream; a zero
+	                                   * out_channels -> the S-1608 default */
 };
 
 struct reac_pacer {
