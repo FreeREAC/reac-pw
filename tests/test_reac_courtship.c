@@ -107,11 +107,6 @@ static int step(struct court *c)
 		                                    REAC_SAMPLES_PER_PKT);
 		c->s_floods_fed++;
 		break;
-	case REAC_SLAVE_EMIT_JOIN:
-		n = reac_ctrl_build_coldconnect(sf,
-		        c->s.fsm.have_master ? c->s.fsm.master_mac : BCAST, S_SRC, sc);
-		c->s_joins_fed++;
-		break;
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
 		n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
 		                                    16, NULL, REAC_SAMPLES_PER_PKT);
@@ -133,6 +128,18 @@ static int step(struct court *c)
 		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC,
 		                           (uint16_t)(sc + 1));
 		c->s_heartbeats_fed++;
+		struct reac_ctrl_parsed ps;
+		enum reac_master_rx_event ev;
+		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
+			reac_master_rx(&c->m, ev, ps.src, sf + 18);
+	}
+	/* #130 fix 1: the cold-connect JOIN burst rides the presence-flood (a real
+	 * box floods FILLER continuously and ALSO cold-connects, §13p.multi) —
+	 * fed into the master as a second frame on the ticks the FSM flags it. */
+	if (d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER && d.with_join) {
+		n = reac_ctrl_build_coldconnect(sf,
+		        c->s.fsm.have_master ? c->s.fsm.master_mac : BCAST, S_SRC, sc);
+		c->s_joins_fed++;
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
 		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)

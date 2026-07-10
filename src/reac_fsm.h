@@ -4,13 +4,26 @@
 /* reac_fsm — the virtual-stagebox JOIN/HOLD state machine as a PURE function
  * (no I/O), so it is fully offline-testable. The caller does the I/O: it parses
  * received frames with reac_ctrl_parse(), drives reac_fsm_step() with events,
- * and acts on the returned action (flood broadcast / emit JOIN burst / unicast
- * audio + heartbeat / go silent / stop). See REAC-CONNECTION-FSM.md.
+ * and acts on the returned action (flood broadcast / unicast audio + heartbeat
+ * / go silent / stop). See REAC-CONNECTION-FSM.md.
  *
  * HOLD (ESTABLISHED keep-alive + drop logic) is validated against the real
  * captures. JOIN (the grant transition) is reconstructed and only reaches
  * ESTABLISHED on a real master's grant frame — gated experimental until a rig
- * capture confirms the grant-burst bytes. */
+ * capture confirms the grant-burst bytes.
+ *
+ * FLOOD_ANNOUNCE presence announcement (#130 fix 1): a real box announces by
+ * FLOODING broadcast FILLER at wire rate on PHY-up (§13p.3: 5459 frames over
+ * ~1.36 s on a cold boot) — that flood is what makes a real master register
+ * and DISPLAY the box. The box's own cdea 04 03 cold-connect is also on the
+ * wire (§13p.multi, byte-captured) but as a burst of a few frames plus a
+ * ~100 ms retry grid, never as a continuous replacement for the flood. So
+ * FSM_ACT_FLOOD_BCAST fires on EVERY FLOOD_ANNOUNCE step (the continuous
+ * presence-flood); the `emit_join` side flag (mirroring `emit_heartbeat` in
+ * ESTABLISHED) marks the steps that should ALSO carry a cold-connect frame:
+ * an immediate burst of REAC_FSM_JOIN_BURST_COUNT frames, then one retry
+ * burst every REAC_FSM_JOIN_RETRY_PERIOD ticks, unbounded, until the master's
+ * grant lands (no hard give-up while PHY stays up). */
 #ifndef REAC_FSM_H
 #define REAC_FSM_H
 
@@ -25,9 +38,17 @@
  * expires before our first unicast and the courtship never closes. */
 #define REAC_FSM_TXMUTE_DWELL     800    /* ~100ms @8000fps */
 
+/* The cold-connect JOIN burst that rides the presence-flood: a short burst on
+ * entry/each retry, then a retry grid — NOT a continuous per-tick spam (the
+ * #130 fix-1 defect this replaces). REAC_FSM_JOIN_RETRY_PERIOD reuses the
+ * TXMUTE_DWELL magnitude (~100 ms @8000fps ticks) — the same order as the
+ * master's own ~150 ms grant window / the box's documented ~100 ms retry grid. */
+#define REAC_FSM_JOIN_BURST_COUNT    3
+#define REAC_FSM_JOIN_RETRY_PERIOD 800    /* ~100ms @8000fps */
+
 enum reac_fsm_state {
 	FSM_PHY_DOWN = 0,
-	FSM_FLOOD_ANNOUNCE,   /* hunting: broadcast FILLER + emit JOIN burst */
+	FSM_FLOOD_ANNOUNCE,   /* hunting: broadcast FILLER flood (+ the JOIN burst) */
 	FSM_TX_MUTE,          /* grant accepted, settle dwell */
 	FSM_ESTABLISHED,      /* linked: unicast audio + heartbeat */
 	FSM_DROP,             /* link lost / torn down */
@@ -35,8 +56,7 @@ enum reac_fsm_state {
 
 enum reac_fsm_action {
 	FSM_ACT_NONE = 0,
-	FSM_ACT_FLOOD_BCAST,  /* broadcast FILLER while announcing */
-	FSM_ACT_EMIT_JOIN,    /* cold-connect + config-announce burst */
+	FSM_ACT_FLOOD_BCAST,  /* broadcast FILLER while announcing (continuous) */
 	FSM_ACT_SILENCE,      /* mute window: counter free-runs, audio held */
 	FSM_ACT_UNICAST_AUDIO,/* established: unicast upstream FILLER (+heartbeat on tick) */
 	FSM_ACT_STOP,         /* idle, emit nothing */
@@ -63,12 +83,16 @@ struct reac_fsm {
 	uint16_t counter;          /* our free-running u16-LE */
 	enum reac_fsm_drop_reason drop_reason;
 	int      emit_heartbeat;   /* set on the step that should emit a keep-alive */
+	int      emit_join;        /* set on the step that should also emit a cold-connect */
+	int      join_burst_left;  /* cold-connect frames left in the current burst */
+	int      join_retry_countdown;  /* ticks until the next burst may start */
 };
 
 struct reac_fsm_out {
 	enum reac_fsm_action action;
 	enum reac_fsm_state  state;
 	int emit_heartbeat;        /* 1 if the action should be accompanied by a heartbeat */
+	int emit_join;             /* 1 if a FLOOD_BCAST step should also emit a cold-connect */
 };
 
 void reac_fsm_init(struct reac_fsm *fsm);

@@ -28,9 +28,41 @@ static void learn_master(struct reac_fsm *fsm, const struct reac_ctrl_parsed *rx
 
 static struct reac_fsm_out out(struct reac_fsm *fsm, enum reac_fsm_action a)
 {
-	struct reac_fsm_out o = { a, fsm->state, fsm->emit_heartbeat };
+	struct reac_fsm_out o = { a, fsm->state, fsm->emit_heartbeat, fsm->emit_join };
 	fsm->emit_heartbeat = 0;
+	fsm->emit_join = 0;
 	return o;
+}
+
+/* Arm a fresh cold-connect burst: REAC_FSM_JOIN_BURST_COUNT frames back to
+ * back, starting on THIS tick. */
+static void arm_join_burst(struct reac_fsm *fsm)
+{
+	fsm->join_burst_left = REAC_FSM_JOIN_BURST_COUNT;
+	fsm->join_retry_countdown = 0;
+}
+
+/* One FLOOD_ANNOUNCE tick: always flood (the continuous presence announcement,
+ * §13p.3), and drive the cold-connect burst/retry-grid on top of it via the
+ * emit_join side flag — an immediate burst of REAC_FSM_JOIN_BURST_COUNT
+ * frames, then one more burst every REAC_FSM_JOIN_RETRY_PERIOD ticks,
+ * unbounded, until the master's grant is RX'd (handled by the caller before
+ * this runs). Mirrors the emit_heartbeat pattern used in ESTABLISHED. */
+static struct reac_fsm_out flood_tick(struct reac_fsm *fsm)
+{
+	fsm->counter++;
+	if (fsm->join_burst_left > 0) {
+		fsm->emit_join = 1;
+		fsm->join_burst_left--;
+		if (fsm->join_burst_left == 0)
+			fsm->join_retry_countdown = REAC_FSM_JOIN_RETRY_PERIOD;
+	} else if (--fsm->join_retry_countdown <= 0) {
+		fsm->emit_join = 1;
+		fsm->join_burst_left = REAC_FSM_JOIN_BURST_COUNT - 1;  /* this tick is burst frame 1 */
+		if (fsm->join_burst_left == 0)
+			fsm->join_retry_countdown = REAC_FSM_JOIN_RETRY_PERIOD;
+	}
+	return out(fsm, FSM_ACT_FLOOD_BCAST);
 }
 
 struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
@@ -48,7 +80,8 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 		if (ev == FSM_EV_PHY_UP) {
 			fsm->state = FSM_FLOOD_ANNOUNCE;
 			fsm->counter = 0;
-			return out(fsm, FSM_ACT_FLOOD_BCAST);
+			arm_join_burst(fsm);
+			return flood_tick(fsm);
 		}
 		return out(fsm, FSM_ACT_STOP);
 
@@ -62,11 +95,10 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 				fsm->link_check = REAC_FSM_LINKCHECK_RELOAD;
 				return out(fsm, FSM_ACT_SILENCE);
 			}
-			return out(fsm, FSM_ACT_EMIT_JOIN);
+			return flood_tick(fsm);
 		}
 		/* tick: keep flooding + periodically re-emit the cold-connect burst */
-		fsm->counter++;
-		return out(fsm, FSM_ACT_EMIT_JOIN);
+		return flood_tick(fsm);
 
 	case FSM_TX_MUTE:
 		/* Frame-arrival IS the box's clock (it recovers word clock from the
@@ -122,10 +154,11 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 
 	case FSM_DROP:
 		if (ev == FSM_EV_PHY_UP || ev == FSM_EV_TICK) {
-			/* PHY still up after a drop -> re-announce */
+			/* PHY still up after a drop -> re-announce (fresh flood + burst) */
 			fsm->state = FSM_FLOOD_ANNOUNCE;
 			fsm->have_master = 0;
-			return out(fsm, FSM_ACT_FLOOD_BCAST);
+			arm_join_burst(fsm);
+			return flood_tick(fsm);
 		}
 		return out(fsm, FSM_ACT_STOP);
 	}
