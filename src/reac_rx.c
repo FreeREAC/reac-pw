@@ -14,6 +14,8 @@
 #include "reac_decode.h"
 #include "reac_capture.h"
 #include "pcap_source.h"
+/* the box-return (braided, box-width) decode — the master-role RX path */
+#include "reac_upstream.h"
 
 /* s24 LE (3 bytes) -> normalized float in [-1, 1) */
 static inline float s24le_to_f32(const uint8_t *p)
@@ -31,12 +33,23 @@ static uint64_t mono_ns(void)
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-/* Decode one validated frame into the ring (planar float, 40 ch x 12 samp). */
+/* Decode one gate-accepted frame into the ring (planar float, ring-width x 12
+ * samples). DOWNSTREAM = the 40-ch plain-LE broadcast (reac_decode); UPSTREAM
+ * = the box-width braided return (reac_upstream_decode), placed positionally
+ * at ring channels 0..nch-1 with the remaining slots silent (the input->slot
+ * allocation is a separate lane). */
 static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
                        const uint8_t *frame, size_t len)
 {
 	uint8_t s24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
-	int ns = reac_decode(frame, len, mode, s24); /* planar s24: out[(ch*ns + s)*3] */
+	int ns, nch;
+	if (rx->cfg.accept == REAC_RX_ACCEPT_UPSTREAM) {
+		nch = reac_upstream_channels(len);      /* < REAC_MAX_CHANNELS by contract */
+		ns = nch > 0 ? reac_upstream_decode(frame, len, s24) : -1;
+	} else {
+		nch = mode->n_channels;
+		ns = reac_decode(frame, len, mode, s24); /* planar s24: out[(ch*ns + s)*3] */
+	}
 	if (ns < 0) {
 		atomic_fetch_add_explicit(&rx->frames_bad, 1, memory_order_relaxed);
 		return;
@@ -46,15 +59,35 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 	 * producer thread, so the branch cost is irrelevant. */
 	if (ns > REAC_SAMPLES_PER_PKT)
 		ns = REAC_SAMPLES_PER_PKT;
-	int nch = mode->n_channels;
 	if (nch > REAC_MAX_CHANNELS)
 		nch = REAC_MAX_CHANNELS;
-	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT];
+	/* Zero-init: the ring consumer reads ring->channels rows; an upstream frame
+	 * fills only the first nch, the rest must be real silence, not stack junk. */
+	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT] = { 0 };
 	for (int ch = 0; ch < nch; ch++)
 		for (int s = 0; s < ns; s++)
 			planar[ch * ns + s] = s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
 	reac_ring_write(rx->ring, planar, (uint32_t)ns);
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
+}
+
+/* The stream gate: does this valid 0x8819 frame belong to the stream we
+ * decode? DOWNSTREAM accepts only the fixed 1492 B broadcast. UPSTREAM
+ * accepts box-shaped returns and locks onto the first box's src MAC so a
+ * second box (or the master's own broadcast) can't interleave counters and
+ * audio from two sources into one ring. */
+static int gate_accepts(struct reac_rx *rx, const uint8_t *frame, size_t len)
+{
+	if (rx->cfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
+		return len == (size_t)REAC_FRAME_BYTES;
+	if (reac_upstream_channels(len) < 0)
+		return 0;
+	if (!rx->up_src_locked) {
+		memcpy(rx->up_src, frame + 6, 6);
+		rx->up_src_locked = 1;
+		return 1;
+	}
+	return memcmp(rx->up_src, frame + 6, 6) == 0;
 }
 
 /* Slow PI-style slope filter: nominal pps vs observed counter advance per
@@ -132,6 +165,11 @@ static void *rx_loop(void *arg)
 			continue;
 		if (!reac_frame_is_reac(frame, (size_t)n))
 			continue;
+		if (!gate_accepts(rx, frame, (size_t)n)) {
+			/* the other direction's stream (or another box): not ours */
+			atomic_fetch_add_explicit(&rx->frames_other, 1, memory_order_relaxed);
+			continue;
+		}
 
 		/* optional: pace pcap replay by capture timestamps so the rate loop
 		 * sees realistic cadence offline */
