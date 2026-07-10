@@ -294,13 +294,19 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			} else {
 				uint32_t lat_us = (uint32_t)e.blk[0] | ((uint32_t)e.blk[1] << 8) |
 				                  ((uint32_t)e.blk[2] << 16) | ((uint32_t)e.blk[3] << 24);
-				fprintf(out, "reac-master: [%.6f] rx %s from %s (state %s"
-				        "%s%.1f ms after last chanmap%s)\n", ts,
-				        reac_master_rx_event_name((enum reac_master_rx_event)e.a),
-				        mac,
-				        reac_master_state_name((enum reac_master_state)e.b),
-				        lat_us ? ", " : "", lat_us ? (double)lat_us / 1000.0 : 0.0,
-				        lat_us ? "" : "");
+				if (lat_us)
+					fprintf(out, "reac-master: [%.6f] rx %s from %s (state %s, "
+					        "%.1f ms after last chanmap)\n", ts,
+					        reac_master_rx_event_name((enum reac_master_rx_event)e.a),
+					        mac,
+					        reac_master_state_name((enum reac_master_state)e.b),
+					        (double)lat_us / 1000.0);
+				else
+					fprintf(out, "reac-master: [%.6f] rx %s from %s (state %s)\n",
+					        ts,
+					        reac_master_rx_event_name((enum reac_master_rx_event)e.a),
+					        mac,
+					        reac_master_state_name((enum reac_master_state)e.b));
 			}
 			break;
 		case REAC_PEV_PRESENCE:
