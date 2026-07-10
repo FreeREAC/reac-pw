@@ -1,25 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_sink_node — the virtual-stagebox TX sink node.
+/* reac_sink_node — the REAC-master TX sink node (reac:playback).
  *
- * FUNCTIONAL first cut (the reac_tx encoder it needs now exists, src/reac_tx.c):
- *   - pw_filter registered Audio/Sink with N INPUT ports (the box's input count)
- *   - realtime process() de-stages each quantum into 12-sample REAC frames and
- *     emits them via reac_tx_emit on a raw 0x8819 socket. The wire cadence is
- *     tied to the graph clock (12 input samples -> one frame); PipeWire
- *     resamples the app rate INTO our advertised REAC rate.
+ * FUNCTIONAL:
+ *   - pw_filter registered Audio/Sink with N INPUT mono ports (the channel count)
+ *   - realtime process() de-stages each quantum into 12-sample REAC frames,
+ *     encodes them with reac_tx_build, and SUBMITS them to the SCHED_FIFO cadence
+ *     pacer (reac_pacer) — NO syscall on the RT graph thread.
+ *   - the pacer thread clocks the wire at a fixed pps and stamps the master
+ *     JOIN/HOLD handshake (reac_master: probe -> cdea 04 03 grant -> established
+ *     cdea 01 03 channel-map + cfea announce ~1/s) onto the downstream broadcast,
+ *     so a real Roland stagebox slaves to us. PipeWire resamples the app rate
+ *     INTO our advertised REAC rate.
  *
- * NOT yet done (loopback demo only — our TX is decoded by our own reac:capture,
- * not a real desk):
- *   - the SCHED_FIFO slot pacer (the reac_repacer.c pattern: prio ~79, mlockall,
- *     affinity, clock_nanosleep TIMER_ABSTIME) that would take the sendto()
- *     syscall off the RT graph thread and clock frames at a fixed pps;
- *   - the JOIN/HOLD connection FSM (flood FILLER on PHY-up -> cold-connect
- *     cdea 04 03 -> config-announce -> heartbeat cdea 01 03 0001 81 at ~1/s ->
- *     walk the 40-ch map, never deduped -> stable src-MAC). Without it a real
- *     Roland desk will not link to us.
- * See NATIVE-REAC-DESIGN.md Section 2 + Section 6.
+ * Verified by construction + loopback (a tone reaches the wire FILLER audio); a
+ * real desk LINKING is the hardware-verify gate (no desk on the bench). See
+ * DESIGN.md S2 (master handshake) + S6 (pacer) + the hardware-verify gate.
  */
 #ifndef REAC_SINK_NODE_H
 #define REAC_SINK_NODE_H

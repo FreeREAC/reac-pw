@@ -1,23 +1,40 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac-pw — PipeWire-native REAC endpoint (RX SOURCE node; TX SINK scaffolded).
+/* reac-pw — PipeWire-native REAC endpoint, MASTER or SLAVE role.
  *
  * A single libpipewire client that registers the 40-channel REAC source node
  * fed by a pcap replay (offline) or a live AF_PACKET 0x8819 socket, decoding
  * with the reac-aes67 plain-LE core and pushing samples through a lock-free
  * ring into the realtime process() callback. The node is a follower; PipeWire's
- * adapter resamples REAC -> graph (Tier-A clock bridge). The TX sink node is
- * registered as an interface-only skeleton (libreac TX layer unbuilt).
+ * adapter resamples REAC -> graph (Tier-A clock bridge).
  *
- *   reac-pw --pcap  capture.pcap [--rate 48000]
- *   reac-pw --live  reac0        [--rate 96000]
+ * REAC has no fixed master: any box can be the master and the rest slave to it.
+ * openmixer must fit either role, selected with --role:
+ *
+ *   --role master (default) — WE drive the cdea/cfea establishment + own the
+ *     clock (the SCHED_FIFO pacer at a fixed pps); a stagebox slaves to us. The
+ *     downstream master TX is the reac:playback sink (--tx IFNAME).
+ *   --role slave — an EXTERNAL master (a desk, or a box configured as master)
+ *     drives the establishment; WE RESPOND and LOCK to the master's cadence (the
+ *     master owns the clock — we never run our own pacer as the timing source).
+ *     We RX the master's audio (reac:capture) and TX our input channels back
+ *     upstream at the box's slots (reac_slave, --tx IFNAME = the REAC NIC).
+ *
+ * Both roles share the encoder/decoder + the PipeWire nodes; they differ only in
+ * WHO drives the handshake + the clock (master drives; slave follows).
+ *
+ *   reac-pw --pcap capture.pcap [--rate 48000]
+ *   reac-pw --live reac0 [--rate 96000] [--role master] [--tx reac0]
+ *   reac-pw --live reac0 --role slave   --tx reac0      # slaved to a desk
  */
 
 #include "reac_ring.h"
 #include "reac_rx.h"
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
+#include "reac_slave.h"
+#include "reac_role.h"
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
@@ -38,11 +55,15 @@ static void on_signal(void *data, int sig)
 static void usage(const char *p)
 {
 	fprintf(stderr,
-	  "usage: %s (--pcap FILE | --live IFNAME) [--rate 44100|48000|96000] [--tx IFNAME]\n"
+	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
+	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
+	  "                slaves to us) | slave (an external master drives; we lock to its\n"
+	  "                cadence + return our inputs upstream)\n"
 	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
-	  "  --tx IFNAME   register the reac:playback sink (encodes + emits REAC 0x8819) on this NIC\n", p);
+	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
+	  "                slave role -> the upstream return + handshake socket\n", p);
 }
 
 int main(int argc, char **argv)
@@ -50,6 +71,7 @@ int main(int argc, char **argv)
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
+	enum reac_role role = REAC_ROLE_MASTER;   /* default master: preserves current behaviour */
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
@@ -60,6 +82,11 @@ int main(int argc, char **argv)
 			rxcfg.forced_rate = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
+		} else if (!strcmp(argv[i], "--role") && i + 1 < argc) {
+			if (reac_role_parse(argv[++i], &role) != 0) {
+				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave)\n", argv[i]);
+				return 2;
+			}
 		} else {
 			usage(argv[0]);
 			return 2;
@@ -67,6 +94,11 @@ int main(int argc, char **argv)
 	}
 	if (!rxcfg.source) {
 		usage(argv[0]);
+		return 2;
+	}
+	if (reac_role_validate(role, tx_if != NULL) != 0) {
+		fprintf(stderr, "reac-pw: --role slave needs --tx IFNAME (the REAC NIC for the "
+		                "upstream return + handshake)\n");
 		return 2;
 	}
 
@@ -92,11 +124,21 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	/* TX side: who drives the handshake + the clock depends on the role.
+	 *   master -> reac:playback sink: WE encode the graph downstream + the pacer
+	 *             drives the cdea/cfea grant + owns the clock (a box slaves to us).
+	 *   slave  -> reac_slave engine: an external master drives; we lock to its
+	 *             cadence + return our input channels upstream at the box's slots. */
 	struct reac_sink_node *sink = NULL;
+	struct reac_slave slave;
+	int slave_open = 0;
 	struct reac_ring tx_ring;
-	if (tx_if) {
+	int tx_ring_init = 0;
+
+	if (tx_if && role == REAC_ROLE_MASTER) {
 		static const uint8_t roland_oui_mac[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
+		tx_ring_init = 1;
 		struct reac_sink_cfg scfg = { .ifname = tx_if, .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = roland_oui_mac, .master_mac = NULL };
@@ -104,6 +146,33 @@ int main(int argc, char **argv)
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
 			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
+	} else if (tx_if && role == REAC_ROLE_SLAVE) {
+		/* The slave returns its OWN input channels (a box width) upstream. The PCM
+		 * for them would come from a reac:return sink; for now the ring is the
+		 * carrier and the slave emits silent/own-input FILLER until that sink is
+		 * linked. The engine learns the master MAC from the wire — never set here. */
+		static const uint8_t box_oui_mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
+		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
+		tx_ring_init = 1;
+		struct reac_slave_cfg slcfg = { .ifname = tx_if,
+		                                .box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT,
+		                                .sample_rate = rx.sample_rate,
+		                                .src_mac = box_oui_mac };
+		if (reac_slave_open(&slave, &slcfg, &tx_ring) == 0) {
+			slave_open = 1;
+			if (reac_slave_start(&slave) == 0) {
+				reac_slave_set_phy_up(&slave, 1);  /* PHY up: begin the establishment */
+				fprintf(stderr, "reac-pw: SLAVE role on '%s' (%d-ch upstream return) — "
+				        "responding to an external master, locked to its cadence\n",
+				        tx_if, REAC_SLAVE_BOX_CHANNELS_DEFAULT);
+			} else {
+				fprintf(stderr, "reac-pw: slave engine thread failed to start\n");
+				reac_slave_close(&slave); slave_open = 0;
+			}
+		} else {
+			fprintf(stderr, "reac-pw: slave engine not created (AF_PACKET on '%s' "
+			        "failed — need CAP_NET_RAW?)\n", tx_if);
+		}
 	}
 
 	if (reac_rx_start(&rx) != 0) {
@@ -116,7 +185,11 @@ int main(int argc, char **argv)
 	reac_rx_stop(&rx);
 	reac_source_node_destroy(src);
 	reac_sink_node_destroy(sink);
-	if (tx_if)
+	if (slave_open) {
+		reac_slave_stop(&slave);
+		reac_slave_close(&slave);
+	}
+	if (tx_ring_init)
 		reac_ring_free(&tx_ring);
 	reac_rx_close(&rx);
 	reac_ring_free(&ring);

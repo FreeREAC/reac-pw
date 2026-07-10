@@ -8,12 +8,13 @@ no new code per destination.
 
 ## What it is
 
-This first cut ships the **RX source node**: a 40-channel `reac:capture`
-Audio/Source fed from a live REAC wire (AF_PACKET, EtherType `0x8819`) or a pcap
-replay, decoded with the proven plain-LE core and handed to PipeWire's adapter
-for channel-map, format-convert and adaptive resample. The **TX sink node**
-(`reac:playback`, the virtual stagebox) is registered as an interface-only
-skeleton; the libreac TX layer it needs is unbuilt (see Status).
+The **RX source node** is a 40-channel `reac:capture` Audio/Source fed from a live
+REAC wire (AF_PACKET, EtherType `0x8819`) or a pcap replay, decoded with the
+proven plain-LE core and handed to PipeWire's adapter for channel-map,
+format-convert and adaptive resample. The **TX sink node** (`reac:playback`) is a
+working REAC **master**: it encodes the graph's PCM into the downstream broadcast,
+clocks the wire from a SCHED_FIFO cadence pacer at a steady pps, and drives the
+cdea/cfea JOIN/HOLD handshake so a real Roland stagebox slaves to it (see Status).
 
 Everything REAC-specific is reused, not reinvented:
 
@@ -38,13 +39,21 @@ is read from a sibling checkout (`../reac-aes67-pub` by default — override wit
 ```
 meson setup   build
 meson compile -C build
-meson test    -C build                              # ring unit test, no PipeWire needed
+meson test    -C build                              # unit tests, no PipeWire needed
 ./build/reac-pw --pcap capture.pcap --rate 48000    # offline replay
-sudo ./build/reac-pw --live reac0                   # live wire (needs CAP_NET_RAW)
+sudo ./build/reac-pw --live reac0 --tx reac0        # MASTER (default): a box slaves to us
+sudo ./build/reac-pw --live reac0 --role slave --tx reac0   # SLAVE: we slave to a desk
 ```
 
-`--rate` forces 44100/48000/96000; omit it to auto-detect from packet cadence on
-a live wire. `--tx IFNAME` registers the inert sink skeleton for graph visibility.
+REAC has no fixed master — any box can be the master. `--role master` (default)
+makes openmixer the master (we drive the cdea/cfea handshake + own the clock; a
+stagebox slaves to us). `--role slave` makes us a box slaved to an external master
+(it drives the handshake + owns the clock; we lock to its cadence and return our
+inputs upstream). `--rate` forces 44100/48000/96000; omit it to auto-detect from
+packet cadence on a live wire. `--tx IFNAME` is the REAC TX NIC (the master's
+downstream sink, or the slave's upstream-return + handshake socket; needs
+`CAP_NET_RAW`, plus `CAP_SYS_NICE` for the master pacer's SCHED_FIFO). The slave
+role requires `--tx`.
 
 ## Node model
 
@@ -64,12 +73,18 @@ the packet rate (pps = rate/12), never on the wire.
   `SPA_IO_RateMatch`. Setting it as the graph **driver** instead runs REAC as the
   master clock and async-resamples the DAC to it. Same node, only the driver flag
   + clock registration differ.
-- **`reac:playback` (sink).** Mirrors the source so it fills in symmetrically once
-  a TX layer lands, but emits no wire traffic today.
+- **`reac:playback` (sink, the REAC master).** N mono-F32 input ports; the RT
+  `process()` encodes each 12-sample group with `reac_tx_build` and submits it to
+  a lock-free TX frame ring (no syscall on the graph thread). A dedicated
+  SCHED_FIFO pacer thread (mlockall, prio ~79, `clock_nanosleep` TIMER_ABSTIME)
+  emits one frame per slot at a fixed pps (125 µs @96 k) and stamps the master
+  JOIN/HOLD sequence — probe → `cdea 04 03` grant → established `cdea 01 03`
+  channel-map + `cfea` announce ~1/s — onto the broadcast, so a real desk links.
+  On underrun the pacer emits silent FILLER to keep cadence + link alive.
 
-See [DESIGN.md](DESIGN.md) for the data path, the two clock topologies, and the
-TX contract. This realizes `NATIVE-REAC-DESIGN.md` §3.4 (REAC as pw-filter nodes,
-adaptive resample via `io_rate_match`).
+See [DESIGN.md](DESIGN.md) for the data path, the clock topologies, and the TX
+master handshake + pacer (S2/S6). This realizes `NATIVE-REAC-DESIGN.md` §3.4 (REAC
+as pw-filter nodes, adaptive resample via `io_rate_match`).
 
 ## Status
 
@@ -77,10 +92,24 @@ adaptive resample via `io_rate_match`).
   tracking; offline-testable.
 - **Lock-free ring** — implemented, unit-tested (round-trip, underrun, overrun);
   the test needs no PipeWire so CI can run it anywhere.
-- **TX sink node** — interface-only skeleton, inert. libreac is RX/measure-only
-  (no frame builder, checksum-apply, interleaver or emitter), so there is nothing
-  to call yet. The runtime pieces still to build — TX ring, a SCHED_FIFO slot
-  pacer, and the JOIN/HOLD connection FSM — are out of scope for this cut.
+- **TX sink node (REAC master)** — implemented: `reac_tx` encoder (round-trips
+  through the decode core to 24-bit ULP), the `reac_master` cdea/cfea JOIN/HOLD
+  handshake (control blocks byte-match the captured M-5000 + checksum), and the
+  `reac_pacer` SCHED_FIFO cadence pacer (8000 fps / 125 µs measured on the wire).
+  Loopback PCM→REAC→PCM verified (a tone played into `reac:playback` reaches the
+  wire FILLER audio). **Not yet verified: a real Roland desk linking** — no desk
+  on the bench; built correct-by-construction against the captures. The
+  hardware-verify gate (does `RCQ` go `establishing`→`established`, does audio
+  reach the box) is in [DESIGN.md](DESIGN.md).
+- **SLAVE role** (`--role slave`, `reac_slave` over `reac_ctrl`/`reac_fsm`) —
+  implemented: we respond to an external master, lock to its cadence (the master
+  owns the clock — no own pacer), RX its audio via `reac:capture`, and return our
+  input channels upstream at the box's slots. The establishment + HOLD FSM is
+  offline-tested from the captured master control kinds (`test_reac_slave`); the
+  JOIN cold-connect bytes + a real link both ways are behind the slave hardware-
+  verify gate in [DESIGN.md](DESIGN.md).
+- **Role selection** (`--role master|slave`, `reac_role.h`) — default master
+  preserves the original behaviour; parse + validation unit-tested.
 
 Target: Fedora + PipeWire 1.4.
 
