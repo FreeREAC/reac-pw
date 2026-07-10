@@ -28,11 +28,23 @@ enum reac_rx_kind {
 	REAC_RX_LIVE,    /* live AF_PACKET (reac_capture) */
 };
 
+/* Which of the two REAC audio streams this RX decodes. The wire carries BOTH
+ * directions (the master's 40-ch broadcast + each box's box-width return);
+ * feeding a mixed stream into one ring would interleave two different audio
+ * sources and corrupt the counter/ppm tracking, so the role picks exactly one:
+ *   slave  -> DOWNSTREAM: the master's 1492 B / 40-ch broadcast (we lock to it)
+ *   master -> UPSTREAM:   a box's 52+nch*36 B braided return (its inputs)      */
+enum reac_rx_accept {
+	REAC_RX_ACCEPT_DOWNSTREAM = 0, /* default: the historical 40-ch path */
+	REAC_RX_ACCEPT_UPSTREAM,
+};
+
 struct reac_rx_cfg {
 	enum reac_rx_kind kind;
 	const char *source;   /* ifname for LIVE, file path for PCAP */
 	int forced_rate;      /* 0 = auto-detect from cadence; else 44100/48000/96000 */
 	int pcap_realtime;    /* PCAP only: pace replay by capture timestamps (1) vs flat out (0) */
+	enum reac_rx_accept accept; /* which stream to decode (zero-init = DOWNSTREAM) */
 };
 
 struct reac_rx {
@@ -55,9 +67,16 @@ struct reac_rx {
 	uint16_t ppm_last_counter;
 	int      ppm_have_last;
 
+	/* UPSTREAM accept: lock onto the first box's src MAC so a second box's
+	 * return can't interleave into the same ring/counter stream. Multi-box RX
+	 * (the 40-slot allocation) is a separate lane. */
+	uint8_t up_src[6];
+	int     up_src_locked;
+
 	/* diagnostics */
 	_Atomic uint64_t frames_ok;
 	_Atomic uint64_t frames_bad;
+	_Atomic uint64_t frames_other; /* valid REAC, but the OTHER stream (gated out) */
 	_Atomic uint64_t counter_gaps; /* lost frames inferred from counter jumps */
 };
 

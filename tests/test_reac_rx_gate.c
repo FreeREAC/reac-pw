@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+
+/* Unit test: the RX stream gate (role-driven downstream/upstream accept).
+ *
+ * Writes a temp pcap that interleaves the two REAC streams a real wire
+ * carries — the master's 1492 B / 40-ch downstream broadcast and a box's
+ * 628 B / 16-ch braided upstream return (a REAL sanitized captured frame) —
+ * plus a second box's return, then runs the actual reac_rx feeder thread
+ * over it in both accept modes and checks:
+ *
+ *   DOWNSTREAM: only the 1492 B frames feed the ring (upstream -> frames_other)
+ *   UPSTREAM:   only the FIRST box's return feeds the ring (downstream + the
+ *               second box -> frames_other), with its braided audio decoded
+ *               into ring channels 0..15 and 16..39 silent.
+ *
+ * No sockets, no PipeWire — pcap replay flat-out, unit scope.
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <time.h>
+#include <math.h>
+
+#include <reac/reac.h>
+#include "reac_ring.h"
+#include "reac_rx.h"
+#include "reac_upstream.h"
+
+#include "upstream_fixtures.inc"
+
+static int fails;
+#define CHK(cond) do { \
+	if (!(cond)) { fails++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } \
+} while (0)
+
+/* ---- minimal classic-pcap writer (LE, linktype 1) ---- */
+static void pcap_hdr(FILE *f)
+{
+	uint32_t gh[6] = { 0xa1b2c3d4, 0x00040002, 0, 0, 65535, 1 };
+	fwrite(gh, sizeof gh, 1, f);
+}
+
+static void pcap_rec(FILE *f, const uint8_t *frame, uint32_t len)
+{
+	uint32_t rh[4] = { 0, 0, len, len };
+	fwrite(rh, sizeof rh, 1, f);
+	fwrite(frame, len, 1, f);
+}
+
+/* a well-formed synthetic 40-ch downstream broadcast frame */
+static void mk_downstream(uint8_t *out, uint16_t counter)
+{
+	memset(out, 0, REAC_FRAME_BYTES);
+	/* dst broadcast, src the master stand-in MAC */
+	memset(out, 0xff, 6);
+	static const uint8_t master[6] = { 0x00, 0x40, 0xab, 0xc4, 0x91, 0x90 };
+	memcpy(out + 6, master, 6);
+	out[12] = 0x88; out[13] = 0x19;
+	out[14] = (uint8_t)(counter & 0xff); out[15] = (uint8_t)(counter >> 8);
+	/* audio region: a marker value on channel 0, plain LE sample-major */
+	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+		uint8_t *p = out + REAC_L2_HEADER_LEN + (size_t)(s * 40) * 3;
+		p[0] = 0x00; p[1] = 0x00; p[2] = 0x40; /* s24 0x400000 = +0.5 */
+	}
+	out[REAC_FRAME_BYTES - 2] = REAC_END_MARKER_0;
+	out[REAC_FRAME_BYTES - 1] = REAC_END_MARKER_1;
+}
+
+/* run the feeder over the fixture until it has accepted n frames (or timeout) */
+static int run_rx(struct reac_rx *rx, uint64_t want_ok)
+{
+	if (reac_rx_start(rx) != 0)
+		return -1;
+	for (int i = 0; i < 2000; i++) { /* <= 2 s */
+		if (atomic_load(&rx->frames_ok) >= want_ok)
+			break;
+		struct timespec ts = { 0, 1000000 };
+		nanosleep(&ts, NULL);
+	}
+	reac_rx_stop(rx);
+	return atomic_load(&rx->frames_ok) >= want_ok ? 0 : -1;
+}
+
+int main(void)
+{
+	/* ---- build the mixed-stream fixture ---- */
+	char path[] = "/tmp/reacpw-gate-XXXXXX";
+	int fd = mkstemp(path);
+	CHK(fd >= 0);
+	FILE *f = fdopen(fd, "wb");
+	CHK(f != NULL);
+	pcap_hdr(f);
+
+	uint8_t down[REAC_FRAME_BYTES];
+	uint8_t up2[sizeof UP16];
+	memcpy(up2, UP16, sizeof up2);
+	up2[11] = 0x01; /* a SECOND box: different src MAC tail */
+	for (uint16_t i = 0; i < 40; i++) {
+		mk_downstream(down, i);
+		pcap_rec(f, down, sizeof down);
+		pcap_rec(f, UP16, sizeof UP16);   /* box 1 (the sanitized capture) */
+		pcap_rec(f, up2, sizeof up2);     /* box 2: must be gated out */
+	}
+	fclose(f);
+
+	/* the expected float of box-1 channel 0, sample 0 (braided s24 -> f32) */
+	uint8_t pcm[16 * REAC_SAMPLES_PER_PKT * 3];
+	CHK(reac_upstream_decode(UP16, sizeof UP16, pcm) == REAC_SAMPLES_PER_PKT);
+
+	/* ---- DOWNSTREAM accept: only the 1492 B broadcast feeds the ring ---- */
+	{
+		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
+		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .accept = REAC_RX_ACCEPT_DOWNSTREAM };
+		struct reac_ring ring;
+		struct reac_rx rx;
+		CHK(reac_rx_open(&rx, &cfg, &ring) == 0);
+		CHK(run_rx(&rx, 20) == 0);
+		uint64_t ok = atomic_load(&rx.frames_ok);
+		CHK(ok >= 20);
+		/* both boxes' returns gated out: the pcap interleaves down,up1,up2, so at
+		 * least 2 gated frames per accepted one (minus the in-flight triplet) */
+		CHK(atomic_load(&rx.frames_other) >= 2 * (ok - 1));
+		CHK(atomic_load(&rx.frames_bad) == 0);
+
+		/* ring channel 0 carries the downstream marker +0.5 */
+		float ch[REAC_MAX_CHANNELS][12];
+		float *dst[REAC_MAX_CHANNELS];
+		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
+		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
+		CHK(fabsf(ch[0][0] - 0.5f) < 1e-6f);
+		reac_rx_close(&rx);
+		reac_ring_free(&ring);
+	}
+
+	/* ---- UPSTREAM accept: only box 1's return feeds the ring ---- */
+	{
+		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
+		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
+		struct reac_ring ring;
+		struct reac_rx rx;
+		CHK(reac_rx_open(&rx, &cfg, &ring) == 0);
+		CHK(run_rx(&rx, 20) == 0);
+		uint64_t ok = atomic_load(&rx.frames_ok);
+		CHK(ok >= 20);
+		/* the downstream frames AND the second box got gated out */
+		CHK(atomic_load(&rx.frames_other) >= 2 * (ok - 1));
+		CHK(atomic_load(&rx.frames_bad) == 0);
+		CHK(rx.up_src_locked == 1);
+		CHK(memcmp(rx.up_src, UP16 + 6, 6) == 0);
+
+		/* ring channels 0..15 carry box 1's braided audio; 16..39 are silent */
+		float ch[REAC_MAX_CHANNELS][12];
+		float *dst[REAC_MAX_CHANNELS];
+		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
+		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
+		int bad = 0;
+		for (int c = 0; c < 16; c++)
+			for (int s = 0; s < 12; s++) {
+				const uint8_t *p = &pcm[(size_t)(c * 12 + s) * 3];
+				int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+				                      ((uint32_t)p[2] << 16));
+				if (v & 0x00800000) v |= ~0x00FFFFFF;
+				if (fabsf(ch[c][s] - (float)v / 8388608.0f) > 1e-7f)
+					bad++;
+			}
+		CHK(bad == 0);
+		for (int c = 16; c < REAC_MAX_CHANNELS; c++)
+			for (int s = 0; s < 12; s++)
+				if (ch[c][s] != 0.0f)
+					bad++;
+		CHK(bad == 0);
+		reac_rx_close(&rx);
+		reac_ring_free(&ring);
+	}
+
+	unlink(path);
+	if (fails) {
+		fprintf(stderr, "%d check(s) failed\n", fails);
+		return 1;
+	}
+	printf("OK: rx gate — downstream accept feeds only the 1492 B broadcast; upstream "
+	       "accept locks to the first box, decodes its braid into ch 0..15, silences "
+	       "the rest, gates out the downstream + a second box\n");
+	return 0;
+}
