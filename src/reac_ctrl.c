@@ -179,16 +179,22 @@ size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
 size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
                                    const uint8_t src[6], uint16_t counter)
 {
+	/* The BYTE-VERIFIED S-1608 cold-connect block (zoneA-48k capture): cdea 04 03,
+	 * BE len 0x0014, then 00 02 00 fe + the box's device-inventory tail. The 0x41
+	 * at block[10] is INVENTORY DATA, not a MAC tail (the earlier reconstruction
+	 * wrote src[5] there — wrong: the block is MAC-independent; the master learns
+	 * the box from the L2 source). Sum(block) mod 256 == 0 holds as captured. */
+	static const uint8_t COLDCONNECT_BLK[32] = {
+		0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe,
+		0x0f, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	};
 	size_t len = box_frame_len(16);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	out[18] = 0x04; out[19] = 0x03;       /* cdea 04 03 — sub-cmd 04 = connect */
-	out[20] = 0x00; out[21] = 0x14;       /* BE len 0x0014 (or 0x0013) */
-	out[22] = 0x02;                       /* selector */
-	out[23] = 0x00; out[24] = 0xfe;       /* payload prefix (§13b: 0002 00 fe ...) */
-	/* tail carries our src-MAC low byte (the §13b "41" = box MAC tail) */
-	out[27] = src[5];
-	reac_ctrl_checksum_apply(out);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK, 32);
+	reac_ctrl_checksum_apply(out);        /* no-op by construction (block sums 0) */
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
 }
