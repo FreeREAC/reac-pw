@@ -18,7 +18,12 @@
 #include "reac_ctrl.h"
 
 #define REAC_FSM_LINKCHECK_RELOAD 600    /* 0x0258 frames */
-#define REAC_FSM_TXMUTE_DWELL     1610   /* ~200ms @8000fps — PLACEHOLDER (rig) */
+/* TX-mute settle dwell after the grant, in frame periods. PLACEHOLDER pending
+ * a rig capture — the golden transcript says the box switches to unicast "the
+ * instant the grant lands", so short is faithful; it MUST stay well under the
+ * master's ~150 ms grant window (fps*15/100 slots) or the master's window
+ * expires before our first unicast and the courtship never closes. */
+#define REAC_FSM_TXMUTE_DWELL     800    /* ~100ms @8000fps */
 
 enum reac_fsm_state {
 	FSM_PHY_DOWN = 0,

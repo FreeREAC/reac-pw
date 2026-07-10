@@ -69,7 +69,12 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 		return out(fsm, FSM_ACT_EMIT_JOIN);
 
 	case FSM_TX_MUTE:
-		if (ev == FSM_EV_TICK) {
+		/* Frame-arrival IS the box's clock (it recovers word clock from the
+		 * master's inter-arrival interval), so a received master frame
+		 * advances the dwell exactly like a self-clocked tick. Without this
+		 * a flooding master (8000 fps — the normal case) starves the timeout
+		 * path and the dwell never elapses. */
+		if (ev == FSM_EV_TICK || ev == FSM_EV_RX) {
 			fsm->counter++;
 			if (--fsm->txmute_dwell <= 0) {
 				fsm->state = FSM_ESTABLISHED;
@@ -94,6 +99,13 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 			 * a keep-alive flag. Drop is driven by the peer-gone countdown +
 			 * MAC-change, which are sound. Wire the explicit signal after a rig
 			 * capture identifies the real byte (REAC-CONNECTION-FSM.md gap list). */
+			/* The ~1/s keep-alive counts frame PERIODS, and with a flooding
+			 * master every period carries a frame (no timeout ticks) — so the
+			 * heartbeat cadence must advance on RX too, like a real box's. */
+			if (++fsm->heartbeat_tick >= HEARTBEAT_PERIOD) {
+				fsm->heartbeat_tick = 0;
+				fsm->emit_heartbeat = 1;
+			}
 			return out(fsm, FSM_ACT_UNICAST_AUDIO);
 		}
 		/* tick: stream upstream audio, decrement peer-alive, heartbeat ~1/s */
