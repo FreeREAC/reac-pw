@@ -40,17 +40,19 @@
  *                 observed silent-idle, and a master that waits for "presence"
  *                 deadlocks against a box whose PHY never bounced (§13b: the
  *                 box only cold-connects on a real link-down/up).
- *   PROBING     — unlinked hunting: FILLER + cdea 01 probes (~180/s, 00-heavy
- *                 sub-state cycle) + cfea announce @1 Hz. Leaves ONLY on a
- *                 validated box JOIN (REAC_M_RX_BOX_JOIN). No timer path out.
+ *   PROBING     — unlinked: FILLER + the continuous M-300 control cadence
+ *                 (PROBE ~115/s + sub01/sub02/chanmap/cfea @1 Hz each). The
+ *                 chanmap advertises the sub-state-0x03 map the box's parser
+ *                 needs to recognize a master. Leaves ONLY on a validated box
+ *                 JOIN (REAC_M_RX_BOX_JOIN). No timer path out.
  *   GRANTING    — echo the box's own cdea 04 03 block back as the broadcast
  *                 grant burst (1 frame per 12 slots over a ~150 ms window).
  *                 -> ESTABLISHED on the box's first unicast-to-us frame of any
  *                 kind; window expiry with no unicast falls BACK to PROBING.
- *   ESTABLISHED — linked: FILLER audio + chanmap walk @1/s + cfea @1/s (two
- *                 independent streams, phase-offset by half a second). Held by
- *                 the 600-frame link-check budget reloaded by every box RX
- *                 event; BYE / budget-drain / box-MAC change drop it. */
+ *   ESTABLISHED — linked: FILLER audio + the SAME continuous control cadence as
+ *                 PROBING (PROBE + sub01/sub02/chanmap/cfea). Held by the
+ *                 600-frame link-check budget reloaded by every box RX event;
+ *                 BYE / budget-drain / box-MAC change drop it. */
 enum reac_master_state {
 	REAC_M_IDLE = 0,
 	REAC_M_PROBING,
@@ -60,13 +62,18 @@ enum reac_master_state {
 
 /* Which control block the master stamps into the NEXT downstream frame. The
  * pacer maps this onto a block template (FILLER = leave the block zero and carry
- * audio; the cdea/cfea kinds overwrite [16:50]). */
+ * audio; the cdea/cfea kinds overwrite [16:50]). The five control messages a
+ * real master advertises CONTINUOUSLY (in both unlinked and linked states, per
+ * the byte-exact M-300/S-1608 capture) are PROBE (~115/s) + SUB01/SUB02/CHANMAP/
+ * CFEA (~1/s each). GRANT is the only event-driven emission (fires on a JOIN). */
 enum reac_master_emit {
 	REAC_M_EMIT_FILLER = 0, /* type 00 00, audio payload (the common case)      */
-	REAC_M_EMIT_PROBE,      /* cdea 01, sub-state cycling (no box linked yet)   */
+	REAC_M_EMIT_PROBE,      /* cdea 01 00 — the fixed M-300 probe (~115/s)      */
+	REAC_M_EMIT_SUB01,      /* cdea 01 01 — the fixed M-300 sub-message (~1/s)  */
+	REAC_M_EMIT_SUB02,      /* cdea 01 02 — the fixed M-300 sub-message (~1/s)  */
 	REAC_M_EMIT_GRANT,      /* cdea 04 03 — the ECHO of the box's JOIN block    */
-	REAC_M_EMIT_CHANMAP,    /* cdea 01 03 0019 established channel-map (1 of 6) */
-	REAC_M_EMIT_ANNOUNCE,   /* cfea master announce (embeds OUR src MAC)        */
+	REAC_M_EMIT_CHANMAP,    /* cdea 01 03 0019 generated channel-map (1 of N)   */
+	REAC_M_EMIT_ANNOUNCE,   /* cfea master announce (generated: OUR MAC + I/O)  */
 };
 
 /* RX events the pacer feeds in (classified by reac_ctrl_classify_box_frame). */
@@ -95,12 +102,32 @@ enum reac_master_drop_reason {
  * frames over the ~150 ms window @8000 fps, the transcribed real burst). */
 #define REAC_M_GRANT_STRIDE 12
 
-/* The probe sub-state cycle, 00-dominant per the §13d transcription (the real
- * unlinked master mostly advertises ss=00, touching 03/01/02 in the loop). */
-extern const uint8_t REAC_M_PROBE_CYCLE[8];
+/* Max channel-map frames the generator can hold (8 slots/frame; the widest REAC
+ * downstream is the 40-slot map -> at most 5 frames, 6 with a section marker). */
+#define REAC_M_CHANMAP_FRAMES_MAX 6
 
-/* How many distinct captured ESTABLISHED channel-map frames make a full walk. */
-#define REAC_M_CHANMAP_FRAMES 6
+/* Console I/O config: everything the downstream generator needs to synthesize
+ * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
+ * L2 source MAC (passed to reac_master_init), which the cfea embeds so the
+ * on-wire announced identity always equals the L2 source (a mismatch is a
+ * documented slave-disconnect trigger). Fed the S-1608 config the generator
+ * reproduces the captured M-300 downstream byte-for-byte. */
+struct reac_console_cfg {
+	uint8_t out_channels;   /* box analog outputs: cfea outCh [18] + drives the
+	                         * chanmap (marker + out_channels-1 channel ids).
+	                         * S-1608 = 8, M-5000 downstream box = 16.        */
+	uint8_t in_channels;    /* box analog inputs: sizes the UPSTREAM parser
+	                         * (box->master); carried for the caller, not a
+	                         * downstream field. S-1608 = 16.                 */
+	uint8_t console_field;  /* cfea [19] and [21] (move together): the emulated
+	                         * MASTER model. M-300 = 0x00, M-5000 = 0x01.     */
+};
+
+/* The default (S-1608 driven by an emulated M-300): 8 out, 16 in, console 0.
+ * reac_master_init(cfg == NULL) uses this, so the byte-exact S-1608 path is the
+ * out-of-the-box behaviour. */
+#define REAC_CONSOLE_CFG_S1608 \
+	((struct reac_console_cfg){ .out_channels = 8, .in_channels = 16, .console_field = 0 })
 
 struct reac_master {
 	enum reac_master_state state;
@@ -109,14 +136,22 @@ struct reac_master {
 	                           * NEVER reset across transitions */
 
 	int      fps;             /* frame rate (pps): 3675/4000/8000 */
-	int      probe_period;    /* slots between probes (~fps/180 ≈ 180 probes/s) */
+	int      probe_period;    /* slots between probes (~fps/115 ≈ 115 probes/s) */
 	int      grant_frames;    /* GRANTING window length (~150 ms of slots)      */
 	int      grant_stride;    /* slots between echoed grants in the window      */
 
-	/* PROBING cadence */
-	int      probe_tick;      /* slots since the last probe */
-	int      announce_tick;   /* slots since the last cfea (probing AND estab.) */
-	int      probe_sub_idx;   /* cursor 0..7 into REAC_M_PROBE_CYCLE */
+	/* The console we advertise + the downstream blocks generated from it. */
+	struct reac_console_cfg cfg;
+	int      chanmap_nframes; /* generated chanmap frame count (>=1)            */
+	uint8_t  chanmap[REAC_M_CHANMAP_FRAMES_MAX][34]; /* generated cdea chanmap  */
+
+	/* Continuous control cadence (identical in PROBING and ESTABLISHED): PROBE
+	 * ~115/s + four 1/s streams (sub01/sub02/chanmap/cfea) phase-offset by
+	 * fps/4 so they never contend for the same slot. */
+	int      probe_tick;      /* slots since the last probe (~fps/115)          */
+	int      sub01_tick;      /* slots since the last cdea 01 01 (~1/s)         */
+	int      sub02_tick;      /* slots since the last cdea 01 02 (~1/s)         */
+	int      announce_tick;   /* slots since the last cfea (~1/s)               */
 
 	/* GRANTING */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
@@ -126,7 +161,7 @@ struct reac_master {
 
 	/* ESTABLISHED */
 	int      chanmap_tick;    /* slots since the last chanmap frame */
-	int      chanmap_cursor;  /* which of the 6 chanmap frames is next */
+	int      chanmap_cursor;  /* which generated chanmap frame is next (0..N-1) */
 	int      link_check;      /* countdown to peer-gone (600-frame budget) */
 
 	/* Diagnostics (never gate the establishment) */
@@ -134,15 +169,20 @@ struct reac_master {
 	int      presence_tick;   /* countdown to clearing box_seen */
 	enum reac_master_drop_reason drop_reason;  /* last backward transition */
 
-	/* Per-instance cfea announce: the captured template with OUR src MAC
-	 * embedded (the capture's cloned 00:40:ab:ca:15:4d desk MAC was a
-	 * documented slave-disconnect trigger — on-wire identity must match L2). */
+	/* Per-instance cfea announce, generated from cfg with OUR src MAC embedded
+	 * (on-wire identity must match the L2 source — a mismatch is a documented
+	 * slave-disconnect trigger). */
 	uint8_t  announce_blk[34];
 };
 
-/* Initialize for a given source MAC + frame rate (3675/4000/8000 fps). Starts
- * in IDLE; the first reac_master_next() call enters PROBING. */
-void reac_master_init(struct reac_master *m, const uint8_t src[6], int fps);
+/* Initialize for a given source MAC, console config + frame rate (3675/4000/
+ * 8000 fps). `src` is OUR master L2 MAC (Roland OUI); it is stamped into the
+ * generated cfea so the announced identity equals the L2 source. `cfg` selects
+ * the box I/O the downstream advertises; NULL -> the S-1608 default (8 out /
+ * 16 in / M-300 console field), which reproduces the captured M-300 downstream
+ * byte-for-byte. Starts in IDLE; the first reac_master_next() enters PROBING. */
+void reac_master_init(struct reac_master *m, const uint8_t src[6],
+                      const struct reac_console_cfg *cfg, int fps);
 
 /* Feed one classified RX event into the FSM (call from the FSM-owning thread
  * only). `box_src` is the frame's L2 source; `blk32` is the 32-byte control
@@ -155,8 +195,8 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 /* PURE: decide what the NEXT frame should carry, advancing the per-slot timers
  * by one frame. Returns the emit kind; *counter is set to the value to stamp at
  * bytes 14-15 (then internally incremented); *tmpl_idx is the template index to
- * pass to reac_master_stamp (chanmap frame 0..5 for CHANMAP, probe cycle index
- * 0..7 for PROBE; 0 otherwise). Call exactly once per emitted downstream frame.
+ * pass to reac_master_stamp (chanmap frame 0..N-1 for CHANMAP; 0 otherwise).
+ * Call exactly once per emitted downstream frame.
  * Safety fallbacks (grant-window expiry, peer-gone budget) move the state
  * BACKWARD to PROBING here — no timer ever advances toward ESTABLISHED. */
 enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
@@ -166,8 +206,9 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
  * reac_tx_build (1492 B: hdr + audio + C2 EA tail). For FILLER this is a no-op.
  * For the cdea/cfea kinds it overwrites type [16:18] + control block [18:50]
  * and applies the checksum, leaving audio + counter + tail intact. GRANT echoes
- * m->join_blk verbatim; ANNOUNCE uses m->announce_blk (our MAC embedded).
- * `tmpl_idx` selects the chanmap frame (0..5) or probe cycle slot (0..7).
+ * m->join_blk verbatim; CHANMAP/ANNOUNCE use the generated m->chanmap[idx] /
+ * m->announce_blk; PROBE/SUB01/SUB02 are the fixed M-300 protocol constants.
+ * `tmpl_idx` selects the chanmap frame (0..N-1); ignored for other kinds.
  * Returns 0, or -1 on a bad kind/index. */
 int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
                       enum reac_master_emit emit, int tmpl_idx);

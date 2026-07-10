@@ -76,7 +76,7 @@ int main(void)
 		p3.fps = 8000;
 		memcpy(p3.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p3.ring, 8, 2048) == 0);
-		reac_master_init(&p3.master, OUR, 8000);
+		reac_master_init(&p3.master, OUR, NULL, 8000);   /* S-1608 default */
 		p3.prev_state = REAC_M_IDLE;
 
 		uint8_t bf[2048];
