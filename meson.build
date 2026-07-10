@@ -131,15 +131,28 @@ fsm_test = executable('test_reac_fsm',
 test('reac_fsm', fsm_test)
 
 # --- unit test: the MASTER-role handshake (cdea/cfea bytes vs the captures) ----
-# Asserts the established channel-map / cfea announce / probe / grant blocks the
-# master stamps match the captured M-5000 bytes + satisfy the checksum, the chan-
-# map cursor walks the full 40-ch map, and the FSM sequences IDLE->...->ESTABLISHED.
+# Asserts the GENERATED channel-map / cfea (from the S-1608 console config) match
+# the captured M-300 bytes + satisfy the checksum, the fixed probe/sub01/sub02
+# constants are byte-exact, the grant echoes the JOIN, and the FSM sequences
+# IDLE->...->ESTABLISHED with the continuous 5-message cadence in both states.
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
    'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
   include_directories : [reac_aes67_inc, include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master', master_test)
+
+# --- acceptance test: the S-1608 downstream is byte-exact vs the M-300 capture -
+# Feeds the generator the S-1608 config and asserts the generated CHANMAP equals
+# the captured M-300 chanmap EXACTLY, the generated CFEA equals it except our MAC
+# + checksum (and is fully byte-exact when our MAC is the M-300's), and every
+# generated control block sums to 0 mod 256. The #130 hardware-verify gate.
+s1608_test = executable('test_reac_s1608',
+  ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_ctrl.c',
+   'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_s1608', s1608_test)
 
 # --- unit test: the SCHED_FIFO cadence pacer (ring + interval) -----------------
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
@@ -165,6 +178,20 @@ slave_test = executable('test_reac_slave',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
+
+# --- unit test: the full offline COURTSHIP (our master <-> our slave) ----------
+# Both establishment cores are pure, so the whole M-5000 <-> S-1608 sequence runs
+# as a frame-by-frame simulation with no socket: master emissions (next+stamp on
+# reac_tx_build FILLERs) feed reac_slave_step_rx; slave emissions (the reac_ctrl
+# builders) feed reac_ctrl_classify_box_frame + reac_master_rx. Pins the golden
+# ordering (probe -> box JOIN -> echoed grant -> box unicast -> both ESTABLISHED
+# -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
+courtship_test = executable('test_reac_courtship',
+  ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_slave.c',
+   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_courtship', courtship_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic

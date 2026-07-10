@@ -11,11 +11,13 @@
  *      CAP_NET_RAW in the test sandbox) — the cadence math above already covers
  *      the timing contract; the live check is a bonus when privilege exists. */
 #include "reac_pacer.h"
+#include "reac_ctrl.h"
 #include <reac/reac.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -62,7 +64,87 @@ int main(void)
 	CHK(r.underruns == 1);
 	reac_frame_ring_free(&r);
 
-	/* 3. live cadence on lo (best-effort; needs CAP_NET_RAW). */
+	/* 3. the RX ingest path WITHOUT a socket: construct the pacer by hand
+	 * (frame ring + master FSM only, fd = -1) and feed fixture frames through
+	 * reac_pacer_rx_ingest — counters, the fsm_state mirror, the event ring. */
+	{
+		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
+		struct reac_pacer p3;
+		memset(&p3, 0, sizeof p3);
+		p3.fd = -1;
+		p3.fps = 8000;
+		memcpy(p3.src, OUR, 6);
+		CHK(reac_frame_ring_init(&p3.ring, 8, 2048) == 0);
+		reac_master_init(&p3.master, OUR, NULL, 8000);   /* S-1608 default */
+		p3.prev_state = REAC_M_IDLE;
+
+		uint8_t bf[2048];
+
+		/* a broadcast presence FILLER: counted, no state change, presence event */
+		static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+		size_t bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, 12);
+		reac_pacer_rx_ingest(&p3, bf, bn);
+		CHK(p3.rx_box_frames == 1 && p3.rx_box_ctrl == 0 && p3.rx_joins == 0);
+		CHK(p3.master.state == REAC_M_PROBING);   /* promoted, but NOT granting */
+
+		/* our own echo must be ignored (the software self-filter) */
+		bn = reac_ctrl_build_upstream_filler(bf, BCAST, OUR, 1, 16, NULL, 12);
+		reac_pacer_rx_ingest(&p3, bf, bn);
+		CHK(p3.rx_box_frames == 1);
+
+		/* the JOIN: fsm mirror flips to GRANTING, the ring holds the block */
+		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2);
+		uint8_t join_blk[32];
+		memcpy(join_blk, bf + 18, 32);
+		reac_pacer_rx_ingest(&p3, bf, bn);
+		CHK(p3.rx_joins == 1 && p3.rx_box_ctrl == 1);
+		CHK(p3.fsm_state == REAC_M_GRANTING);
+		CHK(p3.grant_attempts == 1);
+
+		/* the event ring contains a JOIN event with the exact 32-byte block */
+		int found_join = 0;
+		uint32_t hh = p3.ev_head;
+		for (uint32_t i = p3.ev_tail; i != hh; i++) {
+			const struct reac_pacer_event *e = &p3.evring[i % REAC_PACER_EVRING];
+			if (e->kind == REAC_PEV_JOIN) {
+				CHK(memcmp(e->blk, join_blk, 32) == 0);
+				CHK(memcmp(e->src, BOX, 6) == 0);
+				found_join = 1;
+			}
+		}
+		CHK(found_join);
+
+		/* unicast -> ESTABLISHED via the mirror */
+		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3);
+		reac_pacer_rx_ingest(&p3, bf, bn);
+		CHK(p3.fsm_state == REAC_M_ESTABLISHED);
+
+		/* drain formats + counts every queued event, then returns 0 */
+		FILE *sink = tmpfile();
+		CHK(sink != NULL);
+		int drained = reac_pacer_log_drain(&p3, sink);
+		CHK(drained >= 3);                        /* presence + join + transitions */
+		CHK(reac_pacer_log_drain(&p3, sink) == 0);
+		CHK(ftell(sink) > 0);                     /* something was written */
+		fclose(sink);
+
+		/* overflow: flood JOINs (each always logs) -> ring caps at EVRING,
+		 * drop-newest counts ev_drops, a full drain returns exactly EVRING */
+		for (int i = 0; i < REAC_PACER_EVRING * 2; i++) {
+			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i);
+			reac_pacer_rx_ingest(&p3, bf, bn);
+		}
+		CHK(p3.ev_drops > 0);
+		sink = tmpfile();
+		CHK(sink != NULL);
+		CHK(reac_pacer_log_drain(&p3, sink) == REAC_PACER_EVRING);
+		fclose(sink);
+
+		reac_frame_ring_free(&p3.ring);
+	}
+
+	/* 4. live cadence on lo (best-effort; needs CAP_NET_RAW). */
 	struct reac_pacer p;
 	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = 8000, .prio = 0, .cpu = -1,
 	                              .src_mac = NULL };

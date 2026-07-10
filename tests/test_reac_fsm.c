@@ -43,8 +43,21 @@ int main(void)
 
 	o = reac_fsm_step(&fsm, FSM_EV_PHY_UP, NULL);
 	CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST);
+	CHK(o.emit_join);              /* cold-connect burst frame 1/3 rides the flood (#130) */
 	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
-	CHK(o.action == FSM_ACT_EMIT_JOIN);
+	CHK(o.action == FSM_ACT_FLOOD_BCAST && o.emit_join);   /* burst 2/3, still flooding */
+	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+	CHK(o.action == FSM_ACT_FLOOD_BCAST && o.emit_join);   /* burst 3/3 */
+	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+	CHK(o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);  /* burst spent; still flooding,
+	                                                          * waiting out the retry grid */
+
+	/* the retry grid re-arms a fresh burst after REAC_FSM_JOIN_RETRY_PERIOD ticks */
+	for (int i = 0; i < REAC_FSM_JOIN_RETRY_PERIOD - 2; i++)
+		o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+	CHK(!o.emit_join);
+	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+	CHK(o.action == FSM_ACT_FLOOD_BCAST && o.emit_join);   /* retry burst frame 1/3 */
 
 	struct reac_ctrl_parsed g = mk(REAC_CTRL_GRANT, M);
 	o = reac_fsm_step(&fsm, FSM_EV_RX, &g);
