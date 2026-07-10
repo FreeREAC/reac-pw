@@ -146,10 +146,14 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
 		/* §13d step 1 / §13p.3: announce by FLOODING broadcast FILLER at wire
 		 * rate while unlinked — continuous, not a one-shot (#130 fix 1). The
-		 * dst is broadcast; master is not learned yet. Box-width FILLER, silent. */
-		stage_inputs(s, buf, planar);  /* may carry early input; harmless pre-link */
+		 * dst is broadcast; master is not learned yet. The payload MUST be
+		 * ZEROED (silent): a real S-1608's presence-flood is an incrementing
+		 * sequence counter + an all-zero payload (verified on the wire,
+		 * m200-s1608-realbox-establish-2026-07-11.pcap). Staging input audio
+		 * into the flood makes the master REJECT it as a valid box announce —
+		 * only the ESTABLISHED unicast upstream carries the box's inputs. */
 		len = reac_ctrl_build_upstream_filler(frame, BCAST, s->src, counter,
-		                                      s->box_channels, planar,
+		                                      s->box_channels, NULL,
 		                                      REAC_SAMPLES_PER_PKT);
 		sll = bcast_sll;
 		break;
