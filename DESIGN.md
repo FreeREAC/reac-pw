@@ -27,7 +27,7 @@ the clock, and in the TX direction:**
 | **Handshake** | WE drive it: cycle `cdea 01` probe → `cdea 04 03` grant burst → steady `cdea 01 03` channel-map + `cfea` announce. A stagebox slaves to **us**. (`reac_master`, S2) | An EXTERNAL master drives it; WE RESPOND: flood broadcast FILLER → RX the master's probe → RX its `cdea 04 03` grant → settle → unicast our inputs up + a box heartbeat. (`reac_fsm` via `reac_slave`, S7) |
 | **Clock** | WE own it: a dedicated SCHED_FIFO `clock_nanosleep` pacer emits the downstream at a rock-steady pps (8000/4000/3675); PipeWire resamples the *graph* into it. (`reac_pacer`, S6) | The MASTER owns it: we **lock to the incoming master cadence** — every received master frame is one slot tick and we emit exactly one upstream frame per tick. We never run our own pacer as the timing source. |
 | **TX** | the **downstream broadcast** (40-ch program, dst `ff:ff:…`), encoded from the graph's PCM. | the **upstream return** (our box-width input channels, unicast to the learned master), placed at the box's slots — a slave sends its inputs INTO the stream. |
-| **RX** | a box's upstream return (presence-flood detection; audio return is the rig-only FPGA-scramble gap, task #61). | the master's downstream audio, via the same `reac:capture` source node. |
+| **RX** | a box's upstream return — presence detection AND its input AUDIO: the box-width braided frame is decoded by `reac_upstream` (layout resolved from the captures, task #108). | the master's downstream audio, via the same `reac:capture` source node. |
 
 The `--tx IFNAME` flag means "the REAC TX NIC" in both roles: the master's
 downstream sink, or the slave's upstream-return + handshake socket. The slave
@@ -310,13 +310,22 @@ on the segment):
 That capture also converts the rig-grade items to captured for both roles: the
 exact `cdea 04 03` grant-burst bytes (master: ours accepted; slave: the master's we
 key on), the per-rate cadence, the TX-mute dwell, channel `0x13`'s map frame, and
-the slave's upstream-return slot/scramble. **Commit it to `reac-captures`, do not
+the slave's upstream-return placement on a real desk (the byte layout itself is
+resolved offline, task #108). **Commit it to `reac-captures`, do not
 leave it in `/tmp`.**
 
-Rig-only unknowns still open (do not guess): the box's upstream return-audio FPGA
-channel-scramble (task #61 — a fidelity item, not a JOIN blocker; affects the slave
-TX slot mapping), and the 4th uncharacterised M-5000-internal HOLD-drop trigger
-(REAC-CONNECTION-FSM.md gap list).
+**RESOLVED (task #108, 2026-07-10):** the box's upstream return-audio layout — the
+ex-"FPGA scramble" of task #61 — is the obs-h8819 even/odd channel-pair byte BRAID
+over a downstream-style envelope (50 B header incl. a 16-slot `00 7a` descriptor,
+`len = 52 + nch*36`, C2 EA trailer, 12 samples/frame at every rate), channel order
+plain ascending. Verified against reac-captures (music channel lag1 autocorr +0.998
+under the braid vs garbage under plain LE). `reac_upstream.{h,c}` decodes it; the
+slave's `reac_ctrl_build_upstream_filler` now braid-packs identically, and the RX
+feeder gates by role (slave rx = 1492 B downstream; master rx = box-shaped returns,
+locked to the first box's src MAC).
+
+Rig-only unknowns still open (do not guess): the 4th uncharacterised
+M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 
 ## Files
 
@@ -325,9 +334,10 @@ TX slot mapping), and the 4th uncharacterised M-5000-internal HOLD-drop trigger
 | `src/main.c` | CLI + lifecycle: parse `--role`, open feeder, create source node, then (master) the sink or (slave) the slave engine; run the loop |
 | `src/reac_role.h` | **role selection**: `--role master\|slave` parse + validation (slave requires `--tx`), header-only + unit-tested |
 | `src/reac_ring.{h,c}` | lock-free SPSC planar-float ring (RX hot-path → process(); also the slave's upstream-input carrier) |
-| `src/reac_rx.{h,c}` | non-RT feeder: wire source (live/pcap) → libreac validate → reac-aes67 decode → f32 → ring; counter-slope ppm estimator |
+| `src/reac_rx.{h,c}` | non-RT feeder: wire source (live/pcap) → libreac validate → role-gated decode (downstream 40-ch / upstream box return) → f32 → ring; counter-slope ppm estimator |
 | `src/reac_source_node.{h,c}` | `reac:capture` pw_filter: 40 F32 ports, RT process(), follower/driver clock (RX for BOTH roles) |
 | `src/reac_tx.{h,c}` | downstream-frame encoder (`reac_tx_build`, inverse of the decode core) + raw-socket emitter |
+| `src/reac_upstream.{h,c}` | UPSTREAM (box return) audio decode: box-width braided frame → planar s24 (task #108) |
 | `src/reac_master.{h,c}` | **master-role** JOIN/HOLD: the cdea/cfea establishment FSM + captured control-block templates (S2) |
 | `src/reac_pacer.{h,c}` | **master-role** SCHED_FIFO cadence pacer + TX frame ring; stamps the master block on egress (S6) |
 | `src/reac_sink_node.{h,c}` | `reac:playback` Audio/Sink: process() encodes + submits to the pacer (the master TX) |
@@ -338,6 +348,8 @@ TX slot mapping), and the 4th uncharacterised M-5000-internal HOLD-drop trigger
 | `tests/test_reac_master.c` | master cdea/cfea blocks byte-match the captures + checksum + chanmap walk + FSM sequence |
 | `tests/test_reac_pacer.c` | pacer slot period (125/250/272 µs) + SPSC frame ring + live ~8000 fps emit (needs CAP_NET_RAW) |
 | `tests/test_reac_slave.c` | slave establishment §13d (flood→probe→grant→mute→established upstream + heartbeat) + HOLD, from the captured master control kinds |
+| `tests/test_reac_upstream.c` | upstream decode vs REAL sanitized captured frames (628 B/16 ch + 340 B/8 ch, full PCM tables) |
+| `tests/test_reac_rx_gate.c` | RX stream gate: role picks downstream vs upstream; first-box src-MAC lock; ring contents end-to-end |
 | `tests/test_reac_role.c` | `--role` parse + validation contract (master default; slave requires `--tx`) |
 | `meson.build`, `meson_options.txt` | build: pipewire/spa via pkg-config, libreac subproject, reac-aes67 core sibling |
 | `subprojects/libreac.wrap` + `packagefiles/libreac/meson.build` | libreac as a meson subproject |
