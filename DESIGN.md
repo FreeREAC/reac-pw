@@ -174,35 +174,99 @@ announce (REAC-PROTOCOL-AND-TESTS.md §13d, the gold WIRED reference). The earli
 cut sent a zero control block (= FILLER), which carries audio but is no grant —
 no desk links to it.
 
-`reac_master` is a **pure decision function** (no I/O): given its state + the next
-frame's counter it returns which control block to stamp into the downstream frame,
-and `reac_master_stamp()` writes that block (type `[16:18]` + control block
-`[18:50]`) over the frame `reac_tx_build` produced, re-applying the cdea/cfea
-checksum and leaving the audio + counter + `C2 EA` tail intact. The state machine:
+`reac_master` is a **pure decision core** (no I/O): the pacer thread owns it,
+feeds it classified RX events (`reac_master_rx`) and asks it once per emitted
+frame what to stamp (`reac_master_next` + `reac_master_stamp`, which writes type
+`[16:18]` + control block `[18:50]` over the frame `reac_tx_build` produced,
+re-applying the cdea/cfea checksum and leaving audio + counter + `C2 EA` tail
+intact).
+
+**EVENT-DRIVEN establishment (task #130).** A real M-5000 never advances the
+handshake on a timer — the earlier cut auto-advanced PROBING→GRANTING after ~1 s
+and reached ESTABLISHED against a silent wire. Now every FORWARD transition is
+gated on a received box control frame; the only timers left move BACKWARD to
+PROBING (safety fallbacks):
 
 ```
-IDLE ──box present──▶ PROBING ──~1 s──▶ GRANTING ──~150 ms──▶ ESTABLISHED
-  ▲                   (cdea 01 ss        (cdea 04 03           (FILLER audio +
-  └──box absent──────  03→01→00→02)       grant burst)          cdea 01 03 0019
-                                                                 chanmap + cfea ~1/s)
+              pacer starts emitting
+IDLE ────────────────────────────────▶ PROBING  (FILLER + cdea 01 probes ~180/s,
+                                          │       00-heavy ss cycle + cfea @1 Hz)
+                 rx box JOIN (cdea 04 03, │       — presence alone NEVER grants —
+                 validated cold-connect)  ▼
+                                       GRANTING (ECHO the box's own JOIN block,
+                                          │       1 grant / 12 slots, ~150 ms window)
+                 rx first box UNICAST     ▼
+                 (audio / hb / any)    ESTABLISHED (FILLER audio + chanmap @1/s
+                                                    + cfea @1/s, phase-offset)
+
+SAFETY FALLBACKS (backward only, with a typed drop reason + log line):
+  GRANTING     ──window expiry, no unicast──▶ PROBING   (grant-timeout; the box
+                                                          retries JOIN on ~100 ms)
+  ESTABLISHED  ──600-frame budget drained──▶ PROBING    (peer-gone; every box RX
+                                                          event reloads the budget)
+  ESTABLISHED  ──box hb selector 0x00──────▶ PROBING    (explicit BYE)
+  ESTABLISHED  ──JOIN from another MAC─────▶ GRANTING   (mac-change: re-latch +
+                                                          re-court the new box)
 ```
 
-**Byte source-of-truth.** The control blocks are the EXACT 32-byte blocks
-captured off the real M-5000 (reac-captures/wired-reac-a-bothdirs-2026-06-09,
-master `00:40:ab:ca:15:4d`): the 6 established channel-map frames spanning the
-full 40-ch walk, the `cfea` announce (inCh `0x28`=40, outCh `0x10`=16), plus the
-`cdea 01` probe and `cdea 04 03` grant from the §6/§13d transcription.
-`Sum(block[18..49]) mod 256 == 0` holds on every one (verified). We replay each
-block verbatim and re-stamp only the live counter, so the bytes a desk sees match
-the M-5000 by construction. The probe varies byte `[19]` through the sub-state
-cycle `03→01→00→02` and re-applies the checksum; the chanmap cursor walks the 6
-captured frames (never repeating within a cycle — dodges the desk's 6-identical
-stale-guard). Channel `0x13` falls in a 7th map frame the 120 s capture missed
-(coverage 47/48 slots) — a fidelity gap, not a link blocker.
+The counter free-runs across every transition. There is no presence gate: the
+box only emits its cold-connect on a real PHY link-down/up (§13b), so a master
+that waits for "presence" before probing deadlocks — probing is unconditional
+the moment the pacer emits. Presence (sustained box broadcast FILLER) is only a
+*diagnostic* flag with a 600-frame decay, logged on gained/lost edges.
+
+**Byte source-of-truth.** The chanmap/announce/probe blocks are the EXACT
+32-byte blocks captured off the real M-5000 (reac-captures/wired-reac-a-
+bothdirs-2026-06-09, master `00:40:ab:ca:15:4d`); `Sum(block[18..49]) mod 256
+== 0` holds on every one. Two deliberate departures from replay-verbatim:
+
+- **The grant is an echo, not a canned block.** The golden transcript shows the
+  master echoing the box's own `cdea 04 03` back as the broadcast grant burst,
+  so `REAC_M_EMIT_GRANT` stamps the received `join_blk` verbatim (~100 frames
+  over the ~150 ms window — the transcribed density, not an every-slot flood).
+  The §13d `0013/0e` vs `0014/0f` alternation is not byte-verifiable offline
+  (the /tmp pcaps are lost); the JOIN/grant hex dumps in the event log exist so
+  the first live power-cycle yields the corrective bytes if echo-verbatim is
+  not enough.
+- **The cfea announce embeds OUR src MAC.** The capture embeds the desk's own
+  MAC in the announce payload; replaying it verbatim advertised `ca:15:4d`
+  while our L2 src is `00:40:ab:00:00:01` — an inconsistent on-wire identity
+  and a documented slave-disconnect trigger. `reac_master_init` rewrites the
+  MAC field + recomputes the checksum.
 
 The cdea/cfea control frames ride the 8000 fps broadcast **in-band**, occupying
-audio slots ~1/s exactly as the real master does (§9 reac-repacer note: control
-frames replace audio slots, never add to the stream).
+audio slots exactly as the real master does (§9 reac-repacer note: control
+frames replace audio slots, never add to the stream). Channel `0x13` falls in a
+7th chanmap frame the 120 s capture missed (coverage 47/48 slots) — a fidelity
+gap, not a link blocker.
+
+**RX path + logging.** The pacer's TX fd (bound to the REAC NIC + 0x8819,
+`PACKET_IGNORE_OUTGOING` best-effort) is drained non-blocking up to 8 frames
+per slot *before* the slot's emission decision; `reac_ctrl_classify_box_frame`
+(pure, offline-tested) maps each frame to BCAST_FILLER / JOIN / UNICAST / BYE
+and `reac_pacer_rx_ingest` feeds the FSM on the owning thread. The SCHED_FIFO
+thread never touches stdio: events go into a lock-free SPSC ring the sink
+node's 200 ms main-loop timer drains to stderr — transitions with causes, JOIN
+and BYE with full 32-byte hex dumps, presence edges, grant-window telemetry,
+and a 10 s probing watchdog ("wire silent — check the RX path" vs "box present,
+not joining — bounce the box PHY").
+
+**Rig-day procedure** (the S-1608 hardware-verify gate; do NOT skip the PHY
+bounce — the box only cold-connects on link-up):
+
+1. `reac-pw --live <nic> --role master --tx <nic>` — the banner confirms
+   event-driven mode; the log shows `IDLE -> PROBING` immediately.
+2. Bounce the S-1608 PHY (replug, or link-down/up its port).
+3. Read the drained transcript:
+   - `box presence GAINED` proves the RX tap sees the box (its absence with a
+     flooding box means the RX path is broken, not the box);
+   - the `box JOIN seen (cdea 04 03 ...)` hex dump byte-confirms/corrects the
+     zoneA matcher template;
+   - `PROBING -> GRANTING (rx JOIN ...)` then `GRANTING -> ESTABLISHED` lines
+     timestamp the full establishment (expected ~5 s cold / ~3.7 s replug per
+     §13d); heartbeat lines report latency-after-chanmap (healthy: 0.5–1.9 ms).
+4. On failure the shutdown summary (counters + drops by reason) says which leg
+   of the courtship never happened.
 
 ### S6. SCHED_FIFO cadence pacer (`src/reac_pacer.{h,c}`)
 
