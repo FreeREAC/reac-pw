@@ -155,6 +155,11 @@ int main(int argc, char **argv)
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
 			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
+		else
+			fprintf(stderr, "reac-pw: MASTER role on '%s' — event-driven "
+			        "establishment: probing until the box's cold-connect "
+			        "(cdea 04 03) arrives; FSM/RX transcript on stderr "
+			        "(bounce the box PHY to trigger its JOIN)\n", tx_if);
 	} else if (tx_if && role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the
