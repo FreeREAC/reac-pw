@@ -70,6 +70,7 @@ enum reac_ctrl_kind reac_ctrl_parse(const uint8_t *frame, size_t len,
 	out->op0 = frame[18]; out->op1 = frame[19];
 	out->op_len = (uint16_t)((frame[20] << 8) | frame[21]);
 	out->sel = frame[22];
+	out->sel2 = frame[23];
 
 	const uint8_t t0 = frame[TYPE_OFF], t1 = frame[TYPE_OFF + 1];
 	if (t0 == 0x00 && t1 == 0x00) {
@@ -91,6 +92,67 @@ enum reac_ctrl_kind reac_ctrl_parse(const uint8_t *frame, size_t len,
 		out->kind = REAC_CTRL_UNKNOWN_CTRL;
 	}
 	return out->kind;
+}
+
+int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
+                                 const uint8_t our_mac[6],
+                                 struct reac_ctrl_parsed *out,
+                                 enum reac_master_rx_event *ev)
+{
+	if (reac_ctrl_parse(frame, len, out) == REAC_CTRL_NONE)
+		return -1;                                   /* not a 0x8819 frame */
+	/* Roland OUI only, and never our own echo (mandatory belt-and-braces:
+	 * PACKET_IGNORE_OUTGOING is best-effort and hubs/loopbacks echo). */
+	if (out->src[0] != 0x00 || out->src[1] != 0x40 || out->src[2] != 0xab)
+		return -1;
+	if (memcmp(out->src, our_mac, 6) == 0)
+		return -1;
+
+	const int to_us = (memcmp(out->dst, our_mac, 6) == 0);
+
+	/* A cdea/cfea control frame with an invalid checksum is corrupt — never a
+	 * JOIN, never a heartbeat, never evidence of anything. FILLER (type 0000)
+	 * is checksum-exempt (the block is the audio descriptor). */
+	if (out->kind != REAC_CTRL_FILLER && reac_ctrl_checksum_verify(frame) != 0)
+		return -1;
+
+	/* The box cold-connect JOIN: cdea 04 03, BE len 0x13/0x14, then 00 02.
+	 * Keyed ONLY on block[0:6] + checksum — the tail is device inventory
+	 * (0x41 is NOT a MAC tail). Broadcast AND unicast accepted (the box emits
+	 * it x3 on PHY-up while still in broadcast mode). */
+	if (out->kind == REAC_CTRL_GRANT) {
+		if ((out->op_len == 0x0013 || out->op_len == 0x0014) &&
+		    out->sel == 0x00 && out->sel2 == 0x02) {
+			*ev = REAC_M_RX_BOX_JOIN;
+			return 0;
+		}
+		/* A cdea 04 03 that fails the JOIN matcher is a cold-connect variant
+		 * we do not understand — don't guess (never generic UNICAST: that
+		 * could falsely close a grant window). The live log dumps the block
+		 * so the matcher can be extended from a real capture. */
+		return -1;
+	}
+
+	if (out->is_broadcast) {
+		if (out->kind == REAC_CTRL_FILLER) {
+			*ev = REAC_M_RX_BOX_BCAST_FILLER;        /* the presence-flood */
+			return 0;
+		}
+		return -1;   /* another master's probe/announce/… — not a box frame */
+	}
+
+	if (!to_us)
+		return -1;   /* unicast between other parties */
+
+	/* Unicast-to-us box heartbeat: sel 0x81 keep-alive, sel 0x00 disconnect. */
+	if (out->kind == REAC_CTRL_BOX_HB) {
+		*ev = (out->sel == 0x00) ? REAC_M_RX_BOX_BYE : REAC_M_RX_BOX_UNICAST;
+		return 0;
+	}
+	/* Any other unicast-to-us box frame — upstream FILLER (628/340 B),
+	 * config-announce sel 0x82, unknown ctrl — proves the box linked to us. */
+	*ev = REAC_M_RX_BOX_UNICAST;
+	return 0;
 }
 
 /* box-width frame length for n_ch inputs */
