@@ -148,14 +148,16 @@ int main(void)
 	                               .sample_rate = 96000, .src_mac = S_SRC };
 	reac_slave_fsm_init(&c.s, &scfg);
 
-	/* 1. the master probes first: 2 s alone on the wire — probes + announces
-	 * flow, NO grant, NO chanmap, state stays PROBING (nothing to court). */
+	/* 1. the master probes first: 2 s alone on the wire — probes + announces +
+	 * the sub-state-0x03 chanmap walk (§4: the box's parser needs it to
+	 * recognize a master), NO grant, state stays PROBING (nothing to court). */
 	c.slave_on = 0;
 	for (long i = 0; i < 2L * FPS; i++)
 		CHK(step(&c) == 0);
 	CHK(c.m.state == REAC_M_PROBING);
 	CHK(c.m_probes > 0 && c.m_announces > 0);
-	CHK(c.m_grants == 0 && c.m_chanmaps == 0);
+	CHK(c.m_grants == 0);          /* no grant until the box's cold-connect JOIN */
+	CHK(c.m_chanmaps > 0);         /* §4: chanmap advertised while unlinked too */
 
 	/* 2. the box PHY comes up: it floods + JOINs; the master grants ONLY
 	 * after the cold-connect, both sides walk the golden ordering. */
