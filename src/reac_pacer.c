@@ -216,13 +216,19 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 		         parsed.src, frame + 18);
 	} else {
 		/* Rate-limited: the first frame of each kind after a state change in
-		 * full; unicast heartbeats thereafter 1-in-8; FILLER presence only on
-		 * edges (above). For an established heartbeat, stash the latency
-		 * since our last chanmap walk in blk[0..3] LE (healthy lockstep is
-		 * 0.5-1.9 ms in the golden capture). */
+		 * full; unicast HEARTBEATS thereafter 1-in-8; FILLER presence only on
+		 * edges (above). Gate the 1-in-8 on the heartbeat KIND, not on
+		 * BOX_UNICAST at large: the box's established upstream is audio FILLER
+		 * unicast at wire rate (8000 fps @96k), which the classifier also maps
+		 * to BOX_UNICAST — logging 1-in-8 of THAT floods the 128-slot ring
+		 * (~1000 pev/s) and drop-newest silently evicts the JOIN/BYE/re-JOIN
+		 * blocks the rig transcript exists to capture. For an established
+		 * heartbeat, stash the latency since our last chanmap walk in blk[0..3]
+		 * LE (healthy lockstep is 0.5-1.9 ms in the golden capture). */
 		uint32_t seen = p->rx_since_change[ev & 3]++;
-		int log_it = (seen == 0) ||
-		             (ev == REAC_M_RX_BOX_UNICAST && (seen & 7) == 0);
+		int is_hb = (ev == REAC_M_RX_BOX_UNICAST &&
+		             parsed.kind == REAC_CTRL_BOX_HB);
+		int log_it = (seen == 0) || (is_hb && (seen & 7) == 0);
 		if (log_it && ev != REAC_M_RX_BOX_BCAST_FILLER) {
 			uint8_t blk[32] = { 0 };
 			if (ev == REAC_M_RX_BOX_UNICAST && p->last_chanmap_ns) {
