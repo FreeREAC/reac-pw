@@ -44,6 +44,8 @@ struct reac_sink_node {
 	int channels;
 	int sample_rate;
 	uint8_t src[6];           /* our master MAC */
+	struct pw_loop *loop;
+	struct spa_source *log_timer;  /* 200 ms event-log drain on the main loop */
 	struct port_in *ports[REAC_MAX_CHANNELS];
 
 	/* 12-sample-per-channel staging accumulator: a PipeWire quantum is not a
@@ -100,6 +102,17 @@ static const struct pw_filter_events filter_events = {
 	PW_VERSION_FILTER_EVENTS,
 	.process = on_process,
 };
+
+/* MAIN LOOP (non-RT): drain the pacer's FSM event ring to stderr. The pacer
+ * thread is SCHED_FIFO and must not touch stdio; it logs into a lock-free ring
+ * and this 200 ms timer formats it — so a live power-cycle prints the complete
+ * establishment transcript (presence edges, JOIN hex dumps, transitions). */
+static void on_log_timer(void *data, uint64_t expirations)
+{
+	(void)expirations;
+	struct reac_sink_node *n = data;
+	reac_pacer_log_drain(&n->pacer, stderr);
+}
 
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
                                           struct reac_ring *tx_ring,
@@ -195,6 +208,15 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	}
 
+	/* The FSM/RX log drain: 200 ms period on the main loop we already hold. */
+	n->loop = loop;
+	n->log_timer = pw_loop_add_timer(loop, on_log_timer, n);
+	if (n->log_timer) {
+		struct timespec first = { 0, 200 * 1000000L };
+		struct timespec interval = { 0, 200 * 1000000L };
+		pw_loop_update_timer(loop, n->log_timer, &first, &interval, false);
+	}
+
 	pw_log_info("reac:playback MASTER on '%s' (%d ch, %d Hz, %d fps pacer) — "
 	            "probing; establishment is event-driven on the box's JOIN",
 	            cfg->ifname, n->channels, n->sample_rate,
@@ -206,10 +228,32 @@ void reac_sink_node_destroy(struct reac_sink_node *n)
 {
 	if (!n)
 		return;
+	if (n->log_timer)
+		pw_loop_destroy_source(n->loop, n->log_timer);
 	if (n->filter)
 		pw_filter_destroy(n->filter);   /* stops process() submits first */
 	if (n->pacer_open) {
 		reac_pacer_stop(&n->pacer);     /* join the RT thread */
+		/* Final drain + counters: the shutdown summary of the establishment. */
+		reac_pacer_log_drain(&n->pacer, stderr);
+		fprintf(stderr,
+		        "reac-master: shutdown in %s — tx=%llu err=%llu late=%llu | "
+		        "rx_box_frames=%llu rx_box_ctrl=%llu rx_joins=%llu "
+		        "grant_attempts=%llu | drops: peer-gone=%llu bye=%llu "
+		        "mac-change=%llu grant-timeout=%llu | log-drops=%llu\n",
+		        reac_master_state_name(n->pacer.master.state),
+		        (unsigned long long)n->pacer.tx_frames,
+		        (unsigned long long)n->pacer.tx_errors,
+		        (unsigned long long)n->pacer.late_wakes,
+		        (unsigned long long)n->pacer.rx_box_frames,
+		        (unsigned long long)n->pacer.rx_box_ctrl,
+		        (unsigned long long)n->pacer.rx_joins,
+		        (unsigned long long)n->pacer.grant_attempts,
+		        (unsigned long long)n->pacer.drops[REAC_M_DROP_PEER_GONE],
+		        (unsigned long long)n->pacer.drops[REAC_M_DROP_BYE],
+		        (unsigned long long)n->pacer.drops[REAC_M_DROP_MAC_CHANGE],
+		        (unsigned long long)n->pacer.drops[REAC_M_DROP_GRANT_TIMEOUT],
+		        (unsigned long long)n->pacer.ev_drops);
 		reac_pacer_close(&n->pacer);    /* close socket + free ring */
 	}
 	free(n);
