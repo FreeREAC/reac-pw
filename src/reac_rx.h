@@ -47,6 +47,14 @@ struct reac_rx {
 	 * nominal recovered rate; the source node reads this for io_rate_match. */
 	_Atomic int ppm_error_milli;  /* ppm * 1000, signed; 0 until enough samples */
 
+	/* update_ppm() window state — instance-owned (was function-static, which
+	 * survived a pcap-loop restart and made RX a non-reentrant singleton). Reset
+	 * alongside the pcap-restart reset in rx_loop. */
+	uint64_t ppm_win_start_ns;
+	uint32_t ppm_win_frames;
+	uint16_t ppm_last_counter;
+	int      ppm_have_last;
+
 	/* diagnostics */
 	_Atomic uint64_t frames_ok;
 	_Atomic uint64_t frames_bad;

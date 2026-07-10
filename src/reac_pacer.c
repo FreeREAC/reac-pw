@@ -15,6 +15,7 @@
 #include <sched.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -150,6 +151,13 @@ static void *pacer_loop(void *arg)
 		fprintf(stderr, "reac_pacer: SCHED_FIFO denied (need CAP_SYS_NICE / rtprio); "
 		                "running SCHED_OTHER — cadence may jitter\n");
 
+	/* Block all signals on this thread. SIGINT/SIGTERM are serviced by the pw/main
+	 * loop, not here; a signal delivered to this thread would only cut the slot
+	 * sleep short (EINTR) and emit a frame ahead of cadence. */
+	sigset_t allsig;
+	sigfillset(&allsig);
+	pthread_sigmask(SIG_BLOCK, &allsig, NULL);
+
 	uint8_t frame[REAC_FRAME_BYTES];
 	uint8_t popbuf[2048];
 
@@ -165,7 +173,12 @@ static void *pacer_loop(void *arg)
 
 	while (atomic_load_explicit(&p->running, memory_order_acquire)) {
 		struct timespec d = { deadline / 1000000000ull, deadline % 1000000000ull };
-		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL);
+		/* Re-arm the SAME absolute deadline if interrupted (belt-and-braces: we
+		 * also block all signals above). An EINTR return means the slot sleep was
+		 * cut short — sleeping again to the same absolute target keeps cadence;
+		 * just emitting would put a frame ahead of the beat. */
+		while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL) == EINTR)
+			;
 
 		/* Apply a pending box-present change on THIS thread (the FSM owner) so we
 		 * never mutate struct reac_master from the submit side. */
@@ -194,7 +207,12 @@ static void *pacer_loop(void *arg)
 		frame[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)((counter >> 8) & 0xFF);
 		reac_master_stamp(frame, emit, tmpl_idx);
 
-		ssize_t r = sendto(p->fd, frame, REAC_FRAME_BYTES, 0,
+		/* Non-blocking send (the socket carries SOCK_NONBLOCK). The pacer runs
+		 * SCHED_FIFO: a blocking sendto() on a backed-up NIC tx queue would stall
+		 * THIS thread mid-period and smear the cadence the pacer exists to protect.
+		 * On EAGAIN/EWOULDBLOCK we drop this slot (bump tx_errors) and move on — the
+		 * absolute-deadline snap-forward below keeps the next slot on time. */
+		ssize_t r = sendto(p->fd, frame, REAC_FRAME_BYTES, MSG_DONTWAIT,
 		                   (struct sockaddr *)&sll, sizeof sll);
 		if (r < 0)
 			atomic_fetch_add_explicit(&p->tx_errors, 1, memory_order_relaxed);
@@ -236,7 +254,9 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	if (reac_frame_ring_init(&p->ring, depth, 2048) != 0)
 		return -1;
 
-	int fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
+	/* SOCK_NONBLOCK so the RT pacer thread's sendto() can never block on a backed-up
+	 * NIC tx queue (it also passes MSG_DONTWAIT per-send; either alone suffices). */
+	int fd = socket(AF_PACKET, SOCK_RAW | SOCK_NONBLOCK, htons(REAC_ETHERTYPE));
 	if (fd < 0) {
 		reac_frame_ring_free(&p->ring);
 		return -1;
