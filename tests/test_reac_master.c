@@ -195,7 +195,10 @@ int main(void)
 		else if (e == REAC_M_EMIT_CHANMAP) n_cm++;
 	}
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
-	CHK(n_grant == 0 && n_cm == 0);             /* old code emitted 1200 grants at t=1s */
+	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
+	CHK(n_cm > 0);                              /* §4: advertise the sub-state-0x03 chanmap while
+	                                             * unlinked so the S-1608 parser (FUN_0c003548)
+	                                             * recognizes a master and initiates its JOIN */
 	CHK(n_probe >= 120 * 60 && n_probe <= 250 * 60);   /* 120-250 probes/s band */
 	CHK(sub_hist[0x00] > sub_hist[0x03] && sub_hist[0x00] > sub_hist[0x01] &&
 	    sub_hist[0x00] > sub_hist[0x02]);        /* 00-dominant */

@@ -129,6 +129,11 @@ static void enter_probing(struct reac_master *m)
 	m->probe_tick = 0;
 	m->announce_tick = 0;
 	m->probe_sub_idx = 0;
+	/* Advertise the established channel-map while unlinked too (see the PROBING
+	 * emit case). Phase-offset half a second from the cfea so the two 1 Hz
+	 * control streams don't share a slot. */
+	m->chanmap_tick = m->fps / 2;
+	m->chanmap_cursor = 0;
 }
 
 /* Open a grant window echoing this JOIN block (also re-opens on a fresh JOIN
@@ -246,10 +251,25 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * (its tick is only reset when it actually emits). NO timer leaves
 		 * this state — only a validated JOIN does (reac_master_rx). */
 		m->announce_tick++;
+		m->chanmap_tick++;
 		m->probe_tick++;
 		if (m->announce_tick >= m->fps) {
 			m->announce_tick = 0;
 			emit = REAC_M_EMIT_ANNOUNCE;
+		} else if (m->chanmap_tick >= m->fps) {
+			/* §4 (S-1608 firmware, FUN_0c003548): the box's establishment
+			 * parser recognizes a master ONLY on the sub-state-0x03 established
+			 * channel-map (cdea 01 03 0019 ...); a 00-dominant probe explicitly
+			 * "keeps probing". A master that only probes and waits for the box's
+			 * JOIN therefore deadlocks against a box that only joins once it has
+			 * recognized a valid master. So advertise the chanmap walk while
+			 * unlinked (the byte-exact captured CHANMAP frames) at 1 Hz — the box
+			 * latches on the first valid 03 frame and initiates its cold-connect.
+			 * The interleaved probes stay (a real master also cycles cdea 01). */
+			m->chanmap_tick = 0;
+			emit = REAC_M_EMIT_CHANMAP;
+			idx = m->chanmap_cursor;
+			m->chanmap_cursor = (m->chanmap_cursor + 1) % REAC_M_CHANMAP_FRAMES;
 		} else if (m->probe_tick >= m->probe_period) {
 			m->probe_tick = 0;
 			emit = REAC_M_EMIT_PROBE;
