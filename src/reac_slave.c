@@ -33,13 +33,11 @@
 
 static struct reac_slave_decision map_action(const struct reac_fsm_out *o)
 {
-	struct reac_slave_decision d = { REAC_SLAVE_EMIT_NONE, 0, o->state };
+	struct reac_slave_decision d = { REAC_SLAVE_EMIT_NONE, 0, 0, o->state };
 	switch (o->action) {
 	case FSM_ACT_FLOOD_BCAST:
 		d.emit = REAC_SLAVE_EMIT_FLOOD_FILLER;
-		break;
-	case FSM_ACT_EMIT_JOIN:
-		d.emit = REAC_SLAVE_EMIT_JOIN;
+		d.with_join = o->emit_join;   /* FSM gates the cold-connect burst/retry */
 		break;
 	case FSM_ACT_UNICAST_AUDIO:
 		d.emit = REAC_SLAVE_EMIT_UPSTREAM_AUDIO;
@@ -146,27 +144,14 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		return;
 
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
-		/* §13d step 1: announce by FLOODING broadcast FILLER while unlinked. The
+		/* §13d step 1 / §13p.3: announce by FLOODING broadcast FILLER at wire
+		 * rate while unlinked — continuous, not a one-shot (#130 fix 1). The
 		 * dst is broadcast; master is not learned yet. Box-width FILLER, silent. */
 		stage_inputs(s, buf, planar);  /* may carry early input; harmless pre-link */
 		len = reac_ctrl_build_upstream_filler(frame, BCAST, s->src, counter,
 		                                      s->box_channels, planar,
 		                                      REAC_SAMPLES_PER_PKT);
 		sll = bcast_sll;
-		break;
-
-	case REAC_SLAVE_EMIT_JOIN:
-		/* §13b/§13d: the cold-connect (cdea 04 03, sub-cmd 04 — the trigger) plus a
-		 * config-announce. These are the reconstructed JOIN builders (experimental,
-		 * gated until a fresh PHY-link-up rig capture confirms the grant-burst), so
-		 * a real link only completes when the master's cdea 04 03 grant is RX'd. The
-		 * cold-connect is unicast-to-master once learned, else broadcast-flooded. */
-		if (s->fsm.have_master) {
-			len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src, counter);
-		} else {
-			len = reac_ctrl_build_coldconnect(frame, BCAST, s->src, counter);
-			sll = bcast_sll;
-		}
 		break;
 
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
@@ -200,6 +185,30 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		                                   (uint16_t)(counter + 1));
 		ssize_t hr = sendto(s->fd, hb, hn, 0, (struct sockaddr *)uni_sll, sizeof *uni_sll);
 		if (hr < 0)
+			atomic_fetch_add_explicit(&s->tx_errors, 1, memory_order_relaxed);
+		else
+			atomic_fetch_add_explicit(&s->tx_frames, 1, memory_order_relaxed);
+	}
+
+	/* §13b/§13d/§13p.multi: the cold-connect (cdea 04 03, sub-cmd 04 — the box's
+	 * own JOIN trigger, byte-captured alongside the flood) rides the presence
+	 * flood on the ticks the FSM flags (a burst, then a ~100 ms retry grid —
+	 * #130 fix 1). Unicast-to-master once learned, else broadcast like the
+	 * flood itself. A real link only completes when the master's cdea 04 03
+	 * grant is RX'd; this builder is the reconstructed JOIN half. */
+	if (d->emit == REAC_SLAVE_EMIT_FLOOD_FILLER && d->with_join) {
+		uint8_t jf[2048];
+		struct sockaddr_ll *jsll;
+		size_t jn;
+		if (s->fsm.have_master) {
+			jn = reac_ctrl_build_coldconnect(jf, s->fsm.master_mac, s->src, counter);
+			jsll = uni_sll;
+		} else {
+			jn = reac_ctrl_build_coldconnect(jf, BCAST, s->src, counter);
+			jsll = bcast_sll;
+		}
+		ssize_t jr = sendto(s->fd, jf, jn, 0, (struct sockaddr *)jsll, sizeof *jsll);
+		if (jr < 0)
 			atomic_fetch_add_explicit(&s->tx_errors, 1, memory_order_relaxed);
 		else
 			atomic_fetch_add_explicit(&s->tx_frames, 1, memory_order_relaxed);

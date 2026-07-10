@@ -75,7 +75,77 @@ int main(void)
 	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, 8, NULL, 12);
 	CHK(n == 340);
 
+	/* 5. master-side box-frame classifier truth table -----------------------
+	 * OUR_MAC is the master's identity; SRC plays the box. The canonical zoneA
+	 * JOIN is what reac_ctrl_build_coldconnect now emits. */
+	static const uint8_t OUR_MAC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+	static const uint8_t BCAST[6]   = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	enum reac_master_rx_event ev;
+
+	/* (a) the canonical cold-connect matches as JOIN, unicast AND broadcast */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x14 &&
+	    f[22] == 0x00 && f[23] == 0x02);                     /* zoneA block head */
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_JOIN && p.sel2 == 0x02);         /* sel2 parsed */
+	memcpy(f, BCAST, 6);                                     /* broadcast variant */
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_JOIN && p.is_broadcast);
+
+	/* (b) the 0x13 length variant is also a JOIN */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	f[21] = 0x13;
+	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_JOIN);
+
+	/* (c) rejects: corrupted checksum / op_len 0x15 / our own echo / non-Roland */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	f[49] ^= 0x5a;                                           /* break the checksum */
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	f[21] = 0x15;                                            /* bad op_len */
+	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7); /* src == our_mac */
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	f[6] = 0xde; f[7] = 0xad;                                /* non-Roland OUI */
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
+
+	/* (d) NOT keyed on the tail: mutated inventory byte still matches (the 0x41
+	 * is device inventory, never a MAC tail) */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	f[28] = 0x99;                                            /* block[10]: 0x41->0x99 */
+	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_JOIN);
+
+	/* (e) box hb sel 0x81 -> UNICAST; sel 0x00 -> BYE; bcast FILLER -> presence;
+	 *     unicast upstream FILLER -> UNICAST */
+	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_UNICAST);
+	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9);
+	f[22] = 0x00;                                            /* disconnect latch */
+	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_BYE);
+	n = reac_ctrl_build_upstream_filler(f, BCAST, SRC, 9, 16, NULL, 12);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_BCAST_FILLER);
+	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, 16, NULL, 12);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_UNICAST);
+	/* a config-announce (sel 0x82) unicast-to-us is also just UNICAST */
+	n = reac_ctrl_build_config_announce(f, OUR_MAC, SRC, 9, 16);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+	CHK(ev == REAC_M_RX_BOX_UNICAST);
+	/* a unicast between OTHER parties is not ours */
+	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9);
+	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
+
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
-	       "parser + descriptor + audio round-trip clean\n");
+	       "parser + descriptor + audio round-trip + box-frame classifier clean\n");
 	return 0;
 }

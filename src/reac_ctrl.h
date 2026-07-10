@@ -21,6 +21,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "reac_master.h"   /* enum reac_master_rx_event (the classifier's verdict) */
+
 #define REAC_CTRL_BLOCK_OFF   18   /* control block / checksum region start */
 #define REAC_CTRL_BLOCK_END   50   /* one past end (= audio offset)         */
 #define REAC_CTRL_CKSUM_OFF    49  /* checksum byte (last of the block)     */
@@ -45,6 +47,7 @@ struct reac_ctrl_parsed {
 	uint8_t  op0, op1;       /* control opcode bytes [18],[19] */
 	uint16_t op_len;         /* BE length [20:22] */
 	uint8_t  sel;            /* selector [22] (0x81/0x82/... or a channel byte) */
+	uint8_t  sel2;           /* second selector byte [23] (cold-connect: 0x02) */
 };
 
 /* Checksum over the 32-byte control block [18:50]: set frame[49] so the block
@@ -57,6 +60,28 @@ int  reac_ctrl_checksum_verify(const uint8_t *frame);
  * out->src when the frame came from the master (broadcast or unicast-to-us). */
 enum reac_ctrl_kind reac_ctrl_parse(const uint8_t *frame, size_t len,
                                     struct reac_ctrl_parsed *out);
+
+/* MASTER-side box-frame classifier (PURE — no socket): decide whether a raw
+ * received frame is a box frame the master FSM cares about, and which
+ * reac_master_rx_event it is. Returns 0 with out + ev filled, or -1 for
+ * anything else (not 0x8819 / not Roland OUI / our own echo / another
+ * master's broadcast). Matcher rules (byte-verified zoneA-48k JOIN):
+ *   - broadcast type-0000 -> BCAST_FILLER (the presence-flood; diagnostic);
+ *   - cdea 04 03, BE len 0x0013/0x0014, then 00 02, checksum valid -> JOIN,
+ *     accepted broadcast OR unicast (the box emits it x3 on PHY-up while
+ *     still in broadcast mode). Keyed ONLY on block[0:6] + checksum — the
+ *     tail (0x41 ...) is device inventory, never matched;
+ *   - unicast-to-us box heartbeat (cdea 01 03 0001) sel 0x81 -> UNICAST,
+ *     sel 0x00 -> BYE (the explicit disconnect);
+ *   - any other unicast-to-us box frame (upstream FILLER 628/340 B,
+ *     config-announce sel 0x82, unknown ctrl) -> UNICAST.
+ * reac_ctrl_parse's GRANT kind is direction-blind (a box cold-connect and a
+ * master grant are the same cdea 04 03 bytes) — this classifier disambiguates
+ * by src, not by adding new kinds. */
+int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
+                                 const uint8_t our_mac[6],
+                                 struct reac_ctrl_parsed *out,
+                                 enum reac_master_rx_event *ev);
 
 /* Builders. All emit unicast-to-master (dst=master), our Roland-OUI src, the
  * given free-running u16-LE counter, EtherType 0x8819, checksum applied.
