@@ -8,11 +8,14 @@
  * (40 ch x 12 samples x 3 B, plain-LE sample-major (s*40+ch)*3), 0xC2 0xEA tail.
  *
  * This is the ENCODER only (reac_tx_build) + a standalone direct emitter
- * (reac_tx_emit). It writes a zero control block (FILLER): audio, no link grant.
- * The master JOIN/HOLD handshake that makes a real Roland desk link lives in
- * reac_master (it stamps the cdea/cfea control block over a frame built here);
- * the SCHED_FIFO cadence pacer that clocks the wire lives in reac_pacer. The
- * sink node (reac_sink_node) uses reac_tx_build + the pacer, not reac_tx_emit. */
+ * (reac_tx_emit). It writes a zero control block (FILLER): audio, no link grant
+ * yet — the master role's reac_master_stamp() overwrites [18:50] afterwards on
+ * EVERY frame it stamps, including FILLER (a real master does not leave the
+ * FILLER block zero on the wire either; #130 fix 2). The master JOIN/HOLD
+ * handshake that makes a real Roland desk link lives in reac_master (it stamps
+ * the cdea/cfea control block, or the FILLER descriptor, over a frame built
+ * here); the SCHED_FIFO cadence pacer that clocks the wire lives in reac_pacer.
+ * The sink node (reac_sink_node) uses reac_tx_build + the pacer, not reac_tx_emit. */
 #ifndef REAC_TX_H
 #define REAC_TX_H
 
