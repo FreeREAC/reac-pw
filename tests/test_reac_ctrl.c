@@ -7,6 +7,7 @@
  * cross-check of the checksum algorithm. Geometry (628 B box width, 00 7a
  * descriptor, C2 EA trailer) is ground-truthed in REAC-CONNECTION-FSM.md. */
 #include "reac_ctrl.h"
+#include "reac_upstream.h"
 #include <reac/reac.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,27 +36,34 @@ int main(void)
 	CHK(p.counter == 0x1234 && p.op0 == 1 && p.op1 == 3 && p.op_len == 1 && p.sel == 0x81);
 	CHK(!p.is_broadcast && memcmp(p.src, SRC, 6) == 0 && memcmp(p.dst, MASTER, 6) == 0);
 
-	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips */
+	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips
+	 * through the capture-verified upstream decoder — i.e. we emit the same
+	 * BRAIDED layout a real box does (task #108), not plain LE. */
 	float chbuf[16][12]; float *pl[16];
 	for (int c = 0; c < 16; c++) {
 		pl[c] = chbuf[c];
-		for (int s = 0; s < 12; s++) chbuf[c][s] = (float)c / 64.0f - 0.1f;
+		for (int s = 0; s < 12; s++)
+			chbuf[c][s] = (float)c / 64.0f - 0.1f + (float)s / 1024.0f;
 	}
 	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 16, pl, 12);
 	CHK(n == 628);
 	CHK(f[16] == 0x00 && f[17] == 0x00);
 	for (int k = 0; k < 16; k++) CHK(f[18 + 2 * k] == 0x00 && f[18 + 2 * k + 1] == 0x7a);
 	CHK(f[626] == 0xc2 && f[627] == 0xea);
+	uint8_t pcm[16 * 12 * 3];
+	CHK(reac_upstream_decode(f, n, pcm) == 12);
 	float maxerr = 0;
 	for (int ch = 0; ch < 16; ch++)
 		for (int s = 0; s < 12; s++) {
-			const uint8_t *p3 = &f[50 + (s * 16 + ch) * 3];
+			const uint8_t *p3 = &pcm[(size_t)(ch * 12 + s) * 3];
 			int32_t v = p3[0] | (p3[1] << 8) | (p3[2] << 16);
 			if (v & 0x800000) v |= ~0xffffff;
 			float got = (float)v / 8388608.0f, e = fabsf(got - chbuf[ch][s]);
 			if (e > maxerr) maxerr = e;
 		}
 	CHK(maxerr < 1e-6f);
+	/* odd widths don't exist on-wire (the braid packs pairs) -> rejected */
+	CHK(reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 15, pl, 12) == 0);
 
 	/* 3. experimental JOIN builders: checksum invariant holds */
 	reac_ctrl_build_config_announce(f, MASTER, SRC, 1, 16);

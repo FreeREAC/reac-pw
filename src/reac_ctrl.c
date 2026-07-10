@@ -118,8 +118,8 @@ size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter,
                                        int n_ch, float *const *planar, int ns)
 {
-	if (n_ch < 1 || n_ch > REAC_MAX_CHANNELS)
-		return 0;
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;  /* the braid packs channel PAIRS; odd widths don't exist on-wire */
 	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0x00, 0x00);   /* unicast FILLER */
@@ -128,14 +128,27 @@ size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
 		out[18 + 2 * k] = DESC_WORD_HI;
 		out[18 + 2 * k + 1] = DESC_WORD_LO;
 	}
-	/* audio [50:..] plain-LE sample-major (s*n_ch+ch)*3. Slot placement is
-	 * positional (the FPGA scramble of a real box is unresolved, task #61). */
+	/* audio [50:..] sample-major in the box's BRAIDED layout (resolved 2026-07-10,
+	 * task #108 — the ex-"FPGA scramble" of task #61): per time sample each
+	 * channel PAIR shares a 6-byte group; the even channel's s24 LE (lo,mid,hi)
+	 * bytes sit at group[3],group[0],group[1] and the odd channel's at
+	 * group[4],group[5],group[2] (the obs-h8819 braid). Slot placement is plain
+	 * ascending. This is what a real M-5000 expects from a box's return —
+	 * reac_upstream_decode() is the exact inverse. */
 	uint8_t *audio = out + AUDIO_OFF;
 	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
 	for (int s = 0; s < frames; s++)
 		for (int ch = 0; ch < n_ch; ch++) {
 			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
-			f32_to_s24le(v, audio + (size_t)(s * n_ch + ch) * REAC_RESOLUTION);
+			uint8_t s24[3];
+			f32_to_s24le(v, s24);
+			uint8_t *g = audio + (size_t)s * n_ch * REAC_RESOLUTION
+			                   + (size_t)(ch & ~1) * REAC_RESOLUTION;
+			if ((ch & 1) == 0) {
+				g[3] = s24[0]; g[0] = s24[1]; g[1] = s24[2];
+			} else {
+				g[4] = s24[0]; g[5] = s24[1]; g[2] = s24[2];
+			}
 		}
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;                            /* FILLER: no checksum (exempt) */
