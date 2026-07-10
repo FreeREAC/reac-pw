@@ -403,12 +403,54 @@ static void apply_block(uint8_t *frame, const uint8_t blk[34])
 	reac_ctrl_checksum_apply(frame);        /* re-stamp the checksum at [49]  */
 }
 
+/* The downstream FILLER control-block descriptor (#130 fix 2). A real master
+ * does NOT leave [18:50] all-zero on a FILLER frame: it repeats one non-zero
+ * 16-bit value 16x across the block. Empirically confirmed 2026-07-10 against
+ * reac-captures/m{200,300}-s1608-establish-2026-07-10.pcap (two different real
+ * consoles, >1.1M FILLER frames total, offline pcap analysis, no rig): every
+ * single captured FILLER block is exactly 16 copies of a 2-byte pair "00 xx"
+ * (block[2k]=0x00 constant, block[2k+1]=the varying byte, k=0..15) — ZERO
+ * all-zero blocks bar a literal handful (34 of 1.1M) at value-transition
+ * boundaries, certainly an FPGA register-read race.
+ *
+ * The value is NOT a fixed per-console protocol constant — it is LIVE: a slow
+ * ~1 Hz scan through ~15-20 widely spaced values before the box locks, then a
+ * tight +/-1..3 dither around a per-session baseline (0xd9-0xe7 observed on
+ * BOTH the M-200 and the M-300 captures) once running steadily. No
+ * correlation was found against our free-running counter (every
+ * `(counter >> k) & 0xff`, k=0..8, tested) or wall-clock time
+ * (`elapsed_ms % 256`, tested) — under 4% match rate for either, chance
+ * level. The best-supported read is a live analog telemetry sample (a
+ * PLL-jitter or ADC noise-floor readback, maybe a periodic channel/meter
+ * scan), not a protocol field — so it is UNLIKELY to be handshake-load-
+ * bearing, but that is not proven offline.
+ *
+ * We reproduce the STRUCTURE exactly (16x one non-zero byte, high byte 0x00)
+ * with a FIXED value drawn from the steady-state cluster shared by both
+ * captured consoles. This is a plausible-pattern fix, not a byte-exact one:
+ * matching the real live value is not offline-derivable. The rig test will
+ * confirm whether a real box cares. FILLER stays checksum-exempt (this never
+ * touches the checksum byte's semantics — [49] here is just descriptor data,
+ * not a checksum). */
+#define FILLER_DESC_BYTE 0xdc   /* one observed steady-state sample, both M-200 + M-300 */
+
+static void stamp_filler_descriptor(uint8_t *frame)
+{
+	for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i += 2) {
+		frame[i] = 0x00;
+		frame[i + 1] = FILLER_DESC_BYTE;
+	}
+}
+
 int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
                       enum reac_master_emit emit, int tmpl_idx)
 {
 	switch (emit) {
 	case REAC_M_EMIT_FILLER:
-		/* reac_tx_build already wrote type 00 00 + zero block + audio + tail. */
+		/* reac_tx_build (or the pacer's silent-underrun filler) already wrote
+		 * type 00 00 + audio + tail; stamp the non-zero descriptor pattern a
+		 * real master repeats there on EVERY FILLER frame (#130 fix 2). */
+		stamp_filler_descriptor(frame);
 		return 0;
 	case REAC_M_EMIT_PROBE:
 		apply_block(frame, PROBE_BLK);   /* the fixed M-300 probe */

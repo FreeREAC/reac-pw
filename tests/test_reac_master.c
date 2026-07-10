@@ -65,6 +65,10 @@ static const uint8_t SRC[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6]  = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
 
+/* #130 fix 2: mirrors reac_master.c's FILLER_DESC_BYTE (the chosen placeholder
+ * for the FILLER control-block descriptor a real master stamps there). */
+#define FILLER_DESC_BYTE 0xdc
+
 #define FPS 8000
 
 /* Build a base downstream FILLER (so the audio + tail are present), then let the
@@ -176,6 +180,28 @@ int main(void)
 	int ns = reac_decode(f, REAC_FRAME_BYTES, &mode, s24);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	CHK(f[16] == 0x00 && f[17] == 0x00);        /* FILLER keeps type 00 00 */
+
+	/* 6. #130 fix 2: the FILLER control block [18:50] is the non-zero descriptor
+	 * a real master stamps there (reac-captures/m{200,300}-s1608-establish-
+	 * 2026-07-10.pcap: >1.1M captured FILLER frames from two consoles, 100%
+	 * uniform-16x "00 xx" pairs, essentially never all-zero) — NOT the all-zero
+	 * block our code used to leave. The exact live value is not offline-
+	 * derivable (see reac_master.c's stamp_filler_descriptor comment); we only
+	 * assert the STRUCTURE + that it is unambiguously non-zero, plus that the
+	 * stamp is non-destructive (end marker + audio survive, as already checked
+	 * above). */
+	{
+		int all_zero = 1;
+		for (int i = 18; i < 50; i += 2) {
+			CHK(f[i] == 0x00);              /* high byte constant, per the captures */
+			CHK(f[i + 1] == FILLER_DESC_BYTE);
+			if (f[i] || f[i + 1])
+				all_zero = 0;
+		}
+		CHK(!all_zero);                     /* never all-zero, unlike the old code */
+	}
+	CHK(f[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 &&
+	    f[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);   /* end marker survives the stamp */
 
 	/* ---- (a) NO-RX SOAK: the direct anti-#130 regression test ------------ */
 	reac_master_init(&m, SRC, &s1608, FPS);
