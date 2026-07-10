@@ -62,6 +62,7 @@ reac_pw_src = [
   'src/main.c',
   'src/reac_ring.c',
   'src/reac_rx.c',
+  'src/reac_upstream.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
@@ -94,9 +95,30 @@ tx_test = executable('test_reac_tx',
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
 
+# --- unit test: the UPSTREAM (stagebox->master) frame decode -------------------
+# Captured-frame fixtures (MAC-sanitized) + the resolved braid layout; no I/O.
+upstream_test = executable('test_reac_upstream',
+  ['tests/test_reac_upstream.c', 'src/reac_upstream.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_upstream', upstream_test)
+
+# --- unit test: the RX stream gate (downstream vs upstream accept) ------------
+# Runs the real feeder thread over a temp pcap that interleaves both streams
+# (synthetic 40-ch broadcast + the captured box return + a second box).
+rx_gate_test = executable('test_reac_rx_gate',
+  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_upstream.c',
+   reac_aes67 / 'src' / 'reac_decode.c',
+   reac_aes67 / 'src' / 'reac_capture.c',
+   reac_aes67 / 'src' / 'pcap_source.c'],
+  include_directories : [reac_aes67_inc, include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_rx_gate', rx_gate_test)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
-  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_upstream.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)

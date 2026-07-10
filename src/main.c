@@ -102,6 +102,13 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
+	/* The role picks which stream RX decodes (see DESIGN's role table): as
+	 * MASTER our capture is a box's upstream return (its input channels,
+	 * box-width braided frames); as SLAVE it is the master's 40-ch downstream
+	 * broadcast. The wire carries both; the gate keeps them apart. */
+	rxcfg.accept = (role == REAC_ROLE_MASTER) ? REAC_RX_ACCEPT_UPSTREAM
+	                                          : REAC_RX_ACCEPT_DOWNSTREAM;
+
 	pw_init(&argc, &argv);
 
 	struct reac_ring ring;
@@ -110,8 +117,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "reac-pw: cannot open source '%s'\n", rxcfg.source);
 		return 1;
 	}
-	fprintf(stderr, "reac-pw: recovered REAC rate = %d Hz (%d pps), 40 ch\n",
-	        rx.sample_rate, rx.sample_rate / REAC_SAMPLES_PER_PKT);
+	fprintf(stderr, "reac-pw: recovered REAC rate = %d Hz (%d pps), rx stream = %s\n",
+	        rx.sample_rate, rx.sample_rate / REAC_SAMPLES_PER_PKT,
+	        rxcfg.accept == REAC_RX_ACCEPT_UPSTREAM
+	          ? "box upstream return (box-width)" : "master downstream (40 ch)");
 
 	g_loop = pw_main_loop_new(NULL);
 	struct pw_loop *loop = pw_main_loop_get_loop(g_loop);
