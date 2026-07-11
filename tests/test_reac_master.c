@@ -46,8 +46,11 @@ static const uint8_t GOLD_CHANMAP[34] =
  * emits it with OUR MAC substituted + the checksum recomputed. */
 static const uint8_t GOLD_CFEA_M300[34] =
  { 0xcf,0xea,0xff,0xff,0x01,0x00,0x01,0x03,0x0d,0x01,0x04,0x00,0x40,0xab,0xc9,0xd8,0x5b,0x28,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xd4 };
+/* The PROBE is NOT a constant — it rotates (phase +6 mod 10, 2 emissions each,
+ * sub 0x02 hunting / 0x03 established; #130, measured live off an M-200). This is
+ * the block a freshly-init'd master seeds: phase 0, sub 0x02 (checksum 0xde). */
 static const uint8_t GOLD_PROBE[34] =
- { 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0xdd };
+ { 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0xde };
 static const uint8_t GOLD_SUB01[34] =
  { 0xcd,0xea,0x01,0x01,0x00,0x18,0x00,0x22,0xc8,0x31,0x32,0x33,0x34,0x01,0x00,0x00,0x00,0x04,0x00,0x01,0x80,0x02,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0xa7 };
 static const uint8_t GOLD_SUB02[34] =
@@ -65,9 +68,9 @@ static const uint8_t SRC[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6]  = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
 
-/* #130 fix 2: mirrors reac_master.c's FILLER_DESC_BYTE (the chosen placeholder
- * for the FILLER control-block descriptor a real master stamps there). */
-#define FILLER_DESC_BYTE 0xdc
+/* The FILLER descriptor is 16x "00 <checksum of the CURRENT probe>" (#130): it
+ * tracks the rotating probe, so the test compares against m.filler_desc rather
+ * than any fixed byte — a frozen descriptor is exactly the bug we fixed. */
 
 #define FPS 8000
 
@@ -119,7 +122,7 @@ int main(void)
 
 	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
 	 * fe frame (marker + 0x00..0x06), asserted below against GOLD_CHANMAP. */
-	CHK(m.chanmap_nframes == 11);
+	CHK(m.chanmap_nframes == 49);
 
 	/* ---- byte oracle ---------------------------------------------------- */
 
@@ -212,7 +215,7 @@ int main(void)
 		int all_zero = 1;
 		for (int i = 18; i < 50; i += 2) {
 			CHK(f[i] == 0x00);              /* high byte constant, per the captures */
-			CHK(f[i + 1] == FILLER_DESC_BYTE);
+			CHK(f[i + 1] == m.filler_desc);   /* tracks the current probe */
 			if (f[i] || f[i + 1])
 				all_zero = 0;
 		}
@@ -227,7 +230,7 @@ int main(void)
 	uint16_t cnt = 0;
 	int idx;
 	long n_probe = 0, n_sub01 = 0, n_sub02 = 0, n_ann = 0, n_grant = 0, n_cm = 0;
-	int cm_seen[11] = { 0 };                    /* which sweep windows were emitted */
+	int cm_seen[49] = { 0 };                    /* which sweep windows were emitted */
 	for (long i = 0; i < 60L * FPS; i++) {      /* 60 s of slots, zero RX */
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
 		CHK((int)e >= 0);
@@ -236,12 +239,12 @@ int main(void)
 		case REAC_M_EMIT_SUB01:    n_sub01++; break;
 		case REAC_M_EMIT_SUB02:    n_sub02++; break;
 		case REAC_M_EMIT_ANNOUNCE: n_ann++;   break;
-		case REAC_M_EMIT_CHANMAP:  n_cm++; CHK(idx >= 0 && idx < 11); cm_seen[idx] = 1; break;
+		case REAC_M_EMIT_CHANMAP:  n_cm++; CHK(idx >= 0 && idx < 49); cm_seen[idx] = 1; break;
 		case REAC_M_EMIT_GRANT:    n_grant++; break;
 		case REAC_M_EMIT_FILLER:   break;
 		}
 	}
-	for (int w = 0; w < 11; w++)                 /* the cursor sweeps ALL 11 windows */
+	for (int w = 0; w < 49; w++)                 /* the cursor sweeps ALL 11 windows */
 		CHK(cm_seen[w] == 1);
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
@@ -298,7 +301,7 @@ int main(void)
 		switch (e) {
 		case REAC_M_EMIT_CHANMAP:
 			e_cm++;
-			CHK(idx >= 0 && idx < 11);              /* sweeps the fabric, cursor 0..10 */
+			CHK(idx >= 0 && idx < 49);              /* sweeps the fabric, cursor 0..10 */
 			if (cm_slot >= 0)
 				CHK(i - cm_slot == FPS);            /* exactly 1/s */
 			cm_slot = i;
