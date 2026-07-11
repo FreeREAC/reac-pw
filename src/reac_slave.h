@@ -76,6 +76,14 @@ struct reac_slave {
 	                               * thread (the FSM owner) applies it each loop */
 	int phy_up_seen;              /* engine-thread-local last-applied value */
 
+	/* Clock-follow: our upstream counter TRACKS the master's downstream counter at
+	 * a fixed offset latched at first lock (the M-200 is the word-clock master — a
+	 * box whose counter free-runs/drifts is not clock-slaved and is refused). The
+	 * FSM's own counter is overridden with the master-derived value before emit. */
+	uint16_t counter_offset;
+	int      counter_locked;      /* 1 once the offset is latched (reset on PHY-up) */
+	int      coldconnect_alt;     /* toggles the cdea 04 03 block 0014<->0013, as a real box */
+
 	/* diagnostics (read from any thread) */
 	_Atomic uint64_t rx_master_frames;  /* master downstream frames we locked to */
 	_Atomic uint64_t tx_frames;         /* upstream frames we emitted */
