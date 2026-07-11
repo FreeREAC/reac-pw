@@ -368,7 +368,7 @@ int main(void)
 	/* 12 s = ~4.45 cycles: the cycle streams fire 4-5x, cfea ~12x. */
 	CHK(e_cm >= 4 && e_cm <= 5 && e_ann >= 11 && e_ann <= 13);
 	CHK(e_s1 >= 4 && e_s1 <= 5 && e_s2 >= 4 && e_s2 <= 5);
-	CHK(e_pr >= 4L * 341 && e_pr <= 5L * 341);      /* 341-probe bursts, linked too */
+	CHK(e_pr == 0);                                 /* ESTABLISHED emits ZERO probes (#130) */
 	CHK(cm_slot != ann_slot);                                      /* phase-separated */
 
 	/* ---- (c) safety fallbacks only move BACKWARD ------------------------- */
@@ -387,15 +387,18 @@ int main(void)
 	CHK(m.drop_reason == REAC_M_DROP_GRANT_TIMEOUT);
 	CHK(m.grant_attempts == 1);
 
-	/* established then 600 slots without RX -> peer-gone, at exactly 600 */
+	/* established then link_check_reload silent slots -> peer-gone, at exactly the
+	 * budget's last frame. The budget is now the measured ~6.5 s M-200i hold
+	 * (fps-scaled), NOT the old 600-frame constant (#130). */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 1);
 	CHK(m.state == REAC_M_ESTABLISHED);
-	for (int i = 0; i < REAC_M_LINKCHECK_RELOAD - 1; i++)
+	CHK(m.link_check_reload == (FPS * 65) / 10);   /* ~6.5 s of frames */
+	for (int i = 0; i < m.link_check_reload - 1; i++)
 		slot(&m, NULL, &cnt);
-	CHK(m.state == REAC_M_ESTABLISHED);          /* 599 silent slots: still held */
+	CHK(m.state == REAC_M_ESTABLISHED);          /* budget-1 silent slots: still held */
 	slot(&m, NULL, &cnt);
-	CHK(m.state == REAC_M_PROBING);              /* the 600th drains the budget */
+	CHK(m.state == REAC_M_PROBING);              /* the last frame drains the budget */
 	CHK(m.drop_reason == REAC_M_DROP_PEER_GONE);
 
 	/* established + explicit BYE (hb selector 0x00) -> PROBING immediately */

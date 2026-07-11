@@ -310,6 +310,11 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	if (m->grant_frames < 1)
 		m->grant_frames = 1;
 	m->grant_stride = REAC_M_GRANT_STRIDE;
+	/* Peer-gone budget = ~6.5 s of frames (the measured M-200i hold), rate-scaled
+	 * so it is the same wall-clock at 44.1/48/96k (#130). */
+	m->link_check_reload = (m->fps * REAC_M_LINKCHECK_SECONDS_X10) / 10;
+	if (m->link_check_reload < 1)
+		m->link_check_reload = 1;
 
 	/* Generate the downstream the master advertises for this console: the 49-window
 	 * fabric sweep + the cfea announce (OUR src MAC embedded). */
@@ -363,7 +368,7 @@ static void enter_established(struct reac_master *m)
 	/* Same continuous control cadence as PROBING (PROBE + the four 1/s
 	 * streams), phase-offset so they never contend for a slot. */
 	reset_control_cadence(m);
-	m->link_check = REAC_M_LINKCHECK_RELOAD;
+	m->link_check = m->link_check_reload;
 }
 
 int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
@@ -411,7 +416,7 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 
 	case REAC_M_ESTABLISHED:
 		/* Every box RX event reloads the 600-frame link-check budget. */
-		m->link_check = REAC_M_LINKCHECK_RELOAD;
+		m->link_check = m->link_check_reload;
 		if (ev == REAC_M_RX_BOX_BYE) {
 			m->drop_reason = REAC_M_DROP_BYE;
 			enter_probing(m);
@@ -454,7 +459,14 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 	m->cycle_pos = (pos + 1) % m->cycle_len;
 	m->announce_tick++;
 
-	if (pos <= m->burst_end && pos % m->probe_stride == 0) {
+	/* PROBE burst only while HUNTING. A real M-200i emits ZERO 0100001a probes
+	 * once ESTABLISHED (measured 2026-07-11: 0 probes across the whole linked
+	 * window, only chanmap + audio); the probe is the hunt beacon, so suppress the
+	 * burst once locked — those slots fall through to audio FILLER. (TODO: the
+	 * linked-state chanmap runs ~2/s on the real desk vs our 1/cycle — a fidelity
+	 * refinement, not establishment-critical since the box is already locked.) */
+	if (m->state != REAC_M_ESTABLISHED &&
+	    pos <= m->burst_end && pos % m->probe_stride == 0) {
 		m->probe_idx = pos / m->probe_stride;  /* specials key off this */
 		return REAC_M_EMIT_PROBE;
 	}

@@ -206,19 +206,20 @@ int main(void)
 	CHK(c.m_chanmaps - cm0 >= 1 && c.m_announces - an0 >= 4);   /* 1/cycle + ~1/s */
 	CHK(c.s_heartbeats_fed - hb0 >= 4);       /* the box keep-alive flows */
 
-	/* 4. the box goes silent: the master holds for exactly its 600-frame
-	 * budget, then drops back to PROBING (peer-gone) — and keeps counting. */
+	/* 4. the box goes silent: the master holds for exactly its peer-gone budget
+	 * (the measured ~6.5 s M-200i hold, fps-scaled — NOT the old 600 constant),
+	 * then drops back to PROBING (peer-gone) — and keeps counting. */
 	c.slave_on = 0;
-	for (int i = 0; i < REAC_M_LINKCHECK_RELOAD - 1; i++)
+	for (int i = 0; i < c.m.link_check_reload - 1; i++)
 		CHK(step(&c) == 0);
-	CHK(c.m.state == REAC_M_ESTABLISHED);     /* 599 silent slots: still held */
+	CHK(c.m.state == REAC_M_ESTABLISHED);     /* budget-1 silent slots: still held */
 	CHK(step(&c) == 0);
-	CHK(c.m.state == REAC_M_PROBING);         /* the 600th drains the budget */
+	CHK(c.m.state == REAC_M_PROBING);         /* the last frame drains the budget */
 	CHK(c.m.drop_reason == REAC_M_DROP_PEER_GONE);
 
 	printf("OK: full offline courtship — master probes first, grants only on the "
 	       "box's cold-connect (echoed), box links off the grant, master links off "
 	       "the box's first unicast, 5 s steady HOLD both ways, peer-gone at "
-	       "exactly %d silent slots\n", REAC_M_LINKCHECK_RELOAD);
+	       "exactly %d silent slots\n", c.m.link_check_reload);
 	return 0;
 }
