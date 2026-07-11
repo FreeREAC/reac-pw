@@ -250,19 +250,23 @@ size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch)
 {
-	size_t len = box_frame_len(in_ch);          /* frame width follows our input count */
+	/* The box's SETUP DECLARATION a real S-1608 sends (byte-matched to
+	 * m5000-s1608, 2026-07-11): cdea 01 03 0010, sel 0x82, then the per-input
+	 * channel-config flags. The master ENROLLS the box from this frame — without
+	 * it the desk never registers us (live M-5000 test). 16-input (S-1608) form;
+	 * block sums to 0 with the captured 0x4c checksum byte. */
+	static const uint8_t CONFIG_ANNOUNCE_BLK[32] = {
+		0x01, 0x03, 0x00, 0x10, 0x82, 0x00, 0x00, 0x02,
+		0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x03, 0x03,
+		0x03, 0x03, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4c,
+	};
+	(void)in_ch;
+	size_t len = box_frame_len(16);             /* S-1608 config-announce = 628 B */
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	out[18] = 0x01; out[19] = 0x03;
-	out[20] = 0x00; out[21] = (uint8_t)in_ch;   /* BE len = our input channel count */
-	out[22] = 0x82;                              /* master-reply selector */
-	/* channel entries (3B: ch#, flags, 0xfe term) — layout reconstructed */
-	for (int c = 0; c < in_ch && (24 + 3 * c + 2) < REAC_CTRL_CKSUM_OFF; c++) {
-		out[24 + 3 * c] = (uint8_t)c;
-		out[24 + 3 * c + 1] = 0x28;
-		out[24 + 3 * c + 2] = 0xfe;
-	}
-	reac_ctrl_checksum_apply(out);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, CONFIG_ANNOUNCE_BLK, 32);
+	reac_ctrl_checksum_apply(out);              /* no-op: block already sums to 0 */
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
 }

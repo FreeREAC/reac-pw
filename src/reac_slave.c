@@ -178,7 +178,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 			 * 2026-07-11). The 0016/001a carry the fuller box inventory the master
 			 * needs to register the box; emitting only 0014/0013 left the desk blind
 			 * (live M-5000 test, 2026-07-11). One variant per join grid slot. */
-			switch (s->coldconnect_phase & 3) {
+			switch (s->coldconnect_phase % 6) {
 			case 1:
 				len = reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac, s->src,
 				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
@@ -190,6 +190,17 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 			case 3:
 				len = reac_ctrl_build_coldconnect_001a(frame, s->fsm.master_mac, s->src,
 				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 4:
+				/* ANNOUNCE OUR SETUP — the master enrolls the box from this frame;
+				 * without it the desk never registers us (live M-5000 test). */
+				len = reac_ctrl_build_config_announce(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				break;
+			case 5:
+				/* the box also heartbeats DURING cold-connect, before any grant */
+				len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter,
+				          s->box_channels);
 				break;
 			default:
 				len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src,
