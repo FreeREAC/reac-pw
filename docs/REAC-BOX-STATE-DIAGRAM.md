@@ -102,8 +102,37 @@ grant)**, so the master may grant before it has our setup. Candidate fix: emit
 config-announce at the START of establishment (flood tail / first cold-connect
 slot), not mid-cycle. Unverified — next experiment.
 
-Superseded readings: the earlier "clock domain" conclusion (byte-identical yet
-not granted) was an artifact of an intersection-only diff that hid the missing
-config-announce; adding it produced the grant. And an analysis script that
-labeled all `04 03` as cold-connect hid the master's grants — always key `04 03`
-by L2 source.
+## The state machine is MASTER-INDEPENDENT (verified)
+
+Confirmed against M-200i, M-300, and M-5000 captures (and S-0808 / S-1608 /
+S-4000S). Per the mixer-vs-box matrix (`reac-firmware-re/MIXER-VS-BOX-MATRIX.md`)
+the master contributes only its **MAC** + a one-byte **generation flag**
+(cfea `+17`: `0x00` V-Mixer / `0x01` OHRCA) — the protocol and this state diagram
+are **identical** regardless of desk. So the box behaviour that drives
+`GRANTING → LOCKED` is the same to emulate for any mixer.
+
+## Cross-capture baseline: probe rate is a GRADED lock signal, not binary
+
+A master keeps a low background probe even when fully locked to a real box, and
+reac-pw drives it much higher — the un-pinned `→ LOCKED` gap (all dedup'd,
+same-day M-5000/M-200 captures):
+
+| master + box | master PROBE rate |
+| --- | --- |
+| M-200 + real S-1608 (established) | ~14 /s |
+| M-5000 + real S-1608/S-0808/S-4000S (established) | ~11–91 /s |
+| **M-5000 + reac-pw (granted, streaming)** | **~680 /s** |
+
+reac-pw is granted and streams, but the master keeps hunting ~10× harder than
+with a real box — so we satisfy every transition UP TO the grant but not the
+established-state behaviour that quiets the master. Ruled out for this gap:
+frame content (byte-identical), config-announce timing, and a separate socket
+(the box↔mixer link is 100% 0x8819 — no ARP/IP/other ethertype).
+
+## Superseded readings (do not re-introduce)
+
+- "clock domain / not software" — an artifact of an intersection-only diff that
+  hid the entirely-missing config-announce; adding it produced the grant.
+- "master GRANT=0 for reac-pw" — an analysis script that labeled all `04 03` as
+  cold-connect hid the master's grants. Always key `04 03` by L2 source (box JOIN
+  vs master GRANT).
