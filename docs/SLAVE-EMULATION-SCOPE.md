@@ -110,7 +110,30 @@ is the milestone that counts.
 - **W2 phase-lock** — the clock piece; tractable (desk owns clock) but slips
   must be avoided (downstream frame-slip injects a 12-sample phase step).
 
-## W5 live result (2026-07-11): byte-identical, still not granted — CLOCK DOMAIN
+## W5 live result (2026-07-11): GRANTED — the missing frame was the config-announce
+
+**RESOLVED. The earlier "clock domain" conclusion below was WRONG** — it came
+from a flawed comparison that byte-diffed only the frame types present in BOTH
+captures, so a frame reac-pw never sent (the box's setup declaration,
+`cdea 01 03 0010`) was invisible to the diff. A real S-1608 sends a
+config-announce during cold-connect; the master ENROLLS the box from it. reac-pw
+never sent it, so the M-5000 never registered the box.
+
+Fix: `reac_ctrl_build_config_announce` now emits the real S-1608 setup block
+(byte-matched), and the slave cycles it (plus an early heartbeat) into the
+cold-connect escalation. **Live result: the M-5000 emitted 24 grant frames
+(`04030013`) and enrolled reac-pw** (2026-07-11). A phase-matched full-lifecycle
+census then confirmed reac-pw emits the COMPLETE frame set a real S-1608 sends
+(FLOOD, config-announce, `0014/0013/0016/001a`, heartbeat, filler) — every type
+byte-IDENTICAL.
+
+**Methodology lesson:** to assert "we send the same," compare the COMPLETE set of
+emitted frame TYPES (presence/absence) first, then byte-diff — never diff only
+the intersection, which hides missing frames.
+
+---
+
+### (superseded) earlier clock-domain reasoning
 
 Ran reac-pw as a slave against a live M-5000 (96 kHz) on `enp131s0` (the clean
 REAC NIC — receives the desk's downstream with single, non-double-counted
