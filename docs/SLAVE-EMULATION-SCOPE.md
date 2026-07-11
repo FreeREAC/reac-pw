@@ -110,6 +110,23 @@ is the milestone that counts.
 - **W2 phase-lock** — the clock piece; tractable (desk owns clock) but slips
   must be avoided (downstream frame-slip injects a 12-sample phase step).
 
+## W5 CONNECTED (2026-07-11): real M-200 enrolls reac-pw in its REAC menu ✅
+
+**Milestone reached.** reac-pw ran as a 16-ch S-1608 slave against a real,
+cold-booted **M-200** (V-Mixer, 48 kHz) and the desk **showed it as a connected
+stagebox in the REAC menu** and held the link across a 300 s run. Wire census
+(`reacpw-slave-m200-CONNECTED-2026-07-11.pcap`): master `GRANT` burst at the
+cold-connect step → **PROBE 0/s** for the whole run → steady **3999** fill/s both
+directions, CHANMAP + heartbeat ~0.5/s. No re-hunt, no drop.
+
+This closes W5 **for V-Mixer desks (M-200/M-300/M-200i)** and **falsifies the
+"clock-domain wall" reasoning below**: reac-pw paces off `CLOCK_MONOTONIC`, yet a
+real desk accepts it as a settled box. The M-5000 (OHRCA) is still open, but the
+cause is now understood to be the **OHRCA established-state shape** (1494 B frame +
+per-frame CRC-16 trailer, 96 kHz upstream — see W4) that reac-pw does not yet
+emit, NOT a hardware crystal requirement. Remaining slave work for full M-5000
+support: emit the OHRCA-width upstream + CRC-16 trailer, then re-test.
+
 ## W5 live result (2026-07-11): GRANTED — the missing frame was the config-announce
 
 **RESOLVED. The earlier "clock domain" conclusion below was WRONG** — it came
