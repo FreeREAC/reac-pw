@@ -273,7 +273,22 @@ static void *slave_loop(void *arg)
 
 	uint8_t rxbuf[2048];
 
+	static const char *const st_name[] = {
+		"PHY_DOWN", "FLOOD_ANNOUNCE", "COLDCONNECT", "TX_MUTE", "ESTABLISHED", "DROP"
+	};
+	enum reac_fsm_state prev_state = s->fsm.state;
+	fprintf(stderr, "reac_slave: STATE %s\n", st_name[prev_state]);
+
 	while (atomic_load_explicit(&s->running, memory_order_acquire)) {
+		/* State-transition trace (task #130): the FSM's phase is the ground truth
+		 * for establishment — log every change so a live run shows FLOOD ->
+		 * COLDCONNECT -> (grant) TX_MUTE -> ESTABLISHED and any DROP/re-flood flap. */
+		if (s->fsm.state != prev_state) {
+			fprintf(stderr, "reac_slave: STATE %s -> %s%s\n",
+			        st_name[prev_state], st_name[s->fsm.state],
+			        s->fsm.state == FSM_DROP ? " (drop)" : "");
+			prev_state = s->fsm.state;
+		}
 		/* Apply a pending PHY change on THIS thread (the FSM owner). */
 		int want = atomic_load_explicit(&s->phy_up_req, memory_order_acquire);
 		if (want != s->phy_up_seen) {
