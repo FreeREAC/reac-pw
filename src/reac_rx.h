@@ -23,6 +23,13 @@
 #include <pthread.h>
 #include "reac_ring.h"
 
+/* OHRCA (M-5000/M-480) downstream frame length: the standard REAC_FRAME_BYTES
+ * (1492) plus a 2-byte per-frame CRC-16 trailer appended after the C2 EA end
+ * marker (measured on live M-5000 captures, 2026-07-11). Defined here (reac-pw
+ * owned) rather than in libreac's reac.h, which stays pristine as an upstream
+ * wrap subproject. Kept as a literal to avoid include-order coupling. */
+#define REAC_FRAME_BYTES_OHRCA 1494
+
 enum reac_rx_kind {
 	REAC_RX_PCAP,    /* offline replay (pcap_source) */
 	REAC_RX_LIVE,    /* live AF_PACKET (reac_capture) */
