@@ -102,9 +102,11 @@ enum reac_master_drop_reason {
  * frames over the ~150 ms window @8000 fps, the transcribed real burst). */
 #define REAC_M_GRANT_STRIDE 12
 
-/* Max channel-map frames the generator can hold (8 slots/frame; the widest REAC
- * downstream is the 40-slot map -> at most 5 frames, 6 with a section marker). */
-#define REAC_M_CHANMAP_FRAMES_MAX 6
+/* Max channel-map frames the generator holds. A real master SWEEPS the whole
+ * 40-slot fabric as 11 sliding 8-slot windows (captured M-300 establish, #130) —
+ * not one console-width frame — so the box always sees the window mapping its
+ * own slots. */
+#define REAC_M_CHANMAP_FRAMES_MAX 11
 
 /* Console I/O config: everything the downstream generator needs to synthesize
  * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
@@ -113,8 +115,9 @@ enum reac_master_drop_reason {
  * documented slave-disconnect trigger). Fed the S-1608 config the generator
  * reproduces the captured M-300 downstream byte-for-byte. */
 struct reac_console_cfg {
-	uint8_t out_channels;   /* box analog outputs: cfea outCh [18] + drives the
-	                         * chanmap (marker + out_channels-1 channel ids).
+	uint8_t out_channels;   /* box analog outputs: cfea outCh [18]. (Does NOT
+	                         * size the chanmap: a real master sweeps the whole
+	                         * 40-slot fabric regardless of console width, #130.)
 	                         * S-1608 = 8, M-5000 downstream box = 16.        */
 	uint8_t in_channels;    /* box analog inputs: sizes the UPSTREAM parser
 	                         * (box->master); carried for the caller, not a

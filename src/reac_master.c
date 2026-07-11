@@ -22,10 +22,11 @@
  *       ASCII "1234" token at block bytes [7:11] that may be a per-unit id;
  *       for the S-1608 replay the box is bound to THIS master identity so the
  *       captured token is correct. Flagged in the task's openMitigations.)
- *   CHANMAP — cdea 01 03 0019: GENERATED from the console cfg (gen_chanmap):
- *       a 0xfe section marker + `out_channels-1` channel ids (0x00..) in 8-slot
- *       frames, checksummed. Fed the S-1608 cfg it is exactly the captured
- *       M-300 single frame (marker + 0x00..0x06).
+ *   CHANMAP — cdea 01 03 0019: the 11-window SWEEP a real master advertises to
+ *       tile the whole 40-slot fabric 0x00..0x2f (gen_chanmap), byte-faithful to
+ *       the captured M-300 establish sweep. A box enrolls ONLY after it sees the
+ *       window mapping ITS OWN slots, so the map is fabric-wide, not console-
+ *       width (fixing #130: the old one-frame 0x00..0x06 map left every box mute).
  *   CFEA (announce) — cfea: GENERATED from the console cfg + OUR src MAC
  *       (gen_cfea): fixed head + our MAC + inCh 0x28(=40) + outCh + the console
  *       field, checksummed. On-wire identity must equal the L2 source, so the
@@ -88,27 +89,50 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
 	stamp_block_cksum(out);
 }
 
-/* Generate the cdea channel-map frame(s) from the console cfg. The ring is one
- * 0xfe section marker followed by the box's output channel ids ascending from
- * 0x00, tiled into 8-slot frames. The box advertises `out_channels` downstream
- * slots, the first being the marker — so `out_channels-1` channel ids. Fed the
- * S-1608 cfg (out=8) this is exactly the captured M-300 single frame
- * (marker + 0x00..0x06). Returns the frame count (>=1). NOTE: the 8th output of
- * an 8-out box is not advertised as a channel id (the marker occupies slot 0);
- * this matches the captured M-300 verbatim and is a documented open question
- * (the task's openMitigations #2) — do NOT "fix" it to a full 8 entries. */
+/* The channel-map SWEEP a real master advertises. GROUND TRUTH: the captured
+ * M-300 establish sweep (reac-captures/m300-s1608-establish-2026-07-10.pcap, real
+ * M-300 00:40:ab:c9:d8:5b driving an S-1608) emits ELEVEN distinct cdea 01 03 0019
+ * frames — sliding 8-slot windows that together tile the whole 40-slot REAC fabric
+ * 0x00..0x2f — in the fixed rotation { fe, 07, 0f, 17, 1f, 27, 2f, 06, 0e, 16, 1e }.
+ *
+ * WHY THE SWEEP (not one frame): §4 (S-1608 firmware FUN_0c003548) — a box
+ * recognizes a master ONLY once it has seen the window that maps ITS OWN slots. An
+ * S-0808 owns 0x00..0x07, an S-1608 0x00..0x0f; NEITHER is covered by a single
+ * 0x00..0x06 window. The earlier one-frame map (derived from the local console's
+ * out_channels) advertised only 0x00..0x06, so every real box stayed silent — the
+ * root cause of #130, pinned by an offline field-diff of our downstream vs
+ * m300-s1608-establish / m200-probing-nobox (2026-07-11). The master advertises the
+ * FABRIC, not the console's output count, so the sweep is fixed and cfg-independent.
+ *
+ * Each window is 8 slots. A slot is either the 0xfe section marker (-> fe 00 00,
+ * sitting where the fabric ring wraps: windows 2f and fe) or a channel id ch with
+ * value 0x28 (ch <= 0x27) / 0x38 (0x28 <= ch <= 0x2f). apply_block re-checksums at
+ * emit time, so only the slot bytes matter; stamp_block_cksum keeps the stored
+ * template self-consistent too. This generator reproduces all 11 captured blocks
+ * byte-for-byte incl. their checksums (asserted in tests/test_reac_s1608.c). */
+#define REAC_CHANMAP_SWEEP_FRAMES 11
+#define REAC_CHANMAP_MARKER 0xfe
+static const uint8_t CHANMAP_SWEEP[REAC_CHANMAP_SWEEP_FRAMES][8] = {
+	{ 0xfe, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 },
+	{ 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e },
+	{ 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16 },
+	{ 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e },
+	{ 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 },
+	{ 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e },
+	{ 0x2f, 0xfe, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 },
+	{ 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d },
+	{ 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15 },
+	{ 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d },
+	{ 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25 },
+};
+
+/* Populate `frames` with the fixed 11-window fabric sweep (returns the count).
+ * cfg is unused: the master advertises the whole fabric regardless of console
+ * width (see the block comment above). */
 static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 {
-	int nslots = cfg->out_channels;   /* total ring slots incl. the marker */
-	if (nslots < 1)
-		nslots = 1;
-	int nframes = (nslots + 7) / 8;   /* 8 slots per frame */
-	if (nframes < 1)
-		nframes = 1;
-	if (nframes > REAC_M_CHANMAP_FRAMES_MAX)
-		nframes = REAC_M_CHANMAP_FRAMES_MAX;
-
-	for (int f = 0; f < nframes; f++) {
+	(void)cfg;
+	for (int f = 0; f < REAC_CHANMAP_SWEEP_FRAMES; f++) {
 		uint8_t *blk = frames[f];
 		memset(blk, 0, 34);
 		blk[0] = 0xcd; blk[1] = 0xea;
@@ -116,23 +140,21 @@ static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 		blk[4] = 0x00; blk[5] = 0x19;         /* BE len 0x0019 (fixed)      */
 		blk[6] = 0x01;                        /* payload-type = 1           */
 		for (int s = 0; s < 8; s++) {
-			int slot = f * 8 + s;
+			uint8_t ch = CHANMAP_SWEEP[f][s];
 			uint8_t *t = blk + 7 + s * 3;     /* 3-byte slot */
-			if (slot == 0) {
+			if (ch == REAC_CHANMAP_MARKER) {
 				t[0] = 0xfe; t[1] = 0x00; t[2] = 0x00;  /* section marker */
-			} else if (slot < nslots) {
-				uint8_t ch = (uint8_t)(slot - 1);       /* channel id 0x00.. */
+			} else {
 				t[0] = ch;
 				/* 0x38 for the high bank (0x28..0x2f), else 0x28. */
 				t[1] = (ch >= 0x28 && ch <= 0x2f) ? 0x38 : 0x28;
 				t[2] = 0x00;
 			}
-			/* slots past the ring end stay zero (short final frame) */
 		}
 		blk[31] = 0x00; blk[32] = 0x00;       /* terminator */
 		stamp_block_cksum(blk);
 	}
-	return nframes;
+	return REAC_CHANMAP_SWEEP_FRAMES;
 }
 
 const char *reac_master_state_name(enum reac_master_state s)

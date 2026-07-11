@@ -117,8 +117,9 @@ int main(void)
 	struct reac_console_cfg s1608 = REAC_CONSOLE_CFG_S1608;
 	reac_master_init(&m, SRC, &s1608, FPS);
 
-	/* the S-1608 downstream is one chanmap frame (marker + 0x00..0x06). */
-	CHK(m.chanmap_nframes == 1);
+	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
+	 * fe frame (marker + 0x00..0x06), asserted below against GOLD_CHANMAP. */
+	CHK(m.chanmap_nframes == 11);
 
 	/* ---- byte oracle ---------------------------------------------------- */
 
@@ -163,7 +164,7 @@ int main(void)
 	CHK(memcmp(f + 16, GOLD_SUB02, 34) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
-	/* 5. the single chanmap frame lists the marker + channels 0x00..0x06. */
+	/* 5. chanmap window 0 (the fe frame) lists the marker + channels 0x00..0x06. */
 	{
 		const uint8_t *blk = GOLD_CHANMAP + 2;   /* the 32-byte block */
 		CHK(blk[5] == 0xfe);                     /* slot 0 = section marker */
@@ -171,6 +172,23 @@ int main(void)
 			const uint8_t *t = blk + 5 + (c + 1) * 3;
 			CHK(t[0] == (uint8_t)c && t[1] == 0x28 && t[2] == 0x00);
 		}
+	}
+
+	/* 5b. the full sweep tiles the whole fabric: every slot 0x00..0x2f appears as a
+	 * channel id in at least one window (#130 — else a box owning it stays mute). */
+	{
+		int seen[0x30] = { 0 };
+		for (int i = 0; i < m.chanmap_nframes; i++) {
+			build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, i, planar);
+			const uint8_t *blk = f + 16 + 2;      /* the 32-byte block */
+			for (int s = 0; s < 8; s++) {
+				uint8_t ch = blk[5 + s * 3];
+				if (ch != 0xfe && ch < 0x30)
+					seen[ch] = 1;
+			}
+		}
+		for (int ch = 0x00; ch <= 0x2f; ch++)
+			CHK(seen[ch] == 1);                   /* whole fabric advertised */
 	}
 
 	/* control stamping is non-destructive: a FILLER frame's audio round-trips. */
@@ -209,6 +227,7 @@ int main(void)
 	uint16_t cnt = 0;
 	int idx;
 	long n_probe = 0, n_sub01 = 0, n_sub02 = 0, n_ann = 0, n_grant = 0, n_cm = 0;
+	int cm_seen[11] = { 0 };                    /* which sweep windows were emitted */
 	for (long i = 0; i < 60L * FPS; i++) {      /* 60 s of slots, zero RX */
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
 		CHK((int)e >= 0);
@@ -217,11 +236,13 @@ int main(void)
 		case REAC_M_EMIT_SUB01:    n_sub01++; break;
 		case REAC_M_EMIT_SUB02:    n_sub02++; break;
 		case REAC_M_EMIT_ANNOUNCE: n_ann++;   break;
-		case REAC_M_EMIT_CHANMAP:  n_cm++;    CHK(idx == 0); break;
+		case REAC_M_EMIT_CHANMAP:  n_cm++; CHK(idx >= 0 && idx < 11); cm_seen[idx] = 1; break;
 		case REAC_M_EMIT_GRANT:    n_grant++; break;
 		case REAC_M_EMIT_FILLER:   break;
 		}
 	}
+	for (int w = 0; w < 11; w++)                 /* the cursor sweeps ALL 11 windows */
+		CHK(cm_seen[w] == 1);
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
 	CHK(n_cm > 0);                              /* §4: chanmap advertised while unlinked */
@@ -277,7 +298,7 @@ int main(void)
 		switch (e) {
 		case REAC_M_EMIT_CHANMAP:
 			e_cm++;
-			CHK(idx == 0);
+			CHK(idx >= 0 && idx < 11);              /* sweeps the fabric, cursor 0..10 */
 			if (cm_slot >= 0)
 				CHK(i - cm_slot == FPS);            /* exactly 1/s */
 			cm_slot = i;
