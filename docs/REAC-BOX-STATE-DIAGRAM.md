@@ -196,11 +196,27 @@ to diff. Do NOT guess the encoding.
 Models are fixed rows — a model determines its selector, name frame, descriptor,
 and in/out. There is no "S-1608 with 8 channels": pick a row.
 
-| model | selector | name frame | in / out | audio width | desk shows | source |
+All three rows below are LIVE-VERIFIED on a real M-200 (2026-07-12): reac-pw
+`--box-model {s1608,s0808,s4000s}` enrolled and the desk displayed each correctly.
+
+| model | selector | name frame | 0402000d | in / out | audio width | desk shows |
 | --- | --- | --- | --- | --- | --- | --- |
-| S-1608 | `0x82` | (none — named by selector) | 16 / 8 | 628 B | **S-1608** | matrix-m200/m300/m5000-s1608 |
-| S-0808 | `0x84` | `04 01 001b` "S-0808" | 8 / 8 | 340 B | **S-0808** | matrix-m200/m5000-s0808 |
-| S-4000S | `0x84` | (ASCII TODO) | 32 / 8 | box_frame_len(32) | S-4000S 32/8 | **UNVERIFIED — needs capture** |
+| S-1608 | `0x82` | (none — named by selector) | no | 16 / 8 | 628 B | **S-1608** ✅ |
+| S-0808 | `0x84` | `04 01 001b` "S-0808" | yes | 8 / 8 | 340 B | **S-0808** ✅ |
+| S-4000S | `0x84` | (none — see below) | no | 32 / 8 | 1204 B | **S-4000S** ✅ |
+
+**The `0x84` family default IS "S-4000S" (VERIFIED 2026-07-12).** The real S-4000S
+(`s4000s-coldboot-m5000-...`, box `c4:06:80`) sends selector `0x84` with **no name
+frame and no `0402000d`** — so the desk's default label for a nameless `0x84` box
+is genuinely "S-4000S". The **S-0808** is the exception: it adds the `0401001b`
+name frame to override the default. Each model's `04030016`/`04030001a` inventory
+differs (S-1608 `02 02`, S-0808 `01 00`, S-4000S `02 05` at the discriminating
+byte). The S-4000S heartbeat also carries channel-slot data (`29 38 00 …`) where
+S-1608/S-0808 send an all-zero heartbeat — reac-pw sends the generic heartbeat and
+the M-200 still enrolled it, so the heartbeat is not identity-bearing. Note: the
+S-4000S was captured on OHRCA (frames +2 CRC trailer, 1206 B); reac-pw emits the
+V-Mixer width (1204 B) which the M-200 (V-Mixer) accepts — an OHRCA desk may need
+the trailer (W4).
 
 The S-4000 merge/split units (`c4:06:80`, `c4:08:bc`) are also `0x84` with a
 distinct descriptor; their menu names are unconfirmed → not yet rows.
