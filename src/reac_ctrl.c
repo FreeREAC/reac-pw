@@ -382,6 +382,26 @@ const struct reac_box_model *reac_box_model_by_channels(int in_ch)
 	return &BOX_MODELS[0];   /* default: S-1608 */
 }
 
+const struct reac_box_model *reac_ctrl_identify_box(const uint8_t *frame, size_t len)
+{
+	/* Recognize the connected box's MODEL from its config-announce
+	 * (cdea 01 03 0010) by matching the 32-byte descriptor block against the
+	 * fixed matrix. Each row's config_block is unique (selector + descriptor:
+	 * S-1608 0x82; S-0808 / S-4000S both 0x84 but distinct descriptors), so an
+	 * exact block match uniquely names the model. NULL = not a config-announce,
+	 * or no known model -> caller falls back to the frame's own descriptor/width. */
+	if (len < REAC_CTRL_BLOCK_OFF + 32)               return NULL;
+	if (frame[12] != 0x88 || frame[13] != 0x19)       return NULL;   /* 0x8819    */
+	if (frame[16] != 0xcd || frame[17] != 0xea)       return NULL;   /* cdea      */
+	if (frame[18] != 0x01 || frame[19] != 0x03 ||
+	    frame[20] != 0x00 || frame[21] != 0x10)       return NULL;   /* 01 03 0010 */
+	size_t n; const struct reac_box_model *t = reac_box_model_table(&n);
+	for (size_t i = 0; i < n; i++)
+		if (memcmp(frame + REAC_CTRL_BLOCK_OFF, t[i].config_block, 32) == 0)
+			return &t[i];
+	return NULL;
+}
+
 /* ---- RECONSTRUCTED JOIN builders (experimental, not byte-verified) ---- */
 
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
