@@ -58,7 +58,19 @@ static void stamp_block_cksum(uint8_t blk[34])
 	blk[33] = (uint8_t)((256 - (s & 0xff)) & 0xff);
 }
 
-/* Generate the cfea master-announce from the console cfg + OUR src MAC. */
+/* Generate the cfea master-announce from the console cfg + OUR src MAC.
+ *
+ * cfea width byte (out[18], the byte AFTER the fixed 0x28=40-slot total): CORRECTED
+ * 2026-07-11 by a two-model M-200 compare (S-1608 vs S-0808 on desk c9:cc:03) — it
+ * is the CONNECTED BOX's INPUT width, NOT the box output count: idle default 0x08,
+ * 0x10 once a 16-in S-1608 links, 0x08 once an 8-in S-0808 links, with a box-count
+ * field going 0x0000 -> 0x0001 (out[20:22]). Both boxes are 8-OUT yet the byte
+ * differs, so it tracks INPUT; the chanmap (which follows OUTPUT width) is identical
+ * for both. We currently emit the STATIC idle-form (out[18]=cfg->out_channels, which
+ * is 0x08 for the S-1608 default so it matches the idle capture byte-for-byte) — a
+ * known master-role fidelity gap: the live master should raise this to the box's
+ * input width + set the box-count on sync. Unchanged here: it does not affect the
+ * slave-side #130 establishment fix, and the idle bytes stay M-300-exact. */
 static void gen_cfea(uint8_t out[34], const uint8_t src[6],
                      const struct reac_console_cfg *cfg)
 {
@@ -67,10 +79,10 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
 	memset(out, 0, 34);
 	memcpy(out, head, 11);
 	memcpy(out + ANNOUNCE_MAC_IDX, src, 6);   /* OUR MAC = the L2 source */
-	out[17] = 0x28;                 /* inCh = 40: the FIXED REAC downstream width */
-	out[18] = cfg->out_channels;    /* outCh = the box analog-output count        */
+	out[17] = 0x28;                 /* 40: the FIXED REAC downstream slot total   */
+	out[18] = cfg->out_channels;    /* box width byte (idle-form; see note above) */
 	out[19] = cfg->console_field;   /* console field (M-300 = 0, M-5000 = 1)      */
-	out[20] = 0x00;                 /* always 0 in both captures                  */
+	out[20] = 0x00;                 /* box-count hi (idle 0; ->0x0001 on sync)    */
 	out[21] = cfg->console_field;   /* moves in lockstep with [19]                */
 	/* [22:33] stay zero */
 	stamp_block_cksum(out);

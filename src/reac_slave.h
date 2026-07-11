@@ -90,24 +90,26 @@ struct reac_slave {
  * frame-emission granularity the slave TX path needs. */
 enum reac_slave_emit {
 	REAC_SLAVE_EMIT_NONE = 0,       /* emit nothing (PHY down / idle / mute) */
-	REAC_SLAVE_EMIT_FLOOD_FILLER,   /* broadcast FILLER presence-flood (announcing;
-	                                 * continuous — see with_join below) */
+	REAC_SLAVE_EMIT_FLOOD_FILLER,   /* broadcast FILLER presence-flood (bounded announce) */
+	REAC_SLAVE_EMIT_COLDCONNECT,    /* unicast cold-connect phase: cdea 04 03 on the grid
+	                                 * (with_join), unicast audio FILLER between */
 	REAC_SLAVE_EMIT_UPSTREAM_AUDIO, /* established: unicast our input channels up   */
 	REAC_SLAVE_EMIT_HEARTBEAT,      /* established: the cdea 01 03 0001 81 keep-alive */
 };
 
-/* The decision a slave tick yields: an emit kind + a side flag that an EXTRA
- * frame must accompany the primary emission, and the resolved FSM state.
- * `with_join` (valid when emit == FLOOD_FILLER): also send the cold-connect
- * JOIN burst frame this tick — a real box announces by flooding broadcast
- * FILLER continuously (§13p.3) while a short cold-connect burst + ~100 ms
- * retry grid rides alongside it (§13p.multi), never a cold-connect-only
- * stream (#130 fix 1). `with_heartbeat` (valid when emit ==
- * UPSTREAM_AUDIO): also emit a heartbeat alongside the audio. */
+/* The decision a slave tick yields: an emit kind + a side flag selecting WHICH
+ * single frame this slot carries (control REPLACES audio — exactly one frame per
+ * counter value, never two), and the resolved FSM state.
+ * `with_join` (valid when emit == COLDCONNECT): this slot's unicast frame is the
+ * cold-connect cdea 04 03 (else a unicast audio FILLER) — after the bounded
+ * broadcast flood the box goes unicast-only and cold-connects on a ~100 ms retry
+ * grid (#130, byte-verified 2026-07-11). `with_heartbeat` (valid when emit ==
+ * UPSTREAM_AUDIO): this slot's frame is the heartbeat, REPLACING the audio (a real
+ * box's sparse keep-alive occupies an audio slot, never an extra frame). */
 struct reac_slave_decision {
 	enum reac_slave_emit emit;
-	int with_heartbeat;          /* 1 -> also emit a heartbeat alongside the audio */
-	int with_join;               /* 1 -> also emit the cold-connect burst this tick */
+	int with_heartbeat;          /* 1 -> this slot's audio frame is the heartbeat */
+	int with_join;               /* 1 -> this slot's unicast frame is the cold-connect */
 	enum reac_fsm_state state;
 };
 

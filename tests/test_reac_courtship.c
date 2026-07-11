@@ -99,18 +99,39 @@ static int step(struct court *c)
 	size_t n = 0;
 	uint16_t sc = c->s.fsm.counter;
 
+	/* ONE frame per slot — control REPLACES the audio/flood frame, never adds a
+	 * second (#130): with_join / with_heartbeat SELECT which frame this slot is. */
 	switch (d.emit) {
 	case REAC_SLAVE_EMIT_NONE:
 		return 0;
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
-		n = reac_ctrl_build_upstream_filler(sf, BCAST, S_SRC, sc, 16, NULL,
-		                                    REAC_SAMPLES_PER_PKT);
+		/* the bounded broadcast presence-flood (zero control block + live audio) */
+		n = reac_ctrl_build_flood_filler(sf, BCAST, S_SRC, sc, 16, NULL,
+		                                 REAC_SAMPLES_PER_PKT);
 		c->s_floods_fed++;
 		break;
+	case REAC_SLAVE_EMIT_COLDCONNECT:
+		/* the unicast cold-connect phase: cdea 04 03 on the grid, audio between */
+		if (d.with_join) {
+			n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
+			                                16, NULL, REAC_SAMPLES_PER_PKT);
+			c->s_joins_fed++;
+		} else {
+			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
+			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			c->s_unicasts_fed++;
+		}
+		break;
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
-		n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
-		                                    16, NULL, REAC_SAMPLES_PER_PKT);
-		c->s_unicasts_fed++;
+		/* the ~1/s keep-alive REPLACES the audio frame on the slot the FSM flags */
+		if (d.with_heartbeat) {
+			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc);
+			c->s_heartbeats_fed++;
+		} else {
+			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
+			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			c->s_unicasts_fed++;
+		}
 		break;
 	case REAC_SLAVE_EMIT_HEARTBEAT:
 		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc);
@@ -118,28 +139,6 @@ static int step(struct court *c)
 		break;
 	}
 	if (n > 0) {
-		struct reac_ctrl_parsed ps;
-		enum reac_master_rx_event ev;
-		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
-			reac_master_rx(&c->m, ev, ps.src, sf + 18);
-	}
-	/* an established audio frame may carry the ~1/s keep-alive alongside */
-	if (d.emit == REAC_SLAVE_EMIT_UPSTREAM_AUDIO && d.with_heartbeat) {
-		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC,
-		                           (uint16_t)(sc + 1));
-		c->s_heartbeats_fed++;
-		struct reac_ctrl_parsed ps;
-		enum reac_master_rx_event ev;
-		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
-			reac_master_rx(&c->m, ev, ps.src, sf + 18);
-	}
-	/* #130 fix 1: the cold-connect JOIN burst rides the presence-flood (a real
-	 * box floods FILLER continuously and ALSO cold-connects, §13p.multi) —
-	 * fed into the master as a second frame on the ticks the FSM flags it. */
-	if (d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER && d.with_join) {
-		n = reac_ctrl_build_coldconnect(sf,
-		        c->s.fsm.have_master ? c->s.fsm.master_mac : BCAST, S_SRC, sc);
-		c->s_joins_fed++;
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
 		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)

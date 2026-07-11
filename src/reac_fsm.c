@@ -34,35 +34,43 @@ static struct reac_fsm_out out(struct reac_fsm *fsm, enum reac_fsm_action a)
 	return o;
 }
 
-/* Arm a fresh cold-connect burst: REAC_FSM_JOIN_BURST_COUNT frames back to
- * back, starting on THIS tick. */
-static void arm_join_burst(struct reac_fsm *fsm)
+/* Enter FLOOD_ANNOUNCE: begin the bounded broadcast presence-flood from zero. */
+static void arm_flood(struct reac_fsm *fsm)
 {
-	fsm->join_burst_left = REAC_FSM_JOIN_BURST_COUNT;
+	fsm->state = FSM_FLOOD_ANNOUNCE;
+	fsm->flood_frames = 0;
+}
+
+/* Arm the unicast cold-connect grid so the FIRST FSM_COLDCONNECT step emits the
+ * cdea 04 03 (countdown drains to <=0 immediately), then one per RETRY_PERIOD. */
+static void arm_coldconnect(struct reac_fsm *fsm)
+{
 	fsm->join_retry_countdown = 0;
 }
 
-/* One FLOOD_ANNOUNCE tick: always flood (the continuous presence announcement,
- * §13p.3), and drive the cold-connect burst/retry-grid on top of it via the
- * emit_join side flag — an immediate burst of REAC_FSM_JOIN_BURST_COUNT
- * frames, then one more burst every REAC_FSM_JOIN_RETRY_PERIOD ticks,
- * unbounded, until the master's grant is RX'd (handled by the caller before
- * this runs). Mirrors the emit_heartbeat pattern used in ESTABLISHED. */
+/* One FLOOD_ANNOUNCE tick: emit ONE broadcast FILLER frame (no cold-connect
+ * alongside — the flood is broadcast-only, §13p.3) and count it toward the bound.
+ * The caller decides the flood->cold-connect handoff after this runs. */
 static struct reac_fsm_out flood_tick(struct reac_fsm *fsm)
 {
 	fsm->counter++;
-	if (fsm->join_burst_left > 0) {
-		fsm->emit_join = 1;
-		fsm->join_burst_left--;
-		if (fsm->join_burst_left == 0)
-			fsm->join_retry_countdown = REAC_FSM_JOIN_RETRY_PERIOD;
-	} else if (--fsm->join_retry_countdown <= 0) {
-		fsm->emit_join = 1;
-		fsm->join_burst_left = REAC_FSM_JOIN_BURST_COUNT - 1;  /* this tick is burst frame 1 */
-		if (fsm->join_burst_left == 0)
-			fsm->join_retry_countdown = REAC_FSM_JOIN_RETRY_PERIOD;
-	}
+	if (fsm->flood_frames < REAC_FSM_FLOOD_BURST)
+		fsm->flood_frames++;
 	return out(fsm, FSM_ACT_FLOOD_BCAST);
+}
+
+/* One FSM_COLDCONNECT tick: emit ONE unicast frame to the master. On the retry
+ * grid (every REAC_FSM_JOIN_RETRY_PERIOD steps) it carries the cdea 04 03
+ * cold-connect (emit_join), otherwise a unicast audio FILLER — one frame per
+ * counter value either way. */
+static struct reac_fsm_out coldconnect_tick(struct reac_fsm *fsm)
+{
+	fsm->counter++;
+	if (--fsm->join_retry_countdown <= 0) {
+		fsm->emit_join = 1;
+		fsm->join_retry_countdown = REAC_FSM_JOIN_RETRY_PERIOD;
+	}
+	return out(fsm, FSM_ACT_UNICAST_COLDCONNECT);
 }
 
 struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
@@ -78,14 +86,36 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 	switch (fsm->state) {
 	case FSM_PHY_DOWN:
 		if (ev == FSM_EV_PHY_UP) {
-			fsm->state = FSM_FLOOD_ANNOUNCE;
+			arm_flood(fsm);
 			fsm->counter = 0;
-			arm_join_burst(fsm);
 			return flood_tick(fsm);
 		}
 		return out(fsm, FSM_ACT_STOP);
 
 	case FSM_FLOOD_ANNOUNCE:
+		if (ev == FSM_EV_RX && rx) {
+			if (is_master_frame(rx))
+				learn_master(fsm, rx);
+			if (rx->kind == REAC_CTRL_GRANT) {     /* JOIN gate (early grant) */
+				fsm->state = FSM_TX_MUTE;
+				fsm->txmute_dwell = REAC_FSM_TXMUTE_DWELL;
+				fsm->link_check = REAC_FSM_LINKCHECK_RELOAD;
+				return out(fsm, FSM_ACT_SILENCE);
+			}
+		}
+		/* tick or non-grant RX: flood one frame. Once the bounded burst is done
+		 * AND the master MAC is learned, stop broadcasting and hand off to the
+		 * unicast cold-connect phase — the box goes unicast-only (§13p.3). */
+		{
+			struct reac_fsm_out o = flood_tick(fsm);
+			if (fsm->flood_frames >= REAC_FSM_FLOOD_BURST && fsm->have_master) {
+				fsm->state = FSM_COLDCONNECT;
+				arm_coldconnect(fsm);
+			}
+			return o;
+		}
+
+	case FSM_COLDCONNECT:
 		if (ev == FSM_EV_RX && rx) {
 			if (is_master_frame(rx))
 				learn_master(fsm, rx);
@@ -95,10 +125,13 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 				fsm->link_check = REAC_FSM_LINKCHECK_RELOAD;
 				return out(fsm, FSM_ACT_SILENCE);
 			}
+		}
+		if (!fsm->have_master) {          /* master vanished -> re-flood broadcast */
+			arm_flood(fsm);
 			return flood_tick(fsm);
 		}
-		/* tick: keep flooding + periodically re-emit the cold-connect burst */
-		return flood_tick(fsm);
+		/* tick or non-grant RX: unicast cold-connect on the grid, audio between */
+		return coldconnect_tick(fsm);
 
 	case FSM_TX_MUTE:
 		/* Frame-arrival IS the box's clock (it recovers word clock from the
@@ -154,10 +187,9 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 
 	case FSM_DROP:
 		if (ev == FSM_EV_PHY_UP || ev == FSM_EV_TICK) {
-			/* PHY still up after a drop -> re-announce (fresh flood + burst) */
-			fsm->state = FSM_FLOOD_ANNOUNCE;
+			/* PHY still up after a drop -> re-announce (fresh bounded flood) */
 			fsm->have_master = 0;
-			arm_join_burst(fsm);
+			arm_flood(fsm);
 			return flood_tick(fsm);
 		}
 		return out(fsm, FSM_ACT_STOP);

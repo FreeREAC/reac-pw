@@ -96,10 +96,23 @@ size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter,
                                        int n_ch, float *const *planar, int ns);
 
+/* The presence-flood FILLER (broadcast, unlinked): zero control block [18:50] (no
+ * 0x7a descriptor) over LIVE audio [50:626] — what a real box broadcast-floods to
+ * announce presence on a cold boot. Audio is planar float [ch][s], as
+ * build_upstream_filler; NULL planar -> silent. */
+size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
+                                    const uint8_t src[6], uint16_t counter,
+                                    int n_ch, float *const *planar, int ns);
+
 /* RECONSTRUCTED (experimental, JOIN — not byte-verified, gated until a rig grab): */
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch);
+/* The box cold-connect (cdea 04 03): the 32-byte control block over LIVE audio
+ * [50:626] (the [38:66] region is per-frame audio, NOT device inventory). Audio is
+ * planar float [ch][s], as build_upstream_filler; NULL planar -> silent. The master
+ * echoes the control block verbatim as its grant. */
 size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
-                                   const uint8_t src[6], uint16_t counter);
+                                   const uint8_t src[6], uint16_t counter,
+                                   int n_ch, float *const *planar, int ns);
 
 #endif /* REAC_CTRL_H */
