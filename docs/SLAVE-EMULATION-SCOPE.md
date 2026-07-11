@@ -109,3 +109,35 @@ is the milestone that counts.
 - **W5 reciprocal handshake** — desk granting our slave is unproven on the wire.
 - **W2 phase-lock** — the clock piece; tractable (desk owns clock) but slips
   must be avoided (downstream frame-slip injects a 12-sample phase step).
+
+## W5 live result (2026-07-11): byte-identical, still not granted — CLOCK DOMAIN
+
+Ran reac-pw as a slave against a live M-5000 (96 kHz) on `enp131s0` (the clean
+REAC NIC — receives the desk's downstream with single, non-double-counted
+counters). Systematically eliminated every wire-observable difference vs a real
+S-1608:
+
+- **Full establishment on the wire [V]:** presence flood (5460 broadcast frames,
+  matching a real box), the complete cold-connect escalation `0014→0013→0016→001a`
+  (added this session), 8000 pps / 628 B braided upstream, RX-locked phase.
+- **Byte-identical to a real S-1608 [V]:** diffed reac-pw's emission against a
+  fresh real-S-1608 cold-boot on the same rig
+  (`real-s1608-coldboot-m5000-2026-07-11.pcap`). Flood block, unicast-filler
+  descriptor, and all four cold-connect control blocks came back **IDENTICAL**.
+- **Phase matches [V]:** real S-1608 answers ~0.9 µs after each downstream frame,
+  reac-pw ~2.8 µs — both effectively immediate (the earlier ~69 µs figure was
+  wrong). Phase is NOT the discriminator.
+- **MAC is not it [V]:** impersonating the real box's exact MAC
+  (`--src-mac 00:40:ab:c4:80:3b`, box unplugged) — still no grant.
+- **Delivery proven [V]:** the M-5000's port mirror shows 23559 of reac-pw's
+  frames, so the desk physically receives them.
+
+**Conclusion:** the M-5000 grants a real S-1608 (216 grant frames observed) but
+never grants reac-pw, despite receiving byte-identical frames at the same rate,
+phase, and MAC. The discriminator is invisible to packet capture — it is the
+physical/clock domain: a real box clocks its frames from an FPGA audio crystal
+locked to the sample clock; reac-pw paces from `CLOCK_MONOTONIC`. This is the
+reciprocal confirmation of the mixer-vs-box matrix conclusion (the master-side
+box-mute is the same wall). The path forward is #131 — DLL-discipline the pacer
+to a real hardware word clock (e.g. RME) — which is hardware-dependent, not a
+pure-software fix.
