@@ -93,9 +93,15 @@ enum reac_master_drop_reason {
 	REAC_M_DROP_GRANT_TIMEOUT, /* grant window expired with no box unicast      */
 };
 
-/* Established link-check budget: the firmware 0x0258 = 600 frames (75 ms @96k /
- * 150 ms @48k), counted DOWN per emitted frame, RELOADED by every box RX event. */
+/* Established link-check budget. The firmware constant 0x0258 = 600 frames
+ * (~0.15 s @48k) was FAR too eager: a live M-200i driving an S-1608 held the link
+ * for ~6.5 s of box silence before reverting to hunting (measured on a reboot,
+ * 2026-07-11 — box heartbeat stops at t=16.0 s, master's first probe at t=22.47 s).
+ * We reload a rate-scaled ~6.5 s (reac_master.link_check_reload, set at init) so a
+ * briefly-glitching box isn't torn down the way a real desk would ride through.
+ * The old constant is kept only as documentation of the firmware value. */
 #define REAC_M_LINKCHECK_RELOAD 600
+#define REAC_M_LINKCHECK_SECONDS_X10 65   /* 6.5 s, scaled by fps at init */
 /* Diagnostic presence flag decay (same frame budget as the link-check). */
 #define REAC_M_PRESENCE_TIMEOUT 600
 /* Grant burst density: one echoed grant per this many slots (~100 control
@@ -196,7 +202,8 @@ struct reac_master {
 
 	/* ESTABLISHED */
 	int      chanmap_cursor;  /* which generated chanmap frame is next (0..N-1) */
-	int      link_check;      /* countdown to peer-gone (600-frame budget) */
+	int      link_check;        /* countdown to peer-gone */
+	int      link_check_reload; /* ~6.5 s of frames (fps-scaled), the reload value */
 
 	/* Diagnostics (never gate the establishment) */
 	int      box_seen;        /* sustained box broadcast FILLER on the wire */
