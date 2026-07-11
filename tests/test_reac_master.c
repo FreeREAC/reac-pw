@@ -231,11 +231,25 @@ int main(void)
 	int idx;
 	long n_probe = 0, n_sub01 = 0, n_sub02 = 0, n_ann = 0, n_grant = 0, n_cm = 0;
 	int cm_seen[49] = { 0 };                    /* which sweep windows were emitted */
-	for (long i = 0; i < 60L * FPS; i++) {      /* 60 s of slots, zero RX */
+	/* One chanmap window per control cycle (fps*10778/4000 slots ≈ 2.69 s), so
+	 * the 49-window sweep needs 49 cycles ≈ 132 s — soak 140 s (~52 cycles) to
+	 * cover the whole fabric. Burst rhythm asserted slot-exact: within a burst
+	 * consecutive probes are probe_stride apart; across the pause the gap is
+	 * cycle_len - burst_end. */
+	long prev_probe = -1;
+	for (long i = 0; i < 140L * FPS; i++) {     /* 140 s of slots, zero RX */
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
 		CHK((int)e >= 0);
 		switch (e) {
-		case REAC_M_EMIT_PROBE:    n_probe++; break;
+		case REAC_M_EMIT_PROBE:
+			n_probe++;
+			if (prev_probe >= 0) {
+				long d = i - prev_probe;
+				CHK(d == m.probe_stride ||               /* in-burst rhythm */
+				    d == m.cycle_len - m.burst_end);     /* the probe-free pause */
+			}
+			prev_probe = i;
+			break;
 		case REAC_M_EMIT_SUB01:    n_sub01++; break;
 		case REAC_M_EMIT_SUB02:    n_sub02++; break;
 		case REAC_M_EMIT_ANNOUNCE: n_ann++;   break;
@@ -244,16 +258,47 @@ int main(void)
 		case REAC_M_EMIT_FILLER:   break;
 		}
 	}
-	for (int w = 0; w < 49; w++)                 /* the cursor sweeps ALL 11 windows */
+	for (int w = 0; w < 49; w++)                 /* the cursor sweeps ALL 49 windows */
 		CHK(cm_seen[w] == 1);
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
 	CHK(n_cm > 0);                              /* §4: chanmap advertised while unlinked */
-	CHK(n_probe >= 108L * 60 && n_probe <= 120L * 60);   /* PROBE ~115/s */
-	CHK(n_sub01 >= 58 && n_sub01 <= 62);        /* sub01 ~1/s */
-	CHK(n_sub02 >= 58 && n_sub02 <= 62);        /* sub02 ~1/s */
-	CHK(n_cm    >= 58 && n_cm    <= 62);        /* chanmap ~1/s */
-	CHK(n_ann   >= 58 && n_ann   <= 62);        /* cfea ~1/s */
+	CHK(n_probe >= 51L * 341 && n_probe <= 53L * 341);   /* 341 probes per burst-cycle */
+	CHK(n_sub01 >= 50 && n_sub01 <= 53);        /* sub01: once per cycle */
+	CHK(n_sub02 >= 50 && n_sub02 <= 53);        /* sub02: once per cycle */
+	CHK(n_cm    >= 50 && n_cm    <= 53);        /* chanmap: ONE window per cycle */
+	CHK(n_ann   >= 138 && n_ann  <= 141);       /* cfea free-runs at ~1/s */
+
+	/* ---- (a2) burst choreography: the 4 inventory specials + descriptor ----
+	 * A real burst carries the zeros/our-MAC/SYSP/SCEN specials at in-burst probe
+	 * indices 30..33 (measured 11/11 bursts on the M-300 establish capture), and
+	 * every probe — special or rotating — publishes its checksum as the FILLER
+	 * descriptor. */
+	reac_master_init(&m, SRC, &s1608, FPS);
+	cnt = 0;
+	int specials_seen = 0;
+	for (long i = 0; i < 2L * m.cycle_len; i++) {
+		enum reac_master_emit e = slot(&m, &idx, &cnt);
+		if (e != REAC_M_EMIT_PROBE)
+			continue;
+		build_and_stamp(&m, f, e, idx, planar);
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY probe */
+		if (m.probe_idx == 30) {                  /* zeros special */
+			CHK(f[49] == 0xdd);
+			specials_seen++;
+		} else if (m.probe_idx == 31) {           /* MAC special: OUR identity */
+			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
+			specials_seen++;
+		} else if (m.probe_idx == 32) {           /* "SYSP" inventory token */
+			CHK(f[40] == 'S' && f[41] == 'Y' && f[42] == 'S' && f[43] == 'P');
+			specials_seen++;
+		} else if (m.probe_idx == 33) {           /* "SCEN" inventory token */
+			CHK(f[33] == 'S' && f[34] == 'C' && f[35] == 'E' && f[36] == 'N');
+			specials_seen++;
+		}
+	}
+	CHK(specials_seen == 2 * 4);                  /* all 4 specials, EVERY burst */
 
 	/* ---- (b) the golden response sequence -------------------------------- */
 	/* presence-flood alone must NOT grant (the golden rule) */
@@ -301,15 +346,15 @@ int main(void)
 		switch (e) {
 		case REAC_M_EMIT_CHANMAP:
 			e_cm++;
-			CHK(idx >= 0 && idx < 49);              /* sweeps the fabric, cursor 0..10 */
+			CHK(idx >= 0 && idx < 49);              /* sweeps the fabric, cursor 0..48 */
 			if (cm_slot >= 0)
-				CHK(i - cm_slot == FPS);            /* exactly 1/s */
+				CHK(i - cm_slot == m.cycle_len);    /* exactly one window per cycle */
 			cm_slot = i;
 			break;
 		case REAC_M_EMIT_ANNOUNCE:
 			e_ann++;
 			if (ann_slot >= 0)
-				CHK(i - ann_slot == FPS);           /* exactly 1/s */
+				CHK(i - ann_slot == FPS);           /* cfea free-runs at exactly 1/s */
 			ann_slot = i;
 			break;
 		case REAC_M_EMIT_SUB01:    e_s1++; break;
@@ -320,9 +365,10 @@ int main(void)
 		}
 	}
 	CHK(m.state == REAC_M_ESTABLISHED);
-	CHK(e_cm >= 11 && e_cm <= 13 && e_ann >= 11 && e_ann <= 13);   /* both every second */
-	CHK(e_s1 >= 11 && e_s1 <= 13 && e_s2 >= 11 && e_s2 <= 13);     /* subs too */
-	CHK(e_pr >= 108L * 12 && e_pr <= 120L * 12);                   /* PROBE ~115/s linked */
+	/* 12 s = ~4.45 cycles: the cycle streams fire 4-5x, cfea ~12x. */
+	CHK(e_cm >= 4 && e_cm <= 5 && e_ann >= 11 && e_ann <= 13);
+	CHK(e_s1 >= 4 && e_s1 <= 5 && e_s2 >= 4 && e_s2 <= 5);
+	CHK(e_pr >= 4L * 341 && e_pr <= 5L * 341);      /* 341-probe bursts, linked too */
 	CHK(cm_slot != ann_slot);                                      /* phase-separated */
 
 	/* ---- (c) safety fallbacks only move BACKWARD ------------------------- */
