@@ -84,7 +84,11 @@ static void on_process(void *data, struct spa_io_position *position)
 	for (int c = 0; c < n->channels; c++)
 		planar[c] = n->stage[c];
 
-	uint8_t frame[REAC_FRAME_BYTES];
+	/* MUST be zeroed: reac_tx_build only encodes n->channels of the 40 downstream
+	 * slots, so the unused slots would otherwise carry uninitialized stack memory
+	 * onto the wire. A real M-200 sends CLEAN ZEROS in every FILLER's audio region
+	 * while hunting (measured: 100% zero vs our 100% non-zero) — #130. */
+	uint8_t frame[REAC_FRAME_BYTES] = { 0 };
 	for (uint32_t s = 0; s < nframes; s++) {
 		for (int c = 0; c < n->channels; c++)
 			n->stage[c][n->staged] = in[c] ? in[c][s] : 0.0f;
