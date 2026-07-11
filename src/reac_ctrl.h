@@ -115,4 +115,10 @@ size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
                                    const uint8_t src[6], uint16_t counter,
                                    int n_ch, float *const *planar, int ns);
 
+/* The cdea 04 03 0013 cold-connect variant, interleaved with the 0014 by a real
+ * box. Emitted raw (the 0013 block is not sum-to-0). */
+size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns);
+
 #endif /* REAC_CTRL_H */

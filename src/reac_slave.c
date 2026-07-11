@@ -169,14 +169,21 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		 * master echoes its block back as the grant); otherwise a unicast audio
 		 * FILLER. One frame either way, always to the learned master. */
 		stage_inputs(s, buf, planar);
-		if (d->with_join)
-			len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src, counter,
-			                                  s->box_channels, planar,
-			                                  REAC_SAMPLES_PER_PKT);
-		else
+		if (d->with_join) {
+			/* Interleave the 0014 and 0013 cold-connect variants on successive grid
+			 * slots, as a real box does (S-1608 cold boot, 2026-07-11) — the master
+			 * echoes both back in its grant burst. */
+			len = s->coldconnect_alt
+				? reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac, s->src, counter,
+				                                   s->box_channels, planar, REAC_SAMPLES_PER_PKT)
+				: reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src, counter,
+				                              s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+			s->coldconnect_alt ^= 1;
+		} else {
 			len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
 			                                      s->box_channels, planar,
 			                                      REAC_SAMPLES_PER_PKT);
+		}
 		break;
 
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
@@ -228,8 +235,10 @@ static void *slave_loop(void *arg)
 		if (want != s->phy_up_seen) {
 			struct reac_slave_decision d = reac_slave_step_phy(s, want);
 			s->phy_up_seen = want;
-			if (want)               /* PHY up: begin the presence-flood immediately */
+			if (want) {             /* PHY up: begin the presence-flood immediately */
+				s->counter_locked = 0;   /* re-latch the master offset on a fresh link */
 				emit_decision(s, &d, &bcast_sll, &uni_sll);
+			}
 		}
 
 		/* Block (with a short timeout) for the next master frame. Frame-arrival is
@@ -264,6 +273,22 @@ static void *slave_loop(void *arg)
 
 		struct reac_slave_decision d = reac_slave_step_rx(s, &p);
 		memcpy(uni_sll.sll_addr, s->fsm.master_mac, 6);  /* learned this step */
+
+		/* Follow the master clock (the M-200i is the word-clock master): override
+		 * the FSM's free-running counter with one LOCKED to the master's downstream
+		 * counter at a fixed offset, latched at first lock. A real box's upstream
+		 * counter tracks the master's exactly (constant offset, one frame per
+		 * master frame); a box whose counter free-runs from zero / drifts is not
+		 * clock-slaved and the master refuses it. State transitions don't use the
+		 * counter, so overriding it here (right before emit) is safe. */
+		if (s->fsm.have_master && memcmp(p.src, s->fsm.master_mac, 6) == 0) {
+			if (!s->counter_locked) {
+				s->counter_offset = (uint16_t)(s->fsm.counter - p.counter);
+				s->counter_locked = 1;
+			}
+			s->fsm.counter = (uint16_t)(p.counter + s->counter_offset);
+		}
+
 		emit_decision(s, &d, &bcast_sll, &uni_sll);
 	}
 	return NULL;

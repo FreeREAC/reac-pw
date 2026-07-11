@@ -298,3 +298,30 @@ size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
 }
+
+/* The cdea 04 03 0013 cold-connect variant a real box INTERLEAVES with the 0014
+ * (S-1608 cold boot, m200-s1608-BIDIR-reboot-2026-07-11): same framing, a distinct
+ * 32-byte control block with BE len 0x0013 and its own descriptor. It is NOT
+ * sum-to-0 (the captured block sums to 0xfe mod 256), which proves the cold-connect
+ * is not checksum-validated the way the 0014 block happens to be — so it is emitted
+ * RAW (no checksum_apply). Over live braided audio like every box->master frame. */
+size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns)
+{
+	static const uint8_t COLDCONNECT_BLK_0013[32] = {
+		0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
+		0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x03, 0x02, 0x00, 0x01, 0x00, 0x7a, 0xf7, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	};
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;
+	size_t len = box_frame_len(n_ch);
+	memset(out, 0, len);
+	put_hdr(out, master, src, counter, 0xcd, 0xea);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_0013, 32);
+	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
