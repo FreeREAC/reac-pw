@@ -52,6 +52,18 @@ static void on_signal(void *data, int sig)
 	pw_main_loop_quit(g_loop);
 }
 
+/* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input. */
+static int parse_mac(const char *s, uint8_t out[6])
+{
+	unsigned b[6];
+	if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x",
+	           &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6)
+		return -1;
+	for (int i = 0; i < 6; i++)
+		out[i] = (uint8_t)b[i];
+	return 0;
+}
+
 static void usage(const char *p)
 {
 	fprintf(stderr,
@@ -63,7 +75,11 @@ static void usage(const char *p)
 	  "                cadence + return our inputs upstream)\n"
 	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
-	  "                slave role -> the upstream return + handshake socket\n", p);
+	  "                slave role -> the upstream return + handshake socket\n"
+	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: a Roland-OUI\n"
+	  "                stand-in (master 00:40:ab:00:00:01, slave 00:40:ab:c4:80:41).\n"
+	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
+	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n", p);
 }
 
 int main(int argc, char **argv)
@@ -72,6 +88,8 @@ int main(int argc, char **argv)
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
 	enum reac_role role = REAC_ROLE_MASTER;   /* default master: preserves current behaviour */
+	uint8_t src_mac[6];
+	int src_mac_set = 0;
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
@@ -82,6 +100,13 @@ int main(int argc, char **argv)
 			rxcfg.forced_rate = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
+		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
+			if (parse_mac(argv[++i], src_mac) != 0) {
+				fprintf(stderr, "reac-pw: bad --src-mac '%s' (want aa:bb:cc:dd:ee:ff)\n",
+				        argv[i]);
+				return 2;
+			}
+			src_mac_set = 1;
 		} else if (!strcmp(argv[i], "--role") && i + 1 < argc) {
 			if (reac_role_parse(argv[++i], &role) != 0) {
 				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave)\n", argv[i]);
@@ -146,11 +171,12 @@ int main(int argc, char **argv)
 
 	if (tx_if && role == REAC_ROLE_MASTER) {
 		static const uint8_t roland_oui_mac[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		const uint8_t *master_src = src_mac_set ? src_mac : roland_oui_mac;
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_sink_cfg scfg = { .ifname = tx_if, .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
-		                              .src_mac = roland_oui_mac, .master_mac = NULL };
+		                              .src_mac = master_src, .master_mac = NULL };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
@@ -166,12 +192,13 @@ int main(int argc, char **argv)
 		 * carrier and the slave emits silent/own-input FILLER until that sink is
 		 * linked. The engine learns the master MAC from the wire — never set here. */
 		static const uint8_t box_oui_mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
+		const uint8_t *slave_src = src_mac_set ? src_mac : box_oui_mac;
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_slave_cfg slcfg = { .ifname = tx_if,
 		                                .box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT,
 		                                .sample_rate = rx.sample_rate,
-		                                .src_mac = box_oui_mac };
+		                                .src_mac = slave_src };
 		if (reac_slave_open(&slave, &slcfg, &tx_ring) == 0) {
 			slave_open = 1;
 			if (reac_slave_start(&slave) == 0) {
