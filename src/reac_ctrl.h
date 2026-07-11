@@ -89,7 +89,7 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
  *
  * GROUND-TRUTHED (byte-compared to captured box frames): */
 size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
-                              const uint8_t src[6], uint16_t counter);
+                              const uint8_t src[6], uint16_t counter, int n_ch);
 /* upstream return audio: n_ch x 12 samples, planar float [ch][s]; box-width
  * frame (16ch->628B, 8ch->340B): 18 hdr + 32 descriptor + n_ch*36 audio + 2 tail. */
 size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],

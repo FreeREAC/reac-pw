@@ -68,6 +68,7 @@ static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
+	  "         [--box-channels N] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -76,6 +77,8 @@ static void usage(const char *p)
 	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
+	  "  --box-channels N  slave role: our input width (even 2..40; 8=S-0808, 16=S-1608,\n"
+	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
 	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: a Roland-OUI\n"
 	  "                stand-in (master 00:40:ab:00:00:01, slave 00:40:ab:c4:80:41).\n"
 	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
@@ -90,6 +93,7 @@ int main(int argc, char **argv)
 	enum reac_role role = REAC_ROLE_MASTER;   /* default master: preserves current behaviour */
 	uint8_t src_mac[6];
 	int src_mac_set = 0;
+	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
@@ -110,6 +114,13 @@ int main(int argc, char **argv)
 		} else if (!strcmp(argv[i], "--role") && i + 1 < argc) {
 			if (reac_role_parse(argv[++i], &role) != 0) {
 				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave)\n", argv[i]);
+				return 2;
+			}
+		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
+			box_channels = atoi(argv[++i]);
+			if (box_channels < 2 || box_channels > REAC_MAX_CHANNELS || (box_channels & 1)) {
+				fprintf(stderr, "reac-pw: --box-channels must be even, 2..%d "
+				        "(e.g. 8 = S-0808, 16 = S-1608, 32 = S-4000S)\n", REAC_MAX_CHANNELS);
 				return 2;
 			}
 		} else {
@@ -196,7 +207,7 @@ int main(int argc, char **argv)
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_slave_cfg slcfg = { .ifname = tx_if,
-		                                .box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT,
+		                                .box_channels = box_channels,
 		                                .sample_rate = rx.sample_rate,
 		                                .src_mac = slave_src };
 		if (reac_slave_open(&slave, &slcfg, &tx_ring) == 0) {
@@ -205,7 +216,7 @@ int main(int argc, char **argv)
 				reac_slave_set_phy_up(&slave, 1);  /* PHY up: begin the establishment */
 				fprintf(stderr, "reac-pw: SLAVE role on '%s' (%d-ch upstream return) — "
 				        "responding to an external master, locked to its cadence\n",
-				        tx_if, REAC_SLAVE_BOX_CHANNELS_DEFAULT);
+				        tx_if, box_channels);
 			} else {
 				fprintf(stderr, "reac-pw: slave engine thread failed to start\n");
 				reac_slave_close(&slave); slave_open = 0;

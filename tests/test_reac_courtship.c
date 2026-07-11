@@ -125,7 +125,7 @@ static int step(struct court *c)
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
 		/* the ~1/s keep-alive REPLACES the audio frame on the slot the FSM flags */
 		if (d.with_heartbeat) {
-			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc);
+			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
 			c->s_heartbeats_fed++;
 		} else {
 			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
@@ -134,7 +134,7 @@ static int step(struct court *c)
 		}
 		break;
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc);
+		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
 		c->s_heartbeats_fed++;
 		break;
 	}

@@ -189,10 +189,11 @@ static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, 
 }
 
 size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
-                              const uint8_t src[6], uint16_t counter)
+                              const uint8_t src[6], uint16_t counter, int n_ch)
 {
-	const int n_ch = 16;                 /* box width (S-1608-class 628 B) */
-	size_t len = box_frame_len(n_ch);
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;                        /* box widths are even 2..40 (628B@16, 340B@8) */
+	size_t len = box_frame_len(n_ch);    /* the heartbeat occupies a box-width audio slot */
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);   /* unicast cdea */
 	out[18] = 0x01; out[19] = 0x03;       /* cdea 01 03 */
@@ -249,7 +250,7 @@ size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch)
 {
-	size_t len = box_frame_len(16);
+	size_t len = box_frame_len(in_ch);          /* frame width follows our input count */
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
 	out[18] = 0x01; out[19] = 0x03;
