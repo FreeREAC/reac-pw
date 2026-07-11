@@ -80,6 +80,18 @@ int main(void)
 	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, 16, NULL, 12);
 	CHK(reac_ctrl_checksum_verify(f) == 0 && f[18] == 0x04 && f[19] == 0x03);
 
+	/* 3b. the full cold-connect escalation 0014->0013->0016->001a, byte-matched to
+	 * a real S-1608 (2026-07-11). block[31] = frame[49] is the per-variant trailer. */
+	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 1, 16, NULL, 12);
+	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x13 && f[49] == 0x02);  /* was 0x00 (bug) */
+	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 16, NULL, 12);
+	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x16 && f[49] == 0xfc);
+	n = reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 16, NULL, 12);
+	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x1a && f[49] == 0xf4);
+	/* 8-ch width -> 340 B; odd widths rejected */
+	CHK(reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 8, NULL, 12) == 340);
+	CHK(reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 15, NULL, 12) == 0);
+
 	/* 4. 8-channel box width -> 340 B */
 	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, 8, NULL, 12);
 	CHK(n == 340);

@@ -121,4 +121,15 @@ size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns);
 
+/* The cdea 04 03 0016 and 001a cold-connect variants — the rest of the escalation
+ * a real S-1608 sends (0014 -> 0013 -> 0016 -> 001a). They carry the fuller box
+ * inventory the master needs to register the box in its REAC device list. Emitted
+ * raw (byte-matched to a real S-1608, 2026-07-11). */
+size_t reac_ctrl_build_coldconnect_0016(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns);
+size_t reac_ctrl_build_coldconnect_001a(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns);
+
 #endif /* REAC_CTRL_H */
