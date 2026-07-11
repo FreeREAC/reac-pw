@@ -314,14 +314,61 @@ size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
 		0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
 		0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
 		0x03, 0x02, 0x00, 0x01, 0x00, 0x7a, 0xf7, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	};
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+	};   /* block[31]=0x02 trailer — byte-matched to a real S-1608 (2026-07-11) */
 	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
 		return 0;
 	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
 	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_0013, 32);
+	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
+
+size_t reac_ctrl_build_coldconnect_0016(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns)
+{
+	/* The third cold-connect variant a real S-1608 escalates to (byte-matched to
+	 * m5000-s1608 establish, 2026-07-11): cdea 04 03, BE len 0x0016. Carries more
+	 * of the box inventory the master needs to register the box. */
+	static const uint8_t COLDCONNECT_BLK_0016[32] = {
+		0x04, 0x03, 0x00, 0x16, 0x00, 0x02, 0x00, 0xfe,
+		0x11, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x00,
+		0x77, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc,
+	};
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;
+	size_t len = box_frame_len(n_ch);
+	memset(out, 0, len);
+	put_hdr(out, master, src, counter, 0xcd, 0xea);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_0016, 32);
+	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
+
+size_t reac_ctrl_build_coldconnect_001a(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns)
+{
+	/* The fourth/final cold-connect variant (byte-matched to m5000-s1608 establish,
+	 * 2026-07-11): cdea 04 03, BE len 0x001a — the fullest box inventory. */
+	static const uint8_t COLDCONNECT_BLK_001A[32] = {
+		0x04, 0x03, 0x00, 0x1a, 0x00, 0x02, 0x00, 0xfe,
+		0x15, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x02,
+		0x00, 0x03, 0x00, 0x02, 0x6e, 0xf7, 0x00, 0xf4,
+	};
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;
+	size_t len = box_frame_len(n_ch);
+	memset(out, 0, len);
+	put_hdr(out, master, src, counter, 0xcd, 0xea);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_001A, 32);
 	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
