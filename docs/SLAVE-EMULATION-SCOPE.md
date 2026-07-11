@@ -55,29 +55,28 @@ Files: `src/main.c`, `src/reac_slave.c`, `src/reac_ctrl.c`.
 ### W4 — Downstream decode: OHRCA frame length + per-generation layout  ·  effort S–M
 Two distinct issues found in `src/reac_rx.c`:
 
-**(a) OHRCA 1494 B frame length [V, offline 2026-07-11] — MUST FIX for M-5000.**
-The M-5000 (OHRCA, 96 kHz) downstream is **1494 B, not 1492**: a standard REAC
-frame (audio `[50:1490]`, `C2 EA` end-marker at `[1490:1492]`) plus a **2-byte
-per-frame CRC-16 trailer** at `[1492:1494]` (measured near-unique: 20004 distinct
-values / 23759 frames). `gate_accepts` requires `len == REAC_FRAME_BYTES` (1492),
-so it **rejects every M-5000 frame — capture ports go silent with no error
-logged.** Fix: accept `1492 || 1494`, decode the embedded `[0:1492]` frame as
-today, ignore the trailer. The CRC only needs computing if we later *emit* toward
-an OHRCA-expecting box (a separate RE task).
+**(a) ⚠ FALSIFIED (2026-07-12): the "+2 CRC-16 trailer" was the ETHERNET FCS.**
+The earlier claim — that the M-5000 (OHRCA) frame is 1494 B = a 1492 B REAC frame
+plus a 2-byte per-frame CRC-16 trailer (and the box upstream 1206 B = 1204 + 2) —
+is **WRONG**. Proven: the 2 "trailer" bytes are exactly the **first 2 bytes of the
+standard Ethernet FCS** (`CRC-32(frame[0:L])`, little-endian) — verified on the
+real S-4000S (`s4000s-coldboot-m5000`, box `c4:06:80`): `trailer = ff93` equals
+`CRC32(frame[0:1204]) = ff93 95e4`, exactly, on every frame tested. Some switch
+mirror/SPAN configs include a couple of FCS bytes in the captured frame; others
+strip them — which is why the SAME box on the SAME desk showed 1206 B in one
+capture and the correct 1204 B in another. The box's real REAC frame is the
+constant `box_frame_len(n)` length, ending in `C2 EA`, with **no REAC trailer**.
+Consequence: there is **nothing to crack and nothing to emit** — the Ethernet FCS
+is computed by the NIC hardware, so reac-pw's frames already carry a valid one.
+Do NOT reintroduce a "per-frame CRC-16 trailer" gate or emitter.
 
-**Trailer characterization (offline 2026-07-11, not fully cracked).** The 2-byte
-trailer is NOT a checksum of frame content — it varies for byte-identical content
-across different counters. It is a **linear (GF(2)) function of the free-running
-frame counter**: within every constant-content group,
-`trailer_i XOR trailer_j = L * (counter_i XOR counter_j)` for a fixed 16x16
-matrix `L`. That is the fingerprint of a **CRC-16 seeded by the frame counter**
-(`init = counter`) — a sequence-integrity field, not a data CRC. Standard
-constant-init CRC-16 sweeps (all poly/init/refl/xorout over every contiguous
-range) plus Fletcher-16 and modular sums all MISS, consistent with the counter
-seed. Full polynomial recovery is blocked only by data: the observed counter
-differences span 15 of 16 dimensions (one bit short) — a capture that exercises
-the 16th counter bit finishes it. Off the RX path (we ignore the trailer);
-needed only to EMIT toward an OHRCA-expecting box.
+**Why it masqueraded as a counter-seeded CRC-16.** The Ethernet FCS is a CRC-32
+over the whole frame *including the counter field*, so 2 of its bytes are a linear
+(GF(2)) function of the counter for constant content — which is exactly the
+"trailer_i XOR trailer_j = L·(counter_i XOR counter_j)" fingerprint we mistook for
+a bespoke counter-seeded CRC-16. Standard CRC-16 sweeps missed because it was never
+a CRC-16; it was 2 bytes of the CRC-32 FCS. Lesson: verify capture ground-truth
+(mirror/SPAN byte-faithfulness) before RE-ing a "trailer".
 
 **(b) Per-generation audio layout.** `reac_rx` decodes downstream via
 `reac_decode` = **plain-LE**, which is CORRECT for the M-5000 (OHRCA) but WRONG

@@ -7,10 +7,12 @@
 > CHANMAP + heartbeat ~0.5/s. Proof: `reacpw-slave-m200-CONNECTED-2026-07-11.pcap`.
 > **This falsifies the earlier "hardware / clock-domain wall" conclusion** — reac-pw
 > paces from `CLOCK_MONOTONIC`, and a real desk still accepts it as a settled box.
-> The remaining M-5000 (OHRCA) gap is therefore NOT a clock wall; it is almost
-> certainly the OHRCA established-state shape (1494 B frame + per-frame CRC-16
-> trailer, 96 kHz upstream) that reac-pw does not yet emit. See the M-200 section
-> below.
+> The remaining M-5000 (OHRCA) gap is NOT a clock wall. ⚠ It is also NOT a
+> "+2 CRC-16 trailer" — that theory was FALSIFIED 2026-07-12: the 2 extra bytes
+> some captures show are the **Ethernet FCS** (`CRC-32(frame)[:2]`), a mirror/SPAN
+> artifact, not a REAC field (proof below). The real OHRCA gap is still open —
+> most likely the per-generation downstream audio layout (W4/#135) — but there is
+> nothing to crack or emit for a trailer. See the M-200 section below.
 
 Reconstructed from live M-5000 (OHRCA, 96 kHz) captures, 2026-07-11: a real
 S-1608 cold-boot (`real-s1608-coldboot-m5000-2026-07-11.pcap`) and reac-pw's
@@ -72,8 +74,10 @@ use `cdea 04 03` (box = cold-connect JOIN, master = GRANT).
 satisfied. On the **M-5000 (OHRCA)** the master takes `GRANTING → HUNTING`
 instead (PROBE ~680/s post-grant). Since the same reac-pw build, same pacer, same
 V-Mixer-shaped upstream locks the M-200 but not the M-5000, the missing arrow is
-an **OHRCA-shaped ESTABLISHED stream** (1494 B + CRC-16 trailer, 96 kHz upstream)
-— not a clock/hardware property of the box. reac-pw's *own* transitions are right
+an **OHRCA-shaped ESTABLISHED stream** (96 kHz upstream; likely the per-generation
+audio layout — NOT a CRC trailer, that was the Ethernet-FCS artifact, see the
+falsified-trailer note) — not a clock/hardware property of the box. reac-pw's *own*
+transitions are right
 on both desks (it floods, cold-connects, is granted, establishes); only the
 OHRCA post-grant emission is still unmatched.
 
@@ -214,9 +218,10 @@ differs (S-1608 `02 02`, S-0808 `01 00`, S-4000S `02 05` at the discriminating
 byte). The S-4000S heartbeat also carries channel-slot data (`29 38 00 …`) where
 S-1608/S-0808 send an all-zero heartbeat — reac-pw sends the generic heartbeat and
 the M-200 still enrolled it, so the heartbeat is not identity-bearing. Note: the
-S-4000S was captured on OHRCA (frames +2 CRC trailer, 1206 B); reac-pw emits the
-V-Mixer width (1204 B) which the M-200 (V-Mixer) accepts — an OHRCA desk may need
-the trailer (W4).
+S-4000S's real frame is 1204 B (`box_frame_len(32)`), ending in `c2ea`, with NO
+REAC trailer; reac-pw emits exactly that. (Some M-5000 captures showed 1206 B —
+that was 2 bytes of the Ethernet FCS from a mirror config, NOT a box field; see
+the falsified-trailer note.)
 
 The S-4000 merge/split units (`c4:06:80`, `c4:08:bc`) are also `0x84` with a
 distinct descriptor; their menu names are unconfirmed → not yet rows.
