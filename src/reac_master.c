@@ -41,8 +41,8 @@
  * behaviour. Re-check on the next live power-cycle capture.
  * ------------------------------------------------------------------------- */
 
-/* The three fixed M-300 control constants (byte-exact, checksum-valid). */
-static const uint8_t PROBE_BLK[34] = { 0xcd, 0xea, 0x01, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xdd };
+/* The two fixed M-300 control constants (byte-exact, checksum-valid). The PROBE is
+ * NOT a constant — it rotates; see gen_probe(). */
 static const uint8_t SUB01_BLK[34] = { 0xcd, 0xea, 0x01, 0x01, 0x00, 0x18, 0x00, 0x22, 0xc8, 0x31, 0x32, 0x33, 0x34, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x80, 0x02, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa7 };
 static const uint8_t SUB02_BLK[34] = { 0xcd, 0xea, 0x01, 0x02, 0x00, 0x0e, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe7 };
 
@@ -57,6 +57,48 @@ static void stamp_block_cksum(uint8_t blk[34])
 	for (int i = 2; i < 33; i++)   /* block bytes [18:49] = template [2:33] */
 		s += blk[i];
 	blk[33] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+}
+
+/* ---- PROBE: the rotating hunt sequence (#130) -----------------------------
+ * Measured live off an M-200 driving an S-1608 (2026-07-11): the cdea 01 00 001a
+ * probe's 27-byte payload is a sliding window over the period-10 sequence
+ *   [ 00 00 00 01 00 00 00 00 00 SUB ]
+ * with SUB = 0x02 while hunting, 0x03 once established. The phase advances +6
+ * (mod 10) after every 2 emissions, yielding the observed 0,6,2,8,4 rotation.
+ * All 10 rotating probe blocks in the capture reproduce exactly under this model.
+ * Our old code replayed ONE frozen phase (6/0x02, checksum 0xdd) forever. */
+#define REAC_PROBE_PERIOD     10
+#define REAC_PROBE_PHASE_STEP  6   /* phase += 6 (mod 10) -> 0,6,2,8,4 */
+#define REAC_PROBE_REPEAT      2   /* emissions per phase before advancing */
+#define REAC_PROBE_PAYLOAD    27   /* block[4:31] */
+
+static void gen_probe(uint8_t blk[34], int phase, uint8_t sub)
+{
+	const uint8_t per[REAC_PROBE_PERIOD] = { 0, 0, 0, 1, 0, 0, 0, 0, 0, sub };
+	memset(blk, 0, 34);
+	blk[0] = 0xcd; blk[1] = 0xea;
+	blk[2] = 0x01; blk[3] = 0x00;   /* cdea 01 00      */
+	blk[4] = 0x00; blk[5] = 0x1a;   /* BE len 0x001a   */
+	for (int i = 0; i < REAC_PROBE_PAYLOAD; i++)
+		blk[6 + i] = per[(phase + i) % REAC_PROBE_PERIOD];
+	stamp_block_cksum(blk);         /* -> blk[33] */
+}
+
+/* Build the probe for the CURRENT phase + link state, publish its checksum as the
+ * FILLER descriptor (every FILLER until the next probe carries it — byte-verified
+ * against the M-200: P:de -> F:de x16 -> P:dd -> F:dd x16 ...), then advance the
+ * rotation for the next probe. Called when the cadence decides to emit a PROBE,
+ * BEFORE reac_master_stamp reads m->probe_blk. */
+static void probe_prepare(struct reac_master *m)
+{
+	uint8_t sub = (m->state == REAC_M_ESTABLISHED) ? 0x03 : 0x02;
+	gen_probe(m->probe_blk, m->probe_phase, sub);
+	m->filler_desc = m->probe_blk[33];
+
+	if (++m->probe_repeat >= REAC_PROBE_REPEAT) {
+		m->probe_repeat = 0;
+		m->probe_phase = (m->probe_phase + REAC_PROBE_PHASE_STEP) % REAC_PROBE_PERIOD;
+	}
 }
 
 /* Generate the cfea master-announce from the console cfg + OUR src MAC.
@@ -89,58 +131,70 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
 	stamp_block_cksum(out);
 }
 
-/* The channel-map SWEEP a real master advertises. GROUND TRUTH: the captured
- * M-300 establish sweep (reac-captures/m300-s1608-establish-2026-07-10.pcap, real
- * M-300 00:40:ab:c9:d8:5b driving an S-1608) emits ELEVEN distinct cdea 01 03 0019
- * frames — sliding 8-slot windows that together tile the whole 40-slot REAC fabric
- * 0x00..0x2f — in the fixed rotation { fe, 07, 0f, 17, 1f, 27, 2f, 06, 0e, 16, 1e }.
+/* The channel-map SWEEP a real master advertises. GROUND TRUTH: a LIVE M-200
+ * (00:40:ab:c9:cc:03) driving a real S-1608 to sync, captured 2026-07-11 on the
+ * rig. It emits FORTY-NINE distinct cdea 01 03 0019 windows — one per fabric ring
+ * position — cycling continuously.
  *
- * WHY THE SWEEP (not one frame): §4 (S-1608 firmware FUN_0c003548) — a box
- * recognizes a master ONLY once it has seen the window that maps ITS OWN slots. An
- * S-0808 owns 0x00..0x07, an S-1608 0x00..0x0f; NEITHER is covered by a single
- * 0x00..0x06 window. The earlier one-frame map (derived from the local console's
- * out_channels) advertised only 0x00..0x06, so every real box stayed silent — the
- * root cause of #130, pinned by an offline field-diff of our downstream vs
- * m300-s1608-establish / m200-probing-nobox (2026-07-11). The master advertises the
- * FABRIC, not the console's output count, so the sweep is fixed and cfg-independent.
+ * THE FABRIC IS A RING of 49 positions: channels 0x00..0x2f (48) then the 0xfe
+ * section marker at the wrap. A window advertises 8 CONSECUTIVE ring positions, so
+ * windows near the wrap run through the marker and back to 0x00 (e.g. start 0x2f ->
+ * 2f fe 00 01 02 03 04 05). One window per start position => exactly 49.
  *
- * Each window is 8 slots. A slot is either the 0xfe section marker (-> fe 00 00,
- * sitting where the fabric ring wraps: windows 2f and fe) or a channel id ch with
- * value 0x28 (ch <= 0x27) / 0x38 (0x28 <= ch <= 0x2f). apply_block re-checksums at
- * emit time, so only the slot bytes matter; stamp_block_cksum keeps the stored
- * template self-consistent too. This generator reproduces all 11 captured blocks
- * byte-for-byte incl. their checksums (asserted in tests/test_reac_s1608.c). */
-#define REAC_CHANMAP_SWEEP_FRAMES 11
+ * WHY THE FULL SWEEP: §4 (S-1608 firmware FUN_0c003548) — a box recognizes a master
+ * ONLY once it has seen the window that maps ITS OWN slots. The original code
+ * derived the map from the local console's out_channels and emitted a SINGLE
+ * 0x00..0x06 window, so no real box ever saw its channels and every one stayed
+ * mute (#130). A first fix emitted 11 windows — but that figure came from an M-300
+ * capture too SHORT to hold the whole rotation; the live M-200 shows the true 49.
+ * The master advertises the FABRIC, never the console width: cfg is unused.
+ *
+ * Slot encoding: the 0xfe marker -> (fe 00 00); a channel ch -> (ch, val, 00) with
+ * val 0x28 for ch <= 0x27 and 0x38 for the high bank 0x28..0x2f. apply_block
+ * re-checksums at emit time, so only the slot bytes matter here; stamp_block_cksum
+ * keeps the stored template self-consistent too. This generator reproduces the
+ * captured windows byte-for-byte incl. checksums (tests/test_reac_s1608.c). */
 #define REAC_CHANMAP_MARKER 0xfe
-static const uint8_t CHANMAP_SWEEP[REAC_CHANMAP_SWEEP_FRAMES][8] = {
-	{ 0xfe, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 },
-	{ 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e },
-	{ 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16 },
-	{ 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e },
-	{ 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 },
-	{ 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e },
-	{ 0x2f, 0xfe, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05 },
-	{ 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d },
-	{ 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15 },
-	{ 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d },
-	{ 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25 },
-};
+#define REAC_CHANMAP_SLOTS   8   /* ring positions advertised per frame */
 
-/* Populate `frames` with the fixed 11-window fabric sweep (returns the count).
- * cfg is unused: the master advertises the whole fabric regardless of console
+/* The fabric RING: 49 positions — channels 0x00..0x2f (ring idx 0..47) then the
+ * 0xfe section marker at the wrap (idx 48). */
+static uint8_t ring_at(int i)
+{
+	i %= REAC_M_FABRIC_RING;
+	return (i == REAC_M_FABRIC_RING - 1) ? REAC_CHANMAP_MARKER : (uint8_t)i;
+}
+
+/* The master's window emit ORDER (measured off the M-200): the marker window
+ * first, then base 7 down to 0, each base stepping by 8 —
+ *   fe · 07 0f 17 1f 27 2f · 06 0e 16 1e 26 2e · … · 00 08 10 18 20 28
+ * i.e. 1 + 8*6 = 49 windows. Returns the ring START index of frame f. */
+static int chanmap_start(int f)
+{
+	if (f == 0)
+		return REAC_M_FABRIC_RING - 1;      /* the 0xfe marker window */
+	int i    = f - 1;                       /* 0..47 */
+	int base = 7 - (i / 6);                 /* 7,6,5,4,3,2,1,0 */
+	int k    = i % 6;                       /* 0..5 */
+	return base + 8 * k;
+}
+
+/* Populate `frames` with the full 49-window fabric sweep (returns the count).
+ * cfg is unused: the master advertises the whole FABRIC, never the console's own
  * width (see the block comment above). */
 static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 {
 	(void)cfg;
-	for (int f = 0; f < REAC_CHANMAP_SWEEP_FRAMES; f++) {
+	for (int f = 0; f < REAC_M_FABRIC_RING; f++) {
 		uint8_t *blk = frames[f];
 		memset(blk, 0, 34);
 		blk[0] = 0xcd; blk[1] = 0xea;
 		blk[2] = 0x01; blk[3] = 0x03;         /* established sub-state 0x03 */
 		blk[4] = 0x00; blk[5] = 0x19;         /* BE len 0x0019 (fixed)      */
 		blk[6] = 0x01;                        /* payload-type = 1           */
-		for (int s = 0; s < 8; s++) {
-			uint8_t ch = CHANMAP_SWEEP[f][s];
+		int start = chanmap_start(f);
+		for (int s = 0; s < REAC_CHANMAP_SLOTS; s++) {
+			uint8_t ch = ring_at(start + s);
 			uint8_t *t = blk + 7 + s * 3;     /* 3-byte slot */
 			if (ch == REAC_CHANMAP_MARKER) {
 				t[0] = 0xfe; t[1] = 0x00; t[2] = 0x00;  /* section marker */
@@ -154,7 +208,7 @@ static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 		blk[31] = 0x00; blk[32] = 0x00;       /* terminator */
 		stamp_block_cksum(blk);
 	}
-	return REAC_CHANMAP_SWEEP_FRAMES;
+	return REAC_M_FABRIC_RING;
 }
 
 const char *reac_master_state_name(enum reac_master_state s)
@@ -210,10 +264,17 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 		m->grant_frames = 1;
 	m->grant_stride = REAC_M_GRANT_STRIDE;
 
-	/* Generate the downstream the master advertises for this console: the
-	 * chanmap frame(s) + the cfea announce (OUR src MAC embedded). */
+	/* Generate the downstream the master advertises for this console: the 49-window
+	 * fabric sweep + the cfea announce (OUR src MAC embedded). */
 	m->chanmap_nframes = gen_chanmap(m->chanmap, &m->cfg);
 	gen_cfea(m->announce_blk, m->src, &m->cfg);
+
+	/* Seed the probe rotation at phase 0 / sub 0x02 (hunting) so FILLER frames
+	 * carry a valid descriptor from the very first slot, before any probe fires. */
+	m->probe_phase  = 0;
+	m->probe_repeat = 0;
+	gen_probe(m->probe_blk, m->probe_phase, 0x02);
+	m->filler_desc = m->probe_blk[33];
 }
 
 /* Phase-offset the four 1/s control streams (sub01/sub02/chanmap/cfea) by fps/4
@@ -421,6 +482,12 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		break;
 	}
 
+	/* Build this slot's probe (current phase + link-state sub) and publish its
+	 * checksum as the FILLER descriptor, then advance the rotation. Must run
+	 * BEFORE reac_master_stamp reads m->probe_blk / m->filler_desc. */
+	if (emit == REAC_M_EMIT_PROBE)
+		probe_prepare(m);
+
 	if (tmpl_idx)
 		*tmpl_idx = idx;
 	return emit;
@@ -437,42 +504,28 @@ static void apply_block(uint8_t *frame, const uint8_t blk[34])
 	reac_ctrl_checksum_apply(frame);        /* re-stamp the checksum at [49]  */
 }
 
-/* The downstream FILLER control-block descriptor (#130 fix 2). A real master
- * does NOT leave [18:50] all-zero on a FILLER frame: it repeats one non-zero
- * 16-bit value 16x across the block. Empirically confirmed 2026-07-10 against
- * reac-captures/m{200,300}-s1608-establish-2026-07-10.pcap (two different real
- * consoles, >1.1M FILLER frames total, offline pcap analysis, no rig): every
- * single captured FILLER block is exactly 16 copies of a 2-byte pair "00 xx"
- * (block[2k]=0x00 constant, block[2k+1]=the varying byte, k=0..15) — ZERO
- * all-zero blocks bar a literal handful (34 of 1.1M) at value-transition
- * boundaries, certainly an FPGA register-read race.
+/* The downstream FILLER control-block descriptor. A real master never leaves
+ * [18:50] all-zero on a FILLER frame: it repeats the 2-byte pair "00 xx" 16x.
  *
- * The value is NOT a fixed per-console protocol constant — it is LIVE: a slow
- * ~1 Hz scan through ~15-20 widely spaced values before the box locks, then a
- * tight +/-1..3 dither around a per-session baseline (0xd9-0xe7 observed on
- * BOTH the M-200 and the M-300 captures) once running steadily. No
- * correlation was found against our free-running counter (every
- * `(counter >> k) & 0xff`, k=0..8, tested) or wall-clock time
- * (`elapsed_ms % 256`, tested) — under 4% match rate for either, chance
- * level. The best-supported read is a live analog telemetry sample (a
- * PLL-jitter or ADC noise-floor readback, maybe a periodic channel/meter
- * scan), not a protocol field — so it is UNLIKELY to be handshake-load-
- * bearing, but that is not proven offline.
+ * SOLVED 2026-07-11 (live M-200 + S-1608 on the rig, #130). `xx` is NOT telemetry
+ * and NOT a per-console constant — it is the CHECKSUM OF THE CURRENT PROBE. The
+ * probe rotates (gen_probe), and every FILLER emitted until the next probe carries
+ * that probe's checksum, byte-verified on the wire:
  *
- * We reproduce the STRUCTURE exactly (16x one non-zero byte, high byte 0x00)
- * with a FIXED value drawn from the steady-state cluster shared by both
- * captured consoles. This is a plausible-pattern fix, not a byte-exact one:
- * matching the real live value is not offline-derivable. The rig test will
- * confirm whether a real box cares. FILLER stays checksum-exempt (this never
- * touches the checksum byte's semantics — [49] here is just descriptor data,
- * not a checksum). */
-#define FILLER_DESC_BYTE 0xdc   /* one observed steady-state sample, both M-200 + M-300 */
-
-static void stamp_filler_descriptor(uint8_t *frame)
+ *   P:de P:de  F:de x16   P:dd P:dd  F:dd x16   P:dc P:dc  F:dc x10  ...
+ *
+ * An earlier RE pass mistook the resulting cycle for "a live analog telemetry
+ * sample (PLL-jitter / ADC noise-floor readback), UNLIKELY to be handshake-load-
+ * bearing" — that reading was WRONG, and it hid the real defect: because our probe
+ * was frozen, our descriptor was frozen too (a constant 0xdc), so our downstream
+ * never presented the rotating hunt state a box expects.
+ *
+ * FILLER stays checksum-exempt: [49] here is descriptor data, not a checksum. */
+static void stamp_filler_descriptor(uint8_t *frame, uint8_t desc)
 {
 	for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i += 2) {
 		frame[i] = 0x00;
-		frame[i + 1] = FILLER_DESC_BYTE;
+		frame[i + 1] = desc;
 	}
 }
 
@@ -482,12 +535,12 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
 	switch (emit) {
 	case REAC_M_EMIT_FILLER:
 		/* reac_tx_build (or the pacer's silent-underrun filler) already wrote
-		 * type 00 00 + audio + tail; stamp the non-zero descriptor pattern a
-		 * real master repeats there on EVERY FILLER frame (#130 fix 2). */
-		stamp_filler_descriptor(frame);
+		 * type 00 00 + audio + tail; stamp 16x "00 <current-probe-checksum>",
+		 * which is exactly what a real master repeats there (#130). */
+		stamp_filler_descriptor(frame, m->filler_desc);
 		return 0;
 	case REAC_M_EMIT_PROBE:
-		apply_block(frame, PROBE_BLK);   /* the fixed M-300 probe */
+		apply_block(frame, m->probe_blk); /* the ROTATING probe (probe_prepare) */
 		return 0;
 	case REAC_M_EMIT_SUB01:
 		apply_block(frame, SUB01_BLK);   /* the fixed M-300 cdea 01 01 */

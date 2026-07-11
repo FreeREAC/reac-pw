@@ -102,11 +102,14 @@ enum reac_master_drop_reason {
  * frames over the ~150 ms window @8000 fps, the transcribed real burst). */
 #define REAC_M_GRANT_STRIDE 12
 
-/* Max channel-map frames the generator holds. A real master SWEEPS the whole
- * 40-slot fabric as 11 sliding 8-slot windows (captured M-300 establish, #130) —
- * not one console-width frame — so the box always sees the window mapping its
- * own slots. */
-#define REAC_M_CHANMAP_FRAMES_MAX 11
+/* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
+ * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
+ * ring positions, and a real master emits ONE window per start position — so the
+ * full sweep is exactly 49 frames (measured live off an M-200 driving an S-1608,
+ * 2026-07-11, #130). An earlier 11-frame figure came from an M-300 capture too
+ * short to contain the whole rotation. */
+#define REAC_M_FABRIC_RING        49
+#define REAC_M_CHANMAP_FRAMES_MAX REAC_M_FABRIC_RING
 
 /* Console I/O config: everything the downstream generator needs to synthesize
  * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
@@ -155,6 +158,19 @@ struct reac_master {
 	int      sub01_tick;      /* slots since the last cdea 01 01 (~1/s)         */
 	int      sub02_tick;      /* slots since the last cdea 01 02 (~1/s)         */
 	int      announce_tick;   /* slots since the last cfea (~1/s)               */
+
+	/* PROBE ROTATION (#130, measured live off an M-200 2026-07-11). The probe is
+	 * NOT a fixed constant: its 27-byte payload is a sliding window over the
+	 * period-10 sequence [00 00 00 01 00 00 00 00 00 SUB], where SUB = 0x02 while
+	 * hunting and 0x03 once established. The phase advances +6 (mod 10) after every
+	 * 2 emissions -> the observed 0,6,2,8,4 rotation. EVERY FILLER frame's [18:50]
+	 * descriptor is 16x "00 <cksum-of-the-current-probe>" — the descriptor tracks
+	 * the probe, which is why a real master's FILLER descriptor appears to "cycle".
+	 * A frozen probe (and hence a frozen descriptor) is what left real boxes mute. */
+	int      probe_phase;     /* current phase into the period-10 sequence      */
+	int      probe_repeat;    /* emissions done at this phase (2 per phase)     */
+	uint8_t  probe_blk[34];   /* the current probe [type|block], regenerated    */
+	uint8_t  filler_desc;     /* = current probe's checksum; stamped into FILLER */
 
 	/* GRANTING */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
