@@ -52,13 +52,26 @@ Present as a chosen box via `--box-channels {8,16,32}`; set config-announce
 box. Currently hardcoded to `REAC_SLAVE_BOX_CHANNELS_DEFAULT`.
 Files: `src/main.c`, `src/reac_slave.c`, `src/reac_ctrl.c`.
 
-### W4 — Downstream decode layout per generation  ·  effort S–M  ·  **RISK**
-The slave RXes the master's 40-ch downstream; the matrix showed downstream audio
-layout is per-generation — M-5000 **plain-LE** vs M-200/M-300 **braid**. Confirm
-`reac_rx` decodes the connected desk correctly; add a per-generation switch or
-autodetect if needed. Wrong layout = silent noise (no error), so it MUST be
-wire-verified. Cheapest de-risking step; needs no new code to test.
-Files: `src/reac_rx.c`.
+### W4 — Downstream decode: OHRCA frame length + per-generation layout  ·  effort S–M
+Two distinct issues found in `src/reac_rx.c`:
+
+**(a) OHRCA 1494 B frame length [V, offline 2026-07-11] — MUST FIX for M-5000.**
+The M-5000 (OHRCA, 96 kHz) downstream is **1494 B, not 1492**: a standard REAC
+frame (audio `[50:1490]`, `C2 EA` end-marker at `[1490:1492]`) plus a **2-byte
+per-frame CRC-16 trailer** at `[1492:1494]` (measured near-unique: 20004 distinct
+values / 23759 frames). `gate_accepts` requires `len == REAC_FRAME_BYTES` (1492),
+so it **rejects every M-5000 frame — capture ports go silent with no error
+logged.** Fix: accept `1492 || 1494`, decode the embedded `[0:1492]` frame as
+today, ignore the trailer. The CRC only needs computing if we later *emit* toward
+an OHRCA-expecting box (a separate RE task).
+
+**(b) Per-generation audio layout.** `reac_rx` decodes downstream via
+`reac_decode` = **plain-LE**, which is CORRECT for the M-5000 (OHRCA) but WRONG
+for M-200/M-300 (they braid the downstream → would decode as noise). No change
+needed for the M-5000; add a per-generation switch/autodetect before targeting a
+V-Mixer desk. Wrong layout = silent noise, so wire-verify.
+
+Files: `src/reac_rx.c` (`gate_accepts`, `feed_frame`).
 
 ### W5 — On-wire validation against a real master  ·  rig time  ·  the proof
 `test_reac_courtship.c` only proves our-slave ↔ our-master. Prove a real desk
