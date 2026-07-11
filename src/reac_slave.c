@@ -196,7 +196,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		 * occupies an audio slot, never an extra frame). */
 		stage_inputs(s, buf, planar);
 		if (d->with_heartbeat)
-			len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter);
+			len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter, s->box_channels);
 		else
 			len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
 			                                      s->box_channels, planar,
@@ -204,7 +204,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		break;
 
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter);
+		len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter, s->box_channels);
 		break;
 	}
 

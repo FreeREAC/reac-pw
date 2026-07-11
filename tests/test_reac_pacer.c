@@ -116,7 +116,7 @@ int main(void)
 		CHK(found_join);
 
 		/* unicast -> ESTABLISHED via the mirror */
-		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3);
+		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3, 16);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.fsm_state == REAC_M_ESTABLISHED);
 
