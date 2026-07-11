@@ -166,6 +166,26 @@ int main(void)
 	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 
+	/* 7. MASTER-side box recognition: a box's own config-announce round-trips
+	 * back to its matrix model (slave emits -> master identifies the same row). */
+	struct { const char *tok; int in_ch; } cases[] = {
+		{ "s1608", 16 }, { "s0808", 8 }, { "s4000s", 32 },
+	};
+	for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+		n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, cases[i].in_ch);
+		const struct reac_box_model *m = reac_ctrl_identify_box(f, n);
+		CHK(m != NULL);
+		CHK(strcmp(m->token, cases[i].tok) == 0);
+		CHK(m->in_ch == cases[i].in_ch);
+	}
+	/* a NON-config-announce frame (heartbeat) is not identifiable -> NULL */
+	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x55, 16);
+	CHK(reac_ctrl_identify_box(f, n) == NULL);
+	/* an unknown 0x84 descriptor (mutate one descriptor byte) -> NULL (falls back) */
+	n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, 8);
+	f[REAC_CTRL_BLOCK_OFF + 8] ^= 0xff;   /* corrupt a descriptor byte */
+	CHK(reac_ctrl_identify_box(f, n) == NULL);
+
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
 	       "parser + descriptor + audio round-trip + box-frame classifier clean\n");
 	return 0;

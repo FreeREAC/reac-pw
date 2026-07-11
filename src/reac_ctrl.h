@@ -134,6 +134,14 @@ const struct reac_box_model *reac_box_model_by_token(const char *token);
 const struct reac_box_model *reac_box_model_by_channels(int in_ch);
 const struct reac_box_model *reac_box_model_table(size_t *count);
 
+/* MASTER-side box RECOGNITION (the mirror of the slave emitter): given a raw
+ * received frame, if it is a box config-announce (cdea 01 03 0010) whose
+ * descriptor block matches a fixed-matrix row, return that model; else NULL.
+ * "The matrix is law as a stagebox; as a mixer we read the frame and use the
+ * matrix as the default" — a NULL means no known model, and the caller falls
+ * back to the descriptor/width carried in the frame. PURE (no socket). */
+const struct reac_box_model *reac_ctrl_identify_box(const uint8_t *frame, size_t len);
+
 /* Config-announce (cdea 01 03 0010) — the SETUP DECLARATION the master enrolls
  * the box from. Byte-verified per model; the selector byte sets the displayed
  * model family. in_ch selects the fixed-matrix row (falls back to S-1608). */

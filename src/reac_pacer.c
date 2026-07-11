@@ -196,6 +196,16 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	if (ev == REAC_M_RX_BOX_JOIN)
 		atomic_fetch_add_explicit(&p->rx_joins, 1, memory_order_relaxed);
 
+	/* MASTER as mixer: recognize the connected box's MODEL from its
+	 * config-announce and match the fixed matrix (task #137). Emit once per new
+	 * model (the box repeats its config-announce). NULL => unknown model; the
+	 * caller can still drive it from the frame's descriptor/width. */
+	const struct reac_box_model *bm = reac_ctrl_identify_box(frame, len);
+	if (bm && bm != p->recognized_box) {
+		p->recognized_box = bm;
+		pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)bm->in_ch, 0, parsed.src, NULL);
+	}
+
 	enum reac_master_state from = p->master.state;
 	int changed = reac_master_rx(&p->master, ev, parsed.src,
 	                             ev == REAC_M_RX_BOX_JOIN ? frame + 18 : NULL);
@@ -348,6 +358,12 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 				        "PHY: it only cold-connects on link-up)\n", ts,
 				        (unsigned long long)frames, (unsigned long long)joins,
 				        e.a ? "box present, not joining" : "no sustained presence");
+			break;
+		}
+		case REAC_PEV_RECOGNIZED: {
+			const struct reac_box_model *bm = reac_box_model_by_channels(e.a);
+			fprintf(out, "reac-master: [%.6f] recognized box = %s from %s\n",
+			        ts, bm ? bm->display : "(unknown)", mac);
 			break;
 		}
 		default:
