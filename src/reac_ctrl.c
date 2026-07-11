@@ -245,28 +245,134 @@ size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
 	return len;
 }
 
+/* ---- FIXED box-model matrix (byte-verified real announce blocks) ----
+ * Role decides authority (docs/REAC-BOX-STATE-DIAGRAM.md): as a SLAVE (we ARE a
+ * stagebox) this matrix is LAW — we pick a row and emit its announce verbatim. As
+ * a MASTER (we ARE a mixer) the box's announce on the wire is the truth and this
+ * matrix is only a default. Each row is a real box's captured config-announce
+ * (selector byte = displayed model family; sum mod 256 == 0 with its trailing
+ * check byte), plus, for the 0x84 family, the ASCII name frame that names the
+ * exact model. All blocks byte-matched to matrix-m200/m5000-s1608 / -s0808. */
+static const struct reac_box_model BOX_MODELS[] = {
+	{ .token = "s1608", .display = "S-1608 (16 in / 8 out)", .in_ch = 16, .out_ch = 8,
+	  .config_block = {
+		0x01, 0x03, 0x00, 0x10, 0x82, 0x00, 0x00, 0x02,
+		0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x03, 0x03,
+		0x03, 0x03, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4c },
+	  .has_name = 0,     /* 0x82 family: named by selector, no ASCII frame */
+	  .cc0014 = {
+		0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe,
+		0x0f, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+	  .cc0013 = {
+		0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
+		0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x03, 0x02, 0x00, 0x01, 0x00, 0x7a, 0xf7, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02 },
+	  .cc0016 = {
+		0x04, 0x03, 0x00, 0x16, 0x00, 0x02, 0x00, 0xfe,
+		0x11, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x00,
+		0x77, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc },
+	  .cc001a = {
+		0x04, 0x03, 0x00, 0x1a, 0x00, 0x02, 0x00, 0xfe,
+		0x15, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x02,
+		0x00, 0x03, 0x00, 0x02, 0x6e, 0xf7, 0x00, 0xf4 },
+	  .has_extra = 0 },  /* S-1608 sends no 0402000d */
+	{ .token = "s0808", .display = "S-0808 (8 in / 8 out)", .in_ch = 8, .out_ch = 8,
+	  .config_block = {
+		0x01, 0x03, 0x00, 0x10, 0x84, 0x00, 0x00, 0x00,
+		0x02, 0x02, 0x01, 0x01, 0x03, 0x03, 0x03, 0x03,
+		0x03, 0x03, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4a },
+	  .has_name = 1,     /* 0x84 family: ASCII name frame gives the exact model */
+	  .name_block = {
+		0x04, 0x01, 0x00, 0x1b, 0x00, 0x02, 0x00, 0xfe,
+		0x16, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x10, 0x00, 0x01, 0x53, 0x2d, 0x30,   /* "S-0" */
+		0x38, 0x30, 0x38, 0x00, 0x00, 0x00, 0x00, 0x05 },  /* "808" */
+	  .cc0014 = {         /* 0014/0013 match the S-1608's (model-generic so far) */
+		0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe,
+		0x0f, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+	  .cc0013 = {
+		0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
+		0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x03, 0x02, 0x00, 0x01, 0x00, 0x7a, 0xf7, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02 },
+	  .cc0016 = {         /* S-0808's inventory differs from S-1608's */
+		0x04, 0x03, 0x00, 0x16, 0x00, 0x02, 0x00, 0xfe,
+		0x11, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x03,
+		0x77, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc },
+	  .cc001a = {
+		0x04, 0x03, 0x00, 0x1a, 0x00, 0x02, 0x00, 0xfe,
+		0x15, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+		0x05, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01,
+		0x00, 0x00, 0x00, 0x00, 0x74, 0xf7, 0x00, 0xf4 },
+	  .has_extra = 1,     /* S-0808 also sends cdea 04 02 000d */
+	  .extra_block = {
+		0x04, 0x02, 0x00, 0x0d, 0x00, 0x02, 0x00, 0xfe,
+		0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a,
+		0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd4 } },
+};
+
+const struct reac_box_model *reac_box_model_table(size_t *count)
+{
+	if (count) *count = sizeof(BOX_MODELS) / sizeof(BOX_MODELS[0]);
+	return BOX_MODELS;
+}
+
+const struct reac_box_model *reac_box_model_by_token(const char *token)
+{
+	size_t n = sizeof(BOX_MODELS) / sizeof(BOX_MODELS[0]);
+	for (size_t i = 0; i < n; i++)
+		if (token && strcmp(BOX_MODELS[i].token, token) == 0)
+			return &BOX_MODELS[i];
+	return NULL;
+}
+
+/* Map an input width to its matrix row (each verified width is one model). Falls
+ * back to S-1608 for widths not in the matrix so the pure builders never fault. */
+const struct reac_box_model *reac_box_model_by_channels(int in_ch)
+{
+	size_t n = sizeof(BOX_MODELS) / sizeof(BOX_MODELS[0]);
+	for (size_t i = 0; i < n; i++)
+		if (BOX_MODELS[i].in_ch == in_ch)
+			return &BOX_MODELS[i];
+	return &BOX_MODELS[0];   /* default: S-1608 */
+}
+
 /* ---- RECONSTRUCTED JOIN builders (experimental, not byte-verified) ---- */
 
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch)
 {
-	/* The box's SETUP DECLARATION a real S-1608 sends (byte-matched to
-	 * m5000-s1608, 2026-07-11): cdea 01 03 0010, sel 0x82, then the per-input
-	 * channel-config flags. The master ENROLLS the box from this frame — without
-	 * it the desk never registers us (live M-5000 test). 16-input (S-1608) form;
-	 * block sums to 0 with the captured 0x4c checksum byte. */
-	static const uint8_t CONFIG_ANNOUNCE_BLK[32] = {
-		0x01, 0x03, 0x00, 0x10, 0x82, 0x00, 0x00, 0x02,
-		0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x03, 0x03,
-		0x03, 0x03, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4c,
-	};
-	(void)in_ch;
-	size_t len = box_frame_len(16);             /* S-1608 config-announce = 628 B */
+	const struct reac_box_model *m = reac_box_model_by_channels(in_ch);
+	size_t len = box_frame_len(m->in_ch);       /* width-matched: S-1608 628 B / S-0808 340 B */
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, CONFIG_ANNOUNCE_BLK, 32);
-	reac_ctrl_checksum_apply(out);              /* no-op: block already sums to 0 */
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->config_block, 32);
+	reac_ctrl_checksum_apply(out);              /* no-op: verified blocks already sum to 0 */
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
+
+size_t reac_ctrl_build_name_frame(uint8_t *out, const uint8_t master[6],
+                                  const uint8_t src[6], uint16_t counter, int in_ch)
+{
+	const struct reac_box_model *m = reac_box_model_by_channels(in_ch);
+	if (!m->has_name)
+		return 0;                               /* 0x82 family: named by selector, no frame */
+	size_t len = box_frame_len(m->in_ch);
+	memset(out, 0, len);
+	put_hdr(out, master, src, counter, 0xcd, 0xea);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->name_block, 32);  /* emitted raw (byte-verified) */
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
 }
@@ -275,23 +381,17 @@ size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
                                    const uint8_t src[6], uint16_t counter,
                                    int n_ch, float *const *planar, int ns)
 {
-	/* The BYTE-VERIFIED S-1608 cold-connect block (zoneA-48k capture): cdea 04 03,
-	 * BE len 0x0014, then 00 02 00 fe + a fixed device descriptor. The 0x41 at
-	 * block[10] is descriptor DATA, not a MAC tail (the earlier reconstruction
-	 * wrote src[5] there — wrong: the block is MAC-independent; the master learns
-	 * the box from the L2 source). Sum(block) mod 256 == 0 holds as captured. */
-	static const uint8_t COLDCONNECT_BLK[32] = {
-		0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe,
-		0x0f, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
-		0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	};
+	/* The cold-connect cdea 04 03 0014 block — from the matrix per model. The 0x41
+	 * at block[10] is descriptor DATA, not a MAC tail (the block is MAC-independent;
+	 * the master learns the box from the L2 source and echoes the block as its
+	 * grant). Sum(block) mod 256 == 0 holds as captured. */
 	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
 		return 0;
+	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
 	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK, 32);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc0014, 32);
 	/* payload[38:66] = frame[52:80] is AUDIO, not device inventory: on a real box
 	 * that region varies every frame (verified 2026-07-11,
 	 * m200-s1608-realbox-establish). The master needs NO inventory tail — it learns
@@ -314,18 +414,15 @@ size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns)
 {
-	static const uint8_t COLDCONNECT_BLK_0013[32] = {
-		0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
-		0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
-		0x03, 0x02, 0x00, 0x01, 0x00, 0x7a, 0xf7, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-	};   /* block[31]=0x02 trailer — byte-matched to a real S-1608 (2026-07-11) */
+	/* cdea 04 03 0013 — from the matrix per model (block[31]=0x02 trailer; not
+	 * sum-to-0, so emitted RAW). Byte-matched per model. */
 	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
 		return 0;
+	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
 	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_0013, 32);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc0013, 32);
 	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
@@ -335,21 +432,16 @@ size_t reac_ctrl_build_coldconnect_0016(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns)
 {
-	/* The third cold-connect variant a real S-1608 escalates to (byte-matched to
-	 * m5000-s1608 establish, 2026-07-11): cdea 04 03, BE len 0x0016. Carries more
-	 * of the box inventory the master needs to register the box. */
-	static const uint8_t COLDCONNECT_BLK_0016[32] = {
-		0x04, 0x03, 0x00, 0x16, 0x00, 0x02, 0x00, 0xfe,
-		0x11, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
-		0x05, 0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x00,
-		0x77, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc,
-	};
+	/* The third cold-connect variant (cdea 04 03, BE len 0x0016): a MODEL-specific
+	 * inventory block the mixer uses to identify the box. Byte-matched per model
+	 * (matrix-m200-s1608 / -s0808, 2026-07-11). */
 	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
 		return 0;
+	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
 	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_0016, 32);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc0016, 32);
 	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
@@ -359,21 +451,33 @@ size_t reac_ctrl_build_coldconnect_001a(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns)
 {
-	/* The fourth/final cold-connect variant (byte-matched to m5000-s1608 establish,
-	 * 2026-07-11): cdea 04 03, BE len 0x001a — the fullest box inventory. */
-	static const uint8_t COLDCONNECT_BLK_001A[32] = {
-		0x04, 0x03, 0x00, 0x1a, 0x00, 0x02, 0x00, 0xfe,
-		0x15, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
-		0x05, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x02,
-		0x00, 0x03, 0x00, 0x02, 0x6e, 0xf7, 0x00, 0xf4,
-	};
+	/* The fourth/final cold-connect variant (cdea 04 03, BE len 0x001a) — the fullest
+	 * MODEL-specific box inventory. Byte-matched per model (matrix-m200 captures). */
 	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
 		return 0;
+	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
 	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK_001A, 32);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc001a, 32);
 	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
+
+size_t reac_ctrl_build_extra_frame(uint8_t *out, const uint8_t master[6],
+                                   const uint8_t src[6], uint16_t counter, int in_ch)
+{
+	/* The cdea 04 02 000d frame some models (S-0808) send during cold-connect —
+	 * part of the inventory the mixer reads to name the exact model. Emitted raw
+	 * (byte-verified, matrix-m200-s0808). Returns 0 for models without it. */
+	const struct reac_box_model *m = reac_box_model_by_channels(in_ch);
+	if (!m->has_extra)
+		return 0;
+	size_t len = box_frame_len(m->in_ch);
+	memset(out, 0, len);
+	put_hdr(out, master, src, counter, 0xcd, 0xea);
+	memcpy(out + REAC_CTRL_BLOCK_OFF, m->extra_block, 32);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
 }

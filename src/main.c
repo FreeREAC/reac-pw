@@ -116,6 +116,20 @@ int main(int argc, char **argv)
 				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave)\n", argv[i]);
 				return 2;
 			}
+		} else if (!strcmp(argv[i], "--box-model") && i + 1 < argc) {
+			/* Slave role: pick a FIXED-matrix box model (the matrix is law when we
+			 * are a stagebox). Selects the config-announce block, the ASCII name
+			 * frame, and the width in one choice. */
+			const struct reac_box_model *m = reac_box_model_by_token(argv[++i]);
+			if (!m) {
+				size_t n; const struct reac_box_model *t = reac_box_model_table(&n);
+				fprintf(stderr, "reac-pw: unknown --box-model '%s'; known:", argv[i]);
+				for (size_t k = 0; k < n; k++)
+					fprintf(stderr, " %s (%s)", t[k].token, t[k].display);
+				fprintf(stderr, "\n");
+				return 2;
+			}
+			box_channels = m->in_ch;
 		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
 			box_channels = atoi(argv[++i]);
 			if (box_channels < 2 || box_channels > REAC_MAX_CHANNELS || (box_channels & 1)) {

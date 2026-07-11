@@ -104,9 +104,52 @@ size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
                                     const uint8_t src[6], uint16_t counter,
                                     int n_ch, float *const *planar, int ns);
 
-/* RECONSTRUCTED (experimental, JOIN — not byte-verified, gated until a rig grab): */
+/* ---- FIXED box-model matrix ----
+ * A REAC stagebox is identified on the wire by three orthogonal fields (see
+ * docs/REAC-BOX-STATE-DIAGRAM.md): the config-announce SELECTOR byte (model
+ * family), an optional ASCII NAME frame (exact model within the 0x84 family),
+ * and the channel DESCRIPTOR + width (52 + 36*in_ch bytes). We ship a fixed
+ * table of byte-verified real models so a model always matches its channels —
+ * there is no "S-1608 with 8 channels". Pick a row by token or by in-channel
+ * count; both resolve to the same entry. */
+struct reac_box_model {
+	const char *token;      /* CLI token: "s1608", "s0808"              */
+	const char *display;    /* human label for --help / logs            */
+	int         in_ch;      /* box input (upstream) width -> frame size  */
+	int         out_ch;     /* box output (downstream) width             */
+	uint8_t     config_block[32];  /* config-announce cdea 01 03 0010    */
+	int         has_name;   /* 1 -> also emit the ASCII name frame       */
+	uint8_t     name_block[32];    /* name frame cdea 04 01 001b (if any)*/
+	/* The mixer identifies the MODEL from the cold-connect INVENTORY frames, not
+	 * just the config-announce: the 0016/001a blocks differ per model, and some
+	 * models emit an extra 0402000d frame. Byte-verified per model. */
+	uint8_t     cc0014[32];        /* cold-connect cdea 04 03 0014       */
+	uint8_t     cc0013[32];        /* cold-connect cdea 04 03 0013       */
+	uint8_t     cc0016[32];        /* cold-connect cdea 04 03 0016       */
+	uint8_t     cc001a[32];        /* cold-connect cdea 04 03 001a       */
+	int         has_extra;  /* 1 -> also emit the cdea 04 02 000d frame  */
+	uint8_t     extra_block[32];   /* cdea 04 02 000d (if any)           */
+};
+const struct reac_box_model *reac_box_model_by_token(const char *token);
+const struct reac_box_model *reac_box_model_by_channels(int in_ch);
+const struct reac_box_model *reac_box_model_table(size_t *count);
+
+/* Config-announce (cdea 01 03 0010) — the SETUP DECLARATION the master enrolls
+ * the box from. Byte-verified per model; the selector byte sets the displayed
+ * model family. in_ch selects the fixed-matrix row (falls back to S-1608). */
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch);
+/* ASCII model-name frame (cdea 04 01 001b) — required for the 0x84 family so the
+ * desk shows the exact model (e.g. "S-0808") instead of the generic family name.
+ * Returns 0 (emits nothing) for models whose name comes from the selector alone
+ * (the 0x82 / S-1608 family). */
+size_t reac_ctrl_build_name_frame(uint8_t *out, const uint8_t master[6],
+                                  const uint8_t src[6], uint16_t counter, int in_ch);
+/* The extra cold-connect frame (cdea 04 02 000d) some models send (S-0808). The
+ * mixer uses it, with the 0016/001a inventory, to determine the exact model.
+ * Returns 0 (emits nothing) for models that don't send it (e.g. S-1608). */
+size_t reac_ctrl_build_extra_frame(uint8_t *out, const uint8_t master[6],
+                                   const uint8_t src[6], uint16_t counter, int in_ch);
 /* The box cold-connect (cdea 04 03): the 32-byte control block over LIVE audio
  * [50:626] (the [38:66] region is per-frame audio, NOT device inventory). Audio is
  * planar float [ch][s], as build_upstream_filler; NULL planar -> silent. The master
