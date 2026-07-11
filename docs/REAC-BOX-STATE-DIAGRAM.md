@@ -135,6 +135,77 @@ Confirms: (1) same state machine on a different desk; (2) the rate law — fill 
 4000/s (48 kHz) here vs 8000/s (96 kHz) on the M-5000, `pps = rate/12`; (3) the
 LOCKED reference — a real box drives the master to **PROBE = 0**.
 
+## Box IDENTITY vs CHANNEL COUNT — three independent axes (2026-07-11)
+
+Live M-200/M-200i testing separated what had been conflated into one
+`--box-channels` knob. A box on the wire is described by **three orthogonal
+fields**, and the desk uses them differently:
+
+1. **Model family — the config-announce selector byte** (`cdea 01 03 0010`,
+   frame `[22]`). Mixer-independent (same on M-200/M-200i/M-300/M-5000):
+   - `0x82` → the desk names it **S-1608** (V-Mixer stagebox family).
+   - `0x84` → the **S-4000 family** (OHRCA/modular). The selector alone yields a
+     GENERIC family name; the exact model comes from field (2).
+2. **Exact model — an ASCII name frame** (`cdea 04 01 001b`). The S-0808 spells
+   `53 2d 30 38 30 38` = **"S-0808"** in this frame. When reac-pw emitted a `0x84`
+   config-announce **without** this frame, the M-200 fell back to the family name
+   plus the announced width and showed a nonsense **"S-4000S 8 in / 8 out"**
+   (no such product — the real S-4000S is **32 in / 8 out**). So the displayed
+   model name is this ASCII string, NOT the selector, for the `0x84` family.
+   (V-Mixer `0x82` boxes are named by selector and send no ASCII name.)
+3. **Channel map + width — the descriptor list + frame length.** The
+   config-announce descriptor (`02/01/03` run after the selector) varies with the
+   box's I/O even at the same selector (two different `0x84` boxes carry different
+   descriptors). The on-wire audio width is `box_frame_len(in_ch) = 52 + 36·in_ch`
+   (S-0808 8-in → 340 B, S-1608 16-in → 628 B; config-announce runs +2 on a real
+   box — 342/630 — but reac-pw's width-exact 340/628 is accepted). This is why the
+   **establishment is channel-count-parameterized**: every fill/upstream/announce
+   length scales with `in_ch`, while the phase sequence itself is identical.
+
+**Firmware / REAC version.** The M-200i displays the S-0808 as **firmware 1.003,
+REAC 1.000**. These are read by the desk from the box, confirming a version field
+exists on the wire — but it is NOT isolable from our establishment captures (the
+`010000` bytes inside cold-connect blocks are not a clean match, and the constant
+`12 12` in every cold-connect block is family-wide, not per-unit). Most likely the
+version is returned in a **device-info poll** that fires when the operator opens
+the box's detail page, which our establish/steady captures don't include. OPEN:
+capture while opening the box info page, ideally two boxes of differing firmware
+to diff. Do NOT guess the encoding.
+
+### The FIXED model matrix (byte-verified rows only)
+
+Models are fixed rows — a model determines its selector, name frame, descriptor,
+and in/out. There is no "S-1608 with 8 channels": pick a row.
+
+| model | selector | name frame | in / out | audio width | desk shows | source |
+| --- | --- | --- | --- | --- | --- | --- |
+| S-1608 | `0x82` | (none — named by selector) | 16 / 8 | 628 B | **S-1608** | matrix-m200/m300/m5000-s1608 |
+| S-0808 | `0x84` | `04 01 001b` "S-0808" | 8 / 8 | 340 B | **S-0808** | matrix-m200/m5000-s0808 |
+| S-4000S | `0x84` | (ASCII TODO) | 32 / 8 | box_frame_len(32) | S-4000S 32/8 | **UNVERIFIED — needs capture** |
+
+The S-4000 merge/split units (`c4:06:80`, `c4:08:bc`) are also `0x84` with a
+distinct descriptor; their menu names are unconfirmed → not yet rows.
+
+### Channel-count parameterization of the state machine
+
+The phase graph (PHY_DOWN → FLOOD → COLD_CONNECT → [GRANT] → TX_MUTE →
+ESTABLISHED) is **identical for every model**. Only these quantities are functions
+of `in_ch`:
+
+| quantity | formula | S-0808 (8) | S-1608 (16) |
+| --- | --- | --- | --- |
+| upstream / fill width | `52 + 36·in_ch` | 340 B | 628 B |
+| config-announce len (real box) | width + 2 | 342 B | 630 B |
+| fill rate (pps) | `rate / 12` | 4000 @48k | 4000 @48k |
+| flood burst count | ~5460 (rate-independent) | ~5460 | ~5460 |
+
+### Warm-relink (hot boot) — OPEN
+
+The cold-boot path above is fully captured. The **warm relink** (box already known
+to the desk) is documented to skip FLOOD, but we lack a clean capture of the
+*transition* (`m200-s1608-BIDIR-reboot` starts already-established). Capturing it
+needs a bidirectional mirror (to see the box's egress) + a hot boot.
+
 ## reac-pw ON the M-200 — enrolled (2026-07-11, `reacpw-slave-m200-CONNECTED-...pcap`)
 
 Same rig, reac-pw as a 16-ch slave (`--src-mac 00:40:ab:c4:80:41`) into the
