@@ -84,13 +84,51 @@ static void gen_probe(uint8_t blk[34], int phase, uint8_t sub)
 	stamp_block_cksum(blk);         /* -> blk[33] */
 }
 
-/* Build the probe for the CURRENT phase + link state, publish its checksum as the
- * FILLER descriptor (every FILLER until the next probe carries it — byte-verified
- * against the M-200: P:de -> F:de x16 -> P:dd -> F:dd x16 ...), then advance the
- * rotation for the next probe. Called when the cadence decides to emit a PROBE,
- * BEFORE reac_master_stamp reads m->probe_blk. */
+/* The 4 INVENTORY SPECIALS (#130): every probe burst carries, at in-burst probe
+ * indices 30..33, four one-off probe variants — measured on the M-300/S-1608
+ * establish capture at exactly those indices in EVERY burst (11/11), and present
+ * in the M-200 corpora too. Bytes verbatim from the M-300 (checksum-valid); the
+ * MAC special embeds the master's OWN MAC at block[7:13] (template [9:15]) — we
+ * substitute OURS and re-checksum. A master that never sends these is another
+ * tell of a dead downstream. */
+#define REAC_PROBE_SPECIAL_FIRST 30
+#define REAC_PROBE_SPECIAL_COUNT  4
+#define PROBE_SPECIAL_MAC_IDX     9   /* template idx of the 6-byte MAC */
+static const uint8_t PROBE_SPECIALS[REAC_PROBE_SPECIAL_COUNT][34] = {
+	/* zeros-tail variant (cksum dd) */
+	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,
+	  0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xdd },
+	/* our-MAC variant (M-300 bytes carried c9:d8:5b at [9:15]; ours substituted) */
+	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x00,0x40,0xab,0xc9,0xd8,0x5b,0x00,
+	  0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0x08 },
+	/* "SYSP" variant */
+	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x53,0x59,0x53,0x50,0x01,0x00,0x00,0x00,0x00,0x97 },
+	/* "SCEN" variant */
+	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+	  0x00,0x53,0x43,0x45,0x4e,0x01,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0xb7 },
+};
+
+/* Build the probe for the CURRENT burst position + link state, publish its
+ * checksum as the FILLER descriptor (every FILLER until the next probe carries
+ * it — byte-verified against the M-200: P:de -> F:de x16 -> P:dd -> F:dd x16 ...),
+ * then advance the rotation. m->probe_idx (set by the cadence) selects the 4
+ * inventory specials at in-burst indices 30..33; all other indices emit the
+ * rotating hunt probe. Called when the cadence decides to emit a PROBE, BEFORE
+ * reac_master_stamp reads m->probe_blk. */
 static void probe_prepare(struct reac_master *m)
 {
+	int sp = m->probe_idx - REAC_PROBE_SPECIAL_FIRST;
+	if (sp >= 0 && sp < REAC_PROBE_SPECIAL_COUNT) {
+		memcpy(m->probe_blk, PROBE_SPECIALS[sp], 34);
+		if (sp == 1) {   /* the MAC special advertises OUR identity */
+			memcpy(m->probe_blk + PROBE_SPECIAL_MAC_IDX, m->src, 6);
+			stamp_block_cksum(m->probe_blk);
+		}
+		m->filler_desc = m->probe_blk[33];
+		return;          /* the rotation is not advanced by a special */
+	}
+
 	uint8_t sub = (m->state == REAC_M_ESTABLISHED) ? 0x03 : 0x02;
 	gen_probe(m->probe_blk, m->probe_phase, sub);
 	m->filler_desc = m->probe_blk[33];
@@ -254,10 +292,19 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	m->fps = fps > 0 ? fps : 8000;
 	m->cfg = cfg ? *cfg : REAC_CONSOLE_CFG_S1608;
 
-	/* ~115 probes/s (the M-300's measured probe rate). */
-	m->probe_period = m->fps / 115;
-	if (m->probe_period < 1)
-		m->probe_period = 1;
+	/* The cycle-locked control choreography, all slot offsets measured on the
+	 * M-300/S-1608 establish capture at 4000 fps and scaled by fps (see the
+	 * struct doc): cycle 10778 slots; probes every 8 slots through slot 2720
+	 * (341/burst incl. the 4 specials at indices 30..33); sub02 at 2728;
+	 * chanmap at 5953; sub01 at 10773 (cycle_len - 5). */
+	m->cycle_len    = (int)(((int64_t)m->fps * 10778) / 4000);
+	m->probe_stride = m->fps / 500;
+	if (m->probe_stride < 1)
+		m->probe_stride = 1;
+	m->burst_end    = (341 - 1) * m->probe_stride;
+	m->sub02_off    = m->burst_end + m->probe_stride;
+	m->chanmap_off  = (int)(((int64_t)m->fps * 5953) / 4000);
+	m->sub01_off    = m->cycle_len - 5;
 	/* ~150 ms grant window, one echoed grant per stride (~100 frames total). */
 	m->grant_frames = (m->fps * 15) / 100;
 	if (m->grant_frames < 1)
@@ -277,16 +324,14 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	m->filler_desc = m->probe_blk[33];
 }
 
-/* Phase-offset the four 1/s control streams (sub01/sub02/chanmap/cfea) by fps/4
- * each so no two ever fall due on the same slot. A tick started at offset X
- * fires after (fps - X) slots. */
+/* Restart the control cycle at slot 0 (the burst head — the first slot emits a
+ * probe, exactly like a real master opening a hunt burst). cfea free-runs on its
+ * own ~1/s tick, phase-offset so it lands in the pause region, never on a burst
+ * probe slot. */
 static void reset_control_cadence(struct reac_master *m)
 {
-	m->probe_tick    = 0;
-	m->sub01_tick    = 0;
-	m->sub02_tick    = m->fps / 4;
-	m->chanmap_tick  = m->fps / 2;
-	m->announce_tick = (3 * m->fps) / 4;
+	m->cycle_pos      = 0;
+	m->announce_tick  = (3 * m->fps) / 4;
 	m->chanmap_cursor = 0;
 }
 
@@ -384,13 +429,19 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 	return 0;
 }
 
-/* The continuous 5-message control cadence a real master advertises in BOTH the
- * unlinked and the linked state (byte-exact against the M-300/S-1608 capture):
- * PROBE ~115/s + sub01/sub02/chanmap/cfea @1/s each. At most ONE control block
- * is emitted per slot (the rest carry audio FILLER). The four 1/s streams are
- * phase-offset by fps/4 (reset_control_cadence) so they never fall due together;
- * they take priority over the dense probe, whose tick only resets when it
- * actually fires so a preempted probe emits the next free slot.
+/* The CYCLE-LOCKED control cadence a real master advertises in BOTH the unlinked
+ * and the linked state, measured slot-exact on the M-300/S-1608 establish
+ * capture (#130): one deterministic cycle of cycle_len slots holding a probe
+ * BURST (one probe every probe_stride slots through burst_end — 341 probes with
+ * the 4 inventory specials at in-burst indices 30..33), then a probe-free pause
+ * carrying sub02 (right after the burst), ONE chanmap window (mid-pause; the
+ * 49-window sweep spans 49 cycles) and sub01 (cycle tail). cfea free-runs at
+ * ~1/s and defers by a slot when it collides with a cycle event — the real
+ * desk's cfea lands between burst probes too.
+ *
+ * The old model (PROBE ~115/s uniform + all four streams at 1/s) was the DUTY-
+ * CYCLE AVERAGE of this rhythm — an analysis artifact a real box never sees on
+ * the wire, and plausibly the last tell that kept real boxes mute (#130).
  *
  * §4 (S-1608 firmware, FUN_0c003548): the box's parser recognizes a master ONLY
  * on the sub-state-0x03 channel-map (cdea 01 03 0019 ...), so the chanmap must
@@ -399,33 +450,26 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 {
 	*idx = 0;
-	m->probe_tick++;
-	m->sub01_tick++;
-	m->sub02_tick++;
-	m->chanmap_tick++;
+	int pos = m->cycle_pos;
+	m->cycle_pos = (pos + 1) % m->cycle_len;
 	m->announce_tick++;
 
-	if (m->sub01_tick >= m->fps) {
-		m->sub01_tick = 0;
-		return REAC_M_EMIT_SUB01;
+	if (pos <= m->burst_end && pos % m->probe_stride == 0) {
+		m->probe_idx = pos / m->probe_stride;  /* specials key off this */
+		return REAC_M_EMIT_PROBE;
 	}
-	if (m->sub02_tick >= m->fps) {
-		m->sub02_tick = 0;
+	if (pos == m->sub02_off)
 		return REAC_M_EMIT_SUB02;
-	}
-	if (m->chanmap_tick >= m->fps) {
-		m->chanmap_tick = 0;
+	if (pos == m->chanmap_off) {
 		*idx = m->chanmap_cursor;
 		m->chanmap_cursor = (m->chanmap_cursor + 1) % m->chanmap_nframes;
 		return REAC_M_EMIT_CHANMAP;
 	}
+	if (pos == m->sub01_off)
+		return REAC_M_EMIT_SUB01;
 	if (m->announce_tick >= m->fps) {
 		m->announce_tick = 0;
 		return REAC_M_EMIT_ANNOUNCE;
-	}
-	if (m->probe_tick >= m->probe_period) {
-		m->probe_tick = 0;
-		return REAC_M_EMIT_PROBE;
 	}
 	return REAC_M_EMIT_FILLER;
 }

@@ -142,7 +142,6 @@ struct reac_master {
 	                           * NEVER reset across transitions */
 
 	int      fps;             /* frame rate (pps): 3675/4000/8000 */
-	int      probe_period;    /* slots between probes (~fps/115 ≈ 115 probes/s) */
 	int      grant_frames;    /* GRANTING window length (~150 ms of slots)      */
 	int      grant_stride;    /* slots between echoed grants in the window      */
 
@@ -151,13 +150,30 @@ struct reac_master {
 	int      chanmap_nframes; /* generated chanmap frame count (>=1)            */
 	uint8_t  chanmap[REAC_M_CHANMAP_FRAMES_MAX][34]; /* generated cdea chanmap  */
 
-	/* Continuous control cadence (identical in PROBING and ESTABLISHED): PROBE
-	 * ~115/s + four 1/s streams (sub01/sub02/chanmap/cfea) phase-offset by
-	 * fps/4 so they never contend for the same slot. */
-	int      probe_tick;      /* slots since the last probe (~fps/115)          */
-	int      sub01_tick;      /* slots since the last cdea 01 01 (~1/s)         */
-	int      sub02_tick;      /* slots since the last cdea 01 02 (~1/s)         */
-	int      announce_tick;   /* slots since the last cfea (~1/s)               */
+	/* CYCLE-LOCKED control cadence (#130, measured off the M-300/S-1608 establish
+	 * capture; identical in PROBING and ESTABLISHED). A real master's control
+	 * plane is one deterministic cycle of `cycle_len` slots (10778 @ 4000 fps =
+	 * 2.69 s, scaled by fps):
+	 *   - a probe BURST: one probe every `probe_stride` slots (8 @ 4000 fps =
+	 *     500/s) from slot 0 through `burst_end` (341 probes), probe indices
+	 *     30..33 being the 4 inventory specials (zeros / our-MAC / SYSP / SCEN);
+	 *   - a probe-free PAUSE for the rest of the cycle, holding sub02 right
+	 *     after the burst, ONE chanmap window mid-pause (the 49-window sweep
+	 *     thus takes 49 cycles), and sub01 at the cycle's tail.
+	 * The old model ("PROBE ~115/s uniform + everything at 1/s") was the duty-
+	 * cycle AVERAGE of this rhythm — a capture-analysis artifact; a box never
+	 * sees a real master emit that way. cfea free-runs at ~1/s (measured),
+	 * independent of the cycle. */
+	int      cycle_len;       /* slots per control cycle (fps*10778/4000)       */
+	int      cycle_pos;       /* current slot in the cycle [0, cycle_len)       */
+	int      probe_stride;    /* slots between burst probes (fps/500)           */
+	int      burst_end;       /* last probe slot: (341-1)*probe_stride          */
+	int      sub02_off;       /* cdea 01 02 slot: burst_end + probe_stride      */
+	int      chanmap_off;     /* chanmap slot: fps*5953/4000 (mid-pause)        */
+	int      sub01_off;       /* cdea 01 01 slot: cycle_len - 5                 */
+	int      probe_idx;       /* burst probe index (cycle_pos/stride) of the
+	                           * probe being emitted (set by the cadence)       */
+	int      announce_tick;   /* slots since the last cfea (~1/s, free-running) */
 
 	/* PROBE ROTATION (#130, measured live off an M-200 2026-07-11). The probe is
 	 * NOT a fixed constant: its 27-byte payload is a sliding window over the
@@ -179,7 +195,6 @@ struct reac_master {
 	unsigned grant_attempts;  /* windows opened (diagnostic) */
 
 	/* ESTABLISHED */
-	int      chanmap_tick;    /* slots since the last chanmap frame */
 	int      chanmap_cursor;  /* which generated chanmap frame is next (0..N-1) */
 	int      link_check;      /* countdown to peer-gone (600-frame budget) */
 

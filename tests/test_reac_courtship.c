@@ -195,14 +195,15 @@ int main(void)
 
 	/* 3. steady state holds >= 5 simulated seconds: the slave's upstream
 	 * flood + heartbeats hold our 600 budget; our chanmap+cfea hold its HOLD.
-	 * Both control streams run ~1/s each. */
+	 * cfea free-runs ~1/s; the chanmap advances ONE window per control cycle
+	 * (fps*10778/4000 slots ≈ 2.69 s — the measured M-300 choreography). */
 	long cm0 = c.m_chanmaps, an0 = c.m_announces, hb0 = c.s_heartbeats_fed;
 	for (long i = 0; i < 5L * FPS; i++) {
 		CHK(step(&c) == 0);
 		CHK(c.m.state == REAC_M_ESTABLISHED);
 		CHK(c.s.fsm.state == FSM_ESTABLISHED);
 	}
-	CHK(c.m_chanmaps - cm0 >= 4 && c.m_announces - an0 >= 4);   /* ~1/s each */
+	CHK(c.m_chanmaps - cm0 >= 1 && c.m_announces - an0 >= 4);   /* 1/cycle + ~1/s */
 	CHK(c.s_heartbeats_fed - hb0 >= 4);       /* the box keep-alive flows */
 
 	/* 4. the box goes silent: the master holds for exactly its 600-frame
