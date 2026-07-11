@@ -65,6 +65,20 @@ logged.** Fix: accept `1492 || 1494`, decode the embedded `[0:1492]` frame as
 today, ignore the trailer. The CRC only needs computing if we later *emit* toward
 an OHRCA-expecting box (a separate RE task).
 
+**Trailer characterization (offline 2026-07-11, not fully cracked).** The 2-byte
+trailer is NOT a checksum of frame content — it varies for byte-identical content
+across different counters. It is a **linear (GF(2)) function of the free-running
+frame counter**: within every constant-content group,
+`trailer_i XOR trailer_j = L * (counter_i XOR counter_j)` for a fixed 16x16
+matrix `L`. That is the fingerprint of a **CRC-16 seeded by the frame counter**
+(`init = counter`) — a sequence-integrity field, not a data CRC. Standard
+constant-init CRC-16 sweeps (all poly/init/refl/xorout over every contiguous
+range) plus Fletcher-16 and modular sums all MISS, consistent with the counter
+seed. Full polynomial recovery is blocked only by data: the observed counter
+differences span 15 of 16 dimensions (one bit short) — a capture that exercises
+the 16th counter bit finishes it. Off the RX path (we ignore the trailer);
+needed only to EMIT toward an OHRCA-expecting box.
+
 **(b) Per-generation audio layout.** `reac_rx` decodes downstream via
 `reac_decode` = **plain-LE**, which is CORRECT for the M-5000 (OHRCA) but WRONG
 for M-200/M-300 (they braid the downstream → would decode as noise). No change
