@@ -1,5 +1,17 @@
 # REAC stagebox establishment — state diagram (capture-verified)
 
+> **✅ VALIDATED ON THE WIRE (M-200, 2026-07-11).** reac-pw ran as a 16-ch slave
+> against a real, cold-booted **M-200** (V-Mixer, 48 kHz) and the desk **enrolled
+> it as a stagebox in its REAC menu** and held the connection: master `GRANT`
+> burst → `PROBE 0/s` for the full run → steady `3999` fill/s both directions,
+> CHANMAP + heartbeat ~0.5/s. Proof: `reacpw-slave-m200-CONNECTED-2026-07-11.pcap`.
+> **This falsifies the earlier "hardware / clock-domain wall" conclusion** — reac-pw
+> paces from `CLOCK_MONOTONIC`, and a real desk still accepts it as a settled box.
+> The remaining M-5000 (OHRCA) gap is therefore NOT a clock wall; it is almost
+> certainly the OHRCA established-state shape (1494 B frame + per-frame CRC-16
+> trailer, 96 kHz upstream) that reac-pw does not yet emit. See the M-200 section
+> below.
+
 Reconstructed from live M-5000 (OHRCA, 96 kHz) captures, 2026-07-11: a real
 S-1608 cold-boot (`real-s1608-coldboot-m5000-2026-07-11.pcap`) and reac-pw's
 slave sessions, both viewed on the M-5000's port mirror so the master's response
@@ -54,12 +66,16 @@ use `cdea 04 03` (box = cold-connect JOIN, master = GRANT).
  (re-HUNTING: PROBE ~680/s, CHANMAP→0)
 ```
 
-**This is the crux.** For the real box the master takes `GRANTING → LOCKED` on
-receiving the box's ESTABLISHED stream. For reac-pw it takes `GRANTING → HUNTING`
-— so the missing arrow is a **box packet that drives the master into LOCKED**
-which reac-pw isn't sending (correctly). reac-pw's *own* transitions are right
-(it floods, cold-connects, is granted, establishes); the failure is that our
-post-grant emission does not satisfy the master's `→ LOCKED` edge.
+**This crux is OHRCA-specific (M-5000), NOT universal.** On the **M-200
+(V-Mixer)** reac-pw drives the master cleanly into LOCKED and the desk enrolls it
+(PROBE 0/s, box shown in the REAC menu) — the `GRANTING → LOCKED` edge is
+satisfied. On the **M-5000 (OHRCA)** the master takes `GRANTING → HUNTING`
+instead (PROBE ~680/s post-grant). Since the same reac-pw build, same pacer, same
+V-Mixer-shaped upstream locks the M-200 but not the M-5000, the missing arrow is
+an **OHRCA-shaped ESTABLISHED stream** (1494 B + CRC-16 trailer, 96 kHz upstream)
+— not a clock/hardware property of the box. reac-pw's *own* transitions are right
+on both desks (it floods, cold-connects, is granted, establishes); only the
+OHRCA post-grant emission is still unmatched.
 
 ## Capture evidence (per-second, master-port mirror)
 
@@ -119,6 +135,24 @@ Confirms: (1) same state machine on a different desk; (2) the rate law — fill 
 4000/s (48 kHz) here vs 8000/s (96 kHz) on the M-5000, `pps = rate/12`; (3) the
 LOCKED reference — a real box drives the master to **PROBE = 0**.
 
+## reac-pw ON the M-200 — enrolled (2026-07-11, `reacpw-slave-m200-CONNECTED-...pcap`)
+
+Same rig, reac-pw as a 16-ch slave (`--src-mac 00:40:ab:c4:80:41`) into the
+freshly-booted M-200. Matches the real-box cold-boot census edge-for-edge:
+
+```
+ t │ BOX: fill JOIN CFG HB │ MASTER: PROBE GRANT CHANMAP   note
+ 2 │ 4000    0   0   0     │   257     0     0             master HUNTING (probing for a box)
+ 4 │ 3221    3   1   1     │     0     0     1             COLD_CONNECT: config-announce + join + hb
+ 5 │ 3582    2   1   1     │     0    38     0             master GRANTS
+ 6 │ 3615    0   0   0     │     0    18     1             grant tail
+ 7+│ 3999    0   0  ~.5/s  │     0     0    ~.5/s          ESTABLISHED — PROBE 0/s, box in REAC menu
+```
+
+The config-announce (`cdea 01 03 0010`, the setup declaration) at the cold-connect
+step is what the M-200 registers into its REAC-device inventory; the desk shows
+the box connected. Stable across a 300 s run (no re-hunt, no drop).
+
 ## The state machine is MASTER-INDEPENDENT (verified)
 
 Confirmed against M-200i, M-300, and M-5000 captures (and S-0808 / S-1608 /
@@ -148,8 +182,12 @@ frame content (byte-identical), config-announce timing, and a separate socket
 
 ## Superseded readings (do not re-introduce)
 
-- "clock domain / not software" — an artifact of an intersection-only diff that
-  hid the entirely-missing config-announce; adding it produced the grant.
+- "clock domain / not software" (round 1) — an artifact of an intersection-only
+  diff that hid the entirely-missing config-announce; adding it produced the grant.
+- "hardware / clock-domain wall — needs a real word clock (#131)" (round 2, from
+  the M-5000 post-grant re-hunt) — **falsified 2026-07-11**: the same reac-pw
+  build, `CLOCK_MONOTONIC`-paced, enrolls in a real M-200 (in the REAC menu,
+  PROBE 0/s, stable). The M-5000 gap is OHRCA established-state shape, not a clock.
 - "master GRANT=0 for reac-pw" — an analysis script that labeled all `04 03` as
   cold-connect hid the master's grants. Always key `04 03` by L2 source (box JOIN
   vs master GRANT).
