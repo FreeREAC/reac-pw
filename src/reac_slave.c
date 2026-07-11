@@ -20,6 +20,9 @@
 #include <netpacket/packet.h>
 #include <net/ethernet.h>
 #include <arpa/inet.h>     /* htons */
+#include <sched.h>         /* SCHED_FIFO */
+#include <sys/mman.h>      /* mlockall */
+#include <signal.h>        /* pthread_sigmask */
 
 /* ------------------------------------------------------------------------- *
  * The PURE decision core — maps the reac_fsm action onto a slave emit kind.
@@ -218,6 +221,21 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 static void *slave_loop(void *arg)
 {
 	struct reac_slave *s = arg;
+
+	/* RT hardening — the reac_pacer.c / reac_repacer.c recipe that streams to real
+	 * stageboxes flawlessly AND re-synced our boxes to an M-5000 over WiFi: lock
+	 * memory, go SCHED_FIFO, block signals, so our upstream emission has low,
+	 * consistent latency. A real box's PLL-clocked upstream is jitter-free and the
+	 * master locks its word clock to it before granting. Best-effort — without
+	 * CAP_SYS_NICE/rtprio we run SCHED_OTHER (jittery, may not link). */
+	mlockall(MCL_CURRENT | MCL_FUTURE);
+	struct sched_param sp = { .sched_priority = 79 };
+	if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0)
+		fprintf(stderr, "reac_slave: SCHED_FIFO denied (need CAP_SYS_NICE/rtprio) — "
+		                "SCHED_OTHER, upstream may jitter and the master may not link\n");
+	else
+		fprintf(stderr, "reac_slave: SCHED_FIFO prio %d — low-jitter upstream\n", sp.sched_priority);
+	sigset_t allsig; sigfillset(&allsig); pthread_sigmask(SIG_BLOCK, &allsig, NULL);
 
 	struct sockaddr_ll bcast_sll, uni_sll;
 	memset(&bcast_sll, 0, sizeof bcast_sll);
