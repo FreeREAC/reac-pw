@@ -102,6 +102,23 @@ grant)**, so the master may grant before it has our setup. Candidate fix: emit
 config-announce at the START of establishment (flood tail / first cold-connect
 slot), not mid-cycle. Unverified — next experiment.
 
+## Cross-mixer validation — M-200 cold boot (fresh, 2026-07-11)
+
+Re-captured a real S-1608 cold boot on an **M-200** (48 kHz) — a different mixer —
+and it matches the diagram edge-for-edge (dedup'd; `real-m200-s1608-coldboot-...pcap`):
+
+```
+ t │ BOX: FLOOD JOIN CFG HB fill │ MASTER: PROBE GRANT CHANMAP
+ 0 │  4000    -   -  -    -     │    0     -     1     FLOOD
+ 1 │  1459    6   1  2  2532    │    0     -     1     COLD_CONNECT (config+join+hb)
+ 3 │    -     2   -  -  3998    │    0    56     -     master GRANTS
+ 4+│    -     -   -  1  3999    │    0     -     1     ESTABLISHED, master PROBE=0 (LOCKED)
+```
+
+Confirms: (1) same state machine on a different desk; (2) the rate law — fill =
+4000/s (48 kHz) here vs 8000/s (96 kHz) on the M-5000, `pps = rate/12`; (3) the
+LOCKED reference — a real box drives the master to **PROBE = 0**.
+
 ## The state machine is MASTER-INDEPENDENT (verified)
 
 Confirmed against M-200i, M-300, and M-5000 captures (and S-0808 / S-1608 /
