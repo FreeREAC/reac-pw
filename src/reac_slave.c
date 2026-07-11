@@ -178,7 +178,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 			 * 2026-07-11). The 0016/001a carry the fuller box inventory the master
 			 * needs to register the box; emitting only 0014/0013 left the desk blind
 			 * (live M-5000 test, 2026-07-11). One variant per join grid slot. */
-			switch (s->coldconnect_phase % 6) {
+			switch (s->coldconnect_phase % 8) {
 			case 1:
 				len = reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac, s->src,
 				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
@@ -201,6 +201,29 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 				/* the box also heartbeats DURING cold-connect, before any grant */
 				len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter,
 				          s->box_channels);
+				break;
+			case 6:
+				/* ANNOUNCE OUR EXACT MODEL — the ASCII name frame. Required for the
+				 * 0x84 family (S-0808 etc.) so the desk shows the real model, not the
+				 * generic family name (live M-200, 2026-07-11). Returns 0 for the 0x82
+				 * family (named by selector) -> emit a plain upstream filler instead. */
+				len = reac_ctrl_build_name_frame(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				if (len == 0)
+					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
+				break;
+			case 7:
+				/* The extra inventory frame (cdea 04 02 000d) some models send — the
+				 * mixer reads it WITH the 0016/001a inventory to name the exact model.
+				 * Returns 0 for models without it -> plain upstream filler. */
+				len = reac_ctrl_build_extra_frame(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				if (len == 0)
+					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
 				break;
 			default:
 				len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src,

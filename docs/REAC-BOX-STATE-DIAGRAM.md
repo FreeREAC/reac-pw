@@ -141,17 +141,21 @@ Live M-200/M-200i testing separated what had been conflated into one
 `--box-channels` knob. A box on the wire is described by **three orthogonal
 fields**, and the desk uses them differently:
 
-1. **Model family — the config-announce selector byte** (`cdea 01 03 0010`,
-   frame `[22]`). Mixer-independent (same on M-200/M-200i/M-300/M-5000):
-   - `0x82` → the desk names it **S-1608** (V-Mixer stagebox family).
-   - `0x84` → the **S-4000 family** (OHRCA/modular). The selector alone yields a
-     GENERIC family name; the exact model comes from field (2).
+1. **Selector byte** (`cdea 01 03 0010`, frame `[22]`). Mixer-independent
+   (same on M-200/M-200i/M-300/M-5000). VERIFIED so far:
+   - `0x82` → the desk names it **S-1608** (and sends no ASCII name frame).
+   - `0x84` → the selector the real **S-0808** uses (see field 2). A `0x84`
+     announce with **no** name frame makes the M-200 *fall back* to labelling it
+     **"S-4000S"**. ⚠ That fallback label is the DESK'S GUESS for a nameless
+     `0x84` box — it is NOT proof that a real S-4000 uses `0x84`, nor that S-4000
+     and S-0808 share a selector/family. **UNVERIFIED**: the real S-4000's
+     selector + announce are unknown until an S-4000 is captured. Do not assume.
 2. **Exact model — an ASCII name frame** (`cdea 04 01 001b`). The S-0808 spells
-   `53 2d 30 38 30 38` = **"S-0808"** in this frame. When reac-pw emitted a `0x84`
-   config-announce **without** this frame, the M-200 fell back to the family name
-   plus the announced width and showed a nonsense **"S-4000S 8 in / 8 out"**
-   (no such product — the real S-4000S is **32 in / 8 out**). So the displayed
-   model name is this ASCII string, NOT the selector, for the `0x84` family.
+   `53 2d 30 38 30 38` = **"S-0808"** in this frame (box `c4:dc:9c`, VERIFIED).
+   When reac-pw emitted a `0x84` config-announce **without** this frame, the M-200
+   fell back and showed **"S-4000S 8 in / 8 out"** — a config that doesn't exist
+   (the real S-4000S is **32 in / 8 out**), i.e. a nameless-`0x84` guess, not a
+   real box. So for a `0x84` box the displayed model comes from this ASCII string.
    (V-Mixer `0x82` boxes are named by selector and send no ASCII name.)
 3. **Channel map + width — the descriptor list + frame length.** The
    config-announce descriptor (`02/01/03` run after the selector) varies with the
@@ -161,6 +165,21 @@ fields**, and the desk uses them differently:
    box — 342/630 — but reac-pw's width-exact 340/628 is accepted). This is why the
    **establishment is channel-count-parameterized**: every fill/upstream/announce
    length scales with `in_ch`, while the phase sequence itself is identical.
+
+4. **⚠ Cold-connect INVENTORY frames — the actual model discriminator (VERIFIED,
+   2026-07-11).** The selector + name are NOT sufficient. The mixer identifies the
+   model from the full cold-connect frame set: the escalation blocks
+   `04 03 0016` and `04 03 001a` carry MODEL-SPECIFIC inventory (the S-0808's
+   differ byte-for-byte from the S-1608's), and the S-0808 also sends an extra
+   `04 02 000d` frame the S-1608 never does. Proof: reac-pw emitting an S-0808
+   config-announce + "S-0808" name **but the S-1608's `0016`/`001a` and no
+   `0402000d`** still displayed as the generic **"S-4000S 8 in / 8 out"**. Only
+   after reac-pw sent the S-0808's real `0016`/`001a` + `0402000d` did the M-200
+   show **"S-0808"** (live-verified). So a faithful emulation must replay the
+   COMPLETE per-model frame set, not just selector + name. Frames that are
+   model-generic (verified identical S-1608 vs S-0808): `0014`, `0013`, heartbeat
+   `01030001`. Frames that discriminate: `01030010` (selector), `0401001b` (name),
+   `04030016`, `0403001a`, `0402000d`.
 
 **Firmware / REAC version.** The M-200i displays the S-0808 as **firmware 1.003,
 REAC 1.000**. These are read by the desk from the box, confirming a version field
