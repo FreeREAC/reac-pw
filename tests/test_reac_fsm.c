@@ -41,24 +41,41 @@ int main(void)
 	reac_fsm_init(&fsm);
 	CHK(fsm.state == FSM_PHY_DOWN);
 
+	/* PHY up -> the BOUNDED broadcast presence-flood. It is broadcast-ONLY: no
+	 * cold-connect rides alongside it (#130, byte-verified 2026-07-11). */
 	o = reac_fsm_step(&fsm, FSM_EV_PHY_UP, NULL);
 	CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST);
-	CHK(o.emit_join);              /* cold-connect burst frame 1/3 rides the flood (#130) */
-	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
-	CHK(o.action == FSM_ACT_FLOOD_BCAST && o.emit_join);   /* burst 2/3, still flooding */
-	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
-	CHK(o.action == FSM_ACT_FLOOD_BCAST && o.emit_join);   /* burst 3/3 */
-	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
-	CHK(o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);  /* burst spent; still flooding,
-	                                                          * waiting out the retry grid */
-
-	/* the retry grid re-arms a fresh burst after REAC_FSM_JOIN_RETRY_PERIOD ticks */
-	for (int i = 0; i < REAC_FSM_JOIN_RETRY_PERIOD - 2; i++)
-		o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
 	CHK(!o.emit_join);
 	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
-	CHK(o.action == FSM_ACT_FLOOD_BCAST && o.emit_join);   /* retry burst frame 1/3 */
+	CHK(o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);
 
+	/* learn the master from its L2 source (a probe): still flooding, still no join */
+	struct reac_ctrl_parsed probe = mk(REAC_CTRL_PROBE, M);
+	o = reac_fsm_step(&fsm, FSM_EV_RX, &probe);
+	CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);
+	CHK(fsm.have_master && memcmp(fsm.master_mac, M, 6) == 0);
+
+	/* flood the rest of the bounded burst: broadcast every step, never a join,
+	 * until the burst is spent (master learned) -> hand off to FSM_COLDCONNECT. */
+	while (fsm.state == FSM_FLOOD_ANNOUNCE) {
+		o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		CHK(o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);
+	}
+	CHK(fsm.state == FSM_COLDCONNECT && fsm.flood_frames >= REAC_FSM_FLOOD_BURST);
+
+	/* the cold-connect phase: unicast to the master every step, the cdea 04 03 on
+	 * the retry grid, unicast audio FILLER between — ONE frame per step either way.
+	 * The first grid slot carries the cold-connect. */
+	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+	CHK(o.state == FSM_COLDCONNECT && o.action == FSM_ACT_UNICAST_COLDCONNECT && o.emit_join);
+	for (int i = 0; i < REAC_FSM_JOIN_RETRY_PERIOD - 1; i++) {
+		o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		CHK(o.action == FSM_ACT_UNICAST_COLDCONNECT && !o.emit_join);   /* audio filler */
+	}
+	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+	CHK(o.action == FSM_ACT_UNICAST_COLDCONNECT && o.emit_join);       /* next grid slot */
+
+	/* the master echoes the box block back as the grant -> TX_MUTE -> ESTABLISHED */
 	struct reac_ctrl_parsed g = mk(REAC_CTRL_GRANT, M);
 	o = reac_fsm_step(&fsm, FSM_EV_RX, &g);
 	CHK(o.state == FSM_TX_MUTE && fsm.have_master && memcmp(fsm.master_mac, M, 6) == 0);

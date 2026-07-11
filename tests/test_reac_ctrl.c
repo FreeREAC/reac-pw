@@ -68,7 +68,7 @@ int main(void)
 	/* 3. experimental JOIN builders: checksum invariant holds */
 	reac_ctrl_build_config_announce(f, MASTER, SRC, 1, 16);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1);
+	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, 16, NULL, 12);
 	CHK(reac_ctrl_checksum_verify(f) == 0 && f[18] == 0x04 && f[19] == 0x03);
 
 	/* 4. 8-channel box width -> 340 B */
@@ -83,7 +83,7 @@ int main(void)
 	enum reac_master_rx_event ev;
 
 	/* (a) the canonical cold-connect matches as JOIN, unicast AND broadcast */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x14 &&
 	    f[22] == 0x00 && f[23] == 0x02);                     /* zoneA block head */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
@@ -93,29 +93,29 @@ int main(void)
 	CHK(ev == REAC_M_RX_BOX_JOIN && p.is_broadcast);
 
 	/* (b) the 0x13 length variant is also a JOIN */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	f[21] = 0x13;
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_JOIN);
 
 	/* (c) rejects: corrupted checksum / op_len 0x15 / our own echo / non-Roland */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	f[49] ^= 0x5a;                                           /* break the checksum */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	f[21] = 0x15;                                            /* bad op_len */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7); /* src == our_mac */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7, 16, NULL, 12); /* src == our_mac */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	f[6] = 0xde; f[7] = 0xad;                                /* non-Roland OUI */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 
 	/* (d) NOT keyed on the tail: mutated inventory byte still matches (the 0x41
 	 * is device inventory, never a MAC tail) */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	f[28] = 0x99;                                            /* block[10]: 0x41->0x99 */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);

@@ -94,7 +94,7 @@ int main(void)
 		CHK(p3.rx_box_frames == 1);
 
 		/* the JOIN: fsm mirror flips to GRANTING, the ring holds the block */
-		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2);
+		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, 12);
 		uint8_t join_blk[32];
 		memcpy(join_blk, bf + 18, 32);
 		reac_pacer_rx_ingest(&p3, bf, bn);
@@ -132,7 +132,7 @@ int main(void)
 		/* overflow: flood JOINs (each always logs) -> ring caps at EVRING,
 		 * drop-newest counts ev_drops, a full drain returns exactly EVRING */
 		for (int i = 0; i < REAC_PACER_EVRING * 2; i++) {
-			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i);
+			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i, 16, NULL, 12);
 			reac_pacer_rx_ingest(&p3, bf, bn);
 		}
 		CHK(p3.ev_drops > 0);

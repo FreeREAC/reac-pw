@@ -161,6 +161,33 @@ static size_t box_frame_len(int n_ch)
 	return (size_t)AUDIO_OFF + (size_t)n_ch * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION + 2;
 }
 
+/* Place n_ch planar float channels (ns samples each) into the box's braided audio
+ * region at `audio` (frame[50:..]), the exact layout reac_upstream_decode() inverts
+ * (task #108, the ex-"FPGA scramble" of task #61): per time sample each channel PAIR
+ * shares a 6-byte group; the even channel's s24 LE (lo,mid,hi) bytes sit at
+ * group[3],group[0],group[1] and the odd channel's at group[4],group[5],group[2].
+ * Slot placement is plain ascending. A real M-5000 expects exactly this from a box's
+ * return. Shared by EVERY box->master frame that carries audio — the upstream FILLER,
+ * the broadcast presence-flood, AND the cold-connect — because on a real box the audio
+ * region varies every frame (it is live input, NOT static inventory). */
+static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, int ns)
+{
+	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
+	for (int s = 0; s < frames; s++)
+		for (int ch = 0; ch < n_ch; ch++) {
+			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
+			uint8_t s24[3];
+			f32_to_s24le(v, s24);
+			uint8_t *g = audio + (size_t)s * n_ch * REAC_RESOLUTION
+			                   + (size_t)(ch & ~1) * REAC_RESOLUTION;
+			if ((ch & 1) == 0) {
+				g[3] = s24[0]; g[0] = s24[1]; g[1] = s24[2];
+			} else {
+				g[4] = s24[0]; g[5] = s24[1]; g[2] = s24[2];
+			}
+		}
+}
+
 size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
                               const uint8_t src[6], uint16_t counter)
 {
@@ -190,30 +217,31 @@ size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
 		out[18 + 2 * k] = DESC_WORD_HI;
 		out[18 + 2 * k + 1] = DESC_WORD_LO;
 	}
-	/* audio [50:..] sample-major in the box's BRAIDED layout (resolved 2026-07-10,
-	 * task #108 — the ex-"FPGA scramble" of task #61): per time sample each
-	 * channel PAIR shares a 6-byte group; the even channel's s24 LE (lo,mid,hi)
-	 * bytes sit at group[3],group[0],group[1] and the odd channel's at
-	 * group[4],group[5],group[2] (the obs-h8819 braid). Slot placement is plain
-	 * ascending. This is what a real M-5000 expects from a box's return —
-	 * reac_upstream_decode() is the exact inverse. */
-	uint8_t *audio = out + AUDIO_OFF;
-	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
-	for (int s = 0; s < frames; s++)
-		for (int ch = 0; ch < n_ch; ch++) {
-			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
-			uint8_t s24[3];
-			f32_to_s24le(v, s24);
-			uint8_t *g = audio + (size_t)s * n_ch * REAC_RESOLUTION
-			                   + (size_t)(ch & ~1) * REAC_RESOLUTION;
-			if ((ch & 1) == 0) {
-				g[3] = s24[0]; g[0] = s24[1]; g[1] = s24[2];
-			} else {
-				g[4] = s24[0]; g[5] = s24[1]; g[2] = s24[2];
-			}
-		}
+	/* audio [50:..] in the box's BRAIDED layout (resolved 2026-07-10, task #108). */
+	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;                            /* FILLER: no checksum (exempt) */
+}
+
+/* The presence-flood FILLER (broadcast, unlinked): counter + type 00 00 + a ZERO
+ * control block [18:50] (no 0x7a per-slot descriptor) + LIVE audio [50:626] + end
+ * marker. Verified on the wire (m200-s1608-realbox-establish-2026-07-11.pcap): a
+ * real S-1608's cold-boot flood carries a zero control block but a LIVE audio
+ * region (it varies every frame) — it is NOT an all-zero payload. The 0x7a
+ * descriptor is what distinguishes the ESTABLISHED unicast upstream from this
+ * broadcast announce; the audio itself is present in both. */
+size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
+                                    const uint8_t src[6], uint16_t counter,
+                                    int n_ch, float *const *planar, int ns)
+{
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;
+	size_t len = box_frame_len(n_ch);
+	memset(out, 0, len);
+	put_hdr(out, bcast, src, counter, 0x00, 0x00);   /* broadcast FILLER, zero block */
+	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
 }
 
 /* ---- RECONSTRUCTED JOIN builders (experimental, not byte-verified) ---- */
@@ -239,11 +267,12 @@ size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
 }
 
 size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
-                                   const uint8_t src[6], uint16_t counter)
+                                   const uint8_t src[6], uint16_t counter,
+                                   int n_ch, float *const *planar, int ns)
 {
 	/* The BYTE-VERIFIED S-1608 cold-connect block (zoneA-48k capture): cdea 04 03,
-	 * BE len 0x0014, then 00 02 00 fe + the box's device-inventory tail. The 0x41
-	 * at block[10] is INVENTORY DATA, not a MAC tail (the earlier reconstruction
+	 * BE len 0x0014, then 00 02 00 fe + a fixed device descriptor. The 0x41 at
+	 * block[10] is descriptor DATA, not a MAC tail (the earlier reconstruction
 	 * wrote src[5] there — wrong: the block is MAC-independent; the master learns
 	 * the box from the L2 source). Sum(block) mod 256 == 0 holds as captured. */
 	static const uint8_t COLDCONNECT_BLK[32] = {
@@ -252,10 +281,19 @@ size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
 		0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	};
-	size_t len = box_frame_len(16);
+	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
+		return 0;
+	size_t len = box_frame_len(n_ch);
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
 	memcpy(out + REAC_CTRL_BLOCK_OFF, COLDCONNECT_BLK, 32);
+	/* payload[38:66] = frame[52:80] is AUDIO, not device inventory: on a real box
+	 * that region varies every frame (verified 2026-07-11,
+	 * m200-s1608-realbox-establish). The master needs NO inventory tail — it learns
+	 * the box from the L2 source and echoes THIS 32-byte control block back verbatim
+	 * as the grant. So the cold-connect is the control block over LIVE audio, exactly
+	 * like the unicast upstream but with cdea 04 03 replacing the 0x7a descriptor. */
+	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
 	reac_ctrl_checksum_apply(out);        /* no-op by construction (block sums 0) */
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
