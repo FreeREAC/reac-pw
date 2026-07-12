@@ -290,8 +290,8 @@ int main(void)
 		} else if (m.probe_idx == 31) {           /* MAC special: OUR identity */
 			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
 			specials_seen++;
-		} else if (m.probe_idx == 32) {           /* "SYSP" inventory token */
-			CHK(f[40] == 'S' && f[41] == 'Y' && f[42] == 'S' && f[43] == 'P');
+		} else if (m.probe_idx == 32) {           /* "SYSP" inventory token (M-200: block idx 23 -> frame 39) */
+			CHK(f[39] == 'S' && f[40] == 'Y' && f[41] == 'S' && f[42] == 'P');
 			specials_seen++;
 		} else if (m.probe_idx == 33) {           /* "SCEN" inventory token */
 			CHK(f[33] == 'S' && f[34] == 'C' && f[35] == 'E' && f[36] == 'N');
