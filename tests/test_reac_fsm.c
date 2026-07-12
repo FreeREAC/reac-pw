@@ -28,9 +28,12 @@ static void establish(struct reac_fsm *fsm)
 	struct reac_ctrl_parsed g = mk(REAC_CTRL_GRANT, M);
 	reac_fsm_init(fsm);
 	reac_fsm_step(fsm, FSM_EV_PHY_UP, NULL);
-	reac_fsm_step(fsm, FSM_EV_RX, &g);            /* grant -> TX_MUTE */
-	for (int i = 0; i < REAC_FSM_TXMUTE_DWELL; i++)
-		reac_fsm_step(fsm, FSM_EV_TICK, NULL);    /* dwell -> ESTABLISHED */
+	reac_fsm_step(fsm, FSM_EV_RX, &g);            /* FLOOD: learn master -> COLDCONNECT */
+	reac_fsm_step(fsm, FSM_EV_RX, &g);            /* COLDCONNECT grant -> open ACK window */
+	int guard = 0;                                /* ACK window + dwell -> ESTABLISHED */
+	while (fsm->state != FSM_ESTABLISHED &&
+	       guard++ < REAC_FSM_GRANT_ACK_FRAMES + REAC_FSM_TXMUTE_DWELL + 100)
+		reac_fsm_step(fsm, FSM_EV_TICK, NULL);
 }
 
 int main(void)
@@ -75,10 +78,21 @@ int main(void)
 	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
 	CHK(o.action == FSM_ACT_UNICAST_COLDCONNECT && o.emit_join);       /* next grid slot */
 
-	/* the master echoes the box block back as the grant -> TX_MUTE -> ESTABLISHED */
+	/* the master echoes the box block back as the grant. A real box does NOT mute
+	 * here — it replies with the 0016/001a inventory (post-grant ACK) while the
+	 * master keeps probing, and only then does the desk stop hunting = LINKED. So
+	 * the grant OPENS the ACK window: we stay in COLDCONNECT re-emitting the
+	 * escalation, then fall to TX_MUTE once it elapses. */
 	struct reac_ctrl_parsed g = mk(REAC_CTRL_GRANT, M);
 	o = reac_fsm_step(&fsm, FSM_EV_RX, &g);
-	CHK(o.state == FSM_TX_MUTE && fsm.have_master && memcmp(fsm.master_mac, M, 6) == 0);
+	CHK(o.state == FSM_COLDCONNECT && fsm.have_master && memcmp(fsm.master_mac, M, 6) == 0);
+	CHK(o.action == FSM_ACT_UNICAST_COLDCONNECT);
+	{
+		int guard = 0;
+		while (fsm.state == FSM_COLDCONNECT && guard++ < REAC_FSM_GRANT_ACK_FRAMES + 10)
+			o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		CHK(o.state == FSM_TX_MUTE && guard > 1000);   /* held for the ACK window */
+	}
 
 	for (int i = 0; i < REAC_FSM_TXMUTE_DWELL; i++)
 		o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);

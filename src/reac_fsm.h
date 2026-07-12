@@ -54,6 +54,15 @@
  * TXMUTE_DWELL magnitude (~100 ms @8000fps) — the box's documented ~100 ms grid. */
 #define REAC_FSM_JOIN_RETRY_PERIOD 800    /* ~100ms @8000fps */
 
+/* Post-grant ACK window. A real box, AFTER the master's grant, replies with the
+ * 0016/001a inventory; the master keeps hunting (broadcast probe 0100001a) until
+ * it sees that reply, then stops probing = LINKED. Measured on a live M-5000
+ * (2026-07-12): our slave sent 0016/001a only BEFORE the grant, then muted — the
+ * desk granted but probed forever = stuck LINKING. Fix: after the first grant,
+ * keep cold-connecting one full 8-phase escalation cycle so 0016/001a re-emit as
+ * the ACK, THEN settle to TX_MUTE. */
+#define REAC_FSM_GRANT_ACK_FRAMES  6400   /* 8 phases x JOIN_RETRY_PERIOD @8000fps */
+
 enum reac_fsm_state {
 	FSM_PHY_DOWN = 0,
 	FSM_FLOOD_ANNOUNCE,   /* hunting: BOUNDED broadcast FILLER flood, learn master */
@@ -90,12 +99,17 @@ struct reac_fsm {
 	int      link_check;       /* countdown to peer-gone */
 	int      txmute_dwell;
 	int      heartbeat_tick;   /* frames since our last heartbeat */
+	int      heartbeat_period; /* frames between keep-alives — = fps (sample_rate/12)
+	                            * so the ~1/s cadence holds at any rate; a real box's
+	                            * gap measured 8162@96k / 4017@48k. 0 => default. */
 	uint16_t counter;          /* our free-running u16-LE */
 	int      flood_frames;     /* broadcast FILLER frames flooded so far (bounded) */
 	enum reac_fsm_drop_reason drop_reason;
 	int      emit_heartbeat;   /* set on the step that should emit a keep-alive */
 	int      emit_join;        /* set on the COLDCONNECT step that emits the cdea 04 03 */
 	int      join_retry_countdown;  /* steps until the next cold-connect on the grid */
+	int      grant_ack;             /* >0: post-grant ACK window (frames left) — keep
+	                                 * cold-connecting so 0016/001a re-emit, then mute */
 };
 
 struct reac_fsm_out {
