@@ -33,6 +33,8 @@
 
 #include "reac_master.h"
 
+struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
+
 /* Lock-free SPSC ring of fixed-size frame slots (the TX equivalent of reac_ring,
  * but carrying whole encoded frames not planar samples). Producer = PipeWire
  * process(); consumer = the pacer thread. */
@@ -71,6 +73,7 @@ enum reac_pacer_evkind {
 	REAC_PEV_GRANT_TIMEOUT,  /* grant window expired: a=attempt# (mod 256)     */
 	REAC_PEV_DROP,           /* backward drop: a=reason, blk=block for BYE     */
 	REAC_PEV_WATCHDOG,       /* still PROBING after 10 s: a=box_seen           */
+	REAC_PEV_RECOGNIZED,     /* box model recognized: a=in_ch (matrix lookup)  */
 };
 
 /* Cause codes for REAC_PEV_STATE blk[0]: 0..3 = the reac_master_rx_event that
@@ -124,6 +127,8 @@ struct reac_pacer {
 	_Atomic uint64_t rx_box_frames;  /* classified box frames (incl. FILLER) */
 	_Atomic uint64_t rx_box_ctrl;    /* classified box CONTROL frames */
 	_Atomic uint64_t rx_joins;       /* validated JOINs seen */
+	const struct reac_box_model *recognized_box; /* RX-thread only: last matched
+	                                  matrix model (dedup for the RECOGNIZED pev) */
 	_Atomic uint64_t grant_attempts; /* grant windows opened */
 	_Atomic uint64_t drops[8];       /* backward drops by reac_master_drop_reason */
 

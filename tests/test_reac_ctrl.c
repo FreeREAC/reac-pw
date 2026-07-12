@@ -23,7 +23,7 @@ int main(void)
 	uint8_t f[1536];
 
 	/* 1. box heartbeat: cdea 01 03 0001 81, 628 B, checksum == 0x7a (wire value) */
-	size_t n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x1234);
+	size_t n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x1234, 16);
 	CHK(n == 628);
 	CHK(f[16] == 0xcd && f[17] == 0xea);
 	CHK(f[18] == 0x01 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x01 && f[22] == 0x81);
@@ -35,6 +35,15 @@ int main(void)
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_BOX_HB);
 	CHK(p.counter == 0x1234 && p.op0 == 1 && p.op1 == 3 && p.op_len == 1 && p.sel == 0x81);
 	CHK(!p.is_broadcast && memcmp(p.src, SRC, 6) == 0 && memcmp(p.dst, MASTER, 6) == 0);
+
+	/* 1b. the heartbeat width follows box_channels (W3): 8-ch = 340 B, 40-ch = 1492 B,
+	 * odd / out-of-range rejected. Byte-length = 50 hdr + n_ch*36 + 2 end. */
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 8) == 340);
+	CHK(f[338] == 0xc2 && f[339] == 0xea && reac_ctrl_checksum_verify(f) == 0);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 40) == 1492);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 15) == 0);   /* odd widths don't exist */
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 0)  == 0);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 42) == 0);   /* > 40 */
 
 	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips
 	 * through the capture-verified upstream decoder — i.e. we emit the same
@@ -70,6 +79,18 @@ int main(void)
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, 16, NULL, 12);
 	CHK(reac_ctrl_checksum_verify(f) == 0 && f[18] == 0x04 && f[19] == 0x03);
+
+	/* 3b. the full cold-connect escalation 0014->0013->0016->001a, byte-matched to
+	 * a real S-1608 (2026-07-11). block[31] = frame[49] is the per-variant trailer. */
+	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 1, 16, NULL, 12);
+	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x13 && f[49] == 0x02);  /* was 0x00 (bug) */
+	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 16, NULL, 12);
+	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x16 && f[49] == 0xfc);
+	n = reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 16, NULL, 12);
+	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x1a && f[49] == 0xf4);
+	/* 8-ch width -> 340 B; odd widths rejected */
+	CHK(reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 8, NULL, 12) == 340);
+	CHK(reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 15, NULL, 12) == 0);
 
 	/* 4. 8-channel box width -> 340 B */
 	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, 8, NULL, 12);
@@ -121,12 +142,12 @@ int main(void)
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_JOIN);
 
-	/* (e) box hb sel 0x81 -> UNICAST; sel 0x00 -> BYE; bcast FILLER -> presence;
-	 *     unicast upstream FILLER -> UNICAST */
-	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9);
+	/* (e) box hb sel 0x81 -> HEARTBEAT (the box's "I am locked" signal); sel 0x00
+	 *     -> BYE; bcast FILLER -> presence; unicast upstream FILLER -> UNICAST */
+	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
-	CHK(ev == REAC_M_RX_BOX_UNICAST);
-	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9);
+	CHK(ev == REAC_M_RX_BOX_HEARTBEAT);
+	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
 	f[22] = 0x00;                                            /* disconnect latch */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
@@ -137,13 +158,34 @@ int main(void)
 	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, 16, NULL, 12);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_UNICAST);
-	/* a config-announce (sel 0x82) unicast-to-us is also just UNICAST */
+	/* a config-announce (cdea 01 03 0010) is the box's SETUP DECLARATION — its
+	 * own event so the master FSM can establish on it (warm relink). */
 	n = reac_ctrl_build_config_announce(f, OUR_MAC, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
-	CHK(ev == REAC_M_RX_BOX_UNICAST);
+	CHK(ev == REAC_M_RX_BOX_CONFIG);
 	/* a unicast between OTHER parties is not ours */
-	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9);
+	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
+
+	/* 7. MASTER-side box recognition: a box's own config-announce round-trips
+	 * back to its matrix model (slave emits -> master identifies the same row). */
+	struct { const char *tok; int in_ch; } cases[] = {
+		{ "s1608", 16 }, { "s0808", 8 }, { "s4000s", 32 },
+	};
+	for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+		n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, cases[i].in_ch);
+		const struct reac_box_model *m = reac_ctrl_identify_box(f, n);
+		CHK(m != NULL);
+		CHK(strcmp(m->token, cases[i].tok) == 0);
+		CHK(m->in_ch == cases[i].in_ch);
+	}
+	/* a NON-config-announce frame (heartbeat) is not identifiable -> NULL */
+	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x55, 16);
+	CHK(reac_ctrl_identify_box(f, n) == NULL);
+	/* an unknown 0x84 descriptor (mutate one descriptor byte) -> NULL (falls back) */
+	n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, 8);
+	f[REAC_CTRL_BLOCK_OFF + 8] ^= 0xff;   /* corrupt a descriptor byte */
+	CHK(reac_ctrl_identify_box(f, n) == NULL);
 
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
 	       "parser + descriptor + audio round-trip + box-frame classifier clean\n");

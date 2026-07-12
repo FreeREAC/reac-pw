@@ -72,6 +72,17 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	out[REAC_FRAME_BYTES - 1] = REAC_END_MARKER_1;
 }
 
+/* An OHRCA (M-5000/M-480) downstream frame: the standard 1492 B frame plus a
+ * 2-byte per-frame CRC-16 trailer AFTER the C2 EA end marker (total 1494 B).
+ * The gate must accept it and the decoder must read the embedded 1492 B frame,
+ * ignoring the trailer. `out` must have room for REAC_FRAME_BYTES_OHRCA. */
+static void mk_downstream_ohrca(uint8_t *out, uint16_t counter)
+{
+	mk_downstream(out, counter);                 /* fills [0 : REAC_FRAME_BYTES) */
+	out[REAC_FRAME_BYTES + 0] = 0xB1;            /* trailer stand-in (a real box */
+	out[REAC_FRAME_BYTES + 1] = 0x06;            /* emits a per-frame CRC-16 here) */
+}
+
 /* run the feeder over the fixture until it has accepted n frames (or timeout) */
 static int run_rx(struct reac_rx *rx, uint64_t want_ok)
 {
@@ -182,6 +193,43 @@ int main(void)
 	}
 
 	unlink(path);
+
+	/* ---- OHRCA 1494 B downstream: accepted AND decoded (trailer ignored) ---- */
+	{
+		char opath[] = "/tmp/reacpw-gate-ohrca-XXXXXX";
+		int ofd = mkstemp(opath);
+		CHK(ofd >= 0);
+		FILE *of = fdopen(ofd, "wb");
+		CHK(of != NULL);
+		pcap_hdr(of);
+		uint8_t odown[REAC_FRAME_BYTES_OHRCA];
+		for (uint16_t i = 0; i < 40; i++) {
+			mk_downstream_ohrca(odown, i);
+			pcap_rec(of, odown, sizeof odown);   /* 1494 B OHRCA frames only */
+		}
+		fclose(of);
+
+		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = opath,
+		                           .forced_rate = 96000, .pcap_realtime = 0,
+		                           .accept = REAC_RX_ACCEPT_DOWNSTREAM };
+		struct reac_ring ring;
+		struct reac_rx rx;
+		CHK(reac_rx_open(&rx, &cfg, &ring) == 0);
+		CHK(run_rx(&rx, 20) == 0);
+		CHK(atomic_load(&rx.frames_ok) >= 20);   /* 1494 B frames accepted */
+		CHK(atomic_load(&rx.frames_bad) == 0);   /* none rejected as malformed */
+
+		/* the embedded 1492 B frame decoded: channel 0 still carries +0.5 */
+		float ch[REAC_MAX_CHANNELS][12];
+		float *dst[REAC_MAX_CHANNELS];
+		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
+		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
+		CHK(fabsf(ch[0][0] - 0.5f) < 1e-6f);
+		reac_rx_close(&rx);
+		reac_ring_free(&ring);
+		unlink(opath);
+	}
+
 	if (fails) {
 		fprintf(stderr, "%d check(s) failed\n", fails);
 		return 1;
