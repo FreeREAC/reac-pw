@@ -268,6 +268,7 @@ const char *reac_master_rx_event_name(enum reac_master_rx_event e)
 	case REAC_M_RX_BOX_JOIN:         return "JOIN";
 	case REAC_M_RX_BOX_UNICAST:      return "UNICAST";
 	case REAC_M_RX_BOX_BYE:          return "BYE";
+	case REAC_M_RX_BOX_CONFIG:       return "CONFIG";
 	}
 	return "?";
 }
@@ -391,6 +392,17 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			enter_granting(m, box_src, blk32);
 			return 1;
 		}
+		if (ev == REAC_M_RX_BOX_CONFIG) {
+			/* WARM RELINK: a previously-synced box skips flood + cold-connect
+			 * and re-appears streaming unicast, re-declaring itself with its
+			 * config-announce. No 04 03 JOIN ever comes, so establish on the
+			 * setup declaration (verified live: real S-0808 -> reac-pw master).
+			 * This is a SPECIFIC checksum-valid frame, not mere presence, so it
+			 * does not break the anti-#130 golden rule. */
+			memcpy(m->box_mac, box_src, 6);
+			enter_established(m);
+			return 1;
+		}
 		/* Presence-flood / stray unicast: diagnostic only. Presence alone
 		 * must NOT trigger the grant (the anti-#130 golden rule). */
 		return 0;
@@ -402,9 +414,10 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			enter_granting(m, box_src, blk32);
 			return 0;
 		}
-		if (ev == REAC_M_RX_BOX_UNICAST) {
+		if (ev == REAC_M_RX_BOX_UNICAST || ev == REAC_M_RX_BOX_CONFIG) {
 			/* "The instant the grant lands the box stops broadcasting and
-			 * switches to unicast-to-master" — that switch IS the accept. */
+			 * switches to unicast-to-master" — that switch (or its config-announce
+			 * re-declaration) IS the accept. */
 			enter_established(m);
 			return 1;
 		}

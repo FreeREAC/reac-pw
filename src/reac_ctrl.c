@@ -149,8 +149,18 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
 		*ev = (out->sel == 0x00) ? REAC_M_RX_BOX_BYE : REAC_M_RX_BOX_UNICAST;
 		return 0;
 	}
-	/* Any other unicast-to-us box frame — upstream FILLER (628/340 B),
-	 * config-announce sel 0x82, unknown ctrl — proves the box linked to us. */
+	/* The box's config-announce (cdea 01 03 0010) is its SETUP DECLARATION — the
+	 * frame a mixer enrols the box from. A box that was previously synced does a
+	 * WARM RELINK: it skips the flood + cold-connect JOIN and re-appears streaming
+	 * unicast, re-declaring itself with this frame (verified live: a real S-0808
+	 * to reac-pw-as-master sends config-announce + unicast, never a 04 03 JOIN).
+	 * Surface it distinctly so the master FSM can establish on it. */
+	if (out->op0 == 0x01 && out->op1 == 0x03 && out->op_len == 0x0010) {
+		*ev = REAC_M_RX_BOX_CONFIG;
+		return 0;
+	}
+	/* Any other unicast-to-us box frame — upstream FILLER (628/340 B), unknown
+	 * ctrl — proves the box linked to us. */
 	*ev = REAC_M_RX_BOX_UNICAST;
 	return 0;
 }
