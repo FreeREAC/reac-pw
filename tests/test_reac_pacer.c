@@ -115,6 +115,14 @@ int main(void)
 		}
 		CHK(found_join);
 
+		/* the emit loop delivers the full 32-frame grant burst BEFORE the box's
+		 * unicast can accept (#130 rig fix 2026-07-12): advancing grant_ticks is
+		 * what opens the GRANTING->ESTABLISHED gate, so a warm-relink box gets the
+		 * whole grant instead of a 1-frame stub. */
+		uint16_t ec; int ei;
+		for (int i = 0; i < p3.master.grant_burst_len * p3.master.grant_stride; i++)
+			reac_master_next(&p3.master, &ec, &ei);
+
 		/* unicast -> ESTABLISHED via the mirror */
 		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3, 16);
 		reac_pacer_rx_ingest(&p3, bf, bn);

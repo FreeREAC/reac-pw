@@ -197,14 +197,25 @@ struct reac_master {
 	uint8_t  probe_blk[34];   /* the current probe [type|block], regenerated    */
 	uint8_t  filler_desc;     /* = current probe's checksum; stamped into FILLER */
 
-	/* GRANTING */
+	/* GRANTING — emit the master's own 32-frame grant burst (the cdea 04 03
+	 * sweep, byte-exact from a real M-200), one block per grant_stride slots,
+	 * then -> ESTABLISHED. grant_burst/_len select the burst for the AUTODETECTED
+	 * box model (reac_master_set_box → the recognizer's model); default S-0808. */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
-	uint8_t  join_blk[32];    /* the box's cold-connect block — echoed verbatim */
+	const uint8_t (*grant_burst)[34]; /* the selected model's burst table       */
+	int      grant_burst_len; /* rows in grant_burst                            */
+	uint8_t  join_blk[32];    /* the box's cold-connect block (diagnostic)      */
 	uint8_t  box_mac[6];      /* the joining box's L2 source */
 	unsigned grant_attempts;  /* windows opened (diagnostic) */
 
 	/* ESTABLISHED */
 	int      chanmap_cursor;  /* which generated chanmap frame is next (0..N-1) */
+	int      est_chanmap_tick; /* LOCKED-state chanmap heartbeat counter. A real
+	                            * M-200 runs the chanmap at a metronomic 1.00/s
+	                            * once locked (measured matrix-m200-s0808: 1004 ms
+	                            * gaps) — the box's sync keep-alive. The slower
+	                            * 1/cycle hunt rate (~0.37/s) left the box BLINKING
+	                            * (rig 2026-07-12). Phase-offset from cfea.        */
 	int      link_check;        /* countdown to peer-gone */
 	int      link_check_reload; /* ~6.5 s of frames (fps-scaled), the reload value */
 
@@ -227,6 +238,13 @@ struct reac_master {
  * byte-for-byte. Starts in IDLE; the first reac_master_next() enters PROBING. */
 void reac_master_init(struct reac_master *m, const uint8_t src[6],
                       const struct reac_console_cfg *cfg, int fps);
+
+/* Select the grant burst for the AUTODETECTED box (the recognizer, #137). Keyed
+ * on the box's in/out channel count so the master emits the correct model's
+ * grant sweep. Unknown widths keep the current (default S-0808) burst and the
+ * caller should log the fallback. Call from the FSM-owning thread on a box
+ * recognition. */
+void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
 
 /* Feed one classified RX event into the FSM (call from the FSM-owning thread
  * only). `box_src` is the frame's L2 source; `blk32` is the 32-byte control
