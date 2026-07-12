@@ -78,27 +78,25 @@ static void on_process(void *data, struct spa_io_position *position)
 
 	reac_ring_read_planar(n->ring, dst, n->channels, nframes);
 
-	/* Opt-in telemetry (REAC_DEBUG, throttled): peak across linked ports + ring
-	 * fill. Tells "ring starved" (peak ~0, fill < quantum = producer/graph clock
-	 * drift, #131) from "read fine but the consumer is wrong". */
+	/* Opt-in telemetry (REAC_DEBUG): publish the last ring-read peak/fill into the
+	 * rx diagnostics for the NON-RT feeder thread to print — no fprintf on the RT
+	 * path. Distinguishes "ring starved" (peak ~0, fill < quantum = producer/graph
+	 * clock drift, #131) from "read fine, consumer wrong". */
 	if (n->debug) {
-		static _Atomic uint64_t dbg_cycles = 0;
-		uint64_t c = atomic_fetch_add_explicit(&dbg_cycles, 1, memory_order_relaxed);
-		if ((c & 0x3f) == 0) {  /* ~every 64 cycles */
-			float peak = 0.0f; int active = 0;
-			for (int ch = 0; ch < n->channels; ch++) {
-				if (dst[ch] == n->scratch) continue;
-				float m = 0.0f;
-				for (uint32_t s = 0; s < nframes; s++) {
-					float a = dst[ch][s] < 0 ? -dst[ch][s] : dst[ch][s];
-					if (a > m) m = a;
-				}
-				if (m > 1e-6f) active++;
-				if (m > peak) peak = m;
+		float peak = 0.0f; int active = 0;
+		for (int ch = 0; ch < n->channels; ch++) {
+			if (dst[ch] == n->scratch) continue;
+			float m = 0.0f;
+			for (uint32_t s = 0; s < nframes; s++) {
+				float a = dst[ch][s] < 0 ? -dst[ch][s] : dst[ch][s];
+				if (a > m) m = a;
 			}
-			fprintf(stderr, "reac_src: nframes=%u linked=%d active_ch=%d peak=%.6f fill=%u\n",
-			        nframes, got_ports, active, peak, reac_ring_readable(n->ring));
+			if (m > 1e-6f) active++;
+			if (m > peak) peak = m;
 		}
+		atomic_store_explicit(&n->rx->src_peak_micro, (int)(peak * 1e6f), memory_order_relaxed);
+		atomic_store_explicit(&n->rx->src_active_ch, active, memory_order_relaxed);
+		atomic_store_explicit(&n->rx->src_fill, (int)reac_ring_readable(n->ring), memory_order_relaxed);
 	}
 
 	/* FOLLOWER drift correction (Tier-A clock bridge). io_rate_match.rate is the
