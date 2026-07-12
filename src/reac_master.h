@@ -82,6 +82,9 @@ enum reac_master_rx_event {
 	REAC_M_RX_BOX_JOIN,             /* validated box cdea 04 03 cold-connect    */
 	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/hb/…) */
 	REAC_M_RX_BOX_BYE,              /* box heartbeat with selector 0x00         */
+	REAC_M_RX_BOX_CONFIG,          /* box config-announce cdea 01 03 0010 — the
+	                                * box declaring its setup; establishes even on
+	                                * a WARM RELINK (no cold-connect JOIN)        */
 };
 
 /* Why the last backward transition happened (for the caller's logging). */

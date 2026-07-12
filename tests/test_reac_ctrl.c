@@ -158,10 +158,11 @@ int main(void)
 	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, 16, NULL, 12);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_UNICAST);
-	/* a config-announce (sel 0x82) unicast-to-us is also just UNICAST */
+	/* a config-announce (cdea 01 03 0010) is the box's SETUP DECLARATION — its
+	 * own event so the master FSM can establish on it (warm relink). */
 	n = reac_ctrl_build_config_announce(f, OUR_MAC, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
-	CHK(ev == REAC_M_RX_BOX_UNICAST);
+	CHK(ev == REAC_M_RX_BOX_CONFIG);
 	/* a unicast between OTHER parties is not ours */
 	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
