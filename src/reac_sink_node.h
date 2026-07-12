@@ -32,6 +32,8 @@ struct reac_sink_cfg {
 	int sample_rate;      /* fixed pps authority: 44100/48000/96000 */
 	const uint8_t *src_mac;   /* stable Roland-OUI src MAC for the virtual box */
 	const uint8_t *master_mac;/* unicast destination once linked */
+	uint8_t console_field;    /* emulated mixer model: 0 = V-Mixer (M-200/M-300),
+	                           * 1 = OHRCA (M-5000). Drives cfea [19] + ENROLL.   */
 };
 
 /* Create the sink node. Opens an AF_PACKET 0x8819 TX socket on cfg->ifname

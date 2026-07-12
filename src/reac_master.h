@@ -150,6 +150,25 @@ struct reac_console_cfg {
 #define REAC_CONSOLE_CFG_S1608 \
 	((struct reac_console_cfg){ .out_channels = 8, .in_channels = 16, .console_field = 0 })
 
+/* A MIXER PROFILE — the desk reac-pw impersonates. The grant burst is box-defined
+ * (a box locks to any valid grant), so the only per-mixer identity is a small set
+ * of fields: the master MAC and the console-model byte (0 = V-Mixer M-200/M-300,
+ * 1 = OHRCA M-5000), which drives BOTH the cfea [19] and the ENROLL console byte
+ * (they carry the same 0/1 indicator, measured across matrix-m{200,300,5000}-*).
+ * Probe specials + cadence are currently the V-Mixer (M-200) set for every profile
+ * — a box still locks, but that is the remaining per-mixer fidelity item. */
+struct reac_mixer_profile {
+	const char *name;        /* CLI token: "m200" | "m300" | "m5000"          */
+	const char *display;     /* "M-200" ...                                   */
+	uint8_t     mac[6];      /* the desk's captured master MAC (default id)    */
+	uint8_t     console_field; /* cfea [19] + ENROLL console byte: 0=V-Mixer,1=OHRCA */
+};
+
+/* Look up a profile by CLI token; NULL if unknown. */
+const struct reac_mixer_profile *reac_mixer_profile_by_name(const char *name);
+/* Enumerate profiles for --help (index 0..N-1; NULL past the end). */
+const struct reac_mixer_profile *reac_mixer_profile_at(int i);
+
 struct reac_master {
 	enum reac_master_state state;
 	uint8_t  src[6];          /* our master MAC (Roland OUI) */
@@ -234,6 +253,10 @@ struct reac_master {
 	 * (on-wire identity must match the L2 source — a mismatch is a documented
 	 * slave-disconnect trigger). */
 	uint8_t  announce_blk[34];
+
+	/* Per-instance ENROLL (cdea 01 03 000d), built from the mixer profile: the
+	 * console-model byte [8] = cfg.console_field (0 = V-Mixer, 1 = OHRCA). */
+	uint8_t  enroll_blk[34];
 };
 
 /* Initialize for a given source MAC, console config + frame rate (3675/4000/
