@@ -203,6 +203,9 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	const struct reac_box_model *bm = reac_ctrl_identify_box(frame, len);
 	if (bm && bm != p->recognized_box) {
 		p->recognized_box = bm;
+		/* Autodetect: select the grant burst for THIS matrix model (its in/out
+		 * width) so the master emits the correct model's sweep on the next grant. */
+		reac_master_set_box(&p->master, bm->in_ch, bm->out_ch);
 		pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)bm->in_ch, 0, parsed.src, NULL);
 	}
 
