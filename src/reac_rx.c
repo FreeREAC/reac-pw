@@ -211,14 +211,18 @@ static void *rx_loop(void *arg)
 		if (dbg && now - last_stat_ns >= 2000000000ull) {
 			last_stat_ns = now;
 			fprintf(stderr, "reac_rx: ok=%llu other=%llu bad=%llu gaps=%llu"
-			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s\n",
+			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s | out: active_ch=%d"
+			        " peak=%.6f fill=%d\n",
 			        (unsigned long long)atomic_load(&rx->frames_ok),
 			        (unsigned long long)atomic_load(&rx->frames_other),
 			        (unsigned long long)atomic_load(&rx->frames_bad),
 			        (unsigned long long)atomic_load(&rx->counter_gaps),
 			        rx->up_src[0], rx->up_src[1], rx->up_src[2],
 			        rx->up_src[3], rx->up_src[4], rx->up_src[5],
-			        rx->up_src_locked ? "" : " (unlocked)");
+			        rx->up_src_locked ? "" : " (unlocked)",
+			        atomic_load(&rx->src_active_ch),
+			        atomic_load(&rx->src_peak_micro) / 1e6,
+			        atomic_load(&rx->src_fill));
 		}
 	}
 
