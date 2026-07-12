@@ -99,12 +99,20 @@ int main(void)
 	d = reac_slave_step_tick(&s);
 	CHK(d.emit == REAC_SLAVE_EMIT_COLDCONNECT && !d.with_join);  /* unicast audio filler */
 
-	/* §13d step 3: the master GRANTS with a cdea 04 03 burst -> we accept + enter the
-	 * TX-mute settle window. §13d step 4: we STOP transmitting (emit nothing). */
+	/* §13d step 3: the master GRANTS with a cdea 04 03 burst. A real box does NOT go
+	 * silent yet — it replies with the 0016/001a inventory (post-grant ACK), and the
+	 * desk keeps probing until it sees that reply, THEN links. So the grant opens the
+	 * ACK window: we keep cold-connecting (re-emit the escalation), then settle. */
 	struct reac_ctrl_parsed grant = master_frame(REAC_CTRL_GRANT, MASTER);
 	d = reac_slave_step_rx(&s, &grant);
-	CHK(d.state == FSM_TX_MUTE);
-	CHK(d.emit == REAC_SLAVE_EMIT_NONE);            /* the grant lands -> go silent */
+	CHK(d.state == FSM_COLDCONNECT);
+	CHK(d.emit == REAC_SLAVE_EMIT_COLDCONNECT);
+	{
+		int guard = 0;
+		while (s.fsm.state == FSM_COLDCONNECT && guard++ < REAC_FSM_GRANT_ACK_FRAMES + 10)
+			d = reac_slave_step_tick(&s);
+		CHK(s.fsm.state == FSM_TX_MUTE && guard > 1000);   /* held for the ACK window */
+	}
 
 	/* §13d step 5: the TX-mute dwell elapses -> ESTABLISHED. The dwell self-clocks on
 	 * the master cadence (one tick per master frame interval); drive it with ticks. */
@@ -143,9 +151,14 @@ int main(void)
 	 * many silent ticks and catch the DROP on the draining tick. */
 	reac_slave_fsm_init(&s, &cfg);
 	reac_slave_step_phy(&s, 1);
-	reac_slave_step_rx(&s, &grant);                      /* grant -> TX_MUTE */
-	for (int i = 0; i < REAC_FSM_TXMUTE_DWELL; i++)
-		reac_slave_step_tick(&s);
+	reac_slave_step_rx(&s, &grant);                      /* FLOOD: learn master -> COLDCONNECT */
+	reac_slave_step_rx(&s, &grant);                      /* COLDCONNECT grant -> open ACK window */
+	{
+		int guard = 0;                               /* ACK window + dwell -> ESTABLISHED */
+		while (s.fsm.state != FSM_ESTABLISHED &&
+		       guard++ < REAC_FSM_GRANT_ACK_FRAMES + REAC_FSM_TXMUTE_DWELL + 100)
+			reac_slave_step_tick(&s);
+	}
 	CHK(s.fsm.state == FSM_ESTABLISHED && s.fsm.link_check == REAC_FSM_LINKCHECK_RELOAD);
 	for (int i = 0; i < REAC_FSM_LINKCHECK_RELOAD; i++)
 		d = reac_slave_step_tick(&s);   /* the 600th tick drains link_check -> DROP */
@@ -157,9 +170,14 @@ int main(void)
 	 * (a slave bonds to ONE master, learned from L2). Re-establish, then flip MAC. */
 	reac_slave_fsm_init(&s, &cfg);
 	reac_slave_step_phy(&s, 1);
-	reac_slave_step_rx(&s, &grant);                       /* grant -> TX_MUTE */
-	for (int i = 0; i < REAC_FSM_TXMUTE_DWELL; i++)
-		reac_slave_step_tick(&s);
+	reac_slave_step_rx(&s, &grant);                       /* FLOOD: learn master -> COLDCONNECT */
+	reac_slave_step_rx(&s, &grant);                       /* COLDCONNECT grant -> ACK window */
+	{
+		int guard = 0;
+		while (s.fsm.state != FSM_ESTABLISHED &&
+		       guard++ < REAC_FSM_GRANT_ACK_FRAMES + REAC_FSM_TXMUTE_DWELL + 100)
+			reac_slave_step_tick(&s);
+	}
 	CHK(s.fsm.state == FSM_ESTABLISHED);
 	struct reac_ctrl_parsed hb2 = master_frame(REAC_CTRL_MASTER_HB, MASTER2);
 	d = reac_slave_step_rx(&s, &hb2);

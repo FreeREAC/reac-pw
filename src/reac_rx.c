@@ -6,6 +6,7 @@
 #endif
 #include "reac_rx.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -147,6 +148,7 @@ static void *rx_loop(void *arg)
 	uint16_t last_counter = 0;
 	int have_counter = 0;
 	uint64_t pcap_first_ts = 0, wall_first_ns = 0;
+	uint64_t last_stat_ns = 0;   /* periodic RX telemetry (every ~2 s) */
 
 	while (atomic_load_explicit(&rx->running, memory_order_acquire)) {
 		long n;
@@ -196,8 +198,32 @@ static void *rx_loop(void *arg)
 		last_counter = counter;
 		have_counter = 1;
 
-		update_ppm(rx, counter, mono_ns());
+		uint64_t now = mono_ns();
+		update_ppm(rx, counter, now);
 		feed_frame(rx, mode, frame, (size_t)n);
+
+		/* Opt-in RX telemetry (REAC_DEBUG) — the decode is invisible otherwise;
+		 * this is how you tell "gate rejecting" (frames_other climbs) from
+		 * "decoded fine, audio lost downstream" (frames_ok climbs). ~every 2 s. */
+		static int dbg = -1;
+		if (dbg < 0)
+			dbg = getenv("REAC_DEBUG") != NULL;
+		if (dbg && now - last_stat_ns >= 2000000000ull) {
+			last_stat_ns = now;
+			fprintf(stderr, "reac_rx: ok=%llu other=%llu bad=%llu gaps=%llu"
+			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s | out: active_ch=%d"
+			        " peak=%.6f fill=%d\n",
+			        (unsigned long long)atomic_load(&rx->frames_ok),
+			        (unsigned long long)atomic_load(&rx->frames_other),
+			        (unsigned long long)atomic_load(&rx->frames_bad),
+			        (unsigned long long)atomic_load(&rx->counter_gaps),
+			        rx->up_src[0], rx->up_src[1], rx->up_src[2],
+			        rx->up_src[3], rx->up_src[4], rx->up_src[5],
+			        rx->up_src_locked ? "" : " (unlocked)",
+			        atomic_load(&rx->src_active_ch),
+			        atomic_load(&rx->src_peak_micro) / 1e6,
+			        atomic_load(&rx->src_fill));
+		}
 	}
 
 	if (live)
