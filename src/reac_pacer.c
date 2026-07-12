@@ -565,6 +565,23 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 		return -1;
 	}
 
+	/* PROMISCUOUS mode is MANDATORY for the master role. We TX with a SPOOFED
+	 * Roland-OUI src MAC (our mixer identity), NOT the NIC's hardware MAC. A box
+	 * ESTABLISHES by UNICASTING its config-announce + upstream to THAT spoofed
+	 * MAC — which the NIC's hardware filter drops (it isn't the card's real MAC),
+	 * so without promisc the master receives nothing and stays PROBING forever
+	 * while the box streams to us (verified live: real S-0808 -> reac-pw master,
+	 * 31.9k unicast frames on the mirror, rx_box_frames=1 without promisc). */
+	{
+		struct packet_mreq mr;
+		memset(&mr, 0, sizeof mr);
+		mr.mr_ifindex = p->ifindex;
+		mr.mr_type    = PACKET_MR_PROMISC;
+		if (setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof mr) < 0)
+			fprintf(stderr, "reac_pacer: PACKET_MR_PROMISC failed — the master "
+			                "may not see a box's unicast to our spoofed MAC\n");
+	}
+
 	/* Best-effort (Linux >=4.20): don't echo our own 8000 fps broadcast into
 	 * our RX queue. The classifier's src==ours software filter stays mandatory
 	 * either way (hub/loopback echoes, older kernels). */
