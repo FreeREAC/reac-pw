@@ -169,6 +169,17 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
+	/* The MASTER owns the word clock. Default to 48 kHz: a box reads its rate from
+	 * the downstream CONTROL block (cfea/chanmap), NOT the frame cadence, and every
+	 * profile's blocks are byte-exact 48 kHz V-Mixer/M-300 captures — driving the
+	 * cadence at 96 kHz while the block still says 48 kHz makes the box stream 48 k
+	 * against our 96 k pacer (rig-verified 2026-07-12, both m200 and m5000). True
+	 * max-freq (96 kHz) needs the OHRCA 96 kHz downstream blocks extracted from the
+	 * M-5000 captures + a 96 k profile — tracked separately. `--rate` still forces
+	 * the cadence for experiments. */
+	if (role == REAC_ROLE_MASTER && rxcfg.forced_rate == 0)
+		rxcfg.forced_rate = 48000;
+
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
 	 * box-width braided frames); as SLAVE it is the master's 40-ch downstream
