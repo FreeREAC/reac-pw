@@ -33,16 +33,30 @@ sudo setcap cap_net_raw,cap_sys_nice+ep ./build/reac-pw
 - `reac_src: nframes=… linked=… active_ch=… peak=… fill=…` (~1 s) — the
   ring→PipeWire read. `active_ch` = channels carrying signal; `fill` = ring backlog.
 
+## End-to-end through openmixer — VERIFIED
+
+Linked the box's 16 `reac-capture:capture_NN` ports into openmixer's native console
+(`omx-console:in_N`, `OPENMIXER_CONSOLE=32:16`). The ring `fill` holds STABLE at
+~30–40 samples with `active_ch=16` and live box audio — it does NOT drain to zero.
+So **openmixer's engine rate-matches the REAC clock properly and the box's mic
+channels reach the console cleanly.** The stagebox is usable end-to-end.
+
 ## Known gaps / next steps
 
-1. **Ring underrun (`fill` drains below one quantum).** The RX producer is paced by
-   the wire on `CLOCK_MONOTONIC`; the graph consumer runs on the graph clock. Same
-   nominal rate, slow relative drift, minimal buffering → periodic underruns
-   (glitches) on a same-rate consumer that does not honour `io_rate_match` (e.g.
-   `pw-record`). The follower rate-match (`ppm_error → io_rate_match.rate`) corrects
-   long-term drift only where a resampler sits on the link. Real fix = the pacer
-   clock-discipline / buffer servo (see the DLL clock-discipline task). Re-test in
-   openmixer's actual graph before assuming it glitches there.
+1. **Ring underrun is a dumb-consumer artifact, not a real bug.** With `pw-record`
+   (a same-rate consumer that ignores `io_rate_match`) the ring `fill` drains to zero
+   → glitches. With openmixer's real graph it stays stable (above). The follower
+   rate-match (`ppm_error → io_rate_match.rate`) is honoured by a consumer that
+   resamples/adapts. Only pursue the pacer buffer-servo / reac-pw-as-graph-driver
+   (#131) if a real consumer is shown to glitch; openmixer does not.
+
+2. **openmixer link ordering.** openmixer's saved patch links `reac-capture ↔
+   omx-console ↔ reac-playback`, but if openmixer starts BEFORE reac-pw its links
+   fail ("endpoint port(s) not registered") and it silences retries — it does NOT
+   re-establish them when the reac nodes appear later. Start reac-pw first, or teach
+   openmixer to (re)link on reac node registration (its #68 re-route-on-recreate
+   class). Manual bridge meanwhile: `for i in $(seq -w 1 16); do pw-link
+   reac-capture:capture_$i omx-console:in_$((10#$i)); done`.
 
 2. **Second box / multi-box.** A real **S-0808** (`00:40:ab:c4:dc:9c`) on the same
    segment stays silent until it PHY-links while reac-pw streams (power-cycle /
