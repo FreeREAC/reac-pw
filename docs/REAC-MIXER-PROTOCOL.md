@@ -1,99 +1,88 @@
-# reac-pw as a MIXER (master) — establishment + lock protocol (RE, 2026-07-12)
+# reac-pw as a MIXER (master) — full establishment protocol (SOLVED, 2026-07-12)
 
-Goal: reac-pw impersonates a real Roland desk (M-200 first, then M-300/M-5000) so
-a real stagebox slaves to **it**. The establishment automaton is the SAME state
-diagram as the box side (see `REAC-BOX-STATE-DIAGRAM.md`) — the box's frames are
-the transition events; here they drive the MASTER's state. Roles inverted, the
-protocol is identical.
+reac-pw impersonates a real Roland desk (M-200 first) so a real stagebox slaves to
+**it**. **SOLVED on the rig:** a real S-0808 cold-connects, is granted, reaches its
+own ESTABLISHED, lights **SOLID**, and holds a steady 1/s heartbeat with **zero
+drops**. All findings transcribed byte-exact from `matrix-m200-s0808-2026-07-11.pcap`
+(real M-200 + real S-0808, box solid) and re-verified live.
 
-All findings below are transcribed byte-exact from
-`matrix-m200-s0808-2026-07-11.pcap` (a real M-200 granting a real S-0808, box
-**locked solid**) and re-verified live on the rig (reac-pw master on `enp131s0`,
-a real S-0808 on the same switch).
+The establishment automaton is the SAME diagram box-side and mixer-side — roles
+inverted, frames identical. Our SLAVE FSM (`reac_fsm.c`, validated task #136) is the
+ground-truth stage-box model; the master is its mirror.
 
-## Status (2026-07-12)
-
-Live against the real S-0808:
+## State-by-state — what each side emits, and the transition frames
 
 ```
-recognized box = S-0808 (8 in / 8 out)      ← recognizer #137, autodetect
-PROBING -> GRANTING (rx CONFIG)             ← warm-relink fires the grant burst
-GRANTING -> ESTABLISHED (rx UNICAST)        ← after the FULL 96 ms / 32-frame burst
+ BOX (stagebox)                         wire                    MIXER (master)
+ ─────────────────────────────────────────────────────────────────────────────
+ PHY_DOWN                                                       PROBING
+   (link up)                                                      emits: PROBE ~500/s burst,
+ FLOOD_ANNOUNCE                                                    chanmap, sub01/02, cfea
+   emits: broadcast presence-flood  ── FLOOD ──▶  (diagnostic; does NOT grant)
+ COLD_CONNECT                                                   PROBING
+   emits (unicast, on a retry grid): ── JOIN cdea 04 03 ──▶     rx JOIN ⇒ GRANTING
+     0403 0013/0014/0016/001a (JOIN variants)
+     0401 001b (NAME = "S-0808")                               GRANTING
+     0402 000d (S-0808 extra)                                    emits, in order:
+   ◀── ENROLL  cdea 01 03 000d ──                                 1× ENROLL  (arms the box)
+   ◀── GRANT   cdea 04 03 burst ──                                32× grant sweep (byte-exact)
+                                                                  cfea now carries box-count=1
+   rx GRANT ⇒ TX_MUTE                                           GRANTING
+     (silent; recovers word-clock                                after full burst ⇒ self-COMMIT
+      from master inter-arrival)                                 ESTABLISHED  (do NOT wait for
+                                                                  a post-burst unicast; do NOT
+   dwell elapses ⇒                                               re-grant the same box's retry
+ ESTABLISHED                                                     JOINs — HOLD the stable stream)
+   emits (unicast): audio + ── HEARTBEAT cdea 01 03 0001 ──▶    rx HEARTBEAT ⇒ lock confirmed
+     01030001 sel 0x81, ~1/s          (definitive)               (reload peer-alive budget)
+   LED SOLID                                                    ESTABLISHED
+                                                                  emits ONLY: cfea 1/s +
+                                                                  chanmap 1/s (the box's sync
+                                                                  keep-alive) + filler. 0 probe.
+ ─────────────────────────────────────────────────────────────────────────────
+ DROP: box BYE (01030001 sel 0x00) or peer-gone budget drain ⇒ master → PROBING
 ```
 
-reac-pw's downstream now **byte-matches a real M-200** in both phases:
-- establishment: the 32-frame grant burst, byte-exact;
-- locked: cfea 1/s + chanmap 1/s + filler, and nothing else — verified on the
-  wire (`sendto` classification: `cfea 1.00/s, cdea 01030019 1.00/s`, 0 probe/sub).
+## The five master-side fixes that made the box lock SOLID
 
-**Box status light:** with only the grant burst in place the light still BLINKED
-(observed on the rig). The blink was NOT the grant (a full 96 ms byte-exact burst
-was measured on the wire, `tx_packets` confirming ~4000 fps downstream) — it was
-the **locked keep-alive rate**: reac-pw was sending the chanmap at ~0.5/s vs the
-real desk's 1.00/s. The 1/s locked-cadence fix (below) landed AFTER that
-observation and is **pending a re-confirmation of the light**.
+1. **cfea box-count** (`gen_cfea`): announce `0x0001` in cfea `[20:22]` once a box is
+   latched (was `0x0000`). The box must see itself acknowledged or it withholds its
+   heartbeat. `[19]`=console model and `[21]`=box-count-low are DISTINCT fields (old
+   code wrongly set both to console_field).
+2. **ENROLL** (`cdea 01 03 000d`): the only master op reac-pw was missing (op-set diff
+   vs the M-200). Emitted once on latch, before the burst; arms the box.
+3. **Grant burst**: the master's own 32-frame `cdea 04 03` sweep, byte-exact, one-shot.
+4. **Self-complete + HOLD**: after ENROLL+burst, COMMIT to ESTABLISHED and hold — the
+   box goes quiet settling its TX_MUTE dwell, so waiting for a post-burst unicast (or
+   timing back to PROBING) made it re-attempt forever (LED blinking faster). Do NOT
+   re-grant the same box's cold-connect retry JOINs (same MAC → hold; MAC-change → re-court).
+5. **Explicit box heartbeat** (`REAC_M_RX_BOX_HEARTBEAT`): the box's "I am locked"
+   signal, symmetric to what our slave emits; its arrival is the definitive confirmation.
 
-## The three RE findings (all committed, FreeREAC/reac-pw, design/slave-emulation-scope)
+Plus the earlier **locked cadence** (cfea + chanmap each metronomic 1.00/s post-lock,
+nothing else).
 
-### 1. The grant burst — the master's own 32-frame sweep
-A real M-200, on the box's cold-connect / config-announce, emits a **one-shot
-burst of 32 distinct `cdea 04 03` frames over ~72 ms** (a leading `04030014`
-pair bracketing `04030013` slot-grants that iterate the box's in/out pairs; tail
-byte [23] is an additive check `0x80 - Σpayload`), then goes calm. Measured: all
-62 grant frames fall in a single 1.5 s cluster, then 40 s of silence.
-
-Two earlier models were **falsified**:
-- NOT an echo of the box's JOIN block — the grant is the master's OWN sweep.
-- NOT a periodic 1/s stream — the "1 Hz" memory was the control-frame heartbeat
-  (every cdea/cfea frame also carries 12 audio samples), documented in the
-  re-pacer's "1 Hz click" bug, not the grant.
-
-reac-pw replays the 32 blocks byte-exact (each already sums to 0 over [18:50], so
-the checksum re-stamp is a no-op). Selectable per autodetected model.
-
-### 2. Burst-completion accept gate
-A warm-relink box unicasts from the first slot, so accepting its unicast
-immediately cut the burst to ~1 frame (rig: `GRANTING -> ESTABLISHED` in 0.25 ms).
-Fix: gate `GRANTING -> ESTABLISHED` on the FULL 32-frame burst having been
-delivered; before that the box unicast only confirms presence and keeps granting.
-Anti-#130 holds — establish still needs a box frame (never a blind timer), and the
-grant window still expires BACK to PROBING with no accept. Rig: GRANTING now lasts
-~96 ms (the full burst) before establishing. Warm-relink CONFIG routes through
-GRANTING rather than jumping straight to ESTABLISHED.
-
-### 3. Locked keep-alive cadence — cfea + chanmap, both at 1.00/s
-Once established a real M-200 emits ONLY two control frames, each **metronomic at
-1.00/s** (measured: 1004 ms gaps, dead steady): cfea and the sub-state-0x03
-chanmap. NOTHING else — 0 probes, 0 sub01/sub02. The chanmap is the box's sync
-keep-alive (§4: the box's parser recognizes/holds a master on that map). reac-pw's
-old cadence ran the chanmap at the hunt rate (1/cycle ≈ 0.37/s), under-sending the
-heartbeat. `control_cadence` is now split into the measured HUNT (PROBING) and
-LOCK (ESTABLISHED) cadences; locked chanmap runs at 1/s. Verified on the wire.
+## Live proof
+```
+recognized box = S-0808 (8 in / 8 out)
+GRANTING -> ESTABLISHED (timer)
+rx HEARTBEAT from 00:40:ab:c4:dc:9c (state ESTABLISHED)
+drops: 0    box heartbeat 1.0/s    LED SOLID
+```
 
 ## Rigorously RULED OUT (do not re-chase)
-- **Frame length**: 1492 B is correct (700 = snaplen, 1494 = Ethernet FCS from a
-  mirror config — see `SLAVE-EMULATION-SCOPE.md`).
-- **Chanmap content**: the 49-window sliding sweep already byte-matches the M-200.
-- **"reac-pw isn't transmitting"**: FALSE — `tx_packets` climbs ~4000 fps and the
-  `sendto` payloads are well-formed `8819` broadcast frames. A python RX sniffer
-  not seeing the host's own outgoing frames is a capture artifact, not reality.
+- Frame length 1492 (FCS artifact). Chanmap content (49-window sweep byte-matches).
+- "reac-pw isn't transmitting" — capture artifact; `tx_packets` + `sendto` prove
+  ~4000 fps downstream.
+- **TX timing jitter** — turned out NOT to be the issue; the gap was the PROTOCOL
+  (box-count + ENROLL + hold), not the clock. #131 stays open only as a fidelity item.
 
-## If the light is STILL blinking after the 1/s cadence fix — next candidate
-**TX timing jitter.** The SCHED_FIFO pacer holds p50 = 250 µs (perfect) but shows
-occasional gaps to ~500 µs–3.9 ms (σ ≈ 63 µs, ~0.3 % of slots a full slot late;
-partly strace perturbation, partly real userspace-RT jitter). A hardware desk
-gives the box a rock-solid word-clock; ms-scale gaps can break the box's PLL lock.
-This is task #131 (DLL-discipline the pacer to a real clock). Measure the box's
-UPSTREAM jitter while locked to reac-pw vs while locked to a real M-200 to confirm
-before investing in the clock rework.
-
-## Next, for a COMPLETE mixer product
-1. Confirm the light goes solid with the 1/s locked cadence (pending, rig).
-2. If not: TX jitter / clock discipline (#131).
-3. Real-MAC-as-identity: use the NIC's own MAC (or set the NIC to a Roland MAC) so
-   the box's unicast is received natively without promiscuous mode, and to test
-   whether the box validates the master OUI.
+## Next
+1. Whole-protocol integration test: replay a real M-200 capture into our SLAVE and
+   assert it reaches ESTABLISHED + heartbeats (the courtship is our-code-vs-our-code,
+   so a shared wrong assumption passes it — replay-vs-real-capture would not).
+2. Generalise grant burst + ENROLL + box-count width to S-1608 / S-4000S and to
+   M-300 / M-5000 (from their `matrix-*.pcap`).
+3. Real-MAC identity (NIC's own / set NIC to a Roland MAC) to drop promiscuous RX.
 4. Drive the patches: route the box's upstream audio into PipeWire; feed the
-   downstream from the graph (the reac:playback sink is running but idle).
-5. Generalise the grant burst + probe specials to M-300 / M-5000 and to the other
-   box widths (S-1608 / S-4000S) from their matrix-*.pcap.
+   downstream from the graph.
