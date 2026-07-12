@@ -20,6 +20,9 @@
 #include <netpacket/packet.h>
 #include <net/ethernet.h>
 #include <arpa/inet.h>     /* htons */
+#include <sched.h>         /* SCHED_FIFO */
+#include <sys/mman.h>      /* mlockall */
+#include <signal.h>        /* pthread_sigmask */
 
 /* ------------------------------------------------------------------------- *
  * The PURE decision core — maps the reac_fsm action onto a slave emit kind.
@@ -36,8 +39,11 @@ static struct reac_slave_decision map_action(const struct reac_fsm_out *o)
 	struct reac_slave_decision d = { REAC_SLAVE_EMIT_NONE, 0, 0, o->state };
 	switch (o->action) {
 	case FSM_ACT_FLOOD_BCAST:
-		d.emit = REAC_SLAVE_EMIT_FLOOD_FILLER;
-		d.with_join = o->emit_join;   /* FSM gates the cold-connect burst/retry */
+		d.emit = REAC_SLAVE_EMIT_FLOOD_FILLER;   /* bounded broadcast, no join alongside */
+		break;
+	case FSM_ACT_UNICAST_COLDCONNECT:
+		d.emit = REAC_SLAVE_EMIT_COLDCONNECT;
+		d.with_join = o->emit_join;   /* FSM gates the cdea 04 03 on the retry grid */
 		break;
 	case FSM_ACT_UNICAST_AUDIO:
 		d.emit = REAC_SLAVE_EMIT_UPSTREAM_AUDIO;
@@ -62,6 +68,13 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 		? (cfg->box_channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : cfg->box_channels)
 		: REAC_SLAVE_BOX_CHANNELS_DEFAULT;
 	s->sample_rate = cfg ? cfg->sample_rate : 0;
+
+	/* Heartbeat cadence is ~1/s wall-clock, i.e. one keep-alive per frame-rate
+	 * worth of frames (fps = rate/12). A real box measured 8162 frames @96k and
+	 * 4017 @48k — the gap scales with the rate, so a fixed 8000 would beat at
+	 * half-rate on a 48 k desk. Derive it so the same code path fits any rate. */
+	if (s->sample_rate > 0)
+		s->fsm.heartbeat_period = s->sample_rate / REAC_SAMPLES_PER_PKT;
 
 	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
 	memcpy(s->src, (cfg && cfg->src_mac) ? cfg->src_mac : standin, 6);
@@ -139,32 +152,115 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 	float buf[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
 	float *planar[REAC_MAX_CHANNELS];
 
+	/* EXACTLY ONE frame per call — one wire frame per monotonic counter value, as a
+	 * real S-1608 (#130, byte-verified 2026-07-11). Control frames REPLACE the
+	 * audio/flood frame at this slot; they never add a second frame. */
 	switch (d->emit) {
 	case REAC_SLAVE_EMIT_NONE:
 		return;
 
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
-		/* §13d step 1 / §13p.3: announce by FLOODING broadcast FILLER at wire
-		 * rate while unlinked — continuous, not a one-shot (#130 fix 1). The
-		 * dst is broadcast; master is not learned yet. Box-width FILLER, silent. */
-		stage_inputs(s, buf, planar);  /* may carry early input; harmless pre-link */
-		len = reac_ctrl_build_upstream_filler(frame, BCAST, s->src, counter,
-		                                      s->box_channels, planar,
-		                                      REAC_SAMPLES_PER_PKT);
+		/* §13p.3: announce by FLOODING broadcast FILLER — BOUNDED (~1.36 s), the
+		 * FSM caps it and then switches to the unicast cold-connect phase. The dst
+		 * is broadcast; the master is being learned from its L2 source on RX. Zero
+		 * control block [18:50] (no 0x7a descriptor) over LIVE staged input audio
+		 * [50:626]: on a real box the flood's audio region varies every frame — the
+		 * descriptor, not the audio, is what marks the ESTABLISHED unicast. */
+		stage_inputs(s, buf, planar);
+		len = reac_ctrl_build_flood_filler(frame, BCAST, s->src, counter,
+		                                   s->box_channels, planar,
+		                                   REAC_SAMPLES_PER_PKT);
 		sll = bcast_sll;
+		break;
+
+	case REAC_SLAVE_EMIT_COLDCONNECT:
+		/* Flood done, master learned: unicast-only. On the ~100 ms retry grid this
+		 * slot carries the cold-connect (cdea 04 03, the box's JOIN trigger — the
+		 * master echoes its block back as the grant); otherwise a unicast audio
+		 * FILLER. One frame either way, always to the learned master. */
+		stage_inputs(s, buf, planar);
+		if (d->with_join) {
+			/* Escalate through the FULL cold-connect sequence a real S-1608 sends —
+			 * 0014 -> 0013 -> 0016 -> 001a (byte-matched to m5000-s1608 establish,
+			 * 2026-07-11). The 0016/001a carry the fuller box inventory the master
+			 * needs to register the box; emitting only 0014/0013 left the desk blind
+			 * (live M-5000 test, 2026-07-11). One variant per join grid slot. */
+			switch (s->coldconnect_phase % 8) {
+			case 1:
+				len = reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 2:
+				len = reac_ctrl_build_coldconnect_0016(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 3:
+				len = reac_ctrl_build_coldconnect_001a(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 4:
+				/* ANNOUNCE OUR SETUP — the master enrolls the box from this frame;
+				 * without it the desk never registers us (live M-5000 test). */
+				len = reac_ctrl_build_config_announce(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				break;
+			case 5:
+				/* the box also heartbeats DURING cold-connect, before any grant */
+				len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter,
+				          s->box_channels);
+				break;
+			case 6:
+				/* ANNOUNCE OUR EXACT MODEL — the ASCII name frame. Required for the
+				 * 0x84 family (S-0808 etc.) so the desk shows the real model, not the
+				 * generic family name (live M-200, 2026-07-11). Returns 0 for the 0x82
+				 * family (named by selector) -> emit a plain upstream filler instead. */
+				len = reac_ctrl_build_name_frame(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				if (len == 0)
+					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
+				break;
+			case 7:
+				/* The extra inventory frame (cdea 04 02 000d) some models send — the
+				 * mixer reads it WITH the 0016/001a inventory to name the exact model.
+				 * Returns 0 for models without it -> plain upstream filler. */
+				len = reac_ctrl_build_extra_frame(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				if (len == 0)
+					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
+				break;
+			default:
+				len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			}
+			s->coldconnect_phase++;
+		} else {
+			len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
+			                                      s->box_channels, planar,
+			                                      REAC_SAMPLES_PER_PKT);
+		}
 		break;
 
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
 		/* Established: unicast our input channels upstream at the box's slots — a
-		 * slave sends its inputs INTO the REAC stream. The master MAC is learned. */
+		 * slave sends its inputs INTO the REAC stream. The ~1/s keep-alive REPLACES
+		 * the audio frame on the slot the FSM flags it (a box's sparse heartbeat
+		 * occupies an audio slot, never an extra frame). */
 		stage_inputs(s, buf, planar);
-		len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
-		                                      s->box_channels, planar,
-		                                      REAC_SAMPLES_PER_PKT);
+		if (d->with_heartbeat)
+			len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter, s->box_channels);
+		else
+			len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
+			                                      s->box_channels, planar,
+			                                      REAC_SAMPLES_PER_PKT);
 		break;
 
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter);
+		len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter, s->box_channels);
 		break;
 	}
 
@@ -176,48 +272,26 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		atomic_fetch_add_explicit(&s->tx_errors, 1, memory_order_relaxed);
 	else
 		atomic_fetch_add_explicit(&s->tx_frames, 1, memory_order_relaxed);
-
-	/* The established keep-alive rides alongside the upstream audio frame on the
-	 * tick the FSM flags it (it replaces a slot, like a box's sparse heartbeat). */
-	if (d->emit == REAC_SLAVE_EMIT_UPSTREAM_AUDIO && d->with_heartbeat) {
-		uint8_t hb[2048];
-		size_t hn = reac_ctrl_build_box_hb(hb, s->fsm.master_mac, s->src,
-		                                   (uint16_t)(counter + 1));
-		ssize_t hr = sendto(s->fd, hb, hn, 0, (struct sockaddr *)uni_sll, sizeof *uni_sll);
-		if (hr < 0)
-			atomic_fetch_add_explicit(&s->tx_errors, 1, memory_order_relaxed);
-		else
-			atomic_fetch_add_explicit(&s->tx_frames, 1, memory_order_relaxed);
-	}
-
-	/* §13b/§13d/§13p.multi: the cold-connect (cdea 04 03, sub-cmd 04 — the box's
-	 * own JOIN trigger, byte-captured alongside the flood) rides the presence
-	 * flood on the ticks the FSM flags (a burst, then a ~100 ms retry grid —
-	 * #130 fix 1). Unicast-to-master once learned, else broadcast like the
-	 * flood itself. A real link only completes when the master's cdea 04 03
-	 * grant is RX'd; this builder is the reconstructed JOIN half. */
-	if (d->emit == REAC_SLAVE_EMIT_FLOOD_FILLER && d->with_join) {
-		uint8_t jf[2048];
-		struct sockaddr_ll *jsll;
-		size_t jn;
-		if (s->fsm.have_master) {
-			jn = reac_ctrl_build_coldconnect(jf, s->fsm.master_mac, s->src, counter);
-			jsll = uni_sll;
-		} else {
-			jn = reac_ctrl_build_coldconnect(jf, BCAST, s->src, counter);
-			jsll = bcast_sll;
-		}
-		ssize_t jr = sendto(s->fd, jf, jn, 0, (struct sockaddr *)jsll, sizeof *jsll);
-		if (jr < 0)
-			atomic_fetch_add_explicit(&s->tx_errors, 1, memory_order_relaxed);
-		else
-			atomic_fetch_add_explicit(&s->tx_frames, 1, memory_order_relaxed);
-	}
 }
 
 static void *slave_loop(void *arg)
 {
 	struct reac_slave *s = arg;
+
+	/* RT hardening — the reac_pacer.c / reac_repacer.c recipe that streams to real
+	 * stageboxes flawlessly AND re-synced our boxes to an M-5000 over WiFi: lock
+	 * memory, go SCHED_FIFO, block signals, so our upstream emission has low,
+	 * consistent latency. A real box's PLL-clocked upstream is jitter-free and the
+	 * master locks its word clock to it before granting. Best-effort — without
+	 * CAP_SYS_NICE/rtprio we run SCHED_OTHER (jittery, may not link). */
+	mlockall(MCL_CURRENT | MCL_FUTURE);
+	struct sched_param sp = { .sched_priority = 79 };
+	if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0)
+		fprintf(stderr, "reac_slave: SCHED_FIFO denied (need CAP_SYS_NICE/rtprio) — "
+		                "SCHED_OTHER, upstream may jitter and the master may not link\n");
+	else
+		fprintf(stderr, "reac_slave: SCHED_FIFO prio %d — low-jitter upstream\n", sp.sched_priority);
+	sigset_t allsig; sigfillset(&allsig); pthread_sigmask(SIG_BLOCK, &allsig, NULL);
 
 	struct sockaddr_ll bcast_sll, uni_sll;
 	memset(&bcast_sll, 0, sizeof bcast_sll);
@@ -229,14 +303,31 @@ static void *slave_loop(void *arg)
 
 	uint8_t rxbuf[2048];
 
+	static const char *const st_name[] = {
+		"PHY_DOWN", "FLOOD_ANNOUNCE", "COLDCONNECT", "TX_MUTE", "ESTABLISHED", "DROP"
+	};
+	enum reac_fsm_state prev_state = s->fsm.state;
+	fprintf(stderr, "reac_slave: STATE %s\n", st_name[prev_state]);
+
 	while (atomic_load_explicit(&s->running, memory_order_acquire)) {
+		/* State-transition trace (task #130): the FSM's phase is the ground truth
+		 * for establishment — log every change so a live run shows FLOOD ->
+		 * COLDCONNECT -> (grant) TX_MUTE -> ESTABLISHED and any DROP/re-flood flap. */
+		if (s->fsm.state != prev_state) {
+			fprintf(stderr, "reac_slave: STATE %s -> %s%s\n",
+			        st_name[prev_state], st_name[s->fsm.state],
+			        s->fsm.state == FSM_DROP ? " (drop)" : "");
+			prev_state = s->fsm.state;
+		}
 		/* Apply a pending PHY change on THIS thread (the FSM owner). */
 		int want = atomic_load_explicit(&s->phy_up_req, memory_order_acquire);
 		if (want != s->phy_up_seen) {
 			struct reac_slave_decision d = reac_slave_step_phy(s, want);
 			s->phy_up_seen = want;
-			if (want)               /* PHY up: begin the presence-flood immediately */
+			if (want) {             /* PHY up: begin the presence-flood immediately */
+				s->counter_locked = 0;   /* re-latch the master offset on a fresh link */
 				emit_decision(s, &d, &bcast_sll, &uni_sll);
+			}
 		}
 
 		/* Block (with a short timeout) for the next master frame. Frame-arrival is
@@ -271,6 +362,22 @@ static void *slave_loop(void *arg)
 
 		struct reac_slave_decision d = reac_slave_step_rx(s, &p);
 		memcpy(uni_sll.sll_addr, s->fsm.master_mac, 6);  /* learned this step */
+
+		/* Follow the master clock (the M-200i is the word-clock master): override
+		 * the FSM's free-running counter with one LOCKED to the master's downstream
+		 * counter at a fixed offset, latched at first lock. A real box's upstream
+		 * counter tracks the master's exactly (constant offset, one frame per
+		 * master frame); a box whose counter free-runs from zero / drifts is not
+		 * clock-slaved and the master refuses it. State transitions don't use the
+		 * counter, so overriding it here (right before emit) is safe. */
+		if (s->fsm.have_master && memcmp(p.src, s->fsm.master_mac, 6) == 0) {
+			if (!s->counter_locked) {
+				s->counter_offset = (uint16_t)(s->fsm.counter - p.counter);
+				s->counter_locked = 1;
+			}
+			s->fsm.counter = (uint16_t)(p.counter + s->counter_offset);
+		}
+
 		emit_decision(s, &d, &bcast_sll, &uni_sll);
 	}
 	return NULL;

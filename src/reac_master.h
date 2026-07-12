@@ -71,7 +71,8 @@ enum reac_master_emit {
 	REAC_M_EMIT_PROBE,      /* cdea 01 00 — the fixed M-300 probe (~115/s)      */
 	REAC_M_EMIT_SUB01,      /* cdea 01 01 — the fixed M-300 sub-message (~1/s)  */
 	REAC_M_EMIT_SUB02,      /* cdea 01 02 — the fixed M-300 sub-message (~1/s)  */
-	REAC_M_EMIT_GRANT,      /* cdea 04 03 — the ECHO of the box's JOIN block    */
+	REAC_M_EMIT_GRANT,      /* cdea 04 03 — one block of the model grant burst  */
+	REAC_M_EMIT_ENROLL,     /* cdea 01 03 000d — the pre-grant enroll/arm frame */
 	REAC_M_EMIT_CHANMAP,    /* cdea 01 03 0019 generated channel-map (1 of N)   */
 	REAC_M_EMIT_ANNOUNCE,   /* cfea master announce (generated: OUR MAC + I/O)  */
 };
@@ -80,8 +81,16 @@ enum reac_master_emit {
 enum reac_master_rx_event {
 	REAC_M_RX_BOX_BCAST_FILLER = 0, /* box presence-flood (diagnostic only)     */
 	REAC_M_RX_BOX_JOIN,             /* validated box cdea 04 03 cold-connect    */
-	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/hb/…) */
+	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/…)    */
+	REAC_M_RX_BOX_HEARTBEAT,        /* box cdea 01 03 0001 sel 0x81 keep-alive —
+	                                * the box's ESTABLISHED signal ("I am locked").
+	                                * Symmetric to the heartbeat our SLAVE emits in
+	                                * FSM_ESTABLISHED; its ARRIVAL is the definitive
+	                                * confirmation the real box has locked to us.   */
 	REAC_M_RX_BOX_BYE,              /* box heartbeat with selector 0x00         */
+	REAC_M_RX_BOX_CONFIG,          /* box config-announce cdea 01 03 0010 — the
+	                                * box declaring its setup; establishes even on
+	                                * a WARM RELINK (no cold-connect JOIN)        */
 };
 
 /* Why the last backward transition happened (for the caller's logging). */
@@ -93,18 +102,29 @@ enum reac_master_drop_reason {
 	REAC_M_DROP_GRANT_TIMEOUT, /* grant window expired with no box unicast      */
 };
 
-/* Established link-check budget: the firmware 0x0258 = 600 frames (75 ms @96k /
- * 150 ms @48k), counted DOWN per emitted frame, RELOADED by every box RX event. */
+/* Established link-check budget. The firmware constant 0x0258 = 600 frames
+ * (~0.15 s @48k) was FAR too eager: a live M-200i driving an S-1608 held the link
+ * for ~6.5 s of box silence before reverting to hunting (measured on a reboot,
+ * 2026-07-11 — box heartbeat stops at t=16.0 s, master's first probe at t=22.47 s).
+ * We reload a rate-scaled ~6.5 s (reac_master.link_check_reload, set at init) so a
+ * briefly-glitching box isn't torn down the way a real desk would ride through.
+ * The old constant is kept only as documentation of the firmware value. */
 #define REAC_M_LINKCHECK_RELOAD 600
+#define REAC_M_LINKCHECK_SECONDS_X10 65   /* 6.5 s, scaled by fps at init */
 /* Diagnostic presence flag decay (same frame budget as the link-check). */
 #define REAC_M_PRESENCE_TIMEOUT 600
 /* Grant burst density: one echoed grant per this many slots (~100 control
  * frames over the ~150 ms window @8000 fps, the transcribed real burst). */
 #define REAC_M_GRANT_STRIDE 12
 
-/* Max channel-map frames the generator can hold (8 slots/frame; the widest REAC
- * downstream is the 40-slot map -> at most 5 frames, 6 with a section marker). */
-#define REAC_M_CHANMAP_FRAMES_MAX 6
+/* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
+ * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
+ * ring positions, and a real master emits ONE window per start position — so the
+ * full sweep is exactly 49 frames (measured live off an M-200 driving an S-1608,
+ * 2026-07-11, #130). An earlier 11-frame figure came from an M-300 capture too
+ * short to contain the whole rotation. */
+#define REAC_M_FABRIC_RING        49
+#define REAC_M_CHANMAP_FRAMES_MAX REAC_M_FABRIC_RING
 
 /* Console I/O config: everything the downstream generator needs to synthesize
  * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
@@ -113,8 +133,9 @@ enum reac_master_drop_reason {
  * documented slave-disconnect trigger). Fed the S-1608 config the generator
  * reproduces the captured M-300 downstream byte-for-byte. */
 struct reac_console_cfg {
-	uint8_t out_channels;   /* box analog outputs: cfea outCh [18] + drives the
-	                         * chanmap (marker + out_channels-1 channel ids).
+	uint8_t out_channels;   /* box analog outputs: cfea outCh [18]. (Does NOT
+	                         * size the chanmap: a real master sweeps the whole
+	                         * 40-slot fabric regardless of console width, #130.)
 	                         * S-1608 = 8, M-5000 downstream box = 16.        */
 	uint8_t in_channels;    /* box analog inputs: sizes the UPSTREAM parser
 	                         * (box->master); carried for the caller, not a
@@ -129,6 +150,25 @@ struct reac_console_cfg {
 #define REAC_CONSOLE_CFG_S1608 \
 	((struct reac_console_cfg){ .out_channels = 8, .in_channels = 16, .console_field = 0 })
 
+/* A MIXER PROFILE — the desk reac-pw impersonates. The grant burst is box-defined
+ * (a box locks to any valid grant), so the only per-mixer identity is a small set
+ * of fields: the master MAC and the console-model byte (0 = V-Mixer M-200/M-300,
+ * 1 = OHRCA M-5000), which drives BOTH the cfea [19] and the ENROLL console byte
+ * (they carry the same 0/1 indicator, measured across matrix-m{200,300,5000}-*).
+ * Probe specials + cadence are currently the V-Mixer (M-200) set for every profile
+ * — a box still locks, but that is the remaining per-mixer fidelity item. */
+struct reac_mixer_profile {
+	const char *name;        /* CLI token: "m200" | "m300" | "m5000"          */
+	const char *display;     /* "M-200" ...                                   */
+	uint8_t     mac[6];      /* the desk's captured master MAC (default id)    */
+	uint8_t     console_field; /* cfea [19] + ENROLL console byte: 0=V-Mixer,1=OHRCA */
+};
+
+/* Look up a profile by CLI token; NULL if unknown. */
+const struct reac_mixer_profile *reac_mixer_profile_by_name(const char *name);
+/* Enumerate profiles for --help (index 0..N-1; NULL past the end). */
+const struct reac_mixer_profile *reac_mixer_profile_at(int i);
+
 struct reac_master {
 	enum reac_master_state state;
 	uint8_t  src[6];          /* our master MAC (Roland OUI) */
@@ -136,7 +176,6 @@ struct reac_master {
 	                           * NEVER reset across transitions */
 
 	int      fps;             /* frame rate (pps): 3675/4000/8000 */
-	int      probe_period;    /* slots between probes (~fps/115 ≈ 115 probes/s) */
 	int      grant_frames;    /* GRANTING window length (~150 ms of slots)      */
 	int      grant_stride;    /* slots between echoed grants in the window      */
 
@@ -145,24 +184,65 @@ struct reac_master {
 	int      chanmap_nframes; /* generated chanmap frame count (>=1)            */
 	uint8_t  chanmap[REAC_M_CHANMAP_FRAMES_MAX][34]; /* generated cdea chanmap  */
 
-	/* Continuous control cadence (identical in PROBING and ESTABLISHED): PROBE
-	 * ~115/s + four 1/s streams (sub01/sub02/chanmap/cfea) phase-offset by
-	 * fps/4 so they never contend for the same slot. */
-	int      probe_tick;      /* slots since the last probe (~fps/115)          */
-	int      sub01_tick;      /* slots since the last cdea 01 01 (~1/s)         */
-	int      sub02_tick;      /* slots since the last cdea 01 02 (~1/s)         */
-	int      announce_tick;   /* slots since the last cfea (~1/s)               */
+	/* CYCLE-LOCKED control cadence (#130, measured off the M-300/S-1608 establish
+	 * capture; identical in PROBING and ESTABLISHED). A real master's control
+	 * plane is one deterministic cycle of `cycle_len` slots (10778 @ 4000 fps =
+	 * 2.69 s, scaled by fps):
+	 *   - a probe BURST: one probe every `probe_stride` slots (8 @ 4000 fps =
+	 *     500/s) from slot 0 through `burst_end` (341 probes), probe indices
+	 *     30..33 being the 4 inventory specials (zeros / our-MAC / SYSP / SCEN);
+	 *   - a probe-free PAUSE for the rest of the cycle, holding sub02 right
+	 *     after the burst, ONE chanmap window mid-pause (the 49-window sweep
+	 *     thus takes 49 cycles), and sub01 at the cycle's tail.
+	 * The old model ("PROBE ~115/s uniform + everything at 1/s") was the duty-
+	 * cycle AVERAGE of this rhythm — a capture-analysis artifact; a box never
+	 * sees a real master emit that way. cfea free-runs at ~1/s (measured),
+	 * independent of the cycle. */
+	int      cycle_len;       /* slots per control cycle (fps*10778/4000)       */
+	int      cycle_pos;       /* current slot in the cycle [0, cycle_len)       */
+	int      probe_stride;    /* slots between burst probes (fps/500)           */
+	int      burst_end;       /* last probe slot: (341-1)*probe_stride          */
+	int      sub02_off;       /* cdea 01 02 slot: burst_end + probe_stride      */
+	int      chanmap_off;     /* chanmap slot: fps*5953/4000 (mid-pause)        */
+	int      sub01_off;       /* cdea 01 01 slot: cycle_len - 5                 */
+	int      probe_idx;       /* burst probe index (cycle_pos/stride) of the
+	                           * probe being emitted (set by the cadence)       */
+	int      announce_tick;   /* slots since the last cfea (~1/s, free-running) */
 
-	/* GRANTING */
+	/* PROBE ROTATION (#130, measured live off an M-200 2026-07-11). The probe is
+	 * NOT a fixed constant: its 27-byte payload is a sliding window over the
+	 * period-10 sequence [00 00 00 01 00 00 00 00 00 SUB], where SUB = 0x02 while
+	 * hunting and 0x03 once established. The phase advances +6 (mod 10) after every
+	 * 2 emissions -> the observed 0,6,2,8,4 rotation. EVERY FILLER frame's [18:50]
+	 * descriptor is 16x "00 <cksum-of-the-current-probe>" — the descriptor tracks
+	 * the probe, which is why a real master's FILLER descriptor appears to "cycle".
+	 * A frozen probe (and hence a frozen descriptor) is what left real boxes mute. */
+	int      probe_phase;     /* current phase into the period-10 sequence      */
+	int      probe_repeat;    /* emissions done at this phase (2 per phase)     */
+	uint8_t  probe_blk[34];   /* the current probe [type|block], regenerated    */
+	uint8_t  filler_desc;     /* = current probe's checksum; stamped into FILLER */
+
+	/* GRANTING — emit the master's own 32-frame grant burst (the cdea 04 03
+	 * sweep, byte-exact from a real M-200), one block per grant_stride slots,
+	 * then -> ESTABLISHED. grant_burst/_len select the burst for the AUTODETECTED
+	 * box model (reac_master_set_box → the recognizer's model); default S-0808. */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
-	uint8_t  join_blk[32];    /* the box's cold-connect block — echoed verbatim */
+	const uint8_t (*grant_burst)[34]; /* the selected model's burst table       */
+	int      grant_burst_len; /* rows in grant_burst                            */
+	uint8_t  join_blk[32];    /* the box's cold-connect block (diagnostic)      */
 	uint8_t  box_mac[6];      /* the joining box's L2 source */
 	unsigned grant_attempts;  /* windows opened (diagnostic) */
 
 	/* ESTABLISHED */
-	int      chanmap_tick;    /* slots since the last chanmap frame */
 	int      chanmap_cursor;  /* which generated chanmap frame is next (0..N-1) */
-	int      link_check;      /* countdown to peer-gone (600-frame budget) */
+	int      est_chanmap_tick; /* LOCKED-state chanmap heartbeat counter. A real
+	                            * M-200 runs the chanmap at a metronomic 1.00/s
+	                            * once locked (measured matrix-m200-s0808: 1004 ms
+	                            * gaps) — the box's sync keep-alive. The slower
+	                            * 1/cycle hunt rate (~0.37/s) left the box BLINKING
+	                            * (rig 2026-07-12). Phase-offset from cfea.        */
+	int      link_check;        /* countdown to peer-gone */
+	int      link_check_reload; /* ~6.5 s of frames (fps-scaled), the reload value */
 
 	/* Diagnostics (never gate the establishment) */
 	int      box_seen;        /* sustained box broadcast FILLER on the wire */
@@ -173,6 +253,10 @@ struct reac_master {
 	 * (on-wire identity must match the L2 source — a mismatch is a documented
 	 * slave-disconnect trigger). */
 	uint8_t  announce_blk[34];
+
+	/* Per-instance ENROLL (cdea 01 03 000d), built from the mixer profile: the
+	 * console-model byte [8] = cfg.console_field (0 = V-Mixer, 1 = OHRCA). */
+	uint8_t  enroll_blk[34];
 };
 
 /* Initialize for a given source MAC, console config + frame rate (3675/4000/
@@ -183,6 +267,13 @@ struct reac_master {
  * byte-for-byte. Starts in IDLE; the first reac_master_next() enters PROBING. */
 void reac_master_init(struct reac_master *m, const uint8_t src[6],
                       const struct reac_console_cfg *cfg, int fps);
+
+/* Select the grant burst for the AUTODETECTED box (the recognizer, #137). Keyed
+ * on the box's in/out channel count so the master emits the correct model's
+ * grant sweep. Unknown widths keep the current (default S-0808) burst and the
+ * caller should log the fallback. Call from the FSM-owning thread on a box
+ * recognition. */
+void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
 
 /* Feed one classified RX event into the FSM (call from the FSM-owning thread
  * only). `box_src` is the frame's L2 source; `blk32` is the 32-byte control

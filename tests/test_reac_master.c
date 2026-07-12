@@ -46,8 +46,11 @@ static const uint8_t GOLD_CHANMAP[34] =
  * emits it with OUR MAC substituted + the checksum recomputed. */
 static const uint8_t GOLD_CFEA_M300[34] =
  { 0xcf,0xea,0xff,0xff,0x01,0x00,0x01,0x03,0x0d,0x01,0x04,0x00,0x40,0xab,0xc9,0xd8,0x5b,0x28,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xd4 };
+/* The PROBE is NOT a constant — it rotates (phase +6 mod 10, 2 emissions each,
+ * sub 0x02 hunting / 0x03 established; #130, measured live off an M-200). This is
+ * the block a freshly-init'd master seeds: phase 0, sub 0x02 (checksum 0xde). */
 static const uint8_t GOLD_PROBE[34] =
- { 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0xdd };
+ { 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0xde };
 static const uint8_t GOLD_SUB01[34] =
  { 0xcd,0xea,0x01,0x01,0x00,0x18,0x00,0x22,0xc8,0x31,0x32,0x33,0x34,0x01,0x00,0x00,0x00,0x04,0x00,0x01,0x80,0x02,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0xa7 };
 static const uint8_t GOLD_SUB02[34] =
@@ -65,9 +68,9 @@ static const uint8_t SRC[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6]  = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
 
-/* #130 fix 2: mirrors reac_master.c's FILLER_DESC_BYTE (the chosen placeholder
- * for the FILLER control-block descriptor a real master stamps there). */
-#define FILLER_DESC_BYTE 0xdc
+/* The FILLER descriptor is 16x "00 <checksum of the CURRENT probe>" (#130): it
+ * tracks the rotating probe, so the test compares against m.filler_desc rather
+ * than any fixed byte — a frozen descriptor is exactly the bug we fixed. */
 
 #define FPS 8000
 
@@ -99,6 +102,20 @@ static enum reac_master_emit slot(struct reac_master *m, int *idx,
 	return e;
 }
 
+/* Drive the master from a JOIN to ESTABLISHED the way a real box does: the JOIN
+ * opens GRANTING, the emit loop delivers the FULL 32-frame grant burst, then the
+ * box's unicast accept lands. The accept is gated on burst completion (#130 rig
+ * fix 2026-07-12: a warm-relink box unicasts immediately and would otherwise cut
+ * the burst to ~1 frame, leaving the box's light blinking). */
+static void establish(struct reac_master *m, uint16_t *cnt, const uint8_t box[6])
+{
+	reac_master_rx(m, REAC_M_RX_BOX_JOIN, box, ZONEA_JOIN);
+	/* +1 for the leading ENROLL slot before the 32-block burst. */
+	for (int i = 0; i < m->grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
+		slot(m, NULL, cnt);
+	reac_master_rx(m, REAC_M_RX_BOX_UNICAST, box, NULL);
+}
+
 int main(void)
 {
 	/* planar audio for the FILLER-survives test */
@@ -117,8 +134,9 @@ int main(void)
 	struct reac_console_cfg s1608 = REAC_CONSOLE_CFG_S1608;
 	reac_master_init(&m, SRC, &s1608, FPS);
 
-	/* the S-1608 downstream is one chanmap frame (marker + 0x00..0x06). */
-	CHK(m.chanmap_nframes == 1);
+	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
+	 * fe frame (marker + 0x00..0x06), asserted below against GOLD_CHANMAP. */
+	CHK(m.chanmap_nframes == 49);
 
 	/* ---- byte oracle ---------------------------------------------------- */
 
@@ -144,12 +162,15 @@ int main(void)
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	CHK(f[16 + 17] == 0x28 && f[16 + 18] == 0x08);       /* inCh 40, outCh 8 */
 
-	/* 3. the grant is the ECHO of the received JOIN block, verbatim */
+	/* 3. the grant is the master's OWN burst sweep (byte-exact M-200 cdea 04 03),
+	 * NOT an echo of the box's JOIN (the echo model was falsified by
+	 * matrix-m200-s0808 2026-07-12 — a locked box gets the master's sweep). Block
+	 * 0 of the S-0808 burst is a 04030014 frame. */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	build_and_stamp(&m, f, REAC_M_EMIT_GRANT, 0, planar);
 	CHK(f[16] == 0xcd && f[17] == 0xea && f[18] == 0x04 && f[19] == 0x03);
-	CHK(memcmp(f + 18, ZONEA_JOIN, 32) == 0);            /* byte-for-byte echo */
+	CHK(memcmp(f + 16, m.grant_burst[0], 34) == 0);      /* burst block 0, byte-exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* 4. PROBE / SUB01 / SUB02 are the fixed M-300 constants, byte-exact. */
@@ -163,7 +184,7 @@ int main(void)
 	CHK(memcmp(f + 16, GOLD_SUB02, 34) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
-	/* 5. the single chanmap frame lists the marker + channels 0x00..0x06. */
+	/* 5. chanmap window 0 (the fe frame) lists the marker + channels 0x00..0x06. */
 	{
 		const uint8_t *blk = GOLD_CHANMAP + 2;   /* the 32-byte block */
 		CHK(blk[5] == 0xfe);                     /* slot 0 = section marker */
@@ -171,6 +192,23 @@ int main(void)
 			const uint8_t *t = blk + 5 + (c + 1) * 3;
 			CHK(t[0] == (uint8_t)c && t[1] == 0x28 && t[2] == 0x00);
 		}
+	}
+
+	/* 5b. the full sweep tiles the whole fabric: every slot 0x00..0x2f appears as a
+	 * channel id in at least one window (#130 — else a box owning it stays mute). */
+	{
+		int seen[0x30] = { 0 };
+		for (int i = 0; i < m.chanmap_nframes; i++) {
+			build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, i, planar);
+			const uint8_t *blk = f + 16 + 2;      /* the 32-byte block */
+			for (int s = 0; s < 8; s++) {
+				uint8_t ch = blk[5 + s * 3];
+				if (ch != 0xfe && ch < 0x30)
+					seen[ch] = 1;
+			}
+		}
+		for (int ch = 0x00; ch <= 0x2f; ch++)
+			CHK(seen[ch] == 1);                   /* whole fabric advertised */
 	}
 
 	/* control stamping is non-destructive: a FILLER frame's audio round-trips. */
@@ -194,7 +232,7 @@ int main(void)
 		int all_zero = 1;
 		for (int i = 18; i < 50; i += 2) {
 			CHK(f[i] == 0x00);              /* high byte constant, per the captures */
-			CHK(f[i + 1] == FILLER_DESC_BYTE);
+			CHK(f[i + 1] == m.filler_desc);   /* tracks the current probe */
 			if (f[i] || f[i + 1])
 				all_zero = 0;
 		}
@@ -209,27 +247,76 @@ int main(void)
 	uint16_t cnt = 0;
 	int idx;
 	long n_probe = 0, n_sub01 = 0, n_sub02 = 0, n_ann = 0, n_grant = 0, n_cm = 0;
-	for (long i = 0; i < 60L * FPS; i++) {      /* 60 s of slots, zero RX */
+	int cm_seen[49] = { 0 };                    /* which sweep windows were emitted */
+	/* One chanmap window per control cycle (fps*10778/4000 slots ≈ 2.69 s), so
+	 * the 49-window sweep needs 49 cycles ≈ 132 s — soak 140 s (~52 cycles) to
+	 * cover the whole fabric. Burst rhythm asserted slot-exact: within a burst
+	 * consecutive probes are probe_stride apart; across the pause the gap is
+	 * cycle_len - burst_end. */
+	long prev_probe = -1;
+	for (long i = 0; i < 140L * FPS; i++) {     /* 140 s of slots, zero RX */
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
 		CHK((int)e >= 0);
 		switch (e) {
-		case REAC_M_EMIT_PROBE:    n_probe++; break;
+		case REAC_M_EMIT_ENROLL: CHK(0); break;   /* GRANTING-only; never in PROBING */
+		case REAC_M_EMIT_PROBE:
+			n_probe++;
+			if (prev_probe >= 0) {
+				long d = i - prev_probe;
+				CHK(d == m.probe_stride ||               /* in-burst rhythm */
+				    d == m.cycle_len - m.burst_end);     /* the probe-free pause */
+			}
+			prev_probe = i;
+			break;
 		case REAC_M_EMIT_SUB01:    n_sub01++; break;
 		case REAC_M_EMIT_SUB02:    n_sub02++; break;
 		case REAC_M_EMIT_ANNOUNCE: n_ann++;   break;
-		case REAC_M_EMIT_CHANMAP:  n_cm++;    CHK(idx == 0); break;
+		case REAC_M_EMIT_CHANMAP:  n_cm++; CHK(idx >= 0 && idx < 49); cm_seen[idx] = 1; break;
 		case REAC_M_EMIT_GRANT:    n_grant++; break;
 		case REAC_M_EMIT_FILLER:   break;
 		}
 	}
+	for (int w = 0; w < 49; w++)                 /* the cursor sweeps ALL 49 windows */
+		CHK(cm_seen[w] == 1);
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
 	CHK(n_cm > 0);                              /* §4: chanmap advertised while unlinked */
-	CHK(n_probe >= 108L * 60 && n_probe <= 120L * 60);   /* PROBE ~115/s */
-	CHK(n_sub01 >= 58 && n_sub01 <= 62);        /* sub01 ~1/s */
-	CHK(n_sub02 >= 58 && n_sub02 <= 62);        /* sub02 ~1/s */
-	CHK(n_cm    >= 58 && n_cm    <= 62);        /* chanmap ~1/s */
-	CHK(n_ann   >= 58 && n_ann   <= 62);        /* cfea ~1/s */
+	CHK(n_probe >= 51L * 341 && n_probe <= 53L * 341);   /* 341 probes per burst-cycle */
+	CHK(n_sub01 >= 50 && n_sub01 <= 53);        /* sub01: once per cycle */
+	CHK(n_sub02 >= 50 && n_sub02 <= 53);        /* sub02: once per cycle */
+	CHK(n_cm    >= 50 && n_cm    <= 53);        /* chanmap: ONE window per cycle */
+	CHK(n_ann   >= 138 && n_ann  <= 141);       /* cfea free-runs at ~1/s */
+
+	/* ---- (a2) burst choreography: the 4 inventory specials + descriptor ----
+	 * A real burst carries the zeros/our-MAC/SYSP/SCEN specials at in-burst probe
+	 * indices 30..33 (measured 11/11 bursts on the M-300 establish capture), and
+	 * every probe — special or rotating — publishes its checksum as the FILLER
+	 * descriptor. */
+	reac_master_init(&m, SRC, &s1608, FPS);
+	cnt = 0;
+	int specials_seen = 0;
+	for (long i = 0; i < 2L * m.cycle_len; i++) {
+		enum reac_master_emit e = slot(&m, &idx, &cnt);
+		if (e != REAC_M_EMIT_PROBE)
+			continue;
+		build_and_stamp(&m, f, e, idx, planar);
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY probe */
+		if (m.probe_idx == 30) {                  /* zeros special */
+			CHK(f[49] == 0xdd);
+			specials_seen++;
+		} else if (m.probe_idx == 31) {           /* MAC special: OUR identity */
+			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
+			specials_seen++;
+		} else if (m.probe_idx == 32) {           /* "SYSP" inventory token (M-200: block idx 23 -> frame 39) */
+			CHK(f[39] == 'S' && f[40] == 'Y' && f[41] == 'S' && f[42] == 'P');
+			specials_seen++;
+		} else if (m.probe_idx == 33) {           /* "SCEN" inventory token */
+			CHK(f[33] == 'S' && f[34] == 'C' && f[35] == 'E' && f[36] == 'N');
+			specials_seen++;
+		}
+	}
+	CHK(specials_seen == 2 * 4);                  /* all 4 specials, EVERY burst */
 
 	/* ---- (b) the golden response sequence -------------------------------- */
 	/* presence-flood alone must NOT grant (the golden rule) */
@@ -245,30 +332,36 @@ int main(void)
 	CHK(memcmp(m.box_mac, BOX, 6) == 0);
 	CHK(m.grant_attempts == 1);
 
-	/* collect the grant burst: echo bytes, 1-per-12 density, ~100 over 150 ms */
-	int grants = 0, last_grant_slot = -1;
-	int mid = m.grant_frames / 2;
-	for (int i = 0; i < mid; i++) {
+	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the 32 DISTINCT
+	 * M-200 sweep blocks in order, byte-exact, 1-per-STRIDE. After the full enroll +
+	 * burst the master SELF-COMPLETES to ESTABLISHED and HOLDS — the box goes quiet
+	 * after the grant, so a master that waited for a post-burst unicast (or timed
+	 * back to PROBING) made the box re-attempt forever (rig 2026-07-12: LED blinking
+	 * faster, never solid). A real M-200 commits after granting and holds. */
+	int grants = 0, last_grant_slot = -1, saw_enroll = 0;
+	int span = m.grant_burst_len * REAC_M_GRANT_STRIDE + 4;
+	for (int i = 0; i < span; i++) {
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
+		if (e == REAC_M_EMIT_ENROLL) { CHK(i == 0); saw_enroll = 1; }
 		if (e == REAC_M_EMIT_GRANT) {
 			if (last_grant_slot >= 0)
 				CHK(i - last_grant_slot == REAC_M_GRANT_STRIDE);  /* density */
 			last_grant_slot = i;
-			grants++;
+			CHK(idx == grants);                          /* blocks emitted in order */
 			build_and_stamp(&m, f, e, idx, planar);
-			CHK(memcmp(f + 18, ZONEA_JOIN, 32) == 0);   /* verbatim echo */
+			CHK(memcmp(f + 16, m.grant_burst[idx], 34) == 0);  /* burst block, byte-exact */
 			CHK(reac_ctrl_checksum_verify(f) == 0);
+			grants++;
 		}
 	}
-	CHK(m.state == REAC_M_GRANTING);
-	CHK(grants == mid / REAC_M_GRANT_STRIDE);   /* ~50 at mid-window (100/window) */
+	CHK(saw_enroll);                            /* the pre-grant arm frame, once */
+	CHK(grants == m.grant_burst_len);           /* all 32 blocks, byte-exact */
+	CHK(m.state == REAC_M_ESTABLISHED);         /* self-completed + holds after the burst */
 
-	/* first box unicast mid-window -> ESTABLISHED immediately */
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 1);
-	CHK(m.state == REAC_M_ESTABLISHED);
-
-	/* 12 s established: the SAME continuous cadence runs while linked. Box RX
-	 * every slot keeps HOLD loaded. */
+	/* 12 s established: the LOCKED cadence (measured slot-exact on matrix-m200-s0808,
+	 * box SOLID) — ONLY cfea + chanmap, each metronomic at exactly 1/s, and NOTHING
+	 * else (0 probe, 0 sub01/sub02). The chanmap at 1/s (not the 1/cycle hunt rate)
+	 * is the box's sync keep-alive; under-sending it left the box BLINKING (#130). */
 	long e_cm = 0, e_ann = 0, e_s1 = 0, e_s2 = 0, e_pr = 0;
 	long cm_slot = -1, ann_slot = -1;
 	for (long i = 0; i < 12L * FPS; i++) {
@@ -277,15 +370,15 @@ int main(void)
 		switch (e) {
 		case REAC_M_EMIT_CHANMAP:
 			e_cm++;
-			CHK(idx == 0);
+			CHK(idx >= 0 && idx < 49);              /* sweeps the fabric, cursor 0..48 */
 			if (cm_slot >= 0)
-				CHK(i - cm_slot == FPS);            /* exactly 1/s */
+				CHK(i - cm_slot == FPS);            /* metronomic 1/s (the lock heartbeat) */
 			cm_slot = i;
 			break;
 		case REAC_M_EMIT_ANNOUNCE:
 			e_ann++;
 			if (ann_slot >= 0)
-				CHK(i - ann_slot == FPS);           /* exactly 1/s */
+				CHK(i - ann_slot == FPS);           /* cfea at exactly 1/s */
 			ann_slot = i;
 			break;
 		case REAC_M_EMIT_SUB01:    e_s1++; break;
@@ -296,55 +389,61 @@ int main(void)
 		}
 	}
 	CHK(m.state == REAC_M_ESTABLISHED);
-	CHK(e_cm >= 11 && e_cm <= 13 && e_ann >= 11 && e_ann <= 13);   /* both every second */
-	CHK(e_s1 >= 11 && e_s1 <= 13 && e_s2 >= 11 && e_s2 <= 13);     /* subs too */
-	CHK(e_pr >= 108L * 12 && e_pr <= 120L * 12);                   /* PROBE ~115/s linked */
+	/* 12 s: chanmap ~12x + cfea ~12x, and ZERO probe/sub01/sub02 (the locked desk
+	 * emits only the two 1/s keep-alives). */
+	CHK(e_cm >= 11 && e_cm <= 13 && e_ann >= 11 && e_ann <= 13);
+	CHK(e_s1 == 0 && e_s2 == 0);
+	CHK(e_pr == 0);                                 /* ESTABLISHED emits ZERO probes (#130) */
 	CHK(cm_slot != ann_slot);                                      /* phase-separated */
 
-	/* ---- (c) safety fallbacks only move BACKWARD ------------------------- */
+	/* ---- (c) GRANTING self-completes; ESTABLISHED holds; peer-gone is the only
+	 *          forward-safety fallback (rig 2026-07-12) --------------------- */
 
-	/* grant-window expiry with NO unicast -> back to PROBING, never ESTABLISHED */
+	/* JOIN -> deliver ENROLL + the full 32-frame burst -> COMMIT to ESTABLISHED.
+	 * The box goes quiet after the grant (it is settling its own TX_MUTE dwell), so
+	 * a master that timed back to PROBING here made the box re-attempt forever (LED
+	 * blinking faster, never solid). A real M-200 commits after granting and holds;
+	 * the peer-gone budget below is the backward safety if the box truly vanishes. */
 	reac_master_init(&m, SRC, &s1608, FPS);
 	cnt = 0;
 	slot(&m, NULL, &cnt);                        /* IDLE -> PROBING on first slot */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
-	for (int i = 0; i < m.grant_frames + 8; i++) {
-		enum reac_master_emit e = slot(&m, NULL, &cnt);
-		CHK(m.state != REAC_M_ESTABLISHED);
-		(void)e;
-	}
-	CHK(m.state == REAC_M_PROBING);
-	CHK(m.drop_reason == REAC_M_DROP_GRANT_TIMEOUT);
+	CHK(m.state == REAC_M_GRANTING);
+	for (int i = 0; i < m.grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
+		slot(&m, NULL, &cnt);
+	CHK(m.state == REAC_M_ESTABLISHED);          /* self-completed after the full burst */
 	CHK(m.grant_attempts == 1);
 
-	/* established then 600 slots without RX -> peer-gone, at exactly 600 */
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 1);
+	/* established then link_check_reload silent slots -> peer-gone, at exactly the
+	 * budget's last frame. The budget is now the measured ~6.5 s M-200i hold
+	 * (fps-scaled), NOT the old 600-frame constant (#130). */
+	establish(&m, &cnt, BOX);                       /* JOIN + full burst + unicast accept */
 	CHK(m.state == REAC_M_ESTABLISHED);
-	for (int i = 0; i < REAC_M_LINKCHECK_RELOAD - 1; i++)
+	CHK(m.link_check_reload == (FPS * 65) / 10);   /* ~6.5 s of frames */
+	for (int i = 0; i < m.link_check_reload - 1; i++)
 		slot(&m, NULL, &cnt);
-	CHK(m.state == REAC_M_ESTABLISHED);          /* 599 silent slots: still held */
+	CHK(m.state == REAC_M_ESTABLISHED);          /* budget-1 silent slots: still held */
 	slot(&m, NULL, &cnt);
-	CHK(m.state == REAC_M_PROBING);              /* the 600th drains the budget */
+	CHK(m.state == REAC_M_PROBING);              /* the last frame drains the budget */
 	CHK(m.drop_reason == REAC_M_DROP_PEER_GONE);
 
 	/* established + explicit BYE (hb selector 0x00) -> PROBING immediately */
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 1);
+	establish(&m, &cnt, BOX);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_BYE, BOX, NULL) == 1);
 	CHK(m.state == REAC_M_PROBING && m.drop_reason == REAC_M_DROP_BYE);
 
 	/* JOIN from a second MAC while established -> mac-change, re-grant the new */
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 1);
+	establish(&m, &cnt, BOX);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	CHK(m.drop_reason == REAC_M_DROP_MAC_CHANGE);
 	CHK(memcmp(m.box_mac, BOX2, 6) == 0);        /* latched the new box */
 
-	/* a fresh JOIN mid-window restarts the window */
-	for (int i = 0; i < m.grant_frames / 2; i++)
+	/* a fresh JOIN mid-burst restarts the burst (stay well inside the burst span,
+	 * which now self-completes to ESTABLISHED at burst_len*STRIDE+1 slots). */
+	for (int i = 0; i < 10 * REAC_M_GRANT_STRIDE; i++)   /* 120 << 385, still GRANTING */
 		slot(&m, NULL, &cnt);
+	CHK(m.state == REAC_M_GRANTING);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 0);
 	CHK(m.grant_ticks == 0 && m.state == REAC_M_GRANTING);
 

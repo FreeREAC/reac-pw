@@ -6,6 +6,7 @@
 #endif
 #include "reac_rx.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -48,7 +49,11 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		ns = nch > 0 ? reac_upstream_decode(frame, len, s24) : -1;
 	} else {
 		nch = mode->n_channels;
-		ns = reac_decode(frame, len, mode, s24); /* planar s24: out[(ch*ns + s)*3] */
+		/* Decode the standard 1492 B frame; an OHRCA 1494 B frame is the same
+		 * frame plus a 2-byte CRC-16 trailer after C2 EA — decode the embedded
+		 * REAC_FRAME_BYTES and ignore the trailer. reac_frame_inspect requires
+		 * exactly REAC_FRAME_BYTES, so never hand it the 1494 length. */
+		ns = reac_decode(frame, REAC_FRAME_BYTES, mode, s24); /* out[(ch*ns+s)*3] */
 	}
 	if (ns < 0) {
 		atomic_fetch_add_explicit(&rx->frames_bad, 1, memory_order_relaxed);
@@ -79,7 +84,10 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 static int gate_accepts(struct reac_rx *rx, const uint8_t *frame, size_t len)
 {
 	if (rx->cfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
-		return len == (size_t)REAC_FRAME_BYTES;
+		/* 1492 = V-Mixer; 1494 = OHRCA (M-5000/M-480) = the same frame plus a
+		 * 2-byte per-frame CRC-16 trailer after the C2 EA end marker. */
+		return len == (size_t)REAC_FRAME_BYTES ||
+		       len == (size_t)REAC_FRAME_BYTES_OHRCA;
 	if (reac_upstream_channels(len) < 0)
 		return 0;
 	if (!rx->up_src_locked) {
@@ -140,6 +148,7 @@ static void *rx_loop(void *arg)
 	uint16_t last_counter = 0;
 	int have_counter = 0;
 	uint64_t pcap_first_ts = 0, wall_first_ns = 0;
+	uint64_t last_stat_ns = 0;   /* periodic RX telemetry (every ~2 s) */
 
 	while (atomic_load_explicit(&rx->running, memory_order_acquire)) {
 		long n;
@@ -189,8 +198,32 @@ static void *rx_loop(void *arg)
 		last_counter = counter;
 		have_counter = 1;
 
-		update_ppm(rx, counter, mono_ns());
+		uint64_t now = mono_ns();
+		update_ppm(rx, counter, now);
 		feed_frame(rx, mode, frame, (size_t)n);
+
+		/* Opt-in RX telemetry (REAC_DEBUG) — the decode is invisible otherwise;
+		 * this is how you tell "gate rejecting" (frames_other climbs) from
+		 * "decoded fine, audio lost downstream" (frames_ok climbs). ~every 2 s. */
+		static int dbg = -1;
+		if (dbg < 0)
+			dbg = getenv("REAC_DEBUG") != NULL;
+		if (dbg && now - last_stat_ns >= 2000000000ull) {
+			last_stat_ns = now;
+			fprintf(stderr, "reac_rx: ok=%llu other=%llu bad=%llu gaps=%llu"
+			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s | out: active_ch=%d"
+			        " peak=%.6f fill=%d\n",
+			        (unsigned long long)atomic_load(&rx->frames_ok),
+			        (unsigned long long)atomic_load(&rx->frames_other),
+			        (unsigned long long)atomic_load(&rx->frames_bad),
+			        (unsigned long long)atomic_load(&rx->counter_gaps),
+			        rx->up_src[0], rx->up_src[1], rx->up_src[2],
+			        rx->up_src[3], rx->up_src[4], rx->up_src[5],
+			        rx->up_src_locked ? "" : " (unlocked)",
+			        atomic_load(&rx->src_active_ch),
+			        atomic_load(&rx->src_peak_micro) / 1e6,
+			        atomic_load(&rx->src_fill));
+		}
 	}
 
 	if (live)

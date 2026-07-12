@@ -52,10 +52,23 @@ static void on_signal(void *data, int sig)
 	pw_main_loop_quit(g_loop);
 }
 
+/* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input. */
+static int parse_mac(const char *s, uint8_t out[6])
+{
+	unsigned b[6];
+	if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x",
+	           &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6)
+		return -1;
+	for (int i = 0; i < 6; i++)
+		out[i] = (uint8_t)b[i];
+	return 0;
+}
+
 static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
+	  "         [--box-channels N] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -63,7 +76,16 @@ static void usage(const char *p)
 	  "                cadence + return our inputs upstream)\n"
 	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
-	  "                slave role -> the upstream return + handshake socket\n", p);
+	  "                slave role -> the upstream return + handshake socket\n"
+	  "  --box-channels N  slave role: our input width (even 2..40; 8=S-0808, 16=S-1608,\n"
+	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
+	  "  --mixer M     master role: which Roland desk to impersonate (m200|m300|m5000;\n"
+	  "                default m200). Sets the master MAC + console model; the grants\n"
+	  "                are box-defined so any box locks to any profile.\n"
+	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: a Roland-OUI\n"
+	  "                stand-in (master 00:40:ab:00:00:01, slave 00:40:ab:c4:80:41).\n"
+	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
+	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n", p);
 }
 
 int main(int argc, char **argv)
@@ -72,6 +94,11 @@ int main(int argc, char **argv)
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
 	enum reac_role role = REAC_ROLE_MASTER;   /* default master: preserves current behaviour */
+	uint8_t src_mac[6];
+	int src_mac_set = 0;
+	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
+	const struct reac_mixer_profile *mixer =
+		reac_mixer_profile_by_name("m200");   /* master: which desk we impersonate */
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
@@ -82,9 +109,49 @@ int main(int argc, char **argv)
 			rxcfg.forced_rate = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
+		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
+			if (parse_mac(argv[++i], src_mac) != 0) {
+				fprintf(stderr, "reac-pw: bad --src-mac '%s' (want aa:bb:cc:dd:ee:ff)\n",
+				        argv[i]);
+				return 2;
+			}
+			src_mac_set = 1;
 		} else if (!strcmp(argv[i], "--role") && i + 1 < argc) {
 			if (reac_role_parse(argv[++i], &role) != 0) {
 				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave)\n", argv[i]);
+				return 2;
+			}
+		} else if (!strcmp(argv[i], "--mixer") && i + 1 < argc) {
+			/* Master role: which Roland desk to impersonate (MAC + console model).
+			 * The grants are box-defined, so a box locks to any profile. */
+			mixer = reac_mixer_profile_by_name(argv[++i]);
+			if (!mixer) {
+				fprintf(stderr, "reac-pw: unknown --mixer '%s'; known:", argv[i]);
+				for (int k = 0; reac_mixer_profile_at(k); k++)
+					fprintf(stderr, " %s (%s)", reac_mixer_profile_at(k)->name,
+					        reac_mixer_profile_at(k)->display);
+				fprintf(stderr, "\n");
+				return 2;
+			}
+		} else if (!strcmp(argv[i], "--box-model") && i + 1 < argc) {
+			/* Slave role: pick a FIXED-matrix box model (the matrix is law when we
+			 * are a stagebox). Selects the config-announce block, the ASCII name
+			 * frame, and the width in one choice. */
+			const struct reac_box_model *m = reac_box_model_by_token(argv[++i]);
+			if (!m) {
+				size_t n; const struct reac_box_model *t = reac_box_model_table(&n);
+				fprintf(stderr, "reac-pw: unknown --box-model '%s'; known:", argv[i]);
+				for (size_t k = 0; k < n; k++)
+					fprintf(stderr, " %s (%s)", t[k].token, t[k].display);
+				fprintf(stderr, "\n");
+				return 2;
+			}
+			box_channels = m->in_ch;
+		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
+			box_channels = atoi(argv[++i]);
+			if (box_channels < 2 || box_channels > REAC_MAX_CHANNELS || (box_channels & 1)) {
+				fprintf(stderr, "reac-pw: --box-channels must be even, 2..%d "
+				        "(e.g. 8 = S-0808, 16 = S-1608, 32 = S-4000S)\n", REAC_MAX_CHANNELS);
 				return 2;
 			}
 		} else {
@@ -145,40 +212,44 @@ int main(int argc, char **argv)
 	int tx_ring_init = 0;
 
 	if (tx_if && role == REAC_ROLE_MASTER) {
-		static const uint8_t roland_oui_mac[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		/* Default master MAC = the impersonated desk's captured address; --src-mac
+		 * overrides it. The mixer profile also sets the console-model byte. */
+		const uint8_t *master_src = src_mac_set ? src_mac : mixer->mac;
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_sink_cfg scfg = { .ifname = tx_if, .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
-		                              .src_mac = roland_oui_mac, .master_mac = NULL };
+		                              .src_mac = master_src, .master_mac = NULL,
+		                              .console_field = mixer->console_field };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
 			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
 		else
-			fprintf(stderr, "reac-pw: MASTER role on '%s' — event-driven "
-			        "establishment: probing until the box's cold-connect "
-			        "(cdea 04 03) arrives; FSM/RX transcript on stderr "
-			        "(bounce the box PHY to trigger its JOIN)\n", tx_if);
+			fprintf(stderr, "reac-pw: MASTER role (impersonating %s) on '%s' — "
+			        "event-driven establishment: probing until the box's "
+			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
+			        "stderr\n", mixer->display, tx_if);
 	} else if (tx_if && role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the
 		 * carrier and the slave emits silent/own-input FILLER until that sink is
 		 * linked. The engine learns the master MAC from the wire — never set here. */
 		static const uint8_t box_oui_mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
+		const uint8_t *slave_src = src_mac_set ? src_mac : box_oui_mac;
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_slave_cfg slcfg = { .ifname = tx_if,
-		                                .box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT,
+		                                .box_channels = box_channels,
 		                                .sample_rate = rx.sample_rate,
-		                                .src_mac = box_oui_mac };
+		                                .src_mac = slave_src };
 		if (reac_slave_open(&slave, &slcfg, &tx_ring) == 0) {
 			slave_open = 1;
 			if (reac_slave_start(&slave) == 0) {
 				reac_slave_set_phy_up(&slave, 1);  /* PHY up: begin the establishment */
 				fprintf(stderr, "reac-pw: SLAVE role on '%s' (%d-ch upstream return) — "
 				        "responding to an external master, locked to its cadence\n",
-				        tx_if, REAC_SLAVE_BOX_CHANNELS_DEFAULT);
+				        tx_if, box_channels);
 			} else {
 				fprintf(stderr, "reac-pw: slave engine thread failed to start\n");
 				reac_slave_close(&slave); slave_open = 0;

@@ -7,8 +7,10 @@
  * Ground truth: reac-captures/m300-s1608-*.pcap (2026-07-10), real M-300 master
  * 00:40:ab:c9:d8:5b driving an S-1608 (16 in / 8 out).
  *
- *   CHANMAP — the chanmap carries NO MAC, so a generated frame must equal the
- *             captured M-300 chanmap EXACTLY (bytes + checksum 0xb7).
+ *   CHANMAP — the chanmap carries NO MAC, so the generated fabric SWEEP must equal
+ *             the captured M-300's 11 windows EXACTLY (bytes + checksums), tiling
+ *             the whole 40-slot fabric 0x00..0x2f (#130); window 0 is the fe frame
+ *             (marker + 0x00..0x06, checksum 0xb7).
  *   CFEA    — the cfea embeds OUR MAC, so a generated frame must equal the
  *             captured M-300 cfea EXCEPT the 6 MAC bytes [11:17] and the
  *             recomputed checksum [33]; fed OUR = the M-300 MAC it is EXACT
@@ -33,6 +35,8 @@ static const uint8_t CAP_CHANMAP[34] =
  { 0xcd,0xea,0x01,0x03,0x00,0x19,0x01,0xfe,0x00,0x00,0x00,0x28,0x00,0x01,0x28,0x00,0x02,0x28,0x00,0x03,0x28,0x00,0x04,0x28,0x00,0x05,0x28,0x00,0x06,0x28,0x00,0x00,0x00,0xb7 };
 static const uint8_t CAP_CFEA[34] =
  { 0xcf,0xea,0xff,0xff,0x01,0x00,0x01,0x03,0x0d,0x01,0x04,0x00,0x40,0xab,0xc9,0xd8,0x5b,0x28,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xd4 };
+
+#include "reac_m200_golden.inc"
 
 /* MAC offsets into the 34-byte [type|block] cfea template (task's "byte[14:17]"
  * corrected to the authoritative [11:17]) and its checksum. */
@@ -70,6 +74,61 @@ static int check_all_checksums(const struct reac_master *m)
 	return 0;
 }
 
+static const uint8_t *gold_probe(int phase, uint8_t sub)
+{
+	for (int i = 0; i < GOLD_PROBE_VARIANTS; i++)
+		if (GOLD_PROBES[i].phase == phase && GOLD_PROBES[i].sub == sub)
+			return GOLD_PROBES[i].blk;
+	return NULL;
+}
+
+/* PROBE ROTATION + FILLER-descriptor tracking (#130) — the behaviour that decides
+ * whether a real box will talk to us at all. Drive the master and assert:
+ *   - the emitted probes follow the live M-200's rotation: phase 0,6,2,8,4
+ *     (step +6 mod 10), each phase emitted TWICE, sub 0x02 while hunting;
+ *   - each emitted probe is BYTE-EXACT vs the captured M-200 block;
+ *   - every FILLER between probes carries 16x "00 <that probe's checksum>".
+ * Our old code froze one probe phase forever, which froze the descriptor too. */
+static int test_probe_rotation(void)
+{
+	uint8_t f[REAC_FRAME_BYTES];
+	struct reac_console_cfg s1608 = REAC_CONSOLE_CFG_S1608;
+	struct reac_master m;
+	reac_master_init(&m, OUR_MAC, &s1608, 8000);
+
+	const int expect[10] = { 0, 0, 6, 6, 2, 2, 8, 8, 4, 4 };
+	int np = 0, fillers_checked = 0;
+	uint8_t cur_desc = 0;
+	int have = 0;
+
+	for (long i = 0; i < 500000L && np < 10; i++) {
+		uint16_t cnt;
+		int idx;
+		enum reac_master_emit e = reac_master_next(&m, &cnt, &idx);
+		reac_tx_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, cnt, OUR_MAC);
+		reac_master_stamp(&m, f, e, idx);
+
+		if (e == REAC_M_EMIT_PROBE) {
+			const uint8_t *g = gold_probe(expect[np], 0x02);
+			CHK(g != NULL);
+			CHK(memcmp(f + 16, g, 34) == 0);      /* byte-exact vs the live M-200 */
+			CHK(reac_ctrl_checksum_verify(f) == 0);
+			cur_desc = f[49];                      /* this probe's checksum */
+			have = 1;
+			np++;
+		} else if (e == REAC_M_EMIT_FILLER && have) {
+			for (int k = 18; k < 50; k += 2) {
+				CHK(f[k] == 0x00);                 /* high byte constant */
+				CHK(f[k + 1] == cur_desc);         /* FILLER tracks the probe */
+			}
+			fillers_checked++;
+		}
+	}
+	CHK(np == 10);                                 /* saw a full 5-phase rotation */
+	CHK(fillers_checked > 100);                    /* and plenty of tracking FILLERs */
+	return 0;
+}
+
 int main(void)
 {
 	uint8_t f[REAC_FRAME_BYTES];
@@ -78,12 +137,21 @@ int main(void)
 	/* --- with OUR distinct MAC: chanmap EXACT, cfea EXACT except MAC+cksum --- */
 	struct reac_master m;
 	reac_master_init(&m, OUR_MAC, &s1608, 8000);
-	CHK(m.chanmap_nframes == 1);              /* an 8-out box is one frame */
+	CHK(m.chanmap_nframes == GOLD_CHANMAP_WINDOWS);   /* full 49-window fabric sweep */
 
-	/* CHANMAP: no MAC -> byte-EXACT vs the capture (incl. checksum 0xb7). */
+	/* CHANMAP: no MAC -> byte-EXACT vs the capture. Window 0 is the fe frame
+	 * (marker + 0x00..0x06, checksum 0xb7); the full sweep is checked next. */
 	stamp(&m, f, REAC_M_EMIT_CHANMAP, 0);
 	CHK(memcmp(f + 16, CAP_CHANMAP, 34) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
+
+	/* CHANMAP SWEEP: all 11 windows byte-EXACT vs the captured M-300 fabric sweep
+	 * (tiles 0x00..0x2f; #130 — a box enrolls only after it sees its own slots). */
+	for (int i = 0; i < GOLD_CHANMAP_WINDOWS; i++) {
+		stamp(&m, f, REAC_M_EMIT_CHANMAP, i);
+		CHK(memcmp(f + 16, GOLD_CHANMAP_SWEEP[i], 34) == 0);
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+	}
 
 	/* CFEA: EXACT except the 6 MAC bytes [11:17] (OURS) + the checksum [33]. */
 	stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
@@ -109,9 +177,14 @@ int main(void)
 	CHK(memcmp(f + 16, CAP_CHANMAP, 34) == 0);
 	CHK(check_all_checksums(&m300) == 0);
 
-	printf("OK: S-1608 acceptance — generated CHANMAP byte-exact vs captured "
-	       "M-300 (…b7); generated CFEA matches the captured M-300 except our MAC "
-	       "+ recomputed checksum, and is byte-exact (…28 08 …d4) when OUR MAC is "
-	       "the M-300's; every generated control block sums to 0 mod 256\n");
+	/* the rotating probe + the FILLER descriptor that tracks it */
+	CHK(test_probe_rotation() == 0);
+
+	printf("OK: S-1608 acceptance — generated CHANMAP reproduces ALL %d windows of the "
+	       "LIVE M-200 fabric sweep byte-for-byte; the PROBE rotates 0,6,2,8,4 (x2 each) "
+	       "byte-exact vs the M-200's %d captured variants, and every FILLER carries "
+	       "16x \"00 <current-probe-checksum>\"; CFEA matches except our MAC + recomputed "
+	       "checksum; every control block sums to 0 mod 256\n",
+	       GOLD_CHANMAP_WINDOWS, GOLD_PROBE_VARIANTS);
 	return 0;
 }
