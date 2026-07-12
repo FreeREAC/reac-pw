@@ -85,6 +85,12 @@ struct reac_rx {
 	_Atomic uint64_t frames_bad;
 	_Atomic uint64_t frames_other; /* valid REAC, but the OTHER stream (gated out) */
 	_Atomic uint64_t counter_gaps; /* lost frames inferred from counter jumps */
+
+	/* the source node (RT thread) publishes its last ring-read stats here so the
+	 * non-RT telemetry below can print them — keeps fprintf off the RT path. */
+	_Atomic int src_peak_micro;    /* peak sample * 1e6 across linked ports (fine) */
+	_Atomic int src_active_ch;     /* linked ports carrying signal this read */
+	_Atomic int src_fill;          /* ring backlog after the read (samples) */
 };
 
 /* Open the source, detect (or accept the forced) rate, and allocate the ring

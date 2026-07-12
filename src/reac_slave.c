@@ -69,6 +69,13 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 		: REAC_SLAVE_BOX_CHANNELS_DEFAULT;
 	s->sample_rate = cfg ? cfg->sample_rate : 0;
 
+	/* Heartbeat cadence is ~1/s wall-clock, i.e. one keep-alive per frame-rate
+	 * worth of frames (fps = rate/12). A real box measured 8162 frames @96k and
+	 * 4017 @48k — the gap scales with the rate, so a fixed 8000 would beat at
+	 * half-rate on a 48 k desk. Derive it so the same code path fits any rate. */
+	if (s->sample_rate > 0)
+		s->fsm.heartbeat_period = s->sample_rate / REAC_SAMPLES_PER_PKT;
+
 	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
 	memcpy(s->src, (cfg && cfg->src_mac) ? cfg->src_mac : standin, 6);
 }

@@ -12,6 +12,12 @@ void reac_fsm_init(struct reac_fsm *fsm)
 {
 	memset(fsm, 0, sizeof *fsm);
 	fsm->state = FSM_PHY_DOWN;
+	fsm->heartbeat_period = HEARTBEAT_PERIOD;   /* 96k default; slave overrides per rate */
+}
+
+static inline int hb_period(const struct reac_fsm *fsm)
+{
+	return fsm->heartbeat_period > 0 ? fsm->heartbeat_period : HEARTBEAT_PERIOD;
 }
 
 static int is_master_frame(const struct reac_ctrl_parsed *rx)
@@ -39,6 +45,7 @@ static void arm_flood(struct reac_fsm *fsm)
 {
 	fsm->state = FSM_FLOOD_ANNOUNCE;
 	fsm->flood_frames = 0;
+	fsm->grant_ack = 0;   /* fresh courtship: no post-grant ACK pending */
 }
 
 /* Arm the unicast cold-connect grid so the FIRST FSM_COLDCONNECT step emits the
@@ -96,11 +103,13 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 		if (ev == FSM_EV_RX && rx) {
 			if (is_master_frame(rx))
 				learn_master(fsm, rx);
-			if (rx->kind == REAC_CTRL_GRANT) {     /* JOIN gate (early grant) */
-				fsm->state = FSM_TX_MUTE;
-				fsm->txmute_dwell = REAC_FSM_TXMUTE_DWELL;
-				fsm->link_check = REAC_FSM_LINKCHECK_RELOAD;
-				return out(fsm, FSM_ACT_SILENCE);
+			if (rx->kind == REAC_CTRL_GRANT) {     /* early grant during flood */
+				/* Hand off to the unicast cold-connect so we still emit the JOIN
+				 * escalation (incl. the post-grant 0016/001a ACK) — muting straight
+				 * from flood skips the inventory the desk needs to stop probing. */
+				fsm->state = FSM_COLDCONNECT;
+				arm_coldconnect(fsm);
+				return coldconnect_tick(fsm);
 			}
 		}
 		/* tick or non-grant RX: flood one frame. Once the bounded burst is done
@@ -119,16 +128,25 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 		if (ev == FSM_EV_RX && rx) {
 			if (is_master_frame(rx))
 				learn_master(fsm, rx);
-			if (rx->kind == REAC_CTRL_GRANT) {     /* JOIN gate */
-				fsm->state = FSM_TX_MUTE;
-				fsm->txmute_dwell = REAC_FSM_TXMUTE_DWELL;
-				fsm->link_check = REAC_FSM_LINKCHECK_RELOAD;
-				return out(fsm, FSM_ACT_SILENCE);
-			}
+			/* The grant is the master ECHOing our JOIN back. A real box does NOT
+			 * mute here: it replies with the 0016/001a inventory (the post-grant
+			 * ACK) and the master keeps probing until it sees that reply. So on the
+			 * FIRST grant, open a bounded ACK window and keep cold-connecting — the
+			 * escalation cycle re-emits 0016/001a — then settle. (Ignore repeat
+			 * grants during the window; the burst is many frames.) */
+			if (rx->kind == REAC_CTRL_GRANT && fsm->grant_ack == 0)
+				fsm->grant_ack = REAC_FSM_GRANT_ACK_FRAMES;
 		}
 		if (!fsm->have_master) {          /* master vanished -> re-flood broadcast */
 			arm_flood(fsm);
 			return flood_tick(fsm);
+		}
+		if (fsm->grant_ack > 0 && --fsm->grant_ack == 0) {
+			/* ACK window elapsed: 0016/001a have been re-sent after the grant. */
+			fsm->state = FSM_TX_MUTE;
+			fsm->txmute_dwell = REAC_FSM_TXMUTE_DWELL;
+			fsm->link_check = REAC_FSM_LINKCHECK_RELOAD;
+			return out(fsm, FSM_ACT_SILENCE);
 		}
 		/* tick or non-grant RX: unicast cold-connect on the grid, audio between */
 		return coldconnect_tick(fsm);
@@ -167,7 +185,7 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 			/* The ~1/s keep-alive counts frame PERIODS, and with a flooding
 			 * master every period carries a frame (no timeout ticks) — so the
 			 * heartbeat cadence must advance on RX too, like a real box's. */
-			if (++fsm->heartbeat_tick >= HEARTBEAT_PERIOD) {
+			if (++fsm->heartbeat_tick >= hb_period(fsm)) {
 				fsm->heartbeat_tick = 0;
 				fsm->emit_heartbeat = 1;
 			}
@@ -179,7 +197,7 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 			fsm->state = FSM_DROP; fsm->drop_reason = FSM_DROP_PEER_GONE;
 			return out(fsm, FSM_ACT_STOP);
 		}
-		if (++fsm->heartbeat_tick >= HEARTBEAT_PERIOD) {
+		if (++fsm->heartbeat_tick >= hb_period(fsm)) {
 			fsm->heartbeat_tick = 0;
 			fsm->emit_heartbeat = 1;
 		}

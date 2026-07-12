@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 /* The largest quantum we ever expect from the graph. The scratch buffer (used
  * to swallow reads for unlinked ports) is sized to this; if the graph ever asks
@@ -34,6 +35,7 @@ struct reac_source_node {
 	struct reac_rx *rx;
 	int sample_rate;
 	int channels;
+	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
 	struct port *ports[REAC_MAX_CHANNELS];
 	float scratch[REAC_MAX_QUANTUM]; /* sink for unlinked ports; never read back */
 };
@@ -75,6 +77,27 @@ static void on_process(void *data, struct spa_io_position *position)
 	reac_ring_trim(n->ring, nframes * 4);
 
 	reac_ring_read_planar(n->ring, dst, n->channels, nframes);
+
+	/* Opt-in telemetry (REAC_DEBUG): publish the last ring-read peak/fill into the
+	 * rx diagnostics for the NON-RT feeder thread to print — no fprintf on the RT
+	 * path. Distinguishes "ring starved" (peak ~0, fill < quantum = producer/graph
+	 * clock drift, #131) from "read fine, consumer wrong". */
+	if (n->debug) {
+		float peak = 0.0f; int active = 0;
+		for (int ch = 0; ch < n->channels; ch++) {
+			if (dst[ch] == n->scratch) continue;
+			float m = 0.0f;
+			for (uint32_t s = 0; s < nframes; s++) {
+				float a = dst[ch][s] < 0 ? -dst[ch][s] : dst[ch][s];
+				if (a > m) m = a;
+			}
+			if (m > 1e-6f) active++;
+			if (m > peak) peak = m;
+		}
+		atomic_store_explicit(&n->rx->src_peak_micro, (int)(peak * 1e6f), memory_order_relaxed);
+		atomic_store_explicit(&n->rx->src_active_ch, active, memory_order_relaxed);
+		atomic_store_explicit(&n->rx->src_fill, (int)reac_ring_readable(n->ring), memory_order_relaxed);
+	}
 
 	/* FOLLOWER drift correction (Tier-A clock bridge). io_rate_match.rate is the
 	 * ratio PipeWire's async resampler applies to OUR output on each link; the
@@ -123,6 +146,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	n->rx = rx;
 	n->sample_rate = sample_rate;
 	n->channels = REAC_MAX_CHANNELS;
+	n->debug = getenv("REAC_DEBUG") != NULL;
 
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", sample_rate);
@@ -136,7 +160,10 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 			PW_KEY_MEDIA_CLASS, "Audio/Source",
 			PW_KEY_MEDIA_ROLE, "Production",
 			PW_KEY_NODE_NAME, "reac-capture",
-			PW_KEY_NODE_DESCRIPTION, "REAC 40ch capture (downstream broadcast)",
+			PW_KEY_NODE_DESCRIPTION,
+			rx && rx->cfg.accept == REAC_RX_ACCEPT_UPSTREAM
+			  ? "REAC 40ch capture (box mic inputs)"      /* master role */
+			  : "REAC 40ch capture (master downstream)",  /* slave role  */
 			/* Follower (default): the DAC/PHC drives the graph and PipeWire
 			 * async-resamples our REAC clock into it. To make REAC the graph
 			 * DRIVER instead, add PW_KEY_NODE_DRIVER "true" + a clock rate and
