@@ -48,7 +48,7 @@ struct court {
 	struct reac_slave  s;
 	uint16_t m_counter_next;   /* free-run oracle for the master counter */
 	/* tallies */
-	long m_probes, m_subs, m_announces, m_grants, m_chanmaps;
+	long m_probes, m_subs, m_announces, m_grants, m_chanmaps, m_enrolls;
 	long s_joins_fed, s_unicasts_fed, s_heartbeats_fed, s_floods_fed;
 	int  m_granted_before_join;    /* the #130 regression flag */
 	int  slave_on;                 /* feed slave frames into the master? */
@@ -82,6 +82,7 @@ static int step(struct court *c)
 			c->m_granted_before_join = 1;   /* the defect this task kills */
 		break;
 	case REAC_M_EMIT_CHANMAP:  c->m_chanmaps++;  break;
+	case REAC_M_EMIT_ENROLL:   c->m_enrolls++;   break;
 	case REAC_M_EMIT_FILLER:   break;
 	}
 
@@ -99,47 +100,46 @@ static int step(struct court *c)
 	size_t n = 0;
 	uint16_t sc = c->s.fsm.counter;
 
+	/* ONE frame per slot — control REPLACES the audio/flood frame, never adds a
+	 * second (#130): with_join / with_heartbeat SELECT which frame this slot is. */
 	switch (d.emit) {
 	case REAC_SLAVE_EMIT_NONE:
 		return 0;
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
-		n = reac_ctrl_build_upstream_filler(sf, BCAST, S_SRC, sc, 16, NULL,
-		                                    REAC_SAMPLES_PER_PKT);
+		/* the bounded broadcast presence-flood (zero control block + live audio) */
+		n = reac_ctrl_build_flood_filler(sf, BCAST, S_SRC, sc, 16, NULL,
+		                                 REAC_SAMPLES_PER_PKT);
 		c->s_floods_fed++;
 		break;
+	case REAC_SLAVE_EMIT_COLDCONNECT:
+		/* the unicast cold-connect phase: cdea 04 03 on the grid, audio between */
+		if (d.with_join) {
+			n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
+			                                16, NULL, REAC_SAMPLES_PER_PKT);
+			c->s_joins_fed++;
+		} else {
+			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
+			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			c->s_unicasts_fed++;
+		}
+		break;
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
-		n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
-		                                    16, NULL, REAC_SAMPLES_PER_PKT);
-		c->s_unicasts_fed++;
+		/* the ~1/s keep-alive REPLACES the audio frame on the slot the FSM flags */
+		if (d.with_heartbeat) {
+			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
+			c->s_heartbeats_fed++;
+		} else {
+			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
+			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			c->s_unicasts_fed++;
+		}
 		break;
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc);
+		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
 		c->s_heartbeats_fed++;
 		break;
 	}
 	if (n > 0) {
-		struct reac_ctrl_parsed ps;
-		enum reac_master_rx_event ev;
-		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
-			reac_master_rx(&c->m, ev, ps.src, sf + 18);
-	}
-	/* an established audio frame may carry the ~1/s keep-alive alongside */
-	if (d.emit == REAC_SLAVE_EMIT_UPSTREAM_AUDIO && d.with_heartbeat) {
-		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC,
-		                           (uint16_t)(sc + 1));
-		c->s_heartbeats_fed++;
-		struct reac_ctrl_parsed ps;
-		enum reac_master_rx_event ev;
-		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
-			reac_master_rx(&c->m, ev, ps.src, sf + 18);
-	}
-	/* #130 fix 1: the cold-connect JOIN burst rides the presence-flood (a real
-	 * box floods FILLER continuously and ALSO cold-connects, §13p.multi) —
-	 * fed into the master as a second frame on the ticks the FSM flags it. */
-	if (d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER && d.with_join) {
-		n = reac_ctrl_build_coldconnect(sf,
-		        c->s.fsm.have_master ? c->s.fsm.master_mac : BCAST, S_SRC, sc);
-		c->s_joins_fed++;
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
 		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
@@ -187,38 +187,44 @@ int main(void)
 	}
 	CHK(!c.m_granted_before_join);            /* grant ONLY after the JOIN */
 	CHK(c.s_joins_fed > 0 && c.m_grants > 0);
-	CHK(slot_slave_established >= 0);         /* box linked off the echoed grant */
-	CHK(slot_master_established >= 0);        /* we linked off its first unicast */
-	CHK(slot_slave_established <= slot_master_established);
+	CHK(c.m_enrolls > 0);                     /* the pre-grant ENROLL frame flowed */
+	CHK(slot_slave_established >= 0);         /* box linked off the grant */
+	CHK(slot_master_established >= 0);        /* master self-completed after the burst */
+	/* Ordering is now timing-dependent, not a protocol invariant: the master
+	 * self-completes on the burst timer (~burst_len*STRIDE slots) while the slave
+	 * links off the grant + its TX_MUTE dwell — either may reach ESTABLISHED first.
+	 * Both reaching it (above) is the invariant that matters. */
 	CHK(memcmp(c.m.box_mac, S_SRC, 6) == 0);  /* the box we latched */
 	CHK(memcmp(c.s.fsm.master_mac, M_SRC, 6) == 0);   /* the master it learned */
-	CHK(memcmp(c.m.join_blk, "\x04\x03", 2) == 0);    /* echoing its block */
+	CHK(memcmp(c.m.join_blk, "\x04\x03", 2) == 0);    /* captured its cold-connect block */
 
 	/* 3. steady state holds >= 5 simulated seconds: the slave's upstream
 	 * flood + heartbeats hold our 600 budget; our chanmap+cfea hold its HOLD.
-	 * Both control streams run ~1/s each. */
+	 * cfea free-runs ~1/s; the chanmap advances ONE window per control cycle
+	 * (fps*10778/4000 slots ≈ 2.69 s — the measured M-300 choreography). */
 	long cm0 = c.m_chanmaps, an0 = c.m_announces, hb0 = c.s_heartbeats_fed;
 	for (long i = 0; i < 5L * FPS; i++) {
 		CHK(step(&c) == 0);
 		CHK(c.m.state == REAC_M_ESTABLISHED);
 		CHK(c.s.fsm.state == FSM_ESTABLISHED);
 	}
-	CHK(c.m_chanmaps - cm0 >= 4 && c.m_announces - an0 >= 4);   /* ~1/s each */
+	CHK(c.m_chanmaps - cm0 >= 1 && c.m_announces - an0 >= 4);   /* 1/cycle + ~1/s */
 	CHK(c.s_heartbeats_fed - hb0 >= 4);       /* the box keep-alive flows */
 
-	/* 4. the box goes silent: the master holds for exactly its 600-frame
-	 * budget, then drops back to PROBING (peer-gone) — and keeps counting. */
+	/* 4. the box goes silent: the master holds for exactly its peer-gone budget
+	 * (the measured ~6.5 s M-200i hold, fps-scaled — NOT the old 600 constant),
+	 * then drops back to PROBING (peer-gone) — and keeps counting. */
 	c.slave_on = 0;
-	for (int i = 0; i < REAC_M_LINKCHECK_RELOAD - 1; i++)
+	for (int i = 0; i < c.m.link_check_reload - 1; i++)
 		CHK(step(&c) == 0);
-	CHK(c.m.state == REAC_M_ESTABLISHED);     /* 599 silent slots: still held */
+	CHK(c.m.state == REAC_M_ESTABLISHED);     /* budget-1 silent slots: still held */
 	CHK(step(&c) == 0);
-	CHK(c.m.state == REAC_M_PROBING);         /* the 600th drains the budget */
+	CHK(c.m.state == REAC_M_PROBING);         /* the last frame drains the budget */
 	CHK(c.m.drop_reason == REAC_M_DROP_PEER_GONE);
 
 	printf("OK: full offline courtship — master probes first, grants only on the "
 	       "box's cold-connect (echoed), box links off the grant, master links off "
 	       "the box's first unicast, 5 s steady HOLD both ways, peer-gone at "
-	       "exactly %d silent slots\n", REAC_M_LINKCHECK_RELOAD);
+	       "exactly %d silent slots\n", c.m.link_check_reload);
 	return 0;
 }

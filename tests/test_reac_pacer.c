@@ -94,7 +94,7 @@ int main(void)
 		CHK(p3.rx_box_frames == 1);
 
 		/* the JOIN: fsm mirror flips to GRANTING, the ring holds the block */
-		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2);
+		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, 12);
 		uint8_t join_blk[32];
 		memcpy(join_blk, bf + 18, 32);
 		reac_pacer_rx_ingest(&p3, bf, bn);
@@ -115,10 +115,20 @@ int main(void)
 		}
 		CHK(found_join);
 
-		/* unicast -> ESTABLISHED via the mirror */
-		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3);
+		/* the emit loop delivers ENROLL + the full 32-frame grant burst, then the
+		 * master SELF-COMPLETES to ESTABLISHED and holds (#130 rig fix 2026-07-12:
+		 * the box goes quiet after the grant, so waiting for a post-burst unicast
+		 * made it re-attempt forever). Self-complete happens inside reac_master_next,
+		 * so check the real FSM state (the p3.fsm_state mirror only advances on RX). */
+		uint16_t ec; int ei;
+		for (int i = 0; i < p3.master.grant_burst_len * p3.master.grant_stride + 2; i++)
+			reac_master_next(&p3.master, &ec, &ei);
+		CHK(p3.master.state == REAC_M_ESTABLISHED);
+
+		/* the box heartbeat confirms the lock (mirror path). */
+		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3, 16);
 		reac_pacer_rx_ingest(&p3, bf, bn);
-		CHK(p3.fsm_state == REAC_M_ESTABLISHED);
+		CHK(p3.master.state == REAC_M_ESTABLISHED);
 
 		/* drain formats + counts every queued event, then returns 0 */
 		FILE *sink = tmpfile();
@@ -132,7 +142,7 @@ int main(void)
 		/* overflow: flood JOINs (each always logs) -> ring caps at EVRING,
 		 * drop-newest counts ev_drops, a full drain returns exactly EVRING */
 		for (int i = 0; i < REAC_PACER_EVRING * 2; i++) {
-			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i);
+			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i, 16, NULL, 12);
 			reac_pacer_rx_ingest(&p3, bf, bn);
 		}
 		CHK(p3.ev_drops > 0);

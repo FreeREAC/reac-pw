@@ -196,6 +196,19 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	if (ev == REAC_M_RX_BOX_JOIN)
 		atomic_fetch_add_explicit(&p->rx_joins, 1, memory_order_relaxed);
 
+	/* MASTER as mixer: recognize the connected box's MODEL from its
+	 * config-announce and match the fixed matrix (task #137). Emit once per new
+	 * model (the box repeats its config-announce). NULL => unknown model; the
+	 * caller can still drive it from the frame's descriptor/width. */
+	const struct reac_box_model *bm = reac_ctrl_identify_box(frame, len);
+	if (bm && bm != p->recognized_box) {
+		p->recognized_box = bm;
+		/* Autodetect: select the grant burst for THIS matrix model (its in/out
+		 * width) so the master emits the correct model's sweep on the next grant. */
+		reac_master_set_box(&p->master, bm->in_ch, bm->out_ch);
+		pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)bm->in_ch, 0, parsed.src, NULL);
+	}
+
 	enum reac_master_state from = p->master.state;
 	int changed = reac_master_rx(&p->master, ev, parsed.src,
 	                             ev == REAC_M_RX_BOX_JOIN ? frame + 18 : NULL);
@@ -348,6 +361,12 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 				        "PHY: it only cold-connects on link-up)\n", ts,
 				        (unsigned long long)frames, (unsigned long long)joins,
 				        e.a ? "box present, not joining" : "no sustained presence");
+			break;
+		}
+		case REAC_PEV_RECOGNIZED: {
+			const struct reac_box_model *bm = reac_box_model_by_channels(e.a);
+			fprintf(out, "reac-master: [%.6f] recognized box = %s from %s\n",
+			        ts, bm ? bm->display : "(unknown)", mac);
 			break;
 		}
 		default:
@@ -547,6 +566,23 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 		close(fd);
 		reac_frame_ring_free(&p->ring);
 		return -1;
+	}
+
+	/* PROMISCUOUS mode is MANDATORY for the master role. We TX with a SPOOFED
+	 * Roland-OUI src MAC (our mixer identity), NOT the NIC's hardware MAC. A box
+	 * ESTABLISHES by UNICASTING its config-announce + upstream to THAT spoofed
+	 * MAC — which the NIC's hardware filter drops (it isn't the card's real MAC),
+	 * so without promisc the master receives nothing and stays PROBING forever
+	 * while the box streams to us (verified live: real S-0808 -> reac-pw master,
+	 * 31.9k unicast frames on the mirror, rx_box_frames=1 without promisc). */
+	{
+		struct packet_mreq mr;
+		memset(&mr, 0, sizeof mr);
+		mr.mr_ifindex = p->ifindex;
+		mr.mr_type    = PACKET_MR_PROMISC;
+		if (setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof mr) < 0)
+			fprintf(stderr, "reac_pacer: PACKET_MR_PROMISC failed — the master "
+			                "may not see a box's unicast to our spoofed MAC\n");
 	}
 
 	/* Best-effort (Linux >=4.20): don't echo our own 8000 fps broadcast into

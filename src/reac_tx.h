@@ -5,7 +5,8 @@
  * the reac-aes67 decode core). Builds a 1492-byte FILLER frame: broadcast dst,
  * our OUI src, EtherType 0x8819, u16-LE counter, type 0x0000 (FILLER carries
  * audio and is checksum-exempt), a zero 32-byte control block, 1440 B audio
- * (40 ch x 12 samples x 3 B, plain-LE sample-major (s*40+ch)*3), 0xC2 0xEA tail.
+ * (40 ch x 12 samples x 3 B, obs-h8819 even/odd channel-pair BRAID, the inverse
+ * of reac_upstream_decode — NOT plain-LE), 0xC2 0xEA tail.
  *
  * This is the ENCODER only (reac_tx_build) + a standalone direct emitter
  * (reac_tx_emit). It writes a zero control block (FILLER): audio, no link grant
@@ -33,7 +34,8 @@ struct reac_tx {
  * input planar[ch][s] (ns samples/channel, nch channels mapped onto the 40-ch
  * frame; the rest are silent). `counter` is stamped at bytes 14-15 LE; `src` is
  * the 6-byte source MAC. Returns REAC_FRAME_BYTES. No socket needed — pure +
- * unit-testable (round-trips through reac_decode). */
+ * unit-testable (round-trips through the obs-h8819 braid un-pack; see
+ * tests/test_reac_tx.c). */
 int reac_tx_build(uint8_t *out, float *const *planar, int nch, int ns,
                   uint16_t counter, const uint8_t src[6]);
 

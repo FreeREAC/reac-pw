@@ -89,17 +89,98 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
  *
  * GROUND-TRUTHED (byte-compared to captured box frames): */
 size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
-                              const uint8_t src[6], uint16_t counter);
+                              const uint8_t src[6], uint16_t counter, int n_ch);
 /* upstream return audio: n_ch x 12 samples, planar float [ch][s]; box-width
  * frame (16ch->628B, 8ch->340B): 18 hdr + 32 descriptor + n_ch*36 audio + 2 tail. */
 size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter,
                                        int n_ch, float *const *planar, int ns);
 
-/* RECONSTRUCTED (experimental, JOIN — not byte-verified, gated until a rig grab): */
+/* The presence-flood FILLER (broadcast, unlinked): zero control block [18:50] (no
+ * 0x7a descriptor) over LIVE audio [50:626] — what a real box broadcast-floods to
+ * announce presence on a cold boot. Audio is planar float [ch][s], as
+ * build_upstream_filler; NULL planar -> silent. */
+size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
+                                    const uint8_t src[6], uint16_t counter,
+                                    int n_ch, float *const *planar, int ns);
+
+/* ---- FIXED box-model matrix ----
+ * A REAC stagebox is identified on the wire by three orthogonal fields (see
+ * docs/REAC-BOX-STATE-DIAGRAM.md): the config-announce SELECTOR byte (model
+ * family), an optional ASCII NAME frame (exact model within the 0x84 family),
+ * and the channel DESCRIPTOR + width (52 + 36*in_ch bytes). We ship a fixed
+ * table of byte-verified real models so a model always matches its channels —
+ * there is no "S-1608 with 8 channels". Pick a row by token or by in-channel
+ * count; both resolve to the same entry. */
+struct reac_box_model {
+	const char *token;      /* CLI token: "s1608", "s0808"              */
+	const char *display;    /* human label for --help / logs            */
+	int         in_ch;      /* box input (upstream) width -> frame size  */
+	int         out_ch;     /* box output (downstream) width             */
+	uint8_t     config_block[32];  /* config-announce cdea 01 03 0010    */
+	int         has_name;   /* 1 -> also emit the ASCII name frame       */
+	uint8_t     name_block[32];    /* name frame cdea 04 01 001b (if any)*/
+	/* The mixer identifies the MODEL from the cold-connect INVENTORY frames, not
+	 * just the config-announce: the 0016/001a blocks differ per model, and some
+	 * models emit an extra 0402000d frame. Byte-verified per model. */
+	uint8_t     cc0014[32];        /* cold-connect cdea 04 03 0014       */
+	uint8_t     cc0013[32];        /* cold-connect cdea 04 03 0013       */
+	uint8_t     cc0016[32];        /* cold-connect cdea 04 03 0016       */
+	uint8_t     cc001a[32];        /* cold-connect cdea 04 03 001a       */
+	int         has_extra;  /* 1 -> also emit the cdea 04 02 000d frame  */
+	uint8_t     extra_block[32];   /* cdea 04 02 000d (if any)           */
+};
+const struct reac_box_model *reac_box_model_by_token(const char *token);
+const struct reac_box_model *reac_box_model_by_channels(int in_ch);
+const struct reac_box_model *reac_box_model_table(size_t *count);
+
+/* MASTER-side box RECOGNITION (the mirror of the slave emitter): given a raw
+ * received frame, if it is a box config-announce (cdea 01 03 0010) whose
+ * descriptor block matches a fixed-matrix row, return that model; else NULL.
+ * "The matrix is law as a stagebox; as a mixer we read the frame and use the
+ * matrix as the default" — a NULL means no known model, and the caller falls
+ * back to the descriptor/width carried in the frame. PURE (no socket). */
+const struct reac_box_model *reac_ctrl_identify_box(const uint8_t *frame, size_t len);
+
+/* Config-announce (cdea 01 03 0010) — the SETUP DECLARATION the master enrolls
+ * the box from. Byte-verified per model; the selector byte sets the displayed
+ * model family. in_ch selects the fixed-matrix row (falls back to S-1608). */
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch);
+/* ASCII model-name frame (cdea 04 01 001b) — required for the 0x84 family so the
+ * desk shows the exact model (e.g. "S-0808") instead of the generic family name.
+ * Returns 0 (emits nothing) for models whose name comes from the selector alone
+ * (the 0x82 / S-1608 family). */
+size_t reac_ctrl_build_name_frame(uint8_t *out, const uint8_t master[6],
+                                  const uint8_t src[6], uint16_t counter, int in_ch);
+/* The extra cold-connect frame (cdea 04 02 000d) some models send (S-0808). The
+ * mixer uses it, with the 0016/001a inventory, to determine the exact model.
+ * Returns 0 (emits nothing) for models that don't send it (e.g. S-1608). */
+size_t reac_ctrl_build_extra_frame(uint8_t *out, const uint8_t master[6],
+                                   const uint8_t src[6], uint16_t counter, int in_ch);
+/* The box cold-connect (cdea 04 03): the 32-byte control block over LIVE audio
+ * [50:626] (the [38:66] region is per-frame audio, NOT device inventory). Audio is
+ * planar float [ch][s], as build_upstream_filler; NULL planar -> silent. The master
+ * echoes the control block verbatim as its grant. */
 size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
-                                   const uint8_t src[6], uint16_t counter);
+                                   const uint8_t src[6], uint16_t counter,
+                                   int n_ch, float *const *planar, int ns);
+
+/* The cdea 04 03 0013 cold-connect variant, interleaved with the 0014 by a real
+ * box. Emitted raw (the 0013 block is not sum-to-0). */
+size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns);
+
+/* The cdea 04 03 0016 and 001a cold-connect variants — the rest of the escalation
+ * a real S-1608 sends (0014 -> 0013 -> 0016 -> 001a). They carry the fuller box
+ * inventory the master needs to register the box in its REAC device list. Emitted
+ * raw (byte-matched to a real S-1608, 2026-07-11). */
+size_t reac_ctrl_build_coldconnect_0016(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns);
+size_t reac_ctrl_build_coldconnect_001a(uint8_t *out, const uint8_t master[6],
+                                        const uint8_t src[6], uint16_t counter,
+                                        int n_ch, float *const *planar, int ns);
 
 #endif /* REAC_CTRL_H */

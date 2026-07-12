@@ -12,18 +12,20 @@
  * ESTABLISHED on a real master's grant frame — gated experimental until a rig
  * capture confirms the grant-burst bytes.
  *
- * FLOOD_ANNOUNCE presence announcement (#130 fix 1): a real box announces by
- * FLOODING broadcast FILLER at wire rate on PHY-up (§13p.3: 5459 frames over
- * ~1.36 s on a cold boot) — that flood is what makes a real master register
- * and DISPLAY the box. The box's own cdea 04 03 cold-connect is also on the
- * wire (§13p.multi, byte-captured) but as a burst of a few frames plus a
- * ~100 ms retry grid, never as a continuous replacement for the flood. So
- * FSM_ACT_FLOOD_BCAST fires on EVERY FLOOD_ANNOUNCE step (the continuous
- * presence-flood); the `emit_join` side flag (mirroring `emit_heartbeat` in
- * ESTABLISHED) marks the steps that should ALSO carry a cold-connect frame:
- * an immediate burst of REAC_FSM_JOIN_BURST_COUNT frames, then one retry
- * burst every REAC_FSM_JOIN_RETRY_PERIOD ticks, unbounded, until the master's
- * grant lands (no hard give-up while PHY stays up). */
+ * FLOOD_ANNOUNCE presence announcement (#130, byte-verified 2026-07-11): a real
+ * box announces by FLOODING broadcast FILLER at wire rate on PHY-up, but that
+ * flood is BOUNDED — 5459 frames over ~1.36 s on a cold boot (§13p.3), then the
+ * box STOPS broadcasting entirely and goes UNICAST-ONLY. It does NOT emit a
+ * cold-connect alongside the flood; the cold-connect (cdea 04 03) is unicast to
+ * the master AFTER the bounded flood, on a ~100 ms retry grid interleaved with
+ * unicast audio FILLER, and the master grants ~1.7 s after broadcast stops
+ * (m200-s1608-realbox-establish-2026-07-11.pcap). So the establishment is two
+ * distinct TX phases: FSM_FLOOD_ANNOUNCE (bounded broadcast flood, learn the
+ * master MAC) -> FSM_COLDCONNECT (unicast cold-connect on the retry grid +
+ * unicast audio between) -> grant -> TX_MUTE. FSM_ACT_FLOOD_BCAST fires on every
+ * FLOOD_ANNOUNCE step; FSM_ACT_UNICAST_COLDCONNECT on every FSM_COLDCONNECT step,
+ * with the `emit_join` side flag (mirroring `emit_heartbeat` in ESTABLISHED)
+ * marking the grid steps that carry the cdea 04 03 rather than an audio FILLER. */
 #ifndef REAC_FSM_H
 #define REAC_FSM_H
 
@@ -38,17 +40,33 @@
  * expires before our first unicast and the courtship never closes. */
 #define REAC_FSM_TXMUTE_DWELL     800    /* ~100ms @8000fps */
 
-/* The cold-connect JOIN burst that rides the presence-flood: a short burst on
- * entry/each retry, then a retry grid — NOT a continuous per-tick spam (the
- * #130 fix-1 defect this replaces). REAC_FSM_JOIN_RETRY_PERIOD reuses the
- * TXMUTE_DWELL magnitude (~100 ms @8000fps ticks) — the same order as the
- * master's own ~150 ms grant window / the box's documented ~100 ms retry grid. */
-#define REAC_FSM_JOIN_BURST_COUNT    3
+/* Bounded presence-flood length: how many broadcast FILLER frames the box floods
+ * on PHY-up before it stops broadcasting and switches to the unicast cold-connect
+ * phase. Byte-verified 2026-07-11 at 48k (§13p.3: 5459 frames over ~1.36 s at the
+ * 48k box rate = sampleRate/12 ≈ 4000 fps). Whether this frame-count SCALES with
+ * the wire rate (i.e. is really a ~1.36 s wall-clock window) is rig-TBD — a
+ * frame-count bound is faithful at 48k and safe elsewhere. */
+#define REAC_FSM_FLOOD_BURST      5460
+
+/* The unicast cold-connect retry grid (FSM_COLDCONNECT): emit one cdea 04 03
+ * every REAC_FSM_JOIN_RETRY_PERIOD steps, unicast audio FILLER between, until the
+ * master's grant lands (no hard give-up while PHY stays up). Reuses the
+ * TXMUTE_DWELL magnitude (~100 ms @8000fps) — the box's documented ~100 ms grid. */
 #define REAC_FSM_JOIN_RETRY_PERIOD 800    /* ~100ms @8000fps */
+
+/* Post-grant ACK window. A real box, AFTER the master's grant, replies with the
+ * 0016/001a inventory; the master keeps hunting (broadcast probe 0100001a) until
+ * it sees that reply, then stops probing = LINKED. Measured on a live M-5000
+ * (2026-07-12): our slave sent 0016/001a only BEFORE the grant, then muted — the
+ * desk granted but probed forever = stuck LINKING. Fix: after the first grant,
+ * keep cold-connecting one full 8-phase escalation cycle so 0016/001a re-emit as
+ * the ACK, THEN settle to TX_MUTE. */
+#define REAC_FSM_GRANT_ACK_FRAMES  6400   /* 8 phases x JOIN_RETRY_PERIOD @8000fps */
 
 enum reac_fsm_state {
 	FSM_PHY_DOWN = 0,
-	FSM_FLOOD_ANNOUNCE,   /* hunting: broadcast FILLER flood (+ the JOIN burst) */
+	FSM_FLOOD_ANNOUNCE,   /* hunting: BOUNDED broadcast FILLER flood, learn master */
+	FSM_COLDCONNECT,      /* flood done: unicast cold-connect on the retry grid */
 	FSM_TX_MUTE,          /* grant accepted, settle dwell */
 	FSM_ESTABLISHED,      /* linked: unicast audio + heartbeat */
 	FSM_DROP,             /* link lost / torn down */
@@ -56,10 +74,11 @@ enum reac_fsm_state {
 
 enum reac_fsm_action {
 	FSM_ACT_NONE = 0,
-	FSM_ACT_FLOOD_BCAST,  /* broadcast FILLER while announcing (continuous) */
-	FSM_ACT_SILENCE,      /* mute window: counter free-runs, audio held */
-	FSM_ACT_UNICAST_AUDIO,/* established: unicast upstream FILLER (+heartbeat on tick) */
-	FSM_ACT_STOP,         /* idle, emit nothing */
+	FSM_ACT_FLOOD_BCAST,        /* broadcast FILLER while announcing (bounded) */
+	FSM_ACT_UNICAST_COLDCONNECT,/* unicast cold-connect grid (+cdea on emit_join) */
+	FSM_ACT_SILENCE,            /* mute window: counter free-runs, audio held */
+	FSM_ACT_UNICAST_AUDIO,      /* established: unicast upstream FILLER (+heartbeat) */
+	FSM_ACT_STOP,               /* idle, emit nothing */
 };
 
 enum reac_fsm_event {
@@ -80,19 +99,24 @@ struct reac_fsm {
 	int      link_check;       /* countdown to peer-gone */
 	int      txmute_dwell;
 	int      heartbeat_tick;   /* frames since our last heartbeat */
+	int      heartbeat_period; /* frames between keep-alives — = fps (sample_rate/12)
+	                            * so the ~1/s cadence holds at any rate; a real box's
+	                            * gap measured 8162@96k / 4017@48k. 0 => default. */
 	uint16_t counter;          /* our free-running u16-LE */
+	int      flood_frames;     /* broadcast FILLER frames flooded so far (bounded) */
 	enum reac_fsm_drop_reason drop_reason;
 	int      emit_heartbeat;   /* set on the step that should emit a keep-alive */
-	int      emit_join;        /* set on the step that should also emit a cold-connect */
-	int      join_burst_left;  /* cold-connect frames left in the current burst */
-	int      join_retry_countdown;  /* ticks until the next burst may start */
+	int      emit_join;        /* set on the COLDCONNECT step that emits the cdea 04 03 */
+	int      join_retry_countdown;  /* steps until the next cold-connect on the grid */
+	int      grant_ack;             /* >0: post-grant ACK window (frames left) — keep
+	                                 * cold-connecting so 0016/001a re-emit, then mute */
 };
 
 struct reac_fsm_out {
 	enum reac_fsm_action action;
 	enum reac_fsm_state  state;
 	int emit_heartbeat;        /* 1 if the action should be accompanied by a heartbeat */
-	int emit_join;             /* 1 if a FLOOD_BCAST step should also emit a cold-connect */
+	int emit_join;             /* 1 if a COLDCONNECT step carries the cdea 04 03 (else audio) */
 };
 
 void reac_fsm_init(struct reac_fsm *fsm);
