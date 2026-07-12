@@ -144,6 +144,33 @@ static const uint8_t ENROLL_BLK[34] = {
 	0x00, 0x00, 0x00, 0xc3, 0xc3, 0xc3, 0xc3, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8e
 };
+#define REAC_ENROLL_CONSOLE_IDX 8   /* ENROLL_BLK[8] = console-model byte (0/1) */
+
+/* The mixer profiles reac-pw can impersonate. MAC + console_field are the only
+ * per-mixer identity; the grants are box-defined. MACs are the captured desk
+ * addresses (matrix-m{200,300,5000}-*). M-200/M-300 are V-Mixer (console 0);
+ * M-5000 is OHRCA (console 1). */
+static const struct reac_mixer_profile MIXER_PROFILES[] = {
+	{ "m200",  "M-200",  { 0x00,0x40,0xab,0xc9,0xcc,0x03 }, 0 },
+	{ "m300",  "M-300",  { 0x00,0x40,0xab,0xc9,0xd8,0x5b }, 0 },
+	{ "m5000", "M-5000", { 0x00,0x40,0xab,0xca,0x15,0x4c }, 1 },
+};
+
+const struct reac_mixer_profile *reac_mixer_profile_by_name(const char *name)
+{
+	if (!name) return NULL;
+	for (size_t i = 0; i < sizeof MIXER_PROFILES / sizeof MIXER_PROFILES[0]; i++)
+		if (strcmp(name, MIXER_PROFILES[i].name) == 0)
+			return &MIXER_PROFILES[i];
+	return NULL;
+}
+
+const struct reac_mixer_profile *reac_mixer_profile_at(int i)
+{
+	if (i < 0 || (size_t)i >= sizeof MIXER_PROFILES / sizeof MIXER_PROFILES[0])
+		return NULL;
+	return &MIXER_PROFILES[i];
+}
 
 #define REAC_M_GRANT_BURST_LEN 32
 static const uint8_t GRANT_BURST[REAC_M_GRANT_BURST_LEN][34] = {
@@ -583,6 +610,11 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	 * fabric sweep + the cfea announce (OUR src MAC embedded). */
 	m->chanmap_nframes = gen_chanmap(m->chanmap, &m->cfg);
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);   /* idle: 0 boxes enrolled */
+	/* ENROLL for this mixer: the console-model byte follows the profile
+	 * (V-Mixer 0 / OHRCA 1). apply_block re-checksums at stamp time. */
+	memcpy(m->enroll_blk, ENROLL_BLK, 34);
+	m->enroll_blk[REAC_ENROLL_CONSOLE_IDX] = m->cfg.console_field;
+	stamp_block_cksum(m->enroll_blk);
 
 	/* Seed the probe rotation at phase 0 / sub 0x02 (hunting) so FILLER frames
 	 * carry a valid descriptor from the very first slot, before any probe fires. */
@@ -987,7 +1019,7 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
 		apply_block(frame, m->grant_burst[tmpl_idx]);
 		return 0;
 	case REAC_M_EMIT_ENROLL:
-		apply_block(frame, ENROLL_BLK);  /* cdea 01 03 000d, the pre-grant arm */
+		apply_block(frame, m->enroll_blk);  /* cdea 01 03 000d, per-mixer console byte */
 		return 0;
 	case REAC_M_EMIT_CHANMAP:
 		if (tmpl_idx < 0 || tmpl_idx >= m->chanmap_nframes)
