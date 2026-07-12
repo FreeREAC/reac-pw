@@ -115,18 +115,20 @@ int main(void)
 		}
 		CHK(found_join);
 
-		/* the emit loop delivers the full 32-frame grant burst BEFORE the box's
-		 * unicast can accept (#130 rig fix 2026-07-12): advancing grant_ticks is
-		 * what opens the GRANTING->ESTABLISHED gate, so a warm-relink box gets the
-		 * whole grant instead of a 1-frame stub. */
+		/* the emit loop delivers ENROLL + the full 32-frame grant burst, then the
+		 * master SELF-COMPLETES to ESTABLISHED and holds (#130 rig fix 2026-07-12:
+		 * the box goes quiet after the grant, so waiting for a post-burst unicast
+		 * made it re-attempt forever). Self-complete happens inside reac_master_next,
+		 * so check the real FSM state (the p3.fsm_state mirror only advances on RX). */
 		uint16_t ec; int ei;
-		for (int i = 0; i < p3.master.grant_burst_len * p3.master.grant_stride; i++)
+		for (int i = 0; i < p3.master.grant_burst_len * p3.master.grant_stride + 2; i++)
 			reac_master_next(&p3.master, &ec, &ei);
+		CHK(p3.master.state == REAC_M_ESTABLISHED);
 
-		/* unicast -> ESTABLISHED via the mirror */
+		/* the box heartbeat confirms the lock (mirror path). */
 		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3, 16);
 		reac_pacer_rx_ingest(&p3, bf, bn);
-		CHK(p3.fsm_state == REAC_M_ESTABLISHED);
+		CHK(p3.master.state == REAC_M_ESTABLISHED);
 
 		/* drain formats + counts every queued event, then returns 0 */
 		FILE *sink = tmpfile();

@@ -48,7 +48,7 @@ struct court {
 	struct reac_slave  s;
 	uint16_t m_counter_next;   /* free-run oracle for the master counter */
 	/* tallies */
-	long m_probes, m_subs, m_announces, m_grants, m_chanmaps;
+	long m_probes, m_subs, m_announces, m_grants, m_chanmaps, m_enrolls;
 	long s_joins_fed, s_unicasts_fed, s_heartbeats_fed, s_floods_fed;
 	int  m_granted_before_join;    /* the #130 regression flag */
 	int  slave_on;                 /* feed slave frames into the master? */
@@ -82,6 +82,7 @@ static int step(struct court *c)
 			c->m_granted_before_join = 1;   /* the defect this task kills */
 		break;
 	case REAC_M_EMIT_CHANMAP:  c->m_chanmaps++;  break;
+	case REAC_M_EMIT_ENROLL:   c->m_enrolls++;   break;
 	case REAC_M_EMIT_FILLER:   break;
 	}
 
@@ -186,12 +187,16 @@ int main(void)
 	}
 	CHK(!c.m_granted_before_join);            /* grant ONLY after the JOIN */
 	CHK(c.s_joins_fed > 0 && c.m_grants > 0);
-	CHK(slot_slave_established >= 0);         /* box linked off the echoed grant */
-	CHK(slot_master_established >= 0);        /* we linked off its first unicast */
-	CHK(slot_slave_established <= slot_master_established);
+	CHK(c.m_enrolls > 0);                     /* the pre-grant ENROLL frame flowed */
+	CHK(slot_slave_established >= 0);         /* box linked off the grant */
+	CHK(slot_master_established >= 0);        /* master self-completed after the burst */
+	/* Ordering is now timing-dependent, not a protocol invariant: the master
+	 * self-completes on the burst timer (~burst_len*STRIDE slots) while the slave
+	 * links off the grant + its TX_MUTE dwell — either may reach ESTABLISHED first.
+	 * Both reaching it (above) is the invariant that matters. */
 	CHK(memcmp(c.m.box_mac, S_SRC, 6) == 0);  /* the box we latched */
 	CHK(memcmp(c.s.fsm.master_mac, M_SRC, 6) == 0);   /* the master it learned */
-	CHK(memcmp(c.m.join_blk, "\x04\x03", 2) == 0);    /* echoing its block */
+	CHK(memcmp(c.m.join_blk, "\x04\x03", 2) == 0);    /* captured its cold-connect block */
 
 	/* 3. steady state holds >= 5 simulated seconds: the slave's upstream
 	 * flood + heartbeats hold our 600 budget; our chanmap+cfea hold its HOLD.

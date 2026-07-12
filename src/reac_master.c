@@ -131,6 +131,20 @@ static const uint8_t PROBE_SPECIALS[REAC_PROBE_SPECIAL_COUNT][34] = {
  * S-0808-specific (8 in / 8 out patch). Generalising the tail to arbitrary box
  * width (the 12 12 / 12 11 bank + 02/03 group bytes iterate the slot map) is a
  * follow-up; byte-exact replay is the verified path for the S-0808 tonight. */
+/* The ENROLL / prepare-to-grant frame (cdea 01 03 000d), byte-exact from a real
+ * M-200 (matrix-m200-s0808): emitted ONCE ~1.7 s before the grant burst, on the
+ * COLD_CONNECT/CONFIG latch. It is the ONLY master control op reac-pw was missing
+ * (verified by op-set diff). The box must RECEIVE this to arm itself to consume the
+ * subsequent grant and advance to its own ESTABLISHED — without it the box stays in
+ * a coldconnect-like "waiting" state, streams unicast but never heartbeats, and its
+ * light BLINKS (rig 2026-07-12). Sums to 0 over [18:50] so apply_block re-stamp is a
+ * no-op. */
+static const uint8_t ENROLL_BLK[34] = {
+	0xcd, 0xea, 0x01, 0x03, 0x00, 0x0d, 0x10, 0x04, 0x00, 0x41, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0xc3, 0xc3, 0xc3, 0xc3, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8e
+};
+
 #define REAC_M_GRANT_BURST_LEN 32
 static const uint8_t GRANT_BURST[REAC_M_GRANT_BURST_LEN][34] = {
 	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe, 0x0f, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12, 0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -211,7 +225,7 @@ static void probe_prepare(struct reac_master *m)
  * input width + set the box-count on sync. Unchanged here: it does not affect the
  * slave-side #130 establishment fix, and the idle bytes stay M-300-exact. */
 static void gen_cfea(uint8_t out[34], const uint8_t src[6],
-                     const struct reac_console_cfg *cfg)
+                     const struct reac_console_cfg *cfg, uint16_t box_count)
 {
 	static const uint8_t head[11] =
 		{ 0xcf, 0xea, 0xff, 0xff, 0x01, 0x00, 0x01, 0x03, 0x0d, 0x01, 0x04 };
@@ -220,9 +234,16 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
 	memcpy(out + ANNOUNCE_MAC_IDX, src, 6);   /* OUR MAC = the L2 source */
 	out[17] = 0x28;                 /* 40: the FIXED REAC downstream slot total   */
 	out[18] = cfg->out_channels;    /* box width byte (idle-form; see note above) */
-	out[19] = cfg->console_field;   /* console field (M-300 = 0, M-5000 = 1)      */
-	out[20] = 0x00;                 /* box-count hi (idle 0; ->0x0001 on sync)    */
-	out[21] = cfg->console_field;   /* moves in lockstep with [19]                */
+	out[19] = cfg->console_field;   /* console model (M-300 = 0, M-5000 = 1)      */
+	/* [20:22] = the ENROLLED-BOX COUNT (big-endian). THE blink fix (2026-07-12):
+	 * a real M-200 announces 0x0001 here once a box is enrolled; reac-pw hard-wired
+	 * 0x0000 (the old out[21]=console_field was wrong — [19] and [21] are NOT the
+	 * same field: [19]=console model, [21]=box-count low). Announcing 0 boxes made
+	 * the box see itself UNACKNOWLEDGED, so it withheld its 01030001 heartbeat and
+	 * kept its light BLINKING despite a clean grant + 1/s cadence + unicast link.
+	 * Verified on the wire: box heartbeats to a count=1 master, silent to count=0. */
+	out[20] = (uint8_t)(box_count >> 8);
+	out[21] = (uint8_t)(box_count & 0xff);
 	/* [22:33] stay zero */
 	stamp_block_cksum(out);
 }
@@ -324,6 +345,7 @@ const char *reac_master_rx_event_name(enum reac_master_rx_event e)
 	case REAC_M_RX_BOX_BCAST_FILLER: return "BCAST-FILLER";
 	case REAC_M_RX_BOX_JOIN:         return "JOIN";
 	case REAC_M_RX_BOX_UNICAST:      return "UNICAST";
+	case REAC_M_RX_BOX_HEARTBEAT:    return "HEARTBEAT";
 	case REAC_M_RX_BOX_BYE:          return "BYE";
 	case REAC_M_RX_BOX_CONFIG:       return "CONFIG";
 	}
@@ -382,7 +404,7 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	/* Generate the downstream the master advertises for this console: the 49-window
 	 * fabric sweep + the cfea announce (OUR src MAC embedded). */
 	m->chanmap_nframes = gen_chanmap(m->chanmap, &m->cfg);
-	gen_cfea(m->announce_blk, m->src, &m->cfg);
+	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);   /* idle: 0 boxes enrolled */
 
 	/* Seed the probe rotation at phase 0 / sub 0x02 (hunting) so FILLER frames
 	 * carry a valid descriptor from the very first slot, before any probe fires. */
@@ -428,6 +450,7 @@ static void enter_probing(struct reac_master *m)
 {
 	m->state = REAC_M_PROBING;
 	reset_control_cadence(m);
+	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);   /* no box enrolled */
 }
 
 /* Open a grant window echoing this JOIN block (also re-opens on a fresh JOIN
@@ -442,6 +465,11 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	memcpy(m->box_mac, box_src, 6);
 	if (blk32)
 		memcpy(m->join_blk, blk32, 32);
+	/* We have LATCHED a box — announce box-count 1 in the cfea from now on. The
+	 * box must SEE itself acknowledged (count>=1) to complete its own lock, so
+	 * this has to rise on latch, not on our ESTABLISHED (chicken-and-egg); a real
+	 * M-200 already announces 1 pre-lock. */
+	gen_cfea(m->announce_blk, m->src, &m->cfg, 1);
 }
 
 static void enter_established(struct reac_master *m)
@@ -497,6 +525,14 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			enter_granting(m, box_src, blk32);
 			return 0;
 		}
+		if (ev == REAC_M_RX_BOX_HEARTBEAT) {
+			/* The box's heartbeat = it has LOCKED (reached its own ESTABLISHED).
+			 * That is the definitive, timer-free confirmation — establish at once,
+			 * no burst-gate needed (the box already accepted the grant). Symmetric
+			 * to the heartbeat our slave emits once locked. */
+			enter_established(m);
+			return 1;
+		}
 		if (ev == REAC_M_RX_BOX_UNICAST || ev == REAC_M_RX_BOX_CONFIG) {
 			/* The box's unicast is the accept — BUT only once the FULL 32-frame
 			 * grant burst has been delivered. A cold-JOIN box switches to unicast
@@ -507,8 +543,8 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			 * Before the burst completes, the unicast only confirms presence (keeps
 			 * granting); anti-#130 holds — establish still needs a box frame, never a
 			 * blind timer, and the grant window still expires BACK to PROBING. */
-			if (m->grant_ticks >= m->grant_burst_len * m->grant_stride) {
-				enter_established(m);
+			if (m->grant_ticks >= m->grant_burst_len * m->grant_stride + 1) {
+				enter_established(m);   /* +1: the leading ENROLL slot */
 				return 1;
 			}
 			return 0;
@@ -529,11 +565,19 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			return 1;
 		}
 		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			/* The box (or a different box) restarted its handshake. */
-			if (memcmp(box_src, m->box_mac, 6) != 0)
+			/* A JOIN from a DIFFERENT box -> re-grant the new one. But the SAME
+			 * box keeps JOINing on its cold-connect retry grid WHILE it completes
+			 * its own TX_MUTE dwell to lock — re-granting on each such JOIN tore
+			 * down the stable locked stream the box needs, so it never finished
+			 * locking (rig 2026-07-12: box cold-connects forever, LED blinks faster,
+			 * no heartbeat). HOLD ESTABLISHED for the same box (its JOINs just keep
+			 * the link alive); only a MAC change re-courts. */
+			if (memcmp(box_src, m->box_mac, 6) != 0) {
 				m->drop_reason = REAC_M_DROP_MAC_CHANGE;
-			enter_granting(m, box_src, blk32);
-			return 1;
+				enter_granting(m, box_src, blk32);
+				return 1;
+			}
+			return 0;   /* same box still settling — stay locked, hold the stream */
 		}
 		return 0;
 	}
@@ -644,18 +688,30 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * switches to unicast the instant it sees the grant, so it locks off even
 		 * a partial burst. No forward timer — window expiry with no accept falls
 		 * BACK to PROBING (anti-#130); the box's JOIN retry grid re-opens it. */
-		if (m->grant_ticks % m->grant_stride == 0) {
-			int k = m->grant_ticks / m->grant_stride;
-			if (k < m->grant_burst_len) {
-				emit = REAC_M_EMIT_GRANT;
-				idx = k;
+		if (m->grant_ticks == 0) {
+			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
+		} else {
+			int gt = m->grant_ticks - 1; /* burst timeline starts after enroll */
+			if (gt % m->grant_stride == 0) {
+				int k = gt / m->grant_stride;
+				if (k < m->grant_burst_len) {
+					emit = REAC_M_EMIT_GRANT;
+					idx = k;
+				}
 			}
 		}
 		m->grant_ticks++;
-		if (m->grant_ticks >= m->grant_frames) {
-			m->drop_reason = REAC_M_DROP_GRANT_TIMEOUT;
-			enter_probing(m);
-		}
+		/* Once the FULL enroll + 32-block burst is delivered, COMMIT to ESTABLISHED
+		 * and hold — do NOT wait for a post-burst box unicast. The box goes quiet
+		 * after the grant, waiting for the master to settle into the locked cadence;
+		 * a master that instead times back to PROBING makes the box re-attempt
+		 * forever (rig 2026-07-12: 27 grant-timeouts, box LED blinking faster, never
+		 * stabilising). GRANTING is only entered on a validated box frame, so this is
+		 * not "granting into silence"; the ~6.5 s link-check budget in ESTABLISHED
+		 * drops back to PROBING if the box is genuinely gone (anti-#130 preserved as
+		 * a BACKWARD safety, just not a forward-blocking gate). */
+		if (m->grant_ticks >= m->grant_burst_len * m->grant_stride + 1)
+			enter_established(m);
 		break;
 
 	case REAC_M_ESTABLISHED:
@@ -744,6 +800,9 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
 		if (tmpl_idx < 0 || tmpl_idx >= m->grant_burst_len)
 			return -1;
 		apply_block(frame, m->grant_burst[tmpl_idx]);
+		return 0;
+	case REAC_M_EMIT_ENROLL:
+		apply_block(frame, ENROLL_BLK);  /* cdea 01 03 000d, the pre-grant arm */
 		return 0;
 	case REAC_M_EMIT_CHANMAP:
 		if (tmpl_idx < 0 || tmpl_idx >= m->chanmap_nframes)

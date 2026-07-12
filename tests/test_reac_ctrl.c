@@ -142,11 +142,11 @@ int main(void)
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_JOIN);
 
-	/* (e) box hb sel 0x81 -> UNICAST; sel 0x00 -> BYE; bcast FILLER -> presence;
-	 *     unicast upstream FILLER -> UNICAST */
+	/* (e) box hb sel 0x81 -> HEARTBEAT (the box's "I am locked" signal); sel 0x00
+	 *     -> BYE; bcast FILLER -> presence; unicast upstream FILLER -> UNICAST */
 	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
-	CHK(ev == REAC_M_RX_BOX_UNICAST);
+	CHK(ev == REAC_M_RX_BOX_HEARTBEAT);
 	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
 	f[22] = 0x00;                                            /* disconnect latch */
 	reac_ctrl_checksum_apply(f);
