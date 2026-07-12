@@ -173,15 +173,64 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		 * FILLER. One frame either way, always to the learned master. */
 		stage_inputs(s, buf, planar);
 		if (d->with_join) {
-			/* Interleave the 0014 and 0013 cold-connect variants on successive grid
-			 * slots, as a real box does (S-1608 cold boot, 2026-07-11) — the master
-			 * echoes both back in its grant burst. */
-			len = s->coldconnect_alt
-				? reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac, s->src, counter,
-				                                   s->box_channels, planar, REAC_SAMPLES_PER_PKT)
-				: reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src, counter,
-				                              s->box_channels, planar, REAC_SAMPLES_PER_PKT);
-			s->coldconnect_alt ^= 1;
+			/* Escalate through the FULL cold-connect sequence a real S-1608 sends —
+			 * 0014 -> 0013 -> 0016 -> 001a (byte-matched to m5000-s1608 establish,
+			 * 2026-07-11). The 0016/001a carry the fuller box inventory the master
+			 * needs to register the box; emitting only 0014/0013 left the desk blind
+			 * (live M-5000 test, 2026-07-11). One variant per join grid slot. */
+			switch (s->coldconnect_phase % 8) {
+			case 1:
+				len = reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 2:
+				len = reac_ctrl_build_coldconnect_0016(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 3:
+				len = reac_ctrl_build_coldconnect_001a(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			case 4:
+				/* ANNOUNCE OUR SETUP — the master enrolls the box from this frame;
+				 * without it the desk never registers us (live M-5000 test). */
+				len = reac_ctrl_build_config_announce(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				break;
+			case 5:
+				/* the box also heartbeats DURING cold-connect, before any grant */
+				len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter,
+				          s->box_channels);
+				break;
+			case 6:
+				/* ANNOUNCE OUR EXACT MODEL — the ASCII name frame. Required for the
+				 * 0x84 family (S-0808 etc.) so the desk shows the real model, not the
+				 * generic family name (live M-200, 2026-07-11). Returns 0 for the 0x82
+				 * family (named by selector) -> emit a plain upstream filler instead. */
+				len = reac_ctrl_build_name_frame(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				if (len == 0)
+					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
+				break;
+			case 7:
+				/* The extra inventory frame (cdea 04 02 000d) some models send — the
+				 * mixer reads it WITH the 0016/001a inventory to name the exact model.
+				 * Returns 0 for models without it -> plain upstream filler. */
+				len = reac_ctrl_build_extra_frame(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels);
+				if (len == 0)
+					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
+				break;
+			default:
+				len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac, s->src,
+				          counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				break;
+			}
+			s->coldconnect_phase++;
 		} else {
 			len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
 			                                      s->box_channels, planar,
@@ -196,7 +245,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		 * occupies an audio slot, never an extra frame). */
 		stage_inputs(s, buf, planar);
 		if (d->with_heartbeat)
-			len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter);
+			len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter, s->box_channels);
 		else
 			len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src, counter,
 			                                      s->box_channels, planar,
@@ -204,7 +253,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		break;
 
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter);
+		len = reac_ctrl_build_box_hb(frame, s->fsm.master_mac, s->src, counter, s->box_channels);
 		break;
 	}
 
@@ -247,7 +296,22 @@ static void *slave_loop(void *arg)
 
 	uint8_t rxbuf[2048];
 
+	static const char *const st_name[] = {
+		"PHY_DOWN", "FLOOD_ANNOUNCE", "COLDCONNECT", "TX_MUTE", "ESTABLISHED", "DROP"
+	};
+	enum reac_fsm_state prev_state = s->fsm.state;
+	fprintf(stderr, "reac_slave: STATE %s\n", st_name[prev_state]);
+
 	while (atomic_load_explicit(&s->running, memory_order_acquire)) {
+		/* State-transition trace (task #130): the FSM's phase is the ground truth
+		 * for establishment — log every change so a live run shows FLOOD ->
+		 * COLDCONNECT -> (grant) TX_MUTE -> ESTABLISHED and any DROP/re-flood flap. */
+		if (s->fsm.state != prev_state) {
+			fprintf(stderr, "reac_slave: STATE %s -> %s%s\n",
+			        st_name[prev_state], st_name[s->fsm.state],
+			        s->fsm.state == FSM_DROP ? " (drop)" : "");
+			prev_state = s->fsm.state;
+		}
 		/* Apply a pending PHY change on THIS thread (the FSM owner). */
 		int want = atomic_load_explicit(&s->phy_up_req, memory_order_acquire);
 		if (want != s->phy_up_seen) {

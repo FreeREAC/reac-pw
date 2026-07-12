@@ -71,7 +71,8 @@ enum reac_master_emit {
 	REAC_M_EMIT_PROBE,      /* cdea 01 00 — the fixed M-300 probe (~115/s)      */
 	REAC_M_EMIT_SUB01,      /* cdea 01 01 — the fixed M-300 sub-message (~1/s)  */
 	REAC_M_EMIT_SUB02,      /* cdea 01 02 — the fixed M-300 sub-message (~1/s)  */
-	REAC_M_EMIT_GRANT,      /* cdea 04 03 — the ECHO of the box's JOIN block    */
+	REAC_M_EMIT_GRANT,      /* cdea 04 03 — one block of the model grant burst  */
+	REAC_M_EMIT_ENROLL,     /* cdea 01 03 000d — the pre-grant enroll/arm frame */
 	REAC_M_EMIT_CHANMAP,    /* cdea 01 03 0019 generated channel-map (1 of N)   */
 	REAC_M_EMIT_ANNOUNCE,   /* cfea master announce (generated: OUR MAC + I/O)  */
 };
@@ -80,8 +81,16 @@ enum reac_master_emit {
 enum reac_master_rx_event {
 	REAC_M_RX_BOX_BCAST_FILLER = 0, /* box presence-flood (diagnostic only)     */
 	REAC_M_RX_BOX_JOIN,             /* validated box cdea 04 03 cold-connect    */
-	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/hb/…) */
+	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/…)    */
+	REAC_M_RX_BOX_HEARTBEAT,        /* box cdea 01 03 0001 sel 0x81 keep-alive —
+	                                * the box's ESTABLISHED signal ("I am locked").
+	                                * Symmetric to the heartbeat our SLAVE emits in
+	                                * FSM_ESTABLISHED; its ARRIVAL is the definitive
+	                                * confirmation the real box has locked to us.   */
 	REAC_M_RX_BOX_BYE,              /* box heartbeat with selector 0x00         */
+	REAC_M_RX_BOX_CONFIG,          /* box config-announce cdea 01 03 0010 — the
+	                                * box declaring its setup; establishes even on
+	                                * a WARM RELINK (no cold-connect JOIN)        */
 };
 
 /* Why the last backward transition happened (for the caller's logging). */
@@ -141,6 +150,25 @@ struct reac_console_cfg {
 #define REAC_CONSOLE_CFG_S1608 \
 	((struct reac_console_cfg){ .out_channels = 8, .in_channels = 16, .console_field = 0 })
 
+/* A MIXER PROFILE — the desk reac-pw impersonates. The grant burst is box-defined
+ * (a box locks to any valid grant), so the only per-mixer identity is a small set
+ * of fields: the master MAC and the console-model byte (0 = V-Mixer M-200/M-300,
+ * 1 = OHRCA M-5000), which drives BOTH the cfea [19] and the ENROLL console byte
+ * (they carry the same 0/1 indicator, measured across matrix-m{200,300,5000}-*).
+ * Probe specials + cadence are currently the V-Mixer (M-200) set for every profile
+ * — a box still locks, but that is the remaining per-mixer fidelity item. */
+struct reac_mixer_profile {
+	const char *name;        /* CLI token: "m200" | "m300" | "m5000"          */
+	const char *display;     /* "M-200" ...                                   */
+	uint8_t     mac[6];      /* the desk's captured master MAC (default id)    */
+	uint8_t     console_field; /* cfea [19] + ENROLL console byte: 0=V-Mixer,1=OHRCA */
+};
+
+/* Look up a profile by CLI token; NULL if unknown. */
+const struct reac_mixer_profile *reac_mixer_profile_by_name(const char *name);
+/* Enumerate profiles for --help (index 0..N-1; NULL past the end). */
+const struct reac_mixer_profile *reac_mixer_profile_at(int i);
+
 struct reac_master {
 	enum reac_master_state state;
 	uint8_t  src[6];          /* our master MAC (Roland OUI) */
@@ -194,14 +222,25 @@ struct reac_master {
 	uint8_t  probe_blk[34];   /* the current probe [type|block], regenerated    */
 	uint8_t  filler_desc;     /* = current probe's checksum; stamped into FILLER */
 
-	/* GRANTING */
+	/* GRANTING — emit the master's own 32-frame grant burst (the cdea 04 03
+	 * sweep, byte-exact from a real M-200), one block per grant_stride slots,
+	 * then -> ESTABLISHED. grant_burst/_len select the burst for the AUTODETECTED
+	 * box model (reac_master_set_box → the recognizer's model); default S-0808. */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
-	uint8_t  join_blk[32];    /* the box's cold-connect block — echoed verbatim */
+	const uint8_t (*grant_burst)[34]; /* the selected model's burst table       */
+	int      grant_burst_len; /* rows in grant_burst                            */
+	uint8_t  join_blk[32];    /* the box's cold-connect block (diagnostic)      */
 	uint8_t  box_mac[6];      /* the joining box's L2 source */
 	unsigned grant_attempts;  /* windows opened (diagnostic) */
 
 	/* ESTABLISHED */
 	int      chanmap_cursor;  /* which generated chanmap frame is next (0..N-1) */
+	int      est_chanmap_tick; /* LOCKED-state chanmap heartbeat counter. A real
+	                            * M-200 runs the chanmap at a metronomic 1.00/s
+	                            * once locked (measured matrix-m200-s0808: 1004 ms
+	                            * gaps) — the box's sync keep-alive. The slower
+	                            * 1/cycle hunt rate (~0.37/s) left the box BLINKING
+	                            * (rig 2026-07-12). Phase-offset from cfea.        */
 	int      link_check;        /* countdown to peer-gone */
 	int      link_check_reload; /* ~6.5 s of frames (fps-scaled), the reload value */
 
@@ -214,6 +253,10 @@ struct reac_master {
 	 * (on-wire identity must match the L2 source — a mismatch is a documented
 	 * slave-disconnect trigger). */
 	uint8_t  announce_blk[34];
+
+	/* Per-instance ENROLL (cdea 01 03 000d), built from the mixer profile: the
+	 * console-model byte [8] = cfg.console_field (0 = V-Mixer, 1 = OHRCA). */
+	uint8_t  enroll_blk[34];
 };
 
 /* Initialize for a given source MAC, console config + frame rate (3675/4000/
@@ -224,6 +267,13 @@ struct reac_master {
  * byte-for-byte. Starts in IDLE; the first reac_master_next() enters PROBING. */
 void reac_master_init(struct reac_master *m, const uint8_t src[6],
                       const struct reac_console_cfg *cfg, int fps);
+
+/* Select the grant burst for the AUTODETECTED box (the recognizer, #137). Keyed
+ * on the box's in/out channel count so the master emits the correct model's
+ * grant sweep. Unknown widths keep the current (default S-0808) burst and the
+ * caller should log the fallback. Call from the FSM-owning thread on a box
+ * recognition. */
+void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
 
 /* Feed one classified RX event into the FSM (call from the FSM-owning thread
  * only). `box_src` is the frame's L2 source; `blk32` is the 32-byte control

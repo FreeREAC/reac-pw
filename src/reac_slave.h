@@ -82,7 +82,7 @@ struct reac_slave {
 	 * FSM's own counter is overridden with the master-derived value before emit. */
 	uint16_t counter_offset;
 	int      counter_locked;      /* 1 once the offset is latched (reset on PHY-up) */
-	int      coldconnect_alt;     /* toggles the cdea 04 03 block 0014<->0013, as a real box */
+	int      coldconnect_phase;   /* cycles the cdea 04 03 escalation 0014->0013->0016->001a */
 
 	/* diagnostics (read from any thread) */
 	_Atomic uint64_t rx_master_frames;  /* master downstream frames we locked to */
