@@ -71,6 +71,7 @@ reac_pw_src = [
   'src/reac_slave.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_boxreg.c',
 ]
 
 executable('reac-pw',
@@ -122,6 +123,12 @@ ctrl_test = executable('test_reac_ctrl',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)
+
+# --- unit test: the multi-box registry (fabric slot allocation + names) -------
+boxreg_test = executable('test_reac_boxreg',
+  ['tests/test_reac_boxreg.c', 'src/reac_boxreg.c'],
+  include_directories : [include_directories('src')])
+test('reac_boxreg', boxreg_test)
 
 # --- unit test: the JOIN/HOLD connection FSM (pure state machine) -------------
 fsm_test = executable('test_reac_fsm',
