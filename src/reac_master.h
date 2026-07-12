@@ -71,7 +71,8 @@ enum reac_master_emit {
 	REAC_M_EMIT_PROBE,      /* cdea 01 00 — the fixed M-300 probe (~115/s)      */
 	REAC_M_EMIT_SUB01,      /* cdea 01 01 — the fixed M-300 sub-message (~1/s)  */
 	REAC_M_EMIT_SUB02,      /* cdea 01 02 — the fixed M-300 sub-message (~1/s)  */
-	REAC_M_EMIT_GRANT,      /* cdea 04 03 — the ECHO of the box's JOIN block    */
+	REAC_M_EMIT_GRANT,      /* cdea 04 03 — one block of the model grant burst  */
+	REAC_M_EMIT_ENROLL,     /* cdea 01 03 000d — the pre-grant enroll/arm frame */
 	REAC_M_EMIT_CHANMAP,    /* cdea 01 03 0019 generated channel-map (1 of N)   */
 	REAC_M_EMIT_ANNOUNCE,   /* cfea master announce (generated: OUR MAC + I/O)  */
 };
@@ -80,7 +81,12 @@ enum reac_master_emit {
 enum reac_master_rx_event {
 	REAC_M_RX_BOX_BCAST_FILLER = 0, /* box presence-flood (diagnostic only)     */
 	REAC_M_RX_BOX_JOIN,             /* validated box cdea 04 03 cold-connect    */
-	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/hb/…) */
+	REAC_M_RX_BOX_UNICAST,          /* any unicast-to-us box frame (audio/…)    */
+	REAC_M_RX_BOX_HEARTBEAT,        /* box cdea 01 03 0001 sel 0x81 keep-alive —
+	                                * the box's ESTABLISHED signal ("I am locked").
+	                                * Symmetric to the heartbeat our SLAVE emits in
+	                                * FSM_ESTABLISHED; its ARRIVAL is the definitive
+	                                * confirmation the real box has locked to us.   */
 	REAC_M_RX_BOX_BYE,              /* box heartbeat with selector 0x00         */
 	REAC_M_RX_BOX_CONFIG,          /* box config-announce cdea 01 03 0010 — the
 	                                * box declaring its setup; establishes even on

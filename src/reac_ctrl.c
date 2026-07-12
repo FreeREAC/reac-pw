@@ -144,9 +144,11 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
 	if (!to_us)
 		return -1;   /* unicast between other parties */
 
-	/* Unicast-to-us box heartbeat: sel 0x81 keep-alive, sel 0x00 disconnect. */
+	/* Unicast-to-us box heartbeat: sel 0x81 keep-alive (the box's ESTABLISHED
+	 * "I am locked" signal — symmetric to the heartbeat our slave emits), sel 0x00
+	 * disconnect (BYE). */
 	if (out->kind == REAC_CTRL_BOX_HB) {
-		*ev = (out->sel == 0x00) ? REAC_M_RX_BOX_BYE : REAC_M_RX_BOX_UNICAST;
+		*ev = (out->sel == 0x00) ? REAC_M_RX_BOX_BYE : REAC_M_RX_BOX_HEARTBEAT;
 		return 0;
 	}
 	/* The box's config-announce (cdea 01 03 0010) is its SETUP DECLARATION — the
