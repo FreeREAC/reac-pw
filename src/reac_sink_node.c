@@ -72,7 +72,10 @@ static void on_process(void *data, struct spa_io_position *position)
 	const float *in[REAC_MAX_CHANNELS];
 	int have = 0;
 	for (int c = 0; c < n->channels; c++) {
-		float *b = pw_filter_get_dsp_buffer(n->ports[c], nframes);
+		/* Belt-and-braces: a NULL port (should never happen — the constructor now
+		 * fails if add_port returns NULL) is treated as unlinked, so we never deref
+		 * NULL in the RT path; the stage just carries silence for that slot. */
+		float *b = n->ports[c] ? pw_filter_get_dsp_buffer(n->ports[c], nframes) : NULL;
 		in[c] = b;            /* NULL if this port is unlinked this cycle */
 		if (b)
 			have++;
@@ -206,8 +209,15 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 				PW_KEY_AUDIO_CHANNEL, achan,
 				NULL),
 			NULL, 0);
-		if (n->ports[c])
-			n->ports[c]->channel = c;
+		/* A NULL port would later be handed to pw_filter_get_dsp_buffer on the RT
+		 * thread (SPA_CONTAINER_OF on NULL = a wild deref). Fail construction. */
+		if (!n->ports[c]) {
+			pw_filter_destroy(n->filter);
+			reac_pacer_close(&n->pacer);
+			free(n);
+			return NULL;
+		}
+		n->ports[c]->channel = c;
 	}
 
 	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, NULL, 0) < 0) {

@@ -68,7 +68,7 @@ static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
-	  "         [--box-channels N] [--src-mac M]\n"
+	  "         [--mixer M] [--box MODEL[:NAME]] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -82,6 +82,12 @@ static void usage(const char *p)
 	  "  --mixer M     master role: which Roland desk to impersonate (m200|m300|m5000;\n"
 	  "                default m200). Sets the master MAC + console model; the grants\n"
 	  "                are box-defined so any box locks to any profile.\n"
+	  "  --box MODEL[:NAME]  master role: declare the box on THIS segment (one REAC/VLAN\n"
+	  "                per box). MODEL is s0808|s1608|s4000s; sizes + labels reac:capture\n"
+	  "                to its inputs and reac:playback to its outputs. Optional :NAME sets\n"
+	  "                the openmixer label (default the model name).\n"
+	  "  --name NAME   per-instance PipeWire node suffix (reac-capture.NAME /\n"
+	  "                reac-playback.NAME) so one master per REAC VLAN/segment coexists.\n"
 	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: a Roland-OUI\n"
 	  "                stand-in (master 00:40:ab:00:00:01, slave 00:40:ab:c4:80:41).\n"
 	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
@@ -98,6 +104,7 @@ int main(int argc, char **argv)
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
 	int master_box_in = 0, master_box_out = 0; /* master: declared box widths (0 = 40 fabric) */
+	int box_set = 0;                /* --box given (a master-role option)         */
 	const char *box_label = NULL;   /* --box name: openmixer label for this box  */
 	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
 	const struct reac_mixer_profile *mixer =
@@ -109,7 +116,18 @@ int main(int argc, char **argv)
 		} else if (!strcmp(argv[i], "--live") && i + 1 < argc) {
 			rxcfg.kind = REAC_RX_LIVE; rxcfg.source = argv[++i];
 		} else if (!strcmp(argv[i], "--rate") && i + 1 < argc) {
-			rxcfg.forced_rate = atoi(argv[++i]);
+			/* Validate before it reaches the ring depth (sample_rate/4): a
+			 * negative/garbage rate underflows to a huge depth, next_pow2
+			 * overflows to a 0-slot ring with mask 0xFFFFFFFF, and the first
+			 * write scribbles the heap. Accept only sane audio rates — the REAC
+			 * world is the 44.1k/48k/88.2k/96k families. */
+			int rate = atoi(argv[++i]);
+			if (rate < 8000 || rate > 192000) {
+				fprintf(stderr, "reac-pw: bad --rate '%s' (want 8000..192000 Hz; "
+				        "REAC runs 44100/48000/88200/96000)\n", argv[i]);
+				return 2;
+			}
+			rxcfg.forced_rate = rate;
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
 		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
@@ -176,6 +194,7 @@ int main(int argc, char **argv)
 			master_box_in = bm->in_ch;
 			master_box_out = bm->out_ch;
 			if (!box_label) box_label = bm->display;
+			box_set = 1;
 		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
 			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
 		} else {
@@ -190,6 +209,16 @@ int main(int argc, char **argv)
 	if (reac_role_validate(role, tx_if != NULL) != 0) {
 		fprintf(stderr, "reac-pw: --role slave needs --tx IFNAME (the REAC NIC for the "
 		                "upstream return + handshake)\n");
+		return 2;
+	}
+	/* --box declares a MASTER-role box (sizes + labels reac:capture/reac:playback
+	 * to a real box on this segment); it is consumed only on the master path. As a
+	 * slave it is a silent no-op whose label still leaks into our node description —
+	 * reject the mix rather than mislead. A slave's own identity is --box-channels. */
+	if (role == REAC_ROLE_SLAVE && box_set) {
+		fprintf(stderr, "reac-pw: --box is a master-role option (it declares the box "
+		                "this master serves); for slave identity use --box-channels "
+		                "(e.g. --box-channels 16 = S-1608)\n");
 		return 2;
 	}
 

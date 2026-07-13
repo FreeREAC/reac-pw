@@ -130,6 +130,85 @@ int main(void)
 	}
 	CHK(hb_seen);
 
-	printf("OK: FSM JOIN gate + HOLD (re-arm / peer-gone / mac-change) + heartbeat\n");
+	/* (a) a MAC-change DROP against a STILL-FLOODING new master must RE-ESTABLISH.
+	 * The new master drives RX events (a flooding desk), not self-clocked ticks, so
+	 * DROP has to re-announce on RX or the slave sits dead. Re-establishment goes
+	 * back through the bounded flood (flood_frames reset), learns the NEW master,
+	 * and locks on its grant. */
+	establish(&fsm);
+	CHK(fsm.state == FSM_ESTABLISHED && memcmp(fsm.master_mac, M, 6) == 0);
+	{
+		struct reac_ctrl_parsed hb2b = mk(REAC_CTRL_MASTER_HB, M2);
+		struct reac_ctrl_parsed p2   = mk(REAC_CTRL_PROBE, M2);
+		struct reac_ctrl_parsed g2   = mk(REAC_CTRL_GRANT, M2);
+		o = reac_fsm_step(&fsm, FSM_EV_RX, &hb2b);          /* new MAC -> DROP */
+		CHK(o.state == FSM_DROP && fsm.drop_reason == FSM_DROP_MAC_CHANGE);
+		/* RX from the new master re-enters the bounded flood, reset to zero */
+		o = reac_fsm_step(&fsm, FSM_EV_RX, &p2);
+		CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST);
+		CHK(fsm.flood_frames == 1 && !fsm.have_master);
+		/* the next RX learns the NEW master; still bounded-flooding */
+		o = reac_fsm_step(&fsm, FSM_EV_RX, &p2);
+		CHK(fsm.state == FSM_FLOOD_ANNOUNCE && fsm.have_master &&
+		    memcmp(fsm.master_mac, M2, 6) == 0);
+		/* spend the flood -> cold-connect grid on the new master */
+		while (fsm.state == FSM_FLOOD_ANNOUNCE)
+			reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		CHK(fsm.state == FSM_COLDCONNECT);
+		/* the new master grants -> ACK window + dwell -> ESTABLISHED on M2 */
+		reac_fsm_step(&fsm, FSM_EV_RX, &g2);
+		int guard = 0;
+		while (fsm.state != FSM_ESTABLISHED &&
+		       guard++ < REAC_FSM_GRANT_ACK_FRAMES + REAC_FSM_TXMUTE_DWELL + 100)
+			reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		CHK(fsm.state == FSM_ESTABLISHED && memcmp(fsm.master_mac, M2, 6) == 0);
+	}
+
+	/* (b) a DROP with PHY still up self-clock re-floods on a TICK. */
+	establish(&fsm);
+	{
+		struct reac_ctrl_parsed hb2b = mk(REAC_CTRL_MASTER_HB, M2);
+		o = reac_fsm_step(&fsm, FSM_EV_RX, &hb2b);          /* MAC change -> DROP */
+		CHK(o.state == FSM_DROP);
+		o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST &&
+		    fsm.flood_frames == 1 && !fsm.have_master);
+	}
+
+	/* (c) a SECOND grant inside the post-grant ACK window must NOT restart the
+	 * window (guard: grant_ack == 0). A reset would keep re-arming the burst and
+	 * defer the settle to TX_MUTE. */
+	{
+		struct reac_ctrl_parsed g = mk(REAC_CTRL_GRANT, M);
+		reac_fsm_init(&fsm);
+		reac_fsm_step(&fsm, FSM_EV_PHY_UP, NULL);
+		reac_fsm_step(&fsm, FSM_EV_RX, &g);   /* FLOOD grant -> COLDCONNECT */
+		reac_fsm_step(&fsm, FSM_EV_RX, &g);   /* COLDCONNECT grant -> open ACK window */
+		CHK(fsm.state == FSM_COLDCONNECT && fsm.grant_ack > 0);
+		for (int i = 0; i < 100; i++)         /* let the window drain a bit */
+			reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
+		int ack_mid = fsm.grant_ack;
+		CHK(ack_mid > 0 && ack_mid < REAC_FSM_GRANT_ACK_FRAMES);
+		reac_fsm_step(&fsm, FSM_EV_RX, &g);   /* repeat grant: ignored, keeps draining */
+		CHK(fsm.state == FSM_COLDCONNECT && fsm.grant_ack == ack_mid - 1);
+	}
+
+	/* (d) a PHY flap mid-establishment resets cleanly to PHY_DOWN (master
+	 * forgotten, TX stopped) and re-announces from PHY-up. */
+	{
+		struct reac_ctrl_parsed g = mk(REAC_CTRL_GRANT, M);
+		reac_fsm_init(&fsm);
+		reac_fsm_step(&fsm, FSM_EV_PHY_UP, NULL);
+		reac_fsm_step(&fsm, FSM_EV_RX, &g);   /* -> COLDCONNECT, master learned */
+		CHK(fsm.state == FSM_COLDCONNECT && fsm.have_master);
+		o = reac_fsm_step(&fsm, FSM_EV_PHY_DOWN, NULL);
+		CHK(o.state == FSM_PHY_DOWN && o.action == FSM_ACT_STOP && !fsm.have_master);
+		o = reac_fsm_step(&fsm, FSM_EV_PHY_UP, NULL);
+		CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST &&
+		    fsm.flood_frames == 1);
+	}
+
+	printf("OK: FSM JOIN gate + HOLD (re-arm / peer-gone / mac-change) + heartbeat"
+	       " + DROP re-establish + PHY flap\n");
 	return 0;
 }

@@ -55,6 +55,14 @@ downstream sink, or the slave's upstream-return + handshake socket; needs
 `CAP_NET_RAW`, plus `CAP_SYS_NICE` for the master pacer's SCHED_FIFO). The slave
 role requires `--tx`.
 
+On the master, `--box MODEL[:NAME]` (`MODEL` = `s0808`, `s1608`, or `s4000s`)
+declares the single box on this REAC segment, sizing and labelling
+`reac:capture`/`reac:playback` to its real input/output width; the optional
+`:NAME` overrides the node label (default the model name). `--name NAME` suffixes
+the PipeWire node names (`reac-capture.NAME`, `reac-playback.NAME`) so one master
+per REAC VLAN/segment can coexist in the same graph. (`--box` is master-only; a
+slave's own width is `--box-channels`.)
+
 ## Node model
 
 The REAC broadcast is always 40 ch × 12 samples × 3 B; the sample rate lives in
