@@ -193,16 +193,25 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/* The MASTER owns the word clock. Default to 48 kHz: a box reads its rate from
-	 * the downstream CONTROL block (cfea/chanmap), NOT the frame cadence, and every
-	 * profile's blocks are byte-exact 48 kHz V-Mixer/M-300 captures — driving the
-	 * cadence at 96 kHz while the block still says 48 kHz makes the box stream 48 k
-	 * against our 96 k pacer (rig-verified 2026-07-12, both m200 and m5000). True
-	 * max-freq (96 kHz) needs the OHRCA 96 kHz downstream blocks extracted from the
-	 * M-5000 captures + a 96 k profile — tracked separately. `--rate` still forces
-	 * the cadence for experiments. */
-	if (role == REAC_ROLE_MASTER && rxcfg.forced_rate == 0)
+	/* The box infers its sample rate from the DESK MODEL we impersonate, NOT the
+	 * packet cadence: rig-diffed (2026-07-13) an M-5000 vs an M-300 downstream —
+	 * the only rate signal is the desk IDENTITY (OHRCA 1494-byte frames + `01`
+	 * console/chanmap markers => 96 kHz; V-Mixer 1492-byte frames + `00` => 48 kHz).
+	 * There is no explicit 48000/96000 field. reac-pw emits the 1492 V-Mixer frame
+	 * (reac_tx.c / reac_pacer.c hardcode REAC_FRAME_BYTES), so the box runs 48 kHz
+	 * whatever `--rate` says — and `--rate 96000` merely doubles OUR cadence against
+	 * a box still decoding 48 kHz frames (a broken mismatch). So the master rate is
+	 * a property of the model, not a free knob: force 48 kHz and reject a mismatch.
+	 * True 96 kHz needs the OHRCA emit path (1494 frames + chanmap `fe 01`), tracked
+	 * separately — see docs/MASTER-HARDWARE-VERIFY.md. */
+	if (role == REAC_ROLE_MASTER) {
+		if (rxcfg.forced_rate && rxcfg.forced_rate != 48000)
+			fprintf(stderr, "reac-pw: master emits 48 kHz V-Mixer downstream only; "
+			        "--rate %d ignored (the box takes its rate from the impersonated "
+			        "desk MODEL, not the cadence). 96 kHz needs the OHRCA emit path.\n",
+			        rxcfg.forced_rate);
 		rxcfg.forced_rate = 48000;
+	}
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
