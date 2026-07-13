@@ -73,6 +73,7 @@ reac_pw_src = [
   'src/reac_sink_node.c',
   'src/reac_gain.c',
   'src/reac_boxreg.c',
+  'src/reac_link_state.c',
 ]
 
 executable('reac-pw',
@@ -209,6 +210,15 @@ gain_test = executable('test_reac_gain',
   ['tests/test_reac_gain.c', 'src/reac_gain.c'],
   include_directories : [include_directories('src')])
 test('reac_gain', gain_test)
+
+# --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
+# Pins reac_link_state_from_master: every reac_master_state -> its badge string
+# (IDLE folded into "probing"), the just_dropped overlay, and the exact wire
+# strings a consumer (openmixer's stagebox card) matches on.
+link_state_test = executable('test_reac_link_state',
+  ['tests/test_reac_link_state.c', 'src/reac_link_state.c'],
+  include_directories : [include_directories('src')])
+test('reac_link_state', link_state_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
