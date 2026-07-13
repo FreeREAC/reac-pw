@@ -85,6 +85,27 @@ int reac_frame_ring_push(struct reac_frame_ring *r, const uint8_t *frame, uint16
 	return 1;
 }
 
+uint32_t reac_frame_ring_trim_count(uint32_t depth, uint32_t high, uint32_t target)
+{
+	if (depth <= high)
+		return 0;
+	if (target >= depth)   /* defensive: never an underflowing "drop" */
+		return 0;
+	return depth - target;
+}
+
+uint32_t reac_frame_ring_trim(struct reac_frame_ring *r, uint32_t high, uint32_t target)
+{
+	uint32_t depth = reac_frame_ring_readable(r);
+	uint32_t drop = reac_frame_ring_trim_count(depth, high, target);
+	if (drop == 0)
+		return 0;
+	/* CONSUMER moves tail — legal in SPSC (mirrors reac_ring_trim). */
+	uint32_t t = atomic_load_explicit(&r->tail, memory_order_relaxed);
+	atomic_store_explicit(&r->tail, (t + drop) & r->mask, memory_order_release);
+	return drop;
+}
+
 uint16_t reac_frame_ring_pop(struct reac_frame_ring *r, uint8_t *out)
 {
 	uint32_t t = atomic_load_explicit(&r->tail, memory_order_relaxed);
@@ -377,6 +398,40 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			break;
 		}
 	}
+
+	/* Fix 2a: ring-depth telemetry, GATED so the long-lived master's journald log
+	 * isn't flooded (a 200 ms drain would be ~5 lines/s, burying the FSM events).
+	 * Emit the depth line only when it is interesting: the depth moved by
+	 * >= REAC_PACER_DEPTH_LOG_BAND frames since the last line, the guard trimmed
+	 * this interval (rare + important), or the ~10 s heartbeat elapsed so a healthy
+	 * run still leaves a periodic "depth N" marker. The peak is read-and-reset ONLY
+	 * when we log, so the line shows the max over the whole (up to ~10 s) interval,
+	 * not just the last 200 ms. NOT counted as a drained event (callers key off the
+	 * event count). */
+	uint32_t rdepth = reac_frame_ring_readable(&p->ring);
+	uint64_t rtrims = atomic_load_explicit(&p->ring_trims, memory_order_relaxed);
+	uint64_t now = mono_ns();
+
+	uint32_t ddelta = rdepth > p->log_last_depth
+	                  ? rdepth - p->log_last_depth : p->log_last_depth - rdepth;
+	int emit = (ddelta >= REAC_PACER_DEPTH_LOG_BAND) ||
+	           (rtrims != p->log_last_trims) ||
+	           (now - p->log_last_ns >= REAC_PACER_DEPTH_LOG_HB_NS);
+	if (emit) {
+		uint32_t rpeak = atomic_exchange_explicit(&p->ring_depth_peak, rdepth,
+		                                          memory_order_relaxed);
+		uint64_t rframes = atomic_load_explicit(&p->ring_trim_frames,
+		                                        memory_order_relaxed);
+		double slot_ms = (double)p->period_ns / 1e6;
+		fprintf(out, "reac-pacer: ring depth %u frames (%.2f ms), peak %u (%.2f ms) | "
+		        "guard trims=%llu dropped=%llu frames\n",
+		        rdepth, (double)rdepth * slot_ms, rpeak, (double)rpeak * slot_ms,
+		        (unsigned long long)rtrims, (unsigned long long)rframes);
+		p->log_last_ns = now;
+		p->log_last_depth = rdepth;
+		p->log_last_trims = rtrims;
+	}
+
 	return count;
 }
 
@@ -443,6 +498,24 @@ static void *pacer_loop(void *arg)
 			if (rn <= 0)
 				break;                      /* EAGAIN = drained */
 			reac_pacer_rx_ingest(p, rxbuf, (size_t)rn);
+		}
+
+		/* Bound the graph->wire buffering (task #152). The graph clock can run
+		 * marginally fast vs. the fixed wire clock, walking the ring depth up over
+		 * long uptime toward the ~250 ms cap. As the ring's consumer (we own tail)
+		 * drop the OLDEST excess back to TARGET once depth exceeds HIGH — latency
+		 * stays bounded instead of drifting. Also record the peak depth for the
+		 * non-RT telemetry drain. Both are a handful of atomic ops; RT-safe. */
+		uint32_t depth = reac_frame_ring_readable(&p->ring);
+		if (depth > atomic_load_explicit(&p->ring_depth_peak, memory_order_relaxed))
+			atomic_store_explicit(&p->ring_depth_peak, depth, memory_order_relaxed);
+		uint32_t trimmed = reac_frame_ring_trim(&p->ring,
+		                                        REAC_PACER_RING_HIGH_FRAMES,
+		                                        REAC_PACER_RING_TARGET_FRAMES);
+		if (trimmed) {
+			atomic_fetch_add_explicit(&p->ring_trims, 1, memory_order_relaxed);
+			atomic_fetch_add_explicit(&p->ring_trim_frames, trimmed,
+			                          memory_order_relaxed);
 		}
 
 		/* Pull the next encoded frame; on underrun emit a silent FILLER so the
