@@ -27,6 +27,8 @@
 #include "reac_tx.h"
 #include "reac_pacer.h"
 #include "reac_gain.h"
+#include "reac_link_state.h"
+#include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
 
 #include <reac/reac.h>
 #include <pipewire/pipewire.h>
@@ -90,6 +92,16 @@ struct reac_sink_node {
 	_Atomic float chan_target[REAC_MAX_CHANNELS];
 	float chan_cur[REAC_MAX_CHANNELS];
 	float ramp_step;
+
+	/* reac.link-state / reac.box-model / reac.box-width (task #154's stagebox-
+	 * badge need): MAIN-LOOP-only shadow of what was last stamped into the
+	 * filter's node properties, so on_log_timer only calls
+	 * pw_filter_update_properties when something actually changed. Sourced from
+	 * the pacer's cross-thread-safe atomics (fsm_state, drops[], recognized_box)
+	 * — never touched from on_process (RT). */
+	enum reac_link_state link_state_last;
+	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
+	const struct reac_box_model *box_model_last;
 };
 
 /* REALTIME. Pull this quantum's PCM from the input ports, accumulate into the
@@ -296,15 +308,67 @@ static const struct pw_filter_events filter_events = {
 	.param_changed = on_param_changed,
 };
 
-/* MAIN LOOP (non-RT): drain the pacer's FSM event ring to stderr. The pacer
- * thread is SCHED_FIFO and must not touch stdio; it logs into a lock-free ring
- * and this 200 ms timer formats it — so a live power-cycle prints the complete
- * establishment transcript (presence edges, JOIN hex dumps, transitions). */
+/* MAIN LOOP: stamp reac.link-state / reac.box-model / reac.box-width (task
+ * #154's stagebox-badge need) from the pacer's cross-thread-safe snapshot,
+ * re-advertising via pw_filter_update_properties only when something actually
+ * changed since the last poll — the node-properties analogue of sink_publish's
+ * SPA_PARAM_Props re-advertise. Reads ONLY atomics the pacer thread already
+ * publishes for cross-thread use (fsm_state, drops[], recognized_box); never
+ * touches the RT process() path. Called from on_log_timer, the pacer's
+ * existing non-RT drain hook — see reac_link_state.h for the mapping + the
+ * "dropped" one-shot-overlay rationale. */
+static void sink_publish_link_props(struct reac_sink_node *n)
+{
+	if (!n->filter)
+		return;
+
+	uint64_t drops_total = 0;
+	for (int i = 0; i < 8; i++)
+		drops_total += atomic_load_explicit(&n->pacer.drops[i], memory_order_relaxed);
+	int just_dropped = (drops_total != n->link_drops_seen);
+	n->link_drops_seen = drops_total;
+
+	enum reac_master_state st = (enum reac_master_state)
+		atomic_load_explicit(&n->pacer.fsm_state, memory_order_acquire);
+	enum reac_link_state ls = reac_link_state_from_master(st, just_dropped);
+
+	const struct reac_box_model *bm =
+		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+
+	if (ls == n->link_state_last && bm == n->box_model_last)
+		return; /* unchanged: do not spam pw_filter_update_properties */
+	n->link_state_last = ls;
+	n->box_model_last = bm;
+
+	char width[16];
+	if (bm)
+		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
+	else
+		snprintf(width, sizeof width, "0x0");
+
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_LINK_STATE, reac_link_state_name(ls),
+		REAC_PROP_BOX_MODEL,  bm ? bm->token : "none",
+		REAC_PROP_BOX_WIDTH,  width,
+		NULL);
+	if (props) {
+		pw_filter_update_properties(n->filter, NULL, &props->dict);
+		pw_properties_free(props);
+	}
+}
+
+/* MAIN LOOP (non-RT): drain the pacer's FSM event ring to stderr, then
+ * re-stamp the link-state node properties from the same non-RT cadence. The
+ * pacer thread is SCHED_FIFO and must not touch stdio (or PipeWire API); it
+ * logs into a lock-free ring and this 200 ms timer formats it — so a live
+ * power-cycle prints the complete establishment transcript (presence edges,
+ * JOIN hex dumps, transitions) AND keeps reac.link-state live. */
 static void on_log_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct reac_sink_node *n = data;
 	reac_pacer_log_drain(&n->pacer, stderr);
+	sink_publish_link_props(n);
 }
 
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
@@ -383,6 +447,14 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 			/* The wire is the rate authority; advertise the REAC rate so PipeWire
 			 * resamples whatever the app plays into our pps. */
 			PW_KEY_NODE_RATE, rate_str,
+			/* Correct-at-boot badge props (task #154): the pacer thread hasn't
+			 * started yet at this point, but a real master enters PROBING
+			 * unconditionally on its first frame (#130) — IDLE is a sub-ms
+			 * transient, so "probing" is truthful from t=0. Kept live by
+			 * sink_publish_link_props on the 200 ms log-timer below. */
+			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
+			REAC_PROP_BOX_MODEL, "none",
+			REAC_PROP_BOX_WIDTH, "0x0",
 			NULL),
 		&filter_events, n);
 	if (!n->filter) {
@@ -390,6 +462,9 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		free(n);
 		return NULL;
 	}
+	n->link_state_last = REAC_LINK_PROBING;
+	n->box_model_last = NULL;
+	n->link_drops_seen = 0;
 
 	for (int c = 0; c < n->channels; c++) {
 		char pname[24], achan[12];
