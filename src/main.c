@@ -68,7 +68,7 @@ static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
-	  "         [--box-channels N] [--src-mac M]\n"
+	  "         [--mixer M] [--box MODEL[:NAME]] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -82,6 +82,12 @@ static void usage(const char *p)
 	  "  --mixer M     master role: which Roland desk to impersonate (m200|m300|m5000;\n"
 	  "                default m200). Sets the master MAC + console model; the grants\n"
 	  "                are box-defined so any box locks to any profile.\n"
+	  "  --box MODEL[:NAME]  master role: declare the box on THIS segment (one REAC/VLAN\n"
+	  "                per box). MODEL is s0808|s1608|s4000s; sizes + labels reac:capture\n"
+	  "                to its inputs and reac:playback to its outputs. Optional :NAME sets\n"
+	  "                the openmixer label (default the model name).\n"
+	  "  --name NAME   per-instance PipeWire node suffix (reac-capture.NAME /\n"
+	  "                reac-playback.NAME) so one master per REAC VLAN/segment coexists.\n"
 	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: a Roland-OUI\n"
 	  "                stand-in (master 00:40:ab:00:00:01, slave 00:40:ab:c4:80:41).\n"
 	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
