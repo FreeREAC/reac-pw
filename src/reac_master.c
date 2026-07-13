@@ -172,6 +172,18 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 	return &MIXER_PROFILES[i];
 }
 
+int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
+{
+	int native = (mixer && mixer->console_field != 0) ? 96000 : 48000;
+	if (clamped)
+		*clamped = 0;
+	if (mixer && mixer->console_field != 0)
+		return requested ? requested : native;   /* OHRCA: honor --rate, default 96k */
+	if (requested && requested != native && clamped)
+		*clamped = 1;                            /* V-Mixer: 48k always, report the override */
+	return native;
+}
+
 #define REAC_M_GRANT_BURST_LEN 32
 static const uint8_t GRANT_BURST[REAC_M_GRANT_BURST_LEN][34] = {
 	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe, 0x0f, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12, 0x01, 0x00, 0x06, 0x00, 0x01, 0x00, 0x78, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },

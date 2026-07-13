@@ -519,5 +519,66 @@ int main(void)
 	       "forward path; presence never grants; JOIN->GRANT-echo->first-unicast->"
 	       "ESTABLISHED; backward-only fallbacks; continuous 5-message cadence both "
 	       "states; free-running counter)\n");
+
+	/* ---- task #156: 96 kHz OHRCA emit is PARAMETERIZED off the 48k path ------
+	 * "96k is not anything different, same state diagram, doubled frequency" —
+	 * verify the master rate follows the mixer profile's console_field, NOT a
+	 * compile-time 48k assumption, and that the frame SHAPE (REAC_FRAME_BYTES)
+	 * is unaffected by either the profile or the rate (the #156 trailer RE:
+	 * reac_tx.h / tests/test_reac_tx.c). */
+	{
+		const struct reac_mixer_profile *m200 = reac_mixer_profile_by_name("m200");
+		const struct reac_mixer_profile *m300 = reac_mixer_profile_by_name("m300");
+		const struct reac_mixer_profile *m5000 = reac_mixer_profile_by_name("m5000");
+		CHK(m200 && m300 && m5000);
+		CHK(m200->console_field == 0 && m300->console_field == 0);
+		CHK(m5000->console_field == 1);
+
+		int clamped;
+
+		/* V-Mixer (m200/m300): ALWAYS 48 kHz, whatever --rate says (unset,
+		 * matching, or mismatched) — the original clamp, now profile-driven. */
+		CHK(reac_mixer_resolve_rate(m200, 0, &clamped) == 48000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, 48000, &clamped) == 48000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, 96000, &clamped) == 48000 && clamped);
+		CHK(reac_mixer_resolve_rate(m300, 96000, &clamped) == 48000 && clamped);
+
+		/* OHRCA (m5000): native 96 kHz when --rate is unset; honors an explicit
+		 * --rate (no clamp — it is the desk that gates 48k, not us). */
+		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == 96000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 96000, &clamped) == 96000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 48000, &clamped) == 48000 && !clamped);
+
+		/* fps = rate/REAC_SAMPLES_PER_PKT (reac_sink_node.c) for each resolved
+		 * rate; the pacer's per-fps period (reac_pacer_period_ns) is already
+		 * covered by test_reac_pacer.c — pin the rate->fps mapping here. */
+		int fps_m200_48k  = reac_mixer_resolve_rate(m200, 0, NULL) / REAC_SAMPLES_PER_PKT;
+		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, 0, NULL) / REAC_SAMPLES_PER_PKT;
+		CHK(fps_m200_48k == 4000);
+		CHK(fps_m5000_96k == 8000);
+
+		/* frame SHAPE is identical for both: reac_tx_build takes no mixer/rate
+		 * input at all, so the emitted frame is REAC_FRAME_BYTES regardless. */
+		static const uint8_t src[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		uint8_t frame[REAC_FRAME_BYTES];
+		float *planar[REAC_MAX_CHANNELS] = { 0 };
+		CHK(reac_tx_build(frame, planar, 0, REAC_SAMPLES_PER_PKT, 0, src) == REAC_FRAME_BYTES);
+
+		/* the master FSM itself scales purely off fps for both profiles (no 48k
+		 * assumption baked into reac_master_init: cycle_len/chanmap_off/etc are
+		 * fps*K/4000, see reac_master_init). console_field only changes the
+		 * stamped identity bytes, not the cadence math. */
+		struct reac_master mm200, mm5000;
+		reac_master_init(&mm200, m200->mac, NULL, fps_m200_48k);
+		reac_master_init(&mm5000, m5000->mac, NULL, fps_m5000_96k);
+		CHK(mm200.fps == 4000 && mm5000.fps == 8000);
+		CHK(mm5000.cycle_len == mm200.cycle_len * 2);      /* fps doubled -> cycle doubled */
+		CHK(mm5000.chanmap_off == mm200.chanmap_off * 2);
+
+		printf("OK: --mixer m5000 resolves 96 kHz (48k for V-Mixer profiles "
+		       "unchanged), fps = rate/12 (4000 @48k / 8000 @96k), frame size "
+		       "stays REAC_FRAME_BYTES for both\n");
+	}
+
 	return 0;
 }
