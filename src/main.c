@@ -224,22 +224,30 @@ int main(int argc, char **argv)
 
 	/* The box infers its sample rate from the DESK MODEL we impersonate, NOT the
 	 * packet cadence: rig-diffed (2026-07-13) an M-5000 vs an M-300 downstream —
-	 * the only rate signal is the desk IDENTITY (OHRCA 1494-byte frames + `01`
-	 * console/chanmap markers => 96 kHz; V-Mixer 1492-byte frames + `00` => 48 kHz).
-	 * There is no explicit 48000/96000 field. reac-pw emits the 1492 V-Mixer frame
-	 * (reac_tx.c / reac_pacer.c hardcode REAC_FRAME_BYTES), so the box runs 48 kHz
-	 * whatever `--rate` says — and `--rate 96000` merely doubles OUR cadence against
-	 * a box still decoding 48 kHz frames (a broken mismatch). So the master rate is
-	 * a property of the model, not a free knob: force 48 kHz and reject a mismatch.
-	 * True 96 kHz needs the OHRCA emit path (1494 frames + chanmap `fe 01`), tracked
-	 * separately — see docs/MASTER-HARDWARE-VERIFY.md. */
+	 * the rate signal is the desk IDENTITY (cfea console byte + ENROLL console
+	 * byte: `01` = OHRCA/M-5000 => 96 kHz native, `00` = V-Mixer/M-200,M-300 =>
+	 * 48 kHz only). There is no explicit 48000/96000 field. The downstream FRAME
+	 * SHAPE itself does NOT vary by model (task #156 RE: the "1494-byte OHRCA
+	 * frame" some captures show is a mirror/SPAN capture artifact — the 2 extra
+	 * bytes are the standard Ethernet FCS, not a REAC field; see reac_tx.h /
+	 * tests/test_reac_tx.c), so the only thing that changes for 96 kHz is the
+	 * pacer's cadence (fps = rate/12, already rate-driven) and the console-
+	 * identity bytes (already wired through --mixer's console_field).
+	 *
+	 * A V-Mixer desk has no wire rate field at all, so it is ALWAYS 48 kHz
+	 * regardless of `--rate` (reac_mixer_resolve_rate) — that part of the
+	 * original clamp is preserved. An OHRCA desk (M-5000) is native 96 kHz and
+	 * honors `--rate`; see docs/MASTER-HARDWARE-VERIFY.md. */
 	if (role == REAC_ROLE_MASTER) {
-		if (rxcfg.forced_rate && rxcfg.forced_rate != 48000)
-			fprintf(stderr, "reac-pw: master emits 48 kHz V-Mixer downstream only; "
-			        "--rate %d ignored (the box takes its rate from the impersonated "
-			        "desk MODEL, not the cadence). 96 kHz needs the OHRCA emit path.\n",
-			        rxcfg.forced_rate);
-		rxcfg.forced_rate = 48000;
+		int clamped = 0;
+		int resolved = reac_mixer_resolve_rate(mixer, rxcfg.forced_rate, &clamped);
+		if (clamped)
+			fprintf(stderr, "reac-pw: master impersonating %s emits %d Hz "
+			        "V-Mixer downstream only; --rate %d ignored (the box takes "
+			        "its rate from the impersonated desk MODEL, not the "
+			        "cadence) — use --mixer m5000 for 96 kHz.\n",
+			        mixer->display, resolved, rxcfg.forced_rate);
+		rxcfg.forced_rate = resolved;
 	}
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
