@@ -271,7 +271,8 @@ int main(int argc, char **argv)
 	 * --box, the full 40-slot fabric. Slave: the source is the 40-ch downstream. */
 	int src_ch = (role == REAC_ROLE_MASTER) ? master_box_in : 0;
 	struct reac_source_node *src = reac_source_node_new(loop, &ring, &rx, rx.sample_rate,
-	                                                    src_ch, inst_name, box_label);
+	                                                    src_ch, inst_name, box_label,
+	                                                    role == REAC_ROLE_MASTER);
 	if (!src) {
 		fprintf(stderr, "reac-pw: failed to create reac:capture node\n");
 		return 1;

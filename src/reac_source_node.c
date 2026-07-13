@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_source_node.h"
+#include "reac_link_state.h"
 
 #include <reac/reac.h>
 #include <spa/param/audio/format-utils.h>
@@ -143,7 +144,8 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               int sample_rate,
                                               int channels,
                                               const char *inst,
-                                              const char *label)
+                                              const char *label,
+                                              int master_role)
 {
 	struct reac_source_node *n = calloc(1, sizeof *n);
 	if (!n)
@@ -173,23 +175,30 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		         rx && rx->cfg.accept == REAC_RX_ACCEPT_UPSTREAM
 		           ? "box mic inputs" : "master downstream");
 
-	n->filter = pw_filter_new_simple(
-		loop,
-		"reac:capture",
-		pw_properties_new(
-			PW_KEY_MEDIA_TYPE, "Audio",
-			PW_KEY_MEDIA_CATEGORY, "Capture",  /* a source produces audio */
-			PW_KEY_MEDIA_CLASS, "Audio/Source",
-			PW_KEY_MEDIA_ROLE, "Production",
-			PW_KEY_NODE_NAME, nodename,
-			PW_KEY_NODE_DESCRIPTION, desc,
-			/* Follower (default): the DAC/PHC drives the graph and PipeWire
-			 * async-resamples our REAC clock into it. To make REAC the graph
-			 * DRIVER instead, add PW_KEY_NODE_DRIVER "true" + a clock rate and
-			 * register a clock source — see NATIVE-REAC-DESIGN.md Section 3.4. */
-			PW_KEY_NODE_RATE, rate_str,        /* advertise the recovered REAC rate */
-			NULL),
-		&filter_events, n);
+	struct pw_properties *props = pw_properties_new(
+		PW_KEY_MEDIA_TYPE, "Audio",
+		PW_KEY_MEDIA_CATEGORY, "Capture",  /* a source produces audio */
+		PW_KEY_MEDIA_CLASS, "Audio/Source",
+		PW_KEY_MEDIA_ROLE, "Production",
+		PW_KEY_NODE_NAME, nodename,
+		PW_KEY_NODE_DESCRIPTION, desc,
+		/* Follower (default): the DAC/PHC drives the graph and PipeWire
+		 * async-resamples our REAC clock into it. To make REAC the graph
+		 * DRIVER instead, add PW_KEY_NODE_DRIVER "true" + a clock rate and
+		 * register a clock source — see NATIVE-REAC-DESIGN.md Section 3.4. */
+		PW_KEY_NODE_RATE, rate_str,        /* advertise the recovered REAC rate */
+		NULL);
+	/* CREATE-TIME-ONLY badge props (task #154), master role only — see the
+	 * header doc for why: no live update here (this node has no pacer handle),
+	 * and the slave-role link state is a different FSM entirely. */
+	if (props && master_role) {
+		pw_properties_set(props, REAC_PROP_LINK_STATE,
+		                  reac_link_state_name(REAC_LINK_PROBING));
+		pw_properties_set(props, REAC_PROP_BOX_MODEL, "none");
+		pw_properties_set(props, REAC_PROP_BOX_WIDTH, "0x0");
+	}
+
+	n->filter = pw_filter_new_simple(loop, "reac:capture", props, &filter_events, n);
 	if (!n->filter) {
 		free(n);
 		return NULL;
