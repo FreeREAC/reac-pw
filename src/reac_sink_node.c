@@ -28,6 +28,7 @@
 #include "reac_pacer.h"
 #include "reac_gain.h"
 #include "reac_link_state.h"
+#include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
 
 #include <reac/reac.h>
@@ -61,14 +62,10 @@
  * frame-ring depth — each queued frame is REAC_SAMPLES_PER_PKT samples clocked
  * out one per slot. We advertise it as SPA_PARAM_ProcessLatency so PipeWire's
  * latency algorithm accounts for it (A/V sync, `pw-top`), which the node did not
- * do before (it published an empty ProcessLatency, so the graph thought it added
- * zero delay). REAC_SINK_STEADY_DEPTH_FRAMES seeds the advertised value at
- * connect, before the ring has filled: ~13 frames measured on-rig (task #151,
- * wire-verified 3.4 ms @48k, sigma 2 us). REAC_SINK_LAT_MATERIAL_NS is the
- * re-advertise threshold — below it we leave the last value be, so the ring's
- * sample-to-sample jitter never spams pw_filter_update_params. */
-#define REAC_SINK_STEADY_DEPTH_FRAMES  13u
-#define REAC_SINK_LAT_MATERIAL_NS      1000000LL   /* 1 ms */
+ * do before (it published an empty ProcessLatency). The ring depth SAWTOOTHS with
+ * each producer burst (measured live ~38..113 frames), so the value is SMOOTHED
+ * (reac_lat: an EMA of the drain-observed depth, converging to the sawtooth mean)
+ * and re-advertised only on a material sustained step — see reac_lat.h. */
 
 struct port_in { /* per-port user data PipeWire hands back */
 	int channel;
@@ -118,9 +115,9 @@ struct reac_sink_node {
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
 
-	/* Last-advertised SPA_PARAM_ProcessLatency (ns); the 200 ms log timer
-	 * re-advertises only on a material change (see sink_publish_latency). */
-	int64_t lat_ns_last;
+	/* ProcessLatency smoother (task #152): EMA of the drain-observed ring depth +
+	 * re-advertise hysteresis, driven from the 200 ms log timer. See reac_lat.h. */
+	struct reac_lat lat;
 };
 
 /* REALTIME. Pull this quantum's PCM from the input ports, accumulate into the
@@ -384,36 +381,25 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 /* MAIN LOOP: advertise the node's graph->wire delay as SPA_PARAM_ProcessLatency
  * so PipeWire's latency algorithm folds it into the graph latency (the default
  * pw_filter latency handling applies a node ProcessLatency — we do NOT set
- * PW_FILTER_FLAG_CUSTOM_LATENCY). The delay is the 12-sample staging accumulator
- * plus the pacer frame-ring depth (each frame = REAC_SAMPLES_PER_PKT samples,
- * clocked out one per slot). The live depth is read off the non-RT path
- * (reac_frame_ring_readable is a 2-atomic load, safe cross-thread); before the
- * ring has filled (or in silence) we floor it to the measured steady-state
- * constant so the advertised value stays the representative playing latency.
- * Re-advertise only on a material (>= 1 ms) change — the SPA_PARAM_Props /
- * link-state re-advertise pattern — so ring jitter doesn't churn the graph. */
-static void sink_publish_latency(struct reac_sink_node *n, bool force)
+ * PW_FILTER_FLAG_CUSTOM_LATENCY). The instantaneous ring depth sawtooths with the
+ * producer bursts, so reporting it raw churns the graph every poll; instead feed
+ * the drain-observed depth through the reac_lat EMA smoother, which yields a
+ * STABLE contract latency and re-advertises only on a material sustained step
+ * (see reac_lat.h). reac_frame_ring_readable is a 2-atomic load, safe on the
+ * non-RT path. Returns immediately (no update_params) when the value is stable. */
+static void sink_publish_latency(struct reac_sink_node *n)
 {
 	if (!n->filter)
 		return;
 
 	uint32_t depth = n->pacer_open ? reac_frame_ring_readable(&n->pacer.ring) : 0;
-	if (depth < REAC_SINK_STEADY_DEPTH_FRAMES)
-		depth = REAC_SINK_STEADY_DEPTH_FRAMES;     /* seed/floor: pre-fill or silence */
-	uint32_t lat_samples = (uint32_t)REAC_SAMPLES_PER_PKT * (1u + depth);
-	int64_t lat_ns = n->sample_rate > 0
-		? (int64_t)lat_samples * 1000000000LL / n->sample_rate
+	int64_t lat_ns;
+	if (!reac_lat_poll(&n->lat, depth, n->sample_rate, &lat_ns))
+		return;   /* smoothed latency unchanged: no re-advertise, no churn */
+
+	uint32_t lat_samples = n->sample_rate > 0
+		? (uint32_t)((double)lat_ns * (double)n->sample_rate / 1e9 + 0.5)
 		: 0;
-
-	if (!force) {
-		int64_t d = lat_ns - n->lat_ns_last;
-		if (d < 0)
-			d = -d;
-		if (d < REAC_SINK_LAT_MATERIAL_NS)
-			return;                                /* not worth a re-advertise */
-	}
-	n->lat_ns_last = lat_ns;
-
 	struct spa_process_latency_info pl = {
 		.quantum = 0.0f,
 		.rate = (int32_t)lat_samples,   /* samples at the node (wire) rate */
@@ -438,7 +424,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	struct reac_sink_node *n = data;
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
-	sink_publish_latency(n, false);
+	sink_publish_latency(n);
 }
 
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
@@ -535,7 +521,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
 	n->link_drops_seen = 0;
-	n->lat_ns_last = 0;
+	reac_lat_init(&n->lat);
 
 	for (int c = 0; c < n->channels; c++) {
 		char pname[24], achan[12];
@@ -580,10 +566,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	}
 
-	/* Advertise the graph->wire delay now (seeded from the measured steady-state
-	 * depth; the pacer ring is still empty at connect). Kept live by
+	/* Advertise the graph->wire delay now (the first poll seeds the EMA from the
+	 * still-empty ring and always advertises). Kept live + smoothed by
 	 * sink_publish_latency on the 200 ms log timer below as the ring depth moves. */
-	sink_publish_latency(n, true);
+	sink_publish_latency(n);
 
 	/* Start the SCHED_FIFO pacer thread. The master FSM probes immediately and
 	 * unconditionally (a real unlinked M-5000 always hunts) and only GRANTS on
