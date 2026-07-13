@@ -57,12 +57,15 @@ static void on_process(void *data, struct spa_io_position *position)
 	float *dst[REAC_MAX_CHANNELS];
 	int got_ports = 0;
 	for (int c = 0; c < n->channels; c++) {
-		float *buf = pw_filter_get_dsp_buffer(n->ports[c], nframes);
+		/* Belt-and-braces: a NULL port (should never happen — the constructor now
+		 * fails if add_port returns NULL) is treated like an unlinked buffer so the
+		 * ring planes stay aligned and we never deref NULL in the RT path. */
+		float *buf = n->ports[c] ? pw_filter_get_dsp_buffer(n->ports[c], nframes) : NULL;
 		if (buf) {
 			dst[c] = buf;
 			got_ports++;
 		} else {
-			dst[c] = n->scratch; /* unlinked: discard into scratch */
+			dst[c] = n->scratch; /* unlinked or NULL port: discard into scratch */
 		}
 	}
 	if (got_ports == 0)
@@ -213,8 +216,15 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 				PW_KEY_AUDIO_CHANNEL, achan,
 				NULL),
 			NULL, 0);
-		if (n->ports[c])
-			n->ports[c]->channel = c;
+		/* A NULL port would later be handed to pw_filter_get_dsp_buffer on the RT
+		 * thread (SPA_CONTAINER_OF on NULL = a wild deref). Fail construction rather
+		 * than return a live-but-broken node. */
+		if (!n->ports[c]) {
+			pw_filter_destroy(n->filter);
+			free(n);
+			return NULL;
+		}
+		n->ports[c]->channel = c;
 	}
 
 	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, NULL, 0) < 0) {
