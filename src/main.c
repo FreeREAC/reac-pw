@@ -98,6 +98,7 @@ int main(int argc, char **argv)
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
 	int master_box_in = 0, master_box_out = 0; /* master: declared box widths (0 = 40 fabric) */
+	int box_set = 0;                /* --box given (a master-role option)         */
 	const char *box_label = NULL;   /* --box name: openmixer label for this box  */
 	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
 	const struct reac_mixer_profile *mixer =
@@ -187,6 +188,7 @@ int main(int argc, char **argv)
 			master_box_in = bm->in_ch;
 			master_box_out = bm->out_ch;
 			if (!box_label) box_label = bm->display;
+			box_set = 1;
 		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
 			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
 		} else {
@@ -201,6 +203,16 @@ int main(int argc, char **argv)
 	if (reac_role_validate(role, tx_if != NULL) != 0) {
 		fprintf(stderr, "reac-pw: --role slave needs --tx IFNAME (the REAC NIC for the "
 		                "upstream return + handshake)\n");
+		return 2;
+	}
+	/* --box declares a MASTER-role box (sizes + labels reac:capture/reac:playback
+	 * to a real box on this segment); it is consumed only on the master path. As a
+	 * slave it is a silent no-op whose label still leaks into our node description —
+	 * reject the mix rather than mislead. A slave's own identity is --box-channels. */
+	if (role == REAC_ROLE_SLAVE && box_set) {
+		fprintf(stderr, "reac-pw: --box is a master-role option (it declares the box "
+		                "this master serves); for slave identity use --box-channels "
+		                "(e.g. --box-channels 16 = S-1608)\n");
 		return 2;
 	}
 
