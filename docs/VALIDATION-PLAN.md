@@ -18,10 +18,45 @@ Each step gates the next; merge a PR only after the step that validates it passe
 4. **Upstream audio** — run with `REAC_DEBUG=1`, make sound into port 9.
    Pass: `reac_rx: … active_ch=16 peak=…` rises on the mic channel. → **PR #8 mergeable.**
 
-### Stage B — box outputs (assumption to confirm)
+### Stage B — box outputs
 5. Patch an openmixer bus → `reac-playback:playback_01`, feed tone, listen on box output 1.
    Pass: tone at the box out. If silent → the box output slots aren't 0..7 (roadmap: output-slot RE),
    not a blocker for inputs.
+
+**Result: FAILED 2026-07-13 — VIOLENT BURST, near-equipment-damage.** A −20 dBFS
+440 Hz sine driven to box output 8 (S-1608, real hardware) came out as an
+immediate near-full-scale burst that almost damaged a studio monitor.
+
+- **Root cause.** Commit 895afb9 re-encoded the downstream master→box broadcast
+  with the obs-h8819 even/odd channel-pair braid (`reac_tx.c`), on the mistaken
+  belief that the box de-braids downstream the way it braids its own upstream
+  return (#108) and the per-generation guess of #135 (M-200/M-300 braid). The
+  downstream broadcast is **plain-LE sample-major** — rig-validated against a
+  live M-5000 (`reac_decode`: plain-LE coherence 0.999, braid = noise). A single
+  S-1608 de-interleaves its output fabric ONE way and works with a real M-5000's
+  plain-LE downstream, so it reads plain-LE from us too. Braiding shifts every
+  odd output's MID byte into its HIGH lane: a −20 dBFS tone on output 8 (ch 7)
+  decoded plain-LE by the box comes back at −0.09 dBFS (+19.9 dB, near full
+  scale) and bleeds −19.9 dBFS onto output 7. Measured numerically and re-checked
+  on the wire (mirror capture of the plain-LE binary: clean tone on the fed odd
+  channel, zero pair-neighbour bleed, no near-full-scale peak anywhere).
+- **Fix.** `reac_tx.c` reverted to plain-LE sample-major (the exact inverse of
+  `reac_decode`); only the downstream master TX changes. The upstream box→master
+  braid (`reac_ctrl.c place_braided_audio`, #108) is correct and untouched. The
+  f32→s24 conversion was never at fault. `test_reac_tx` now uses `reac_decode`
+  (the box's plain-LE view) as ground truth and keeps the braid as a negative
+  control that reproduces the burst.
+- **Re-test protocol (before ANYONE listens again).**
+  1. Deploy the fix: rebuild wt-130 from the merged branch, then
+     `sudo setcap cap_net_raw,cap_sys_nice+ep build/reac-pw` (the relink strips
+     file caps), and restart the master with the standard cmdline.
+  2. Wire-first, always: capture the master TX on the SPAN mirror and confirm the
+     fed channel decodes clean under `reac_decode` (plain-LE) with no
+     near-full-scale peak on ANY of the 40 slots — BEFORE re-enabling any monitor.
+  3. Only then, an operator listen: source at **−40 dBFS**, monitor volume at
+     **minimum**, and a **hand on the power switch**. Ramp the monitor up slowly.
+  4. Confirm the tone lands on the intended output only, at the expected level,
+     with no cross-channel bleed.
 
 ### Stage C — openmixer per-box UI (validates PR #156)
 6. **Build + unit tests** — `cd ~/Devel/audio/openmixer && git checkout feat/reac-per-box-stagebox
@@ -53,8 +88,13 @@ Each step gates the next; merge a PR only after the step that validates it passe
 - **#133 frame-locked upstream TX + #131 clock discipline / repacer** — the M-5000 grants our slave but
   never goes fully LINKED; the last gap is the upstream timing/jitter lock. Biggest remaining slave item.
 - **#132** PipeWire `reac:return` sink (inject audio as the box's mic inputs).
-- **#135** per-generation downstream decode (M-5000 plain-LE vs M-200/M-300 braid; also fixes reac-aes67
-  `reac_decode` still being plain-LE).
+- **#135** per-generation downstream decode. NOTE (2026-07-13): the "M-200/M-300 braid"
+  half of this guess is refuted for the master TX by Stage B — a real S-1608 reads the
+  downstream broadcast **plain-LE** regardless of the emulated desk generation (it works
+  with a real M-5000's plain-LE downstream, and it de-interleaves its output fabric ONE
+  way). The downstream encode is plain-LE, full stop. Any residual per-generation nuance
+  lives in the slave/return decode path, not the master output; `reac_decode` staying
+  plain-LE is correct, not a bug.
 
 **openmixer**
 - Stagebox card output control + `assignGroup` wire clamp (#156 left out of scope).
