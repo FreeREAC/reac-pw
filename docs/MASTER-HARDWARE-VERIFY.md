@@ -82,21 +82,92 @@ vs `m300-s1608-establish`):
 
 | | M-5000 (96 kHz) | M-300 (48 kHz) |
 |---|---|---|
-| frame | **1494 B (OHRCA)** | **1492 B (V-Mixer)** |
+| frame (as captured) | **1494 B (OHRCA)** | **1492 B (V-Mixer)** |
 | cfea console byte | `28 10 **01** …` | `28 10 **00** …` |
 | chanmap marker | `fe **01**` | `fe **00**` |
 
 There is **no explicit 48000/96000 field** anywhere. The box infers its rate from the
-desk IDENTITY: OHRCA (1494-byte frames + `01` markers) ⇒ 96 kHz; V-Mixer (1492-byte
-frames + `00`) ⇒ 48 kHz. reac-pw hardcodes the **1492-byte V-Mixer** frame
-(`reac_tx.c` / `reac_pacer.c`), so a box runs **48 kHz regardless of `--rate`**;
-`--rate 96000` only doubles our cadence against a box still decoding 48 kHz frames (a
-broken mismatch — the box streamed 48 kHz upstream while our pacer ran 8000 fps,
-rig-verified with both `m200` and `m5000`). So the master rate follows the model:
-reac-pw forces 48 kHz and rejects a `--rate` mismatch.
+desk IDENTITY: OHRCA (`01` cfea/ENROLL console markers) ⇒ 96 kHz; V-Mixer (`00`) ⇒
+48 kHz — see "The 1494-byte frame is a capture artifact" below for why the frame
+LENGTH row above is not itself part of that signal.
 
-**To drive 96 kHz** = impersonate a full OHRCA/M-5000 desk: emit **1494-byte** frames
-(the 1492 V-Mixer frame + the 2-byte OHRCA trailer — trailer/CRC algorithm still to
-RE), set the chanmap OHRCA marker `fe 01` + cfea console `01` (the `m5000` profile
-already sets cfea `[19]`), and pace at 8000 fps. That's a scoped OHRCA emit feature,
-not a rate flag.
+### 96 kHz OHRCA emit — DONE (task #156, 2026-07-14): parameterized, not re-engineered
+
+"96k is not anything different, same state diagram, doubled frequency." The
+downstream frame SHAPE does not vary by mixer profile or rate (see the trailer
+finding below), so 96 kHz needed no new emit path — only the two things a real
+OHRCA desk actually varies:
+
+- **Pacer cadence** — fps = rate/12 (`reac_sink_node.c`), already rate-driven;
+  `--mixer m5000` + `--rate 96000` now yields 8000 fps, `--mixer m200/m300` stays
+  4000 fps. `reac_master_init`'s cadence math (`cycle_len`, `chanmap_off`, …) scales
+  purely off fps for either profile — no 48k assumption was baked in there.
+- **Console identity** — cfea `[19]`/ENROLL `[8]` = `console_field`, already threaded
+  from `--mixer` through `reac_sink_cfg`/`reac_pacer_cfg`/`reac_master`.
+
+The only real gap was `main.c`'s `--rate` handling, which force-clamped to 48 kHz
+**unconditionally**, for every profile including `m5000`. Fixed via
+`reac_mixer_resolve_rate()` (`reac_master.h`/`.c`): V-Mixer profiles (`m200`/`m300`,
+`console_field == 0`) keep the original unconditional 48 kHz clamp — a V-Mixer desk
+has no wire rate field, so it can only ever run 48 kHz. OHRCA (`m5000`,
+`console_field == 1`) now honors `--rate`, defaulting to its native 96 kHz when
+unset. Covered by `tests/test_reac_master.c` (resolve-rate table + fps mapping +
+frame-size invariance) and `tests/test_reac_tx.c` (the trailer finding below).
+
+Run 96 kHz:
+```
+sudo setcap cap_net_raw,cap_sys_nice+ep ./build/reac-pw
+./build/reac-pw --live enp131s0 --role master --mixer m5000 --tx enp131s0
+# --rate is optional here: m5000 defaults to 96000; --rate 96000 is equivalent.
+```
+
+### The 1494-byte frame is a capture artifact, not a REAC field (task #156 RE)
+
+The "OHRCA trailer" — the 2 extra bytes that make some M-5000 downstream captures
+1494 B instead of 1492 B — is **not a REAC-level field**. Sampled 1494-byte
+downstream frames from two independent real-M-5000 captures
+(`real-s1608-coldboot-m5000-2026-07-11.pcap`, `s4000s-coldboot-m5000-2026-07-12.pcap`,
+40 frames total, `reac-captures/captures/`): in every case the trailer equals the low
+16 bits (little-endian) of the standard Ethernet CRC-32 (IEEE 802.3) over
+`frame[0:1492]`. The second capture is a dual-tap/BIDIR-style recording that caught
+the SAME wire frame TWICE — once at 1492 B, once at 1494 B, byte-identical in
+`[0:1492]`, same counter — which proves the extra 2 bytes are a mirror/SPAN capture
+artifact (partial Ethernet FCS passthrough — see the existing rig gotcha above, "The
+USB SPAN mirror adds the 2-byte Ethernet FCS"), not something the desk's REAC logic
+emits. This is the same conclusion already reached and committed for the box-
+UPSTREAM direction (`docs/SLAVE-EMULATION-SCOPE.md` W4(a), 2026-07-12); this is the
+independent reproduction for the master's DOWNSTREAM direction.
+
+Consequence: there is **nothing to crack and nothing to emit**. A real desk's actual
+wire frame is `REAC_FRAME_BYTES` (1492) plus whatever 4-byte FCS its own NIC hardware
+appends — identical in kind to every other Ethernet frame reac-pw already sends over
+`AF_PACKET`. Emitting a literal 1494-byte payload would not reproduce a real desk's
+frame; it would put 2 extra GARBAGE bytes into the payload before the NIC's own real
+FCS, actively breaking on-wire correctness. `reac_eth_crc32()` (`reac_tx.h`/`.c`) is
+kept as a pure, documented verification utility only (reproduces the captured trailer
+in `tests/test_reac_tx.c`) — it is never called from the encode path.
+
+### On-wire validation gate (still open)
+
+Everything above is proven from captures + unit tests (`meson test`: 14 OK / 1 SKIP
+as of this task). Attempted a disposable `--live lo` self-test (tcpdump on `lo`,
+`--mixer m5000 --rate 96000`, `setcap cap_net_raw,cap_sys_nice+ep`) to eyeball frame
+sizes on the wire; blocked by the dev sandbox lacking `CAP_NET_RAW` even after
+`setcap` (the same reason `tests/test_reac_pacer.c`'s live-cadence case SKIPs there).
+**Not yet validated against real hardware.** Before calling 96 kHz OHRCA emit
+hardware-proven, run on the bench rig against a real M-5000, or an S-1608 forced to
+96 kHz by a real M-5000 upstream of it:
+
+```
+sudo setcap cap_net_raw,cap_sys_nice+ep ./build/reac-pw
+./build/reac-pw --live enp131s0 --role master --mixer m5000 --tx enp131s0
+```
+
+and confirm: (1) the box cold-connects and reaches ESTABLISHED exactly as the 48 kHz
+`m200` path does (same FSM, per the "do not re-engineer" framing — no new establishment
+behaviour is expected); (2) `tcpdump -i enp131s0 'ether proto 0x8819'` shows reac-pw's
+downstream frames at exactly 1492 B, 8000 fps; (3) the box's own upstream return runs
+at 8000 fps (96 kHz), not 4000 — the mismatch class this task exists to fix (see the
+2026-07-13 RE note above, "the box streamed 48 kHz upstream while our pacer ran
+8000 fps"). Until that is checked off, treat 96 kHz OHRCA emit as protocol-level-sound
+but hardware-unverified.
