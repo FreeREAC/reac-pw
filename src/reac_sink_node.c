@@ -191,8 +191,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	}
 
 	for (int c = 0; c < n->channels; c++) {
-		char pname[24];
+		char pname[24], achan[12];
 		snprintf(pname, sizeof pname, "playback_%02d", c + 1);
+		/* Discrete mono box output — AUX channel so no tool pairs them as stereo. */
+		snprintf(achan, sizeof achan, "AUX%d", c);
 		n->ports[c] = pw_filter_add_port(
 			n->filter,
 			PW_DIRECTION_INPUT,
@@ -201,6 +203,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 			pw_properties_new(
 				PW_KEY_FORMAT_DSP, "32 bit float mono audio",
 				PW_KEY_PORT_NAME, pname,
+				PW_KEY_AUDIO_CHANNEL, achan,
 				NULL),
 			NULL, 0);
 		if (n->ports[c])
