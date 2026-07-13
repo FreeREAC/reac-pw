@@ -109,7 +109,18 @@ int main(int argc, char **argv)
 		} else if (!strcmp(argv[i], "--live") && i + 1 < argc) {
 			rxcfg.kind = REAC_RX_LIVE; rxcfg.source = argv[++i];
 		} else if (!strcmp(argv[i], "--rate") && i + 1 < argc) {
-			rxcfg.forced_rate = atoi(argv[++i]);
+			/* Validate before it reaches the ring depth (sample_rate/4): a
+			 * negative/garbage rate underflows to a huge depth, next_pow2
+			 * overflows to a 0-slot ring with mask 0xFFFFFFFF, and the first
+			 * write scribbles the heap. Accept only sane audio rates — the REAC
+			 * world is the 44.1k/48k/88.2k/96k families. */
+			int rate = atoi(argv[++i]);
+			if (rate < 8000 || rate > 192000) {
+				fprintf(stderr, "reac-pw: bad --rate '%s' (want 8000..192000 Hz; "
+				        "REAC runs 44100/48000/88200/96000)\n", argv[i]);
+				return 2;
+			}
+			rxcfg.forced_rate = rate;
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
 		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
