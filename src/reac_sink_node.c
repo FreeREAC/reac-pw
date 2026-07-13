@@ -137,6 +137,11 @@ static void on_process(void *data, struct spa_io_position *position)
 		return;
 	uint32_t nframes = position->clock.duration;
 
+	/* Publish the graph quantum so the pacer's depth guard sizes its band off the
+	 * ACTUAL producer burst (up to one quantum of frames pushed per callback), not
+	 * a guessed steady state. A single relaxed atomic store; RT-safe. */
+	atomic_store_explicit(&n->pacer.graph_quantum, nframes, memory_order_relaxed);
+
 	const float *in[REAC_MAX_CHANNELS];
 	int have = 0;
 	for (int c = 0; c < n->channels; c++) {
