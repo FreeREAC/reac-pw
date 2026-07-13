@@ -63,27 +63,34 @@ uint32_t reac_frame_ring_readable(const struct reac_frame_ring *r);
 /* ---- drain-to-target depth guard (task #152) ----------------------------- *
  * The graph pushes whole encoded frames into the ring; the pacer drains exactly
  * one per slot. If the graph clock runs marginally fast versus the wire clock,
- * the ring depth is an unregulated random walk that creeps up over long uptime
- * toward the ~250 ms ring cap — silently inflating graph->wire latency. As the
- * ring's CONSUMER (it alone owns tail) the pacer drops the OLDEST excess back to
- * TARGET whenever the depth exceeds HIGH, bounding that walk. SPSC-safe.
+ * the ring depth walks up over long uptime toward the ~250 ms ring cap — silently
+ * inflating graph->wire latency. As the ring's CONSUMER (it alone owns tail) the
+ * pacer drops the OLDEST excess back to TARGET whenever the depth exceeds HIGH,
+ * bounding that walk. SPSC-safe.
  *
- * Sized so normal operation never trips: on-rig steady depth is ~13 frames
- * (task #151), and a typical PipeWire quantum (<=1024 samples -> <=~85 frames
- * pushed per process() burst) stays well under HIGH. Under sustained drift the
- * buffering is bounded to HIGH/fps (32 ms @48k / 16 ms @96k) instead of 256 ms.
- * TARGET (>= the per-burst frame count for a <=768-sample quantum) is the safe
- * landing so a trim never starves the next drain. */
-#define REAC_PACER_RING_HIGH_FRAMES    128u
-#define REAC_PACER_RING_TARGET_FRAMES   64u
+ * The band is derived from the ACTUAL producer burst, NOT a guessed steady state.
+ * The graph delivers up to one quantum of audio per process() callback, i.e.
+ * quantum/12 frames pushed at once, so the ring depth SAWTOOTHS by that much
+ * every drive cycle — measured LIVE at ~38..113 frames (peak 113) with openmixer
+ * feeding playback_08 at the deployed quantum (an earlier guessed HIGH of 128
+ * sat one bigger burst away from trimming healthy audio). HIGH must clear several
+ * such bursts: HIGH = max(FLOOR, MULT * quantum_frames), TARGET = HIGH/2. FLOOR
+ * is a hard minimum well above the live 113-frame peak — 512 frames ~= 128 ms
+ * @48k, half the 256 ms cap, so normal operation NEVER trims and only genuine
+ * runaway drift toward the cap does. quantum_frames is plumbed live from the sink
+ * node's process() (graph_quantum); 0 before the first callback -> FLOOR. */
+#define REAC_PACER_GUARD_FLOOR_FRAMES   512u   /* hard min HIGH (~128 ms @48k)     */
+#define REAC_PACER_GUARD_BURST_MULT       4u   /* ring holds >= this many bursts   */
 
-/* Depth-telemetry gating (the master is a long-lived systemd service logging to
- * journald — an unconditional per-drain line would be ~5/s and bury the FSM
- * transition events). The depth line is emitted only when it is interesting: the
- * depth moved by >= BAND frames since the last line, the guard trimmed this
- * interval, or the HB heartbeat elapsed — so a healthy steady run leaves at most
- * one "depth N" marker per heartbeat. */
-#define REAC_PACER_DEPTH_LOG_BAND      8u              /* frames (~2 ms @48k)   */
+/* HIGH watermark for a given producer burst size (frames per process() callback,
+ * = quantum/12). PURE, unit-tested: max(FLOOR, MULT * quantum_frames). TARGET is
+ * always HIGH/2. */
+uint32_t reac_pacer_guard_high(uint32_t quantum_frames);
+
+/* Depth-telemetry heartbeat (the master is a long-lived systemd service logging
+ * to journald). The depth SAWTOOTHS with each producer burst, so a per-change
+ * band would fire every drain — the line is emitted ONLY on this heartbeat
+ * (carrying the interval min/max/last depth) or when the guard trims. */
 #define REAC_PACER_DEPTH_LOG_HB_NS     10000000000ull  /* 10 s health heartbeat */
 
 /* Depth-guard math (PURE — unit-tested): the number of frames to drop so a ring
@@ -159,13 +166,17 @@ struct reac_pacer {
 	_Atomic uint64_t tx_errors;
 	_Atomic uint64_t late_wakes;     /* slots where we woke > 1 period late */
 
-	/* frame-ring depth guard telemetry (task #152). ring_depth_peak is the max
-	 * depth seen since the last non-RT log drain (which resets it), so the drain
-	 * can surface the drift walk; the trim counters are cumulative. Written by the
-	 * pacer thread, read by the non-RT drain. */
+	/* frame-ring depth guard telemetry (task #152). ring_depth_{min,peak} bound the
+	 * depth SAWTOOTH seen since the last EMITTED depth line (read-and-reset there),
+	 * so a heartbeat surfaces the interval's real min/max; the trim counters are
+	 * cumulative. Written by the pacer thread, read+reset by the non-RT drain.
+	 * graph_quantum is the latest process() quantum (samples), plumbed live from
+	 * the sink node so the guard band tracks the actual producer burst. */
 	_Atomic uint64_t ring_trims;        /* times the depth guard fired */
 	_Atomic uint64_t ring_trim_frames;  /* total frames the guard dropped */
-	_Atomic uint32_t ring_depth_peak;   /* max ring depth since last drain */
+	_Atomic uint32_t ring_depth_peak;   /* max ring depth since last emitted line */
+	_Atomic uint32_t ring_depth_min;    /* min ring depth since last emitted line */
+	_Atomic uint32_t graph_quantum;     /* latest graph quantum in samples (0 = none) */
 
 	/* RX / establishment diagnostics (written by the pacer thread only) */
 	_Atomic int      fsm_state;      /* mirror of master.state for cross-thread reads */
@@ -194,11 +205,10 @@ struct reac_pacer {
 	uint64_t last_chanmap_ns;        /* for heartbeat-after-walk latency */
 
 	/* depth-telemetry drain state (NON-RT drain / main-loop thread only; single
-	 * writer, no atomics needed) — gates the per-drain depth line (see the
-	 * REAC_PACER_DEPTH_LOG_* rationale). Zero-initialised, so the first drain
-	 * emits one baseline line via the heartbeat branch. */
+	 * writer, no atomics needed) — gates the depth line to the heartbeat + trims
+	 * (see REAC_PACER_DEPTH_LOG_HB_NS). Zero-initialised, so the first drain emits
+	 * one baseline line via the heartbeat branch. */
 	uint64_t log_last_ns;            /* mono_ns of the last emitted depth line */
-	uint32_t log_last_depth;         /* depth reported by the last depth line */
 	uint64_t log_last_trims;         /* ring_trims count at the last depth line */
 };
 

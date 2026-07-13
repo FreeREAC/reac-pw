@@ -71,6 +71,7 @@ reac_pw_src = [
   'src/reac_slave.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_boxreg.c',
   'src/reac_link_state.c',
@@ -162,6 +163,15 @@ s1608_test = executable('test_reac_s1608',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_s1608', s1608_test)
+
+# --- unit test: the ProcessLatency smoother (pure EMA + hysteresis) -----------
+# No PipeWire, no socket: feeds a 38..113 depth sawtooth through the EMA and
+# asserts the smoothed latency settles into a tight band and stops re-advertising.
+lat_test = executable('test_reac_lat',
+  ['tests/test_reac_lat.c', 'src/reac_lat.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_lat', lat_test)
 
 # --- unit test: the SCHED_FIFO cadence pacer (ring + interval) -----------------
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
