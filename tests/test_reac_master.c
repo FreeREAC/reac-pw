@@ -110,8 +110,9 @@ static enum reac_master_emit slot(struct reac_master *m, int *idx,
 static void establish(struct reac_master *m, uint16_t *cnt, const uint8_t box[6])
 {
 	reac_master_rx(m, REAC_M_RX_BOX_JOIN, box, ZONEA_JOIN);
-	/* +1 for the leading ENROLL slot before the 32-block burst. */
-	for (int i = 0; i < m->grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
+	/* +1 for the leading ENROLL slot, +grant_dwell for the ENROLL->grant dwell
+	 * (~1.6 s, matching the measured M-200 gap), before the 32-block burst. */
+	for (int i = 0; i < m->grant_dwell + m->grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
 		slot(m, NULL, cnt);
 	reac_master_rx(m, REAC_M_RX_BOX_UNICAST, box, NULL);
 }
@@ -365,20 +366,27 @@ int main(void)
 	CHK(memcmp(m.box_mac, BOX, 6) == 0);
 	CHK(m.grant_attempts == 1);
 
-	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the 32 DISTINCT
-	 * M-200 sweep blocks in order, byte-exact, 1-per-STRIDE. After the full enroll +
-	 * burst the master SELF-COMPLETES to ESTABLISHED and HOLDS — the box goes quiet
-	 * after the grant, so a master that waited for a post-burst unicast (or timed
-	 * back to PROBING) made the box re-attempt forever (rig 2026-07-12: LED blinking
+	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the ~1.6 s
+	 * grant_dwell hold (matching the measured M-200 ENROLL->grant gap: Δ1.503 s
+	 * on matrix-m200-s0808-2026-07-11.pcap, Δ1.717 s on matrix-m200-s1608-
+	 * 2026-07-11.pcap — the RX-driven rewrite dropped this dwell and started the
+	 * burst the very next tick), THEN the 32 DISTINCT M-200 sweep blocks in
+	 * order, byte-exact, 1-per-STRIDE. After the full enroll + dwell + burst the
+	 * master SELF-COMPLETES to ESTABLISHED and HOLDS — the box goes quiet after
+	 * the grant, so a master that waited for a post-burst unicast (or timed back
+	 * to PROBING) made the box re-attempt forever (rig 2026-07-12: LED blinking
 	 * faster, never solid). A real M-200 commits after granting and holds. */
 	int grants = 0, last_grant_slot = -1, saw_enroll = 0;
-	int span = m.grant_burst_len * REAC_M_GRANT_STRIDE + 4;
+	int span = m.grant_dwell + m.grant_burst_len * REAC_M_GRANT_STRIDE + 4;
 	for (int i = 0; i < span; i++) {
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
 		if (e == REAC_M_EMIT_ENROLL) { CHK(i == 0); saw_enroll = 1; }
+		CHK(e != REAC_M_EMIT_GRANT || i > m.grant_dwell);  /* no grant before the dwell elapses */
 		if (e == REAC_M_EMIT_GRANT) {
 			if (last_grant_slot >= 0)
 				CHK(i - last_grant_slot == REAC_M_GRANT_STRIDE);  /* density */
+			else
+				CHK(i == m.grant_dwell + 1);        /* burst starts right after the dwell */
 			last_grant_slot = i;
 			CHK(idx == grants);                          /* blocks emitted in order */
 			build_and_stamp(&m, f, e, idx, planar);
@@ -442,9 +450,9 @@ int main(void)
 	slot(&m, NULL, &cnt);                        /* IDLE -> PROBING on first slot */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
-	for (int i = 0; i < m.grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
+	for (int i = 0; i < m.grant_dwell + m.grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
 		slot(&m, NULL, &cnt);
-	CHK(m.state == REAC_M_ESTABLISHED);          /* self-completed after the full burst */
+	CHK(m.state == REAC_M_ESTABLISHED);          /* self-completed after dwell + full burst */
 	CHK(m.grant_attempts == 1);
 
 	/* established then link_check_reload silent slots -> peer-gone, at exactly the
@@ -472,13 +480,39 @@ int main(void)
 	CHK(m.drop_reason == REAC_M_DROP_MAC_CHANGE);
 	CHK(memcmp(m.box_mac, BOX2, 6) == 0);        /* latched the new box */
 
-	/* a fresh JOIN mid-burst restarts the burst (stay well inside the burst span,
-	 * which now self-completes to ESTABLISHED at burst_len*STRIDE+1 slots). */
-	for (int i = 0; i < 10 * REAC_M_GRANT_STRIDE; i++)   /* 120 << 385, still GRANTING */
+	/* ---- ENROLL->grant DWELL (grant_dwell): a real M-200 waits ~1.6 s between
+	 * ENROLL and the start of the grant burst (measured Δ1.503 s on
+	 * matrix-m200-s0808-2026-07-11.pcap, Δ1.717 s on matrix-m200-s1608-2026-07-11
+	 * .pcap). The box keeps cold-connecting on its own ~100 ms retry grid for the
+	 * whole dwell, so a JOIN from the SAME box mid-dwell must NOT reset it —
+	 * that was exactly the class of bug the repo's history calls out ("GRANTING
+	 * ->ESTABLISHED in 0.25 ms... box LED blinking faster, never stabilising"),
+	 * here in the other direction: a reset-happy dwell would never complete
+	 * against a retrying box. A JOIN from a genuinely DIFFERENT box still
+	 * re-latches (new box, fresh window). BOX2 is already latched from the
+	 * mac-change re-grant above; m.grant_ticks == 0 fresh into this window. */
+	CHK(m.grant_ticks == 0);
+	CHK(m.grant_dwell > 10 * REAC_M_GRANT_STRIDE);   /* the dwell dwarfs one retry grid */
+	for (int i = 0; i < 10 * REAC_M_GRANT_STRIDE; i++)   /* well inside the dwell */
 		slot(&m, NULL, &cnt);
 	CHK(m.state == REAC_M_GRANTING);
+	CHK(m.grant_ticks == 10 * REAC_M_GRANT_STRIDE);      /* mid-dwell, no grant emitted yet */
+	/* same-box retry mid-dwell: held, NOT reset */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 0);
+	CHK(m.grant_ticks == 10 * REAC_M_GRANT_STRIDE && m.state == REAC_M_GRANTING);
+	/* the burst must not have started before the dwell count, and must start
+	 * right after it (checked exhaustively in the byte-oracle section above);
+	 * consume the rest of the dwell here and confirm the very next tick is the
+	 * first grant block. */
+	while (m.grant_ticks <= m.grant_dwell)
+		CHK(slot(&m, NULL, &cnt) != REAC_M_EMIT_GRANT);
+	CHK(slot(&m, &idx, &cnt) == REAC_M_EMIT_GRANT && idx == 0);  /* right after the dwell */
+
+	/* a DIFFERENT box's JOIN mid-dwell still restarts the window (new box). */
+	static const uint8_t BOX3[6] = { 0x00, 0x40, 0xab, 0x03, 0x03, 0x03 };
+	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX3, ZONEA_JOIN) == 1);
 	CHK(m.grant_ticks == 0 && m.state == REAC_M_GRANTING);
+	CHK(memcmp(m.box_mac, BOX3, 6) == 0);
 
 	printf("OK: master byte oracle (generated chanmap/cfea-with-our-MAC, fixed "
 	       "probe/sub01/sub02, grant-echo) + event-driven establishment (no timer "
