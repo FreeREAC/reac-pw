@@ -121,7 +121,10 @@ int main(void)
 		 * made it re-attempt forever). Self-complete happens inside reac_master_next,
 		 * so check the real FSM state (the p3.fsm_state mirror only advances on RX). */
 		uint16_t ec; int ei;
-		for (int i = 0; i < p3.master.grant_burst_len * p3.master.grant_stride + 2; i++)
+		/* +grant_dwell: the ENROLL->grant dwell (~1.6 s, matching the measured
+		 * M-200 gap — see grant_dwell's comment in reac_master_init) that now
+		 * precedes the burst. */
+		for (int i = 0; i < p3.master.grant_dwell + p3.master.grant_burst_len * p3.master.grant_stride + 2; i++)
 			reac_master_next(&p3.master, &ec, &ei);
 		CHK(p3.master.state == REAC_M_ESTABLISHED);
 

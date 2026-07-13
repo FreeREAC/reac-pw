@@ -46,9 +46,12 @@
  *                 needs to recognize a master. Leaves ONLY on a validated box
  *                 JOIN (REAC_M_RX_BOX_JOIN). No timer path out.
  *   GRANTING    — echo the box's own cdea 04 03 block back as the broadcast
- *                 grant burst (1 frame per 12 slots over a ~150 ms window).
- *                 -> ESTABLISHED on the box's first unicast-to-us frame of any
- *                 kind; window expiry with no unicast falls BACK to PROBING.
+ *                 grant burst (1 frame per 12 slots over a ~150 ms window),
+ *                 preceded by a ~1.6 s ENROLL->grant DWELL (grant_dwell) that
+ *                 matches the measured M-200 gap (see grant_dwell's comment in
+ *                 reac_master_init). -> ESTABLISHED on the box's first
+ *                 unicast-to-us frame of any kind; window expiry with no
+ *                 unicast falls BACK to PROBING.
  *   ESTABLISHED — linked: FILLER audio + the SAME continuous control cadence as
  *                 PROBING (PROBE + sub01/sub02/chanmap/cfea). Held by the
  *                 600-frame link-check budget reloaded by every box RX event;
@@ -116,6 +119,12 @@ enum reac_master_drop_reason {
 /* Grant burst density: one echoed grant per this many slots (~100 control
  * frames over the ~150 ms window @8000 fps, the transcribed real burst). */
 #define REAC_M_GRANT_STRIDE 12
+/* ENROLL->grant DWELL: a real M-200 holds ~1.6 s between the ENROLL arm frame
+ * and the start of the grant burst (measured Δ1.503 s on
+ * matrix-m200-s0808-2026-07-11.pcap, Δ1.717 s on matrix-m200-s1608-2026-07-11.pcap,
+ * both real M-200 goldens). Frame-counted (not wall-clock — the pacer is
+ * tick-driven) and fps-scaled at init like link_check_reload. */
+#define REAC_M_GRANT_DWELL_SECONDS_X10 16   /* 1.6 s, scaled by fps at init */
 
 /* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
  * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
@@ -222,11 +231,15 @@ struct reac_master {
 	uint8_t  probe_blk[34];   /* the current probe [type|block], regenerated    */
 	uint8_t  filler_desc;     /* = current probe's checksum; stamped into FILLER */
 
-	/* GRANTING — emit the master's own 32-frame grant burst (the cdea 04 03
-	 * sweep, byte-exact from a real M-200), one block per grant_stride slots,
-	 * then -> ESTABLISHED. grant_burst/_len select the burst for the AUTODETECTED
-	 * box model (reac_master_set_box → the recognizer's model); default S-0808. */
+	/* GRANTING — hold for grant_dwell slots (ENROLL->grant DWELL, ~1.6 s,
+	 * fps-scaled at init) after the ENROLL arm frame, THEN emit the master's own
+	 * 32-frame grant burst (the cdea 04 03 sweep, byte-exact from a real M-200),
+	 * one block per grant_stride slots, then -> ESTABLISHED. grant_burst/_len
+	 * select the burst for the AUTODETECTED box model (reac_master_set_box → the
+	 * recognizer's model); default S-0808. */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
+	int      grant_dwell;     /* dwell slots between ENROLL and the grant burst
+	                           * (fps*REAC_M_GRANT_DWELL_SECONDS_X10/10, set at init) */
 	const uint8_t (*grant_burst)[34]; /* the selected model's burst table       */
 	int      grant_burst_len; /* rows in grant_burst                            */
 	uint8_t  join_blk[32];    /* the box's cold-connect block (diagnostic)      */
