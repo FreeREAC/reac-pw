@@ -178,6 +178,28 @@ const struct reac_mixer_profile *reac_mixer_profile_by_name(const char *name);
 /* Enumerate profiles for --help (index 0..N-1; NULL past the end). */
 const struct reac_mixer_profile *reac_mixer_profile_at(int i);
 
+/* Resolve the master's EMISSION rate for a requested --rate against the
+ * impersonated mixer profile (task #156, "96k is not anything different, same
+ * state diagram, doubled frequency" — parameterizing the existing 48k path by
+ * mixer profile rather than re-engineering the FSM).
+ *
+ * A V-Mixer desk (console_field 0: M-200/M-300) only ever exists on the wire
+ * at 48 kHz: cfea/ENROLL carry no explicit rate field, so a box infers 48 kHz
+ * purely from the V-Mixer identity (docs/MASTER-HARDWARE-VERIFY.md, "Sample
+ * rate is the desk MODEL, not a clock knob") — reac-pw forces 48 kHz and
+ * ignores/reports a mismatched --rate, exactly as before this task. An OHRCA
+ * desk (console_field 1: M-5000) is native 96 kHz; its downstream frame shape
+ * is IDENTICAL to the V-Mixer's (REAC_FRAME_BYTES, unchanged — see the #156
+ * trailer RE in reac_tx.h/tests/test_reac_tx.c: the "1494 B OHRCA frame" some
+ * captures show is a mirror-capture artifact, not a real field), so unlike the
+ * V-Mixer there is nothing tying it to a fixed rate — `requested` is honored,
+ * defaulting to the native 96 kHz when unset.
+ *
+ * `requested` is the --rate value (0 = unset/auto). Returns the rate reac-pw
+ * should actually emit at. If `clamped` is non-NULL, sets *clamped to 1 when
+ * `requested` was non-zero and got overridden (the caller should warn), else 0. */
+int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped);
+
 struct reac_master {
 	enum reac_master_state state;
 	uint8_t  src[6];          /* our master MAC (Roland OUI) */

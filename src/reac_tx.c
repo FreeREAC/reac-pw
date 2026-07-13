@@ -112,6 +112,20 @@ static inline void f32_to_s24le(float v, uint8_t *p)
 	p[2] = (uint8_t)((s >> 16) & 0xFF);  /* hi  */
 }
 
+/* Standard Ethernet CRC-32 (IEEE 802.3), bit-reflected table-free form — see the
+ * doc comment on the declaration in reac_tx.h for why this exists and why it is
+ * NOT part of the encode path. */
+uint32_t reac_eth_crc32(const uint8_t *buf, size_t len)
+{
+	uint32_t crc = 0xFFFFFFFFu;
+	for (size_t i = 0; i < len; i++) {
+		crc ^= buf[i];
+		for (int b = 0; b < 8; b++)
+			crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1u)));
+	}
+	return ~crc;
+}
+
 int reac_tx_build(uint8_t *out, float *const *planar, int nch, int ns,
                   uint16_t counter, const uint8_t src[6])
 {
