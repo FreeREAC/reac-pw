@@ -159,6 +159,17 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", n->sample_rate);
 
+	char nodename[64];
+	if (cfg->inst && *cfg->inst)
+		snprintf(nodename, sizeof nodename, "reac-playback.%s", cfg->inst);
+	else
+		snprintf(nodename, sizeof nodename, "reac-playback");
+	char desc[128];
+	if (cfg->label && *cfg->label)
+		snprintf(desc, sizeof desc, "%s — %d ch (REAC box outputs)", cfg->label, n->channels);
+	else
+		snprintf(desc, sizeof desc, "REAC %dch playback (downstream master TX)", n->channels);
+
 	n->filter = pw_filter_new_simple(
 		loop,
 		"reac:playback",
@@ -166,8 +177,8 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 			PW_KEY_MEDIA_TYPE, "Audio",
 			PW_KEY_MEDIA_CATEGORY, "Playback", /* a sink consumes audio */
 			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
-			PW_KEY_NODE_NAME, "reac-playback",
-			PW_KEY_NODE_DESCRIPTION, "REAC 40ch playback (downstream master TX)",
+			PW_KEY_NODE_NAME, nodename,
+			PW_KEY_NODE_DESCRIPTION, desc,
 			/* The wire is the rate authority; advertise the REAC rate so PipeWire
 			 * resamples whatever the app plays into our pps. */
 			PW_KEY_NODE_RATE, rate_str,

@@ -137,7 +137,10 @@ static const struct pw_filter_events filter_events = {
 struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               struct reac_ring *ring,
                                               struct reac_rx *rx,
-                                              int sample_rate)
+                                              int sample_rate,
+                                              int channels,
+                                              const char *inst,
+                                              const char *label)
 {
 	struct reac_source_node *n = calloc(1, sizeof *n);
 	if (!n)
@@ -145,11 +148,27 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	n->ring = ring;
 	n->rx = rx;
 	n->sample_rate = sample_rate;
-	n->channels = REAC_MAX_CHANNELS;
+	/* Expose the box's real input width; fall back to the full fabric. */
+	n->channels = (channels > 0 && channels <= REAC_MAX_CHANNELS)
+	              ? channels : REAC_MAX_CHANNELS;
 	n->debug = getenv("REAC_DEBUG") != NULL;
 
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", sample_rate);
+
+	/* Per-instance node name so one master per REAC VLAN/segment coexists. */
+	char nodename[64];
+	if (inst && *inst)
+		snprintf(nodename, sizeof nodename, "reac-capture.%s", inst);
+	else
+		snprintf(nodename, sizeof nodename, "reac-capture");
+	char desc[128];
+	if (label && *label)
+		snprintf(desc, sizeof desc, "%s — %d ch (REAC box inputs)", label, n->channels);
+	else
+		snprintf(desc, sizeof desc, "REAC %dch capture (%s)", n->channels,
+		         rx && rx->cfg.accept == REAC_RX_ACCEPT_UPSTREAM
+		           ? "box mic inputs" : "master downstream");
 
 	n->filter = pw_filter_new_simple(
 		loop,
@@ -159,11 +178,8 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 			PW_KEY_MEDIA_CATEGORY, "Capture",  /* a source produces audio */
 			PW_KEY_MEDIA_CLASS, "Audio/Source",
 			PW_KEY_MEDIA_ROLE, "Production",
-			PW_KEY_NODE_NAME, "reac-capture",
-			PW_KEY_NODE_DESCRIPTION,
-			rx && rx->cfg.accept == REAC_RX_ACCEPT_UPSTREAM
-			  ? "REAC 40ch capture (box mic inputs)"      /* master role */
-			  : "REAC 40ch capture (master downstream)",  /* slave role  */
+			PW_KEY_NODE_NAME, nodename,
+			PW_KEY_NODE_DESCRIPTION, desc,
 			/* Follower (default): the DAC/PHC drives the graph and PipeWire
 			 * async-resamples our REAC clock into it. To make REAC the graph
 			 * DRIVER instead, add PW_KEY_NODE_DRIVER "true" + a clock rate and

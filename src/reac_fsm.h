@@ -61,7 +61,12 @@
  * desk granted but probed forever = stuck LINKING. Fix: after the first grant,
  * keep cold-connecting one full 8-phase escalation cycle so 0016/001a re-emit as
  * the ACK, THEN settle to TX_MUTE. */
-#define REAC_FSM_GRANT_ACK_FRAMES  6400   /* 8 phases x JOIN_RETRY_PERIOD @8000fps */
+/* 9 x JOIN_RETRY_PERIOD, NOT 8: the join grid's phase is arbitrary when the grant
+ * lands (the first post-grant emit_join is up to one full period away), so an
+ * 8-period window can fit only 7 emissions in the worst alignment and skip a phase
+ * — exactly the 0016/001a we must re-send. 9 periods guarantee >=8 emit_joins, so
+ * all 8 escalation phases (incl. 0016 + 001a) re-emit regardless of alignment. */
+#define REAC_FSM_GRANT_ACK_FRAMES  7200   /* 9 x JOIN_RETRY_PERIOD */
 
 enum reac_fsm_state {
 	FSM_PHY_DOWN = 0,
