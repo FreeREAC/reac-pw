@@ -60,6 +60,43 @@ int  reac_frame_ring_push(struct reac_frame_ring *r, const uint8_t *frame, uint1
 uint16_t reac_frame_ring_pop(struct reac_frame_ring *r, uint8_t *out);
 uint32_t reac_frame_ring_readable(const struct reac_frame_ring *r);
 
+/* ---- drain-to-target depth guard (task #152) ----------------------------- *
+ * The graph pushes whole encoded frames into the ring; the pacer drains exactly
+ * one per slot. If the graph clock runs marginally fast versus the wire clock,
+ * the ring depth is an unregulated random walk that creeps up over long uptime
+ * toward the ~250 ms ring cap — silently inflating graph->wire latency. As the
+ * ring's CONSUMER (it alone owns tail) the pacer drops the OLDEST excess back to
+ * TARGET whenever the depth exceeds HIGH, bounding that walk. SPSC-safe.
+ *
+ * Sized so normal operation never trips: on-rig steady depth is ~13 frames
+ * (task #151), and a typical PipeWire quantum (<=1024 samples -> <=~85 frames
+ * pushed per process() burst) stays well under HIGH. Under sustained drift the
+ * buffering is bounded to HIGH/fps (32 ms @48k / 16 ms @96k) instead of 256 ms.
+ * TARGET (>= the per-burst frame count for a <=768-sample quantum) is the safe
+ * landing so a trim never starves the next drain. */
+#define REAC_PACER_RING_HIGH_FRAMES    128u
+#define REAC_PACER_RING_TARGET_FRAMES   64u
+
+/* Depth-telemetry gating (the master is a long-lived systemd service logging to
+ * journald — an unconditional per-drain line would be ~5/s and bury the FSM
+ * transition events). The depth line is emitted only when it is interesting: the
+ * depth moved by >= BAND frames since the last line, the guard trimmed this
+ * interval, or the HB heartbeat elapsed — so a healthy steady run leaves at most
+ * one "depth N" marker per heartbeat. */
+#define REAC_PACER_DEPTH_LOG_BAND      8u              /* frames (~2 ms @48k)   */
+#define REAC_PACER_DEPTH_LOG_HB_NS     10000000000ull  /* 10 s health heartbeat */
+
+/* Depth-guard math (PURE — unit-tested): the number of frames to drop so a ring
+ * of `depth` frames drains back to `target`, but only once `depth` exceeds the
+ * `high` watermark. At/below `high` returns 0 (normal jitter is never trimmed);
+ * a `target` >= `depth` also returns 0 (defensive, never an underflowing drop). */
+uint32_t reac_frame_ring_trim_count(uint32_t depth, uint32_t high, uint32_t target);
+
+/* CONSUMER-side trim: drop the OLDEST frames so the depth returns to `target`,
+ * but only when it exceeds `high` (reac_frame_ring_trim_count). SPSC-safe — only
+ * the consumer (the pacer thread) moves tail. Returns frames dropped. RT-SAFE. */
+uint32_t reac_frame_ring_trim(struct reac_frame_ring *r, uint32_t high, uint32_t target);
+
 /* ---- the FSM event log (SPSC ring, RT-safe producer) ----------------------
  * The pacer thread is SCHED_FIFO: no stdio there. It pushes fixed-size events
  * into a small lock-free SPSC ring (drop-newest on full, like the frame ring);
@@ -122,6 +159,14 @@ struct reac_pacer {
 	_Atomic uint64_t tx_errors;
 	_Atomic uint64_t late_wakes;     /* slots where we woke > 1 period late */
 
+	/* frame-ring depth guard telemetry (task #152). ring_depth_peak is the max
+	 * depth seen since the last non-RT log drain (which resets it), so the drain
+	 * can surface the drift walk; the trim counters are cumulative. Written by the
+	 * pacer thread, read by the non-RT drain. */
+	_Atomic uint64_t ring_trims;        /* times the depth guard fired */
+	_Atomic uint64_t ring_trim_frames;  /* total frames the guard dropped */
+	_Atomic uint32_t ring_depth_peak;   /* max ring depth since last drain */
+
 	/* RX / establishment diagnostics (written by the pacer thread only) */
 	_Atomic int      fsm_state;      /* mirror of master.state for cross-thread reads */
 	_Atomic uint64_t rx_box_frames;  /* classified box frames (incl. FILLER) */
@@ -147,6 +192,14 @@ struct reac_pacer {
 	uint32_t rx_since_change[4];     /* per-rx-event counts since a transition */
 	uint64_t probing_slots;          /* fruitless-probing watchdog counter */
 	uint64_t last_chanmap_ns;        /* for heartbeat-after-walk latency */
+
+	/* depth-telemetry drain state (NON-RT drain / main-loop thread only; single
+	 * writer, no atomics needed) — gates the per-drain depth line (see the
+	 * REAC_PACER_DEPTH_LOG_* rationale). Zero-initialised, so the first drain
+	 * emits one baseline line via the heartbeat branch. */
+	uint64_t log_last_ns;            /* mono_ns of the last emitted depth line */
+	uint32_t log_last_depth;         /* depth reported by the last depth line */
+	uint64_t log_last_trims;         /* ring_trims count at the last depth line */
 };
 
 /* period for an fps (ns). Exposed for the unit test. */
