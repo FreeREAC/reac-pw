@@ -596,6 +596,18 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	if (m->grant_frames < 1)
 		m->grant_frames = 1;
 	m->grant_stride = REAC_M_GRANT_STRIDE;
+	/* ENROLL->grant dwell: a real M-200 waits ~1.6 s between emitting ENROLL and
+	 * starting the grant burst (measured Δ1.503 s on matrix-m200-s0808-2026-07-11.pcap,
+	 * Δ1.717 s on matrix-m200-s1608-2026-07-11.pcap — both real M-200 goldens,
+	 * reac-captures/captures/). The RX-driven rewrite invoked enter_granting()
+	 * synchronously off the box's JOIN/CONFIG frame and the very next pacer tick
+	 * started the burst, dropping this dwell — the same failure class the repo's
+	 * own history calls out ("GRANTING->ESTABLISHED in 0.25 ms... box LED blinking
+	 * faster, never stabilising"). fps-scaled like link_check_reload, frame-counted
+	 * (not wall-clock — the pacer is tick-driven). */
+	m->grant_dwell = (m->fps * REAC_M_GRANT_DWELL_SECONDS_X10) / 10;
+	if (m->grant_dwell < 1)
+		m->grant_dwell = 1;
 	/* Default grant burst = S-0808 (the byte-verified transcription). The
 	 * recognizer re-selects per autodetected model via reac_master_set_box. */
 	m->grant_burst     = GRANT_BURST;
@@ -670,9 +682,11 @@ static void enter_probing(struct reac_master *m)
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);   /* no box enrolled */
 }
 
-/* Open a grant window echoing this JOIN block (also re-opens on a fresh JOIN
- * mid-window, and on a JOIN while established — the box restarted its
- * handshake, so we re-court it). */
+/* Open a grant window (ENROLL, then the grant_dwell hold, then the burst)
+ * echoing this JOIN block. Re-opens on a JOIN from a DIFFERENT box — including
+ * one that arrives mid-window or while established — since that is a new box
+ * to court; a JOIN from the SAME box mid-window is a retry and must NOT reset
+ * it (reac_master_rx's same-box guards, GRANTING and ESTABLISHED). */
 static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
                            const uint8_t blk32[32])
 {
@@ -737,9 +751,18 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 
 	case REAC_M_GRANTING:
 		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			/* A fresh JOIN restarts the window (the box retries on a ~100 ms
-			 * grid); a JOIN from a different box re-latches to it. */
-			enter_granting(m, box_src, blk32);
+			/* The SAME box keeps cold-connecting on its own ~100 ms retry grid
+			 * for as long as it hasn't seen the grant — which now spans the
+			 * ~1.6 s ENROLL->grant dwell (grant_dwell) too. Resetting on every
+			 * such retry would perpetually restart the dwell and the box would
+			 * never be granted, so HOLD for the same box (symmetric to the
+			 * same-box hold already used in ESTABLISHED, below). A JOIN from a
+			 * DIFFERENT box is a genuinely new box: re-latch and restart the
+			 * window for it. */
+			if (memcmp(box_src, m->box_mac, 6) != 0) {
+				enter_granting(m, box_src, blk32);
+				return 1;
+			}
 			return 0;
 		}
 		if (ev == REAC_M_RX_BOX_HEARTBEAT) {
@@ -760,8 +783,8 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			 * Before the burst completes, the unicast only confirms presence (keeps
 			 * granting); anti-#130 holds — establish still needs a box frame, never a
 			 * blind timer, and the grant window still expires BACK to PROBING. */
-			if (m->grant_ticks >= m->grant_burst_len * m->grant_stride + 1) {
-				enter_established(m);   /* +1: the leading ENROLL slot */
+			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
+				enter_established(m);   /* +1: the leading ENROLL slot; +grant_dwell: the dwell */
 				return 1;
 			}
 			return 0;
@@ -899,16 +922,22 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		/* Emit the master's own 32-frame grant burst (the byte-exact M-200 cdea
 		 * 04 03 sweep), one distinct block every grant_stride slots — the SEND
 		 * side of the exact transition reac-pw waited to RECEIVE as a slave (#130,
-		 * same state diagram, roles inverted). The burst spans burst_len*stride
-		 * (384) slots, well inside the grant_frames (~600) window. -> ESTABLISHED
-		 * only on the box's unicast/config accept (reac_master_rx): the box
-		 * switches to unicast the instant it sees the grant, so it locks off even
-		 * a partial burst. No forward timer — window expiry with no accept falls
-		 * BACK to PROBING (anti-#130); the box's JOIN retry grid re-opens it. */
+		 * same state diagram, roles inverted), but only AFTER the grant_dwell
+		 * ENROLL->grant hold (~1.6 s, see its comment in reac_master_init) — a real
+		 * M-200 does not start granting the tick after ENROLL. -> ESTABLISHED only
+		 * on the box's unicast/config accept (reac_master_rx): the box switches to
+		 * unicast the instant it sees the grant, so it locks off even a partial
+		 * burst. No forward timer — window expiry with no accept falls BACK to
+		 * PROBING (anti-#130); the box's JOIN retry grid re-opens it. */
 		if (m->grant_ticks == 0) {
 			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
+		} else if (m->grant_ticks <= m->grant_dwell) {
+			/* The dwell: ordinary FILLER cadence while we hold off granting.
+			 * Repeated box cold-connect bursts land here too (reac_master_rx's
+			 * same-box GRANTING guard keeps them from restarting the dwell). */
+			emit = REAC_M_EMIT_FILLER;
 		} else {
-			int gt = m->grant_ticks - 1; /* burst timeline starts after enroll */
+			int gt = m->grant_ticks - 1 - m->grant_dwell; /* burst timeline starts after enroll+dwell */
 			if (gt % m->grant_stride == 0) {
 				int k = gt / m->grant_stride;
 				if (k < m->grant_burst_len) {
@@ -927,7 +956,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * not "granting into silence"; the ~6.5 s link-check budget in ESTABLISHED
 		 * drops back to PROBING if the box is genuinely gone (anti-#130 preserved as
 		 * a BACKWARD safety, just not a forward-blocking gate). */
-		if (m->grant_ticks >= m->grant_burst_len * m->grant_stride + 1)
+		if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1)
 			enter_established(m);
 		break;
 
