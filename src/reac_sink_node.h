@@ -34,6 +34,9 @@ struct reac_sink_cfg {
 	const uint8_t *master_mac;/* unicast destination once linked */
 	uint8_t console_field;    /* emulated mixer model: 0 = V-Mixer (M-200/M-300),
 	                           * 1 = OHRCA (M-5000). Drives cfea [19] + ENROLL.   */
+	const char *inst;         /* per-instance node suffix -> "reac-playback.<inst>"
+	                           * so one master per REAC VLAN coexists. NULL = bare. */
+	const char *label;        /* operator box name for the node description        */
 };
 
 /* Create the sink node. Opens an AF_PACKET 0x8819 TX socket on cfg->ifname

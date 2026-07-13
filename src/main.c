@@ -97,6 +97,9 @@ int main(int argc, char **argv)
 	uint8_t src_mac[6];
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
+	int master_box_in = 0, master_box_out = 0; /* master: declared box widths (0 = 40 fabric) */
+	const char *box_label = NULL;   /* --box name: openmixer label for this box  */
+	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
 	const struct reac_mixer_profile *mixer =
 		reac_mixer_profile_by_name("m200");   /* master: which desk we impersonate */
 
@@ -154,6 +157,27 @@ int main(int argc, char **argv)
 				        "(e.g. 8 = S-0808, 16 = S-1608, 32 = S-4000S)\n", REAC_MAX_CHANNELS);
 				return 2;
 			}
+		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {
+			/* MASTER role: declare the box on THIS segment (one REAC/VLAN per box).
+			 * Sizes reac:capture to the box's real inputs + reac:playback to its
+			 * outputs, and labels them. Form: <model>[:name] e.g. s1608:Drums. */
+			static char spec[64];
+			snprintf(spec, sizeof spec, "%s", argv[++i]);
+			char *colon = strchr(spec, ':');
+			if (colon) { *colon = '\0'; box_label = colon + 1; }
+			const struct reac_box_model *bm = reac_box_model_by_token(spec);
+			if (!bm) {
+				size_t nm; const struct reac_box_model *t = reac_box_model_table(&nm);
+				fprintf(stderr, "reac-pw: unknown --box model '%s'; known:", spec);
+				for (size_t k = 0; k < nm; k++) fprintf(stderr, " %s", t[k].token);
+				fprintf(stderr, "\n");
+				return 2;
+			}
+			master_box_in = bm->in_ch;
+			master_box_out = bm->out_ch;
+			if (!box_label) box_label = bm->display;
+		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
+			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
 		} else {
 			usage(argv[0]);
 			return 2;
@@ -205,7 +229,11 @@ int main(int argc, char **argv)
 	pw_loop_add_signal(loop, SIGINT, on_signal, NULL);
 	pw_loop_add_signal(loop, SIGTERM, on_signal, NULL);
 
-	struct reac_source_node *src = reac_source_node_new(loop, &ring, &rx, rx.sample_rate);
+	/* Master: expose the declared box's real inputs (16=S-1608, 8=S-0808); with no
+	 * --box, the full 40-slot fabric. Slave: the source is the 40-ch downstream. */
+	int src_ch = (role == REAC_ROLE_MASTER) ? master_box_in : 0;
+	struct reac_source_node *src = reac_source_node_new(loop, &ring, &rx, rx.sample_rate,
+	                                                    src_ch, inst_name, box_label);
 	if (!src) {
 		fprintf(stderr, "reac-pw: failed to create reac:capture node\n");
 		return 1;
@@ -228,10 +256,13 @@ int main(int argc, char **argv)
 		const uint8_t *master_src = src_mac_set ? src_mac : mixer->mac;
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
-		struct reac_sink_cfg scfg = { .ifname = tx_if, .channels = REAC_MAX_CHANNELS,
+		struct reac_sink_cfg scfg = { .ifname = tx_if,
+		                              .channels = master_box_out ? master_box_out
+		                                                         : REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = master_src, .master_mac = NULL,
-		                              .console_field = mixer->console_field };
+		                              .console_field = mixer->console_field,
+		                              .inst = inst_name, .label = box_label };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
