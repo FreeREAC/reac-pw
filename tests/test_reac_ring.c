@@ -18,6 +18,15 @@ int main(void)
 	assert(r.capacity == 128);          /* rounded up to power of two */
 	assert(reac_ring_readable(&r) == 0);
 
+	/* init guard: a zero or overflow-rounding capacity must FAIL (-1), not build a
+	 * 0-slot ring with mask 0xFFFFFFFF. A garbage --rate reaches reac_ring_init as
+	 * such a depth (sample_rate/4 of a negative rate), and the first write would
+	 * otherwise scribble the heap. */
+	struct reac_ring bad;
+	assert(reac_ring_init(&bad, CH, 0) == -1);            /* zero capacity */
+	assert(reac_ring_init(&bad, CH, 0xFFFFFFFFu) == -1);  /* next_pow2 wraps to 0 */
+	assert(reac_ring_init(&bad, CH, 0x80000001u) == -1);  /* rounds past UINT32_MAX */
+
 	/* write 12 frames/ch (a REAC quantum), planar src[c*n + s] = c*100 + s */
 	float src[CH * 12];
 	for (int c = 0; c < CH; c++)
