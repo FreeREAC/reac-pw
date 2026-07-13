@@ -26,12 +26,32 @@
 #include "reac_sink_node.h"
 #include "reac_tx.h"
 #include "reac_pacer.h"
+#include "reac_gain.h"
 
 #include <reac/reac.h>
 #include <pipewire/pipewire.h>
 #include <pipewire/filter.h>
+#include <spa/param/param.h>
+#include <spa/param/props.h>
+#include <spa/param/audio/raw.h>
+#include <spa/pod/builder.h>
+#include <spa/pod/iter.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+#include <stdatomic.h>
+
+/* Volume ramp length: how long a level change (or mute/unmute) glides so it does
+ * not zipper. ~15 ms is the usual de-click window — long enough to be inaudible
+ * as a step, short enough that an operator move feels immediate. Converted to a
+ * per-sample linear increment from the wire rate at construction. */
+#define REAC_GAIN_RAMP_MS   15.0f
+
+/* Advertised upper bound of the volume range (linear). 10.0 == +20 dB of
+ * over-amplification headroom, matching the range PipeWire sinks commonly expose;
+ * the encoder's f32->s24 clamp still bounds the actual wire sample, so a boosted
+ * gain saturates cleanly rather than wrapping. */
+#define REAC_GAIN_VOL_MAX   10.0f
 
 struct port_in { /* per-port user data PipeWire hands back */
 	int channel;
@@ -53,6 +73,23 @@ struct reac_sink_node {
 	 * and emit a frame each time the stage fills. */
 	float stage[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
 	int staged; /* 0..REAC_SAMPLES_PER_PKT-1 */
+
+	/* Output-gain state (SPA_PROP volume/mute; see reac_gain.h for the scale).
+	 * Split by thread ownership, no locks:
+	 *   - chan_vol[] + muted: MAIN-LOOP shadow, written only by param_changed;
+	 *     the linear per-channel volume + the mute flag as the controller set
+	 *     them. Also used to re-advertise the current Props.
+	 *   - chan_target[]: the effective per-channel gain (mute folded in) the RT
+	 *     thread ramps toward. Written by param_changed (main loop), read by the
+	 *     RT process() — a single relaxed atomic per channel, the SPSC pattern
+	 *     the source node uses for its telemetry.
+	 *   - chan_cur[]: RT-ONLY running ramp gain; only process() touches it.
+	 *   - ramp_step: per-sample linear increment, const after construction. */
+	float chan_vol[REAC_MAX_CHANNELS];
+	bool muted;
+	_Atomic float chan_target[REAC_MAX_CHANNELS];
+	float chan_cur[REAC_MAX_CHANNELS];
+	float ramp_step;
 };
 
 /* REALTIME. Pull this quantum's PCM from the input ports, accumulate into the
@@ -96,6 +133,21 @@ static void on_process(void *data, struct spa_io_position *position)
 		for (int c = 0; c < n->channels; c++)
 			n->stage[c][n->staged] = in[c] ? in[c][s] : 0.0f;
 		if (++n->staged == REAC_SAMPLES_PER_PKT) {
+			/* Apply the SPA_PROP output gain to each channel's full 12-sample
+			 * stage before encoding — a per-sample linear ramp toward the
+			 * controller's latest target so a volume/mute move glides instead of
+			 * clicking. reac_gain_ramp_block is pure (no atomic/alloc/syscall);
+			 * we only load the target atomic (relaxed) and carry chan_cur. This
+			 * is the defense-in-depth so wpctl/desktop volume attenuates the box
+			 * DAC even though the raw filter has no audioadapter. */
+			for (int c = 0; c < n->channels; c++) {
+				float target = atomic_load_explicit(&n->chan_target[c],
+				                                     memory_order_relaxed);
+				n->chan_cur[c] = reac_gain_ramp_block(n->stage[c],
+				                                      REAC_SAMPLES_PER_PKT,
+				                                      n->chan_cur[c], target,
+				                                      n->ramp_step);
+			}
 			/* Encode audio + L2 header; counter/control are stamped by the pacer.
 			 * Counter 0 is a placeholder (overwritten on egress). */
 			reac_tx_build(frame, planar, n->channels, REAC_SAMPLES_PER_PKT, 0, n->src);
@@ -105,9 +157,143 @@ static void on_process(void *data, struct spa_io_position *position)
 	}
 }
 
+/* Build the node's param pods into `b`: the three PropInfo descriptors (volume,
+ * mute, channelVolumes) that let a controller discover the controls, plus a Props
+ * object carrying the CURRENT state (volume/mute/channelVolumes/channelMap). Used
+ * both to advertise at connect and to re-advertise after a change so controllers
+ * (and WirePlumber's state store) always see the live values. Returns the count.
+ *
+ * MAIN LOOP only: reads chan_vol[]/muted, which only param_changed writes. */
+static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_builder *b,
+                                  const struct spa_pod *params[4])
+{
+	params[0] = spa_pod_builder_add_object(b,
+		SPA_TYPE_OBJECT_PropInfo, SPA_PARAM_PropInfo,
+		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_volume),
+		SPA_PROP_INFO_description, SPA_POD_String("Volume"),
+		SPA_PROP_INFO_type,        SPA_POD_CHOICE_RANGE_Float(1.0f, 0.0f, REAC_GAIN_VOL_MAX));
+
+	params[1] = spa_pod_builder_add_object(b,
+		SPA_TYPE_OBJECT_PropInfo, SPA_PARAM_PropInfo,
+		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_mute),
+		SPA_PROP_INFO_description, SPA_POD_String("Mute"),
+		SPA_PROP_INFO_type,        SPA_POD_CHOICE_Bool(false));
+
+	params[2] = spa_pod_builder_add_object(b,
+		SPA_TYPE_OBJECT_PropInfo, SPA_PARAM_PropInfo,
+		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_channelVolumes),
+		SPA_PROP_INFO_description, SPA_POD_String("Channel Volumes"),
+		SPA_PROP_INFO_type,        SPA_POD_CHOICE_RANGE_Float(1.0f, 0.0f, REAC_GAIN_VOL_MAX),
+		SPA_PROP_INFO_container,   SPA_POD_Id(SPA_TYPE_Array));
+
+	/* Current state. The channelMap mirrors the AUX ports (playback_NN -> AUXc),
+	 * so a controller's per-channel sliders line up with the box outputs; `volume`
+	 * is the mono view (mean of the per-channel gains). */
+	float vols[REAC_MAX_CHANNELS];
+	uint32_t map[REAC_MAX_CHANNELS];
+	float sum = 0.0f;
+	for (int c = 0; c < n->channels; c++) {
+		vols[c] = n->chan_vol[c];
+		map[c]  = SPA_AUDIO_CHANNEL_AUX0 + c;
+		sum    += n->chan_vol[c];
+	}
+	float vmean = n->channels > 0 ? sum / (float)n->channels : 1.0f;
+
+	params[3] = spa_pod_builder_add_object(b,
+		SPA_TYPE_OBJECT_Props, SPA_PARAM_Props,
+		SPA_PROP_volume,         SPA_POD_Float(vmean),
+		SPA_PROP_mute,           SPA_POD_Bool(n->muted),
+		SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float,
+		                                       n->channels, vols),
+		SPA_PROP_channelMap,     SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id,
+		                                       n->channels, map));
+	return 4;
+}
+
+/* Push the current per-channel gain (mute folded in) to the RT thread and
+ * re-advertise the Props so controllers see the live state. MAIN LOOP only. */
+static void sink_publish(struct reac_sink_node *n)
+{
+	for (int c = 0; c < n->channels; c++) {
+		float t = n->muted ? 0.0f : n->chan_vol[c];
+		atomic_store_explicit(&n->chan_target[c], t, memory_order_relaxed);
+	}
+	if (!n->filter)
+		return;
+	uint8_t buf[2048];
+	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
+	const struct spa_pod *params[4];
+	uint32_t np = sink_build_params(n, &b, params);
+	pw_filter_update_params(n->filter, NULL, params, np);
+}
+
+/* MAIN LOOP: a controller changed our node params. We only care about node-global
+ * Props (port_data == NULL). Parse volume / mute / channelVolumes and re-publish.
+ * channelVolumes is authoritative per-channel; a bare `volume` scalar sets all
+ * channels (so both a mono and a per-channel controller work, with no double
+ * count). Values are linear (reac_gain.h); negatives clamp to silence. */
+static void on_param_changed(void *data, void *port_data, uint32_t id,
+                             const struct spa_pod *param)
+{
+	struct reac_sink_node *n = data;
+	if (port_data != NULL)             /* a port param, not the node's Props */
+		return;
+	if (id != SPA_PARAM_Props || param == NULL)
+		return;
+
+	const struct spa_pod_object *obj = (const struct spa_pod_object *)param;
+	const struct spa_pod_prop *prop;
+	float chanvols[REAC_MAX_CHANNELS];
+	uint32_t nchv = 0;
+	bool have_chanvol = false, changed = false;
+
+	SPA_POD_OBJECT_FOREACH(obj, prop) {
+		switch (prop->key) {
+		case SPA_PROP_mute: {
+			bool m;
+			if (spa_pod_get_bool(&prop->value, &m) == 0) {
+				n->muted = m;
+				changed = true;
+			}
+			break;
+		}
+		case SPA_PROP_volume: {
+			float v;
+			if (spa_pod_get_float(&prop->value, &v) == 0) {
+				if (v < 0.0f)
+					v = 0.0f;
+				for (int c = 0; c < n->channels; c++)
+					n->chan_vol[c] = v;
+				changed = true;
+			}
+			break;
+		}
+		case SPA_PROP_channelVolumes:
+			nchv = spa_pod_copy_array(&prop->value, SPA_TYPE_Float,
+			                          chanvols, REAC_MAX_CHANNELS);
+			if (nchv > 0)
+				have_chanvol = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	/* channelVolumes wins over a same-object `volume` scalar (applied last). */
+	if (have_chanvol) {
+		for (uint32_t c = 0; c < nchv && c < (uint32_t)n->channels; c++)
+			n->chan_vol[c] = chanvols[c] < 0.0f ? 0.0f : chanvols[c];
+		changed = true;
+	}
+
+	if (changed)
+		sink_publish(n);
+}
+
 static const struct pw_filter_events filter_events = {
 	PW_VERSION_FILTER_EVENTS,
 	.process = on_process,
+	.param_changed = on_param_changed,
 };
 
 /* MAIN LOOP (non-RT): drain the pacer's FSM event ring to stderr. The pacer
@@ -132,6 +318,18 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	n->channels = cfg->channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : cfg->channels;
 	n->sample_rate = cfg->sample_rate;
+
+	/* Output gain starts at UNITY (calloc would leave it 0 == fully muted). The
+	 * ramp step is one REAC_GAIN_RAMP_MS worth of samples at the wire rate; a
+	 * safe fallback keeps it positive if the rate is somehow unset. */
+	float ramp_samples = REAC_GAIN_RAMP_MS * (float)n->sample_rate / 1000.0f;
+	n->ramp_step = ramp_samples > 1.0f ? 1.0f / ramp_samples : 1.0f;
+	n->muted = false;
+	for (int c = 0; c < REAC_MAX_CHANNELS; c++) {
+		n->chan_vol[c] = 1.0f;
+		n->chan_cur[c] = 1.0f;
+		atomic_init(&n->chan_target[c], 1.0f);
+	}
 
 	/* Our master src MAC (Roland OUI stand-in unless the caller supplies one). */
 	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
@@ -220,7 +418,16 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		n->ports[c]->channel = c;
 	}
 
-	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, NULL, 0) < 0) {
+	/* Advertise the volume/mute PropInfo + the initial (unity) Props at connect,
+	 * so a controller sees the controls the moment the node appears and standard
+	 * volume tools drive the box outputs (the raw filter has no audioadapter, so
+	 * without this wpctl/desktop volume would be silently ignored). */
+	uint8_t pbuf[2048];
+	struct spa_pod_builder pb = SPA_POD_BUILDER_INIT(pbuf, sizeof pbuf);
+	const struct spa_pod *cparams[4];
+	uint32_t ncp = sink_build_params(n, &pb, cparams);
+
+	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, cparams, ncp) < 0) {
 		pw_filter_destroy(n->filter);
 		reac_pacer_close(&n->pacer);
 		free(n);
