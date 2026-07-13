@@ -59,6 +59,27 @@ void reac_tx_layout_pos(int layout, int s, int ch, size_t pos[3]);
 int reac_tx_build(uint8_t *out, float *const *planar, int nch, int ns,
                   uint16_t counter, const uint8_t src[6]);
 
+/* Standard Ethernet CRC-32 (IEEE 802.3 / ISO-HDLC, poly 0xEDB88320 reflected —
+ * the same algorithm zlib's crc32() and every NIC's hardware FCS unit use) over
+ * `len` bytes. Verification vector: reac_eth_crc32("123456789", 9) == 0xCBF43926
+ * (the standard CRC-32 check value).
+ *
+ * This is NOT a REAC field and reac_tx_build/reac_tx_emit never call it — see
+ * task #156's RE writeup (docs/MASTER-HARDWARE-VERIFY.md, "downstream OHRCA
+ * trailer") and the earlier, already-committed finding for the box-UPSTREAM
+ * direction (docs/SLAVE-EMULATION-SCOPE.md W4(a)). The "2-byte OHRCA trailer"
+ * some M-5000 downstream captures show (1494 B instead of 1492 B) is exactly
+ * the low 16 bits of this CRC-32 over frame[0:REAC_FRAME_BYTES] (byte0 = crc&
+ * 0xFF, byte1 = (crc>>8)&0xFF) — i.e. the first 2 of the standard 4-byte
+ * Ethernet FCS, which some switch mirror/SPAN taps pass through and others
+ * strip. It is computed by NIC hardware, never by REAC application logic, so
+ * there is nothing for reac-pw to emit: a real desk's actual wire frame is
+ * REAC_FRAME_BYTES (1492) plus whatever FCS its own NIC appends, identical in
+ * kind to every other Ethernet frame reac-pw already sends over AF_PACKET.
+ * Exposed only as the pure verify function the RE task asked for (see
+ * tests/test_reac_tx.c, which reproduces a real captured M-5000 trailer). */
+uint32_t reac_eth_crc32(const uint8_t *buf, size_t len);
+
 /* Open an AF_PACKET raw TX socket on `ifname` (needs CAP_NET_RAW). 0 / -1. */
 int reac_tx_open(struct reac_tx *tx, const char *ifname);
 void reac_tx_close(struct reac_tx *tx);
