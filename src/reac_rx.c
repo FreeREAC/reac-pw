@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 
 #include <reac/reac.h>
 /* the reac-aes67 plain-LE decode core + the two wire sources, reused as-is */
@@ -140,6 +142,20 @@ static void *rx_loop(void *arg)
 		if (reac_capture_open(&cap, rx->cfg.source) != 0)
 			return NULL;
 		reac_capture_set_nonblock(&cap, 0); /* blocking; EINTR/stop-flag exits */
+		/* SO_RCVTIMEO so a traffic-idle recv() still wakes periodically to
+		 * recheck rx->running. Needed because SIGINT/SIGTERM never reach this
+		 * thread as an interrupting signal: main() registers them with
+		 * pw_loop_add_signal() (signalfd-based) BEFORE reac_rx_start() spawns
+		 * us, so pthread_create() inherits them already blocked in our mask —
+		 * a blocked signal can't EINTR a blocking syscall, it just queues for
+		 * the main thread's signalfd read. Without this timeout, an idle wire
+		 * (box parked/PHY down/no more traffic) leaves recv() parked forever,
+		 * reac_rx_stop()'s pthread_join() never returns, and SIGTERM is a
+		 * silent no-op (only SIGKILL works). reac_slave.c's RX socket already
+		 * carries the identical timeout for the same reason (see its
+		 * SO_RCVTIMEO comment). */
+		struct timeval tv = { 0, 200000 }; /* 200 ms: well under the shutdown budget */
+		setsockopt(cap.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 	} else {
 		if (pcap_source_open(&ps, rx->cfg.source) != 0)
 			return NULL;
