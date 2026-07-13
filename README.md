@@ -88,7 +88,15 @@ the packet rate (pps = rate/12), never on the wire.
   emits one frame per slot at a fixed pps (125 µs @96 k) and stamps the master
   JOIN/HOLD sequence — probe → `cdea 04 03` grant → established `cdea 01 03`
   channel-map + `cfea` announce ~1/s — onto the broadcast, so a real desk links.
-  On underrun the pacer emits silent FILLER to keep cadence + link alive.
+  On underrun the pacer emits silent FILLER to keep cadence + link alive. The
+  node also exposes standard `SPA_PARAM_Props` **volume / mute / channelVolumes**
+  (with a channel map over the AUX ports), so `wpctl set-volume`, the desktop
+  mixer and WirePlumber attenuate the box outputs; the raw filter has no
+  audioadapter, so `process()` applies the gain itself while it stages samples,
+  ramping toward the target to avoid zipper. Volumes are **linear** multipliers
+  (1.0 = unity / 0 dBFS, 0.5 = −6 dB, 0.0 = silence), exactly as
+  `SPA_PROP_channelVolumes` is defined and as PipeWire's own audioconvert applies
+  them — so a REAC box sink behaves like a soundcard sink under standard controls.
 
 See [DESIGN.md](DESIGN.md) for the data path, the clock topologies, and the TX
 master handshake + pacer (S2/S6). This realizes `NATIVE-REAC-DESIGN.md` §3.4 (REAC
