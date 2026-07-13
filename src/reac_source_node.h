@@ -32,8 +32,10 @@ struct reac_source_node;
  * `inst`  = optional instance id -> node name "reac-capture.<inst>" so several
  *   masters (one per REAC VLAN/segment) coexist without a node-name clash.
  *   NULL/"" keeps the bare "reac-capture" (single-box / back-compat).
- * `label` = optional operator box name for the node description + port names
- *   (e.g. "Drums" -> ports "Drums_1".."Drums_16"). NULL/"" -> "capture_NN".
+ * `label` = optional operator box name for the node DESCRIPTION only
+ *   (e.g. "Drums" -> "Drums — 16 ch (REAC box inputs)"). Port names stay the stable
+ *   "capture_NN" so a saved openmixer patch keeps linking; the box identity is on
+ *   the node (name + description). NULL/"" -> the role-default description.
  * Returns the node or NULL. */
 struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               struct reac_ring *ring,
