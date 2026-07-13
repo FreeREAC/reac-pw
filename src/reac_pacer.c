@@ -201,8 +201,10 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	 * model (the box repeats its config-announce). NULL => unknown model; the
 	 * caller can still drive it from the frame's descriptor/width. */
 	const struct reac_box_model *bm = reac_ctrl_identify_box(frame, len);
-	if (bm && bm != p->recognized_box) {
-		p->recognized_box = bm;
+	const struct reac_box_model *prev_bm =
+		atomic_load_explicit(&p->recognized_box, memory_order_relaxed);
+	if (bm && bm != prev_bm) {
+		atomic_store_explicit(&p->recognized_box, bm, memory_order_release);
 		/* Autodetect: select the grant burst for THIS matrix model (its in/out
 		 * width) so the master emits the correct model's sweep on the next grant. */
 		reac_master_set_box(&p->master, bm->in_ch, bm->out_ch);
