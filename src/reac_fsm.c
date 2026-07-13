@@ -204,8 +204,12 @@ struct reac_fsm_out reac_fsm_step(struct reac_fsm *fsm, enum reac_fsm_event ev,
 		return out(fsm, FSM_ACT_UNICAST_AUDIO);
 
 	case FSM_DROP:
-		if (ev == FSM_EV_PHY_UP || ev == FSM_EV_TICK) {
-			/* PHY still up after a drop -> re-announce (fresh bounded flood) */
+		if (ev == FSM_EV_PHY_UP || ev == FSM_EV_TICK || ev == FSM_EV_RX) {
+			/* PHY still up after a drop -> re-announce (fresh bounded flood, back
+			 * through FLOOD_ANNOUNCE with flood_frames reset). RX is included, and
+			 * matters: a MAC-change drop fires against a still-flooding NEW master
+			 * that drives RX events, not self-clocked ticks — mirror the TX_MUTE
+			 * trigger so the slave re-establishes instead of sitting dead. */
 			fsm->have_master = 0;
 			arm_flood(fsm);
 			return flood_tick(fsm);
