@@ -19,19 +19,19 @@
 #include <net/ethernet.h>
 #include <arpa/inet.h>     /* htons */
 
-/* normalized float [-1,1) -> 24-bit signed LE trio (lo,mid,hi), the exact
- * inverse of reac_rx.c's s24le_to_f32 (which divides by 2^23), so an
+/* normalized float [-1,1) -> 24-bit signed LE (lo,mid,hi at p[0],p[1],p[2]), the
+ * exact inverse of reac_rx.c's s24le_to_f32 (which divides by 2^23), so an
  * encode->decode round-trip is the identity up to one ULP of 24-bit
  * quantization. */
-static inline void f32_to_s24le(float v, uint8_t trio[3])
+static inline void f32_to_s24le(float v, uint8_t *p)
 {
 	float x = v * 8388608.0f;            /* 2^23 */
 	if (x > 8388607.0f) x = 8388607.0f;  /* clamp to the 24-bit signed range */
 	if (x < -8388608.0f) x = -8388608.0f;
 	int32_t s = (int32_t)lrintf(x);
-	trio[0] = (uint8_t)(s & 0xFF);          /* lo  */
-	trio[1] = (uint8_t)((s >> 8) & 0xFF);   /* mid */
-	trio[2] = (uint8_t)((s >> 16) & 0xFF);  /* hi  */
+	p[0] = (uint8_t)(s & 0xFF);          /* lo  */
+	p[1] = (uint8_t)((s >> 8) & 0xFF);   /* mid */
+	p[2] = (uint8_t)((s >> 16) & 0xFF);  /* hi  */
 }
 
 int reac_tx_build(uint8_t *out, float *const *planar, int nch, int ns,
@@ -50,36 +50,27 @@ int reac_tx_build(uint8_t *out, float *const *planar, int nch, int ns,
 	out[REAC_HDR_COUNTER_OFF]     = (uint8_t)(counter & 0xFF);
 	out[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)((counter >> 8) & 0xFF);
 
-	/* Audio: the obs-h8819 even/odd channel-pair BRAID — the exact inverse of
-	 * reac_upstream_decode (and of what a real Roland stagebox de-braids onto its
-	 * analog outputs). Per time-sample s, each channel PAIR (2k, 2k+1) occupies a
-	 * 6-byte group at (s*40 + 2k)*3; within the group the even channel's s24-LE
-	 * bytes (lo,mid,hi) go to g[3],g[0],g[1] and the odd channel's to
-	 * g[4],g[5],g[2]. Channels beyond nch (or NULL planes) are silent.
+	/* Audio: plain-LE, sample-major — the exact inverse of reac_decode (the
+	 * rig-validated downstream decode: live M-5000 coherence 0.999, obs-h8819
+	 * braid = noise; see reac-aes67 src/reac_decode.c). For each time-sample s all
+	 * 40 channels appear in order, so channel ch / sample s lands at (s*40 + ch)*3
+	 * — the exact slot the box de-interleaves onto its analog outputs and the slot
+	 * reac_decode reads back. Channels beyond nch (or NULL planes) are silent.
 	 *
-	 * This is NOT plain-LE sample-major. Downstream is braided just like the
-	 * upstream return: verified against the LOUD rig captures (reac-captures/
-	 * wired-reac-loud, zoneA-48k) — under plain-LE the box's odd output channels
-	 * read the neighbour's high byte as their own and smear to full-scale NOISE
-	 * (zoneA ch13: 4.85M RMS white noise), while the braid decodes every pair
-	 * clean and leaves idle channels at the noise floor (task #130 fix). */
+	 * NOT the obs-h8819 even/odd channel-pair braid: that is the UPSTREAM box
+	 * return layout (reac_upstream_decode, #108), NOT the downstream broadcast. A
+	 * single stagebox de-interleaves its output fabric ONE way; the S-1608 works
+	 * with a real M-5000's plain-LE downstream, so it reads plain-LE from us too.
+	 * Braiding the downstream shifts every odd output's MID byte into its HIGH
+	 * lane, turning a -20 dBFS tone on box output 8 into a near-full-scale burst
+	 * (VALIDATION-PLAN.md Stage B, 2026-07-13 near-equipment-damage). */
 	uint8_t *audio = out + REAC_AUDIO_OFFSET;
 	const int N = REAC_MAX_CHANNELS;
 	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
 	for (int s = 0; s < frames; s++) {
-		for (int k = 0; k < N; k += 2) {
-			float ev = (k     < nch && planar[k])     ? planar[k][s]     : 0.0f;
-			float od = (k + 1 < nch && planar[k + 1]) ? planar[k + 1][s] : 0.0f;
-			uint8_t e[3], o[3];
-			f32_to_s24le(ev, e);
-			f32_to_s24le(od, o);
-			uint8_t *g = audio + (size_t)(s * N + k) * REAC_RESOLUTION;
-			g[0] = e[1];  /* even mid */
-			g[1] = e[2];  /* even hi  */
-			g[2] = o[2];  /* odd  hi  */
-			g[3] = e[0];  /* even lo  */
-			g[4] = o[0];  /* odd  lo  */
-			g[5] = o[1];  /* odd  mid */
+		for (int ch = 0; ch < N; ch++) {
+			float v = (ch < nch && planar[ch]) ? planar[ch][s] : 0.0f;
+			f32_to_s24le(v, audio + (size_t)(s * N + ch) * REAC_RESOLUTION);
 		}
 	}
 
