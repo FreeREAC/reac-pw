@@ -424,11 +424,18 @@ static void probe_prepare(struct reac_master *m)
  * 0x10 once a 16-in S-1608 links, 0x08 once an 8-in S-0808 links, with a box-count
  * field going 0x0000 -> 0x0001 (out[20:22]). Both boxes are 8-OUT yet the byte
  * differs, so it tracks INPUT; the chanmap (which follows OUTPUT width) is identical
- * for both. We currently emit the STATIC idle-form (out[18]=cfg->out_channels, which
- * is 0x08 for the S-1608 default so it matches the idle capture byte-for-byte) — a
- * known master-role fidelity gap: the live master should raise this to the box's
- * input width + set the box-count on sync. Unchanged here: it does not affect the
- * slave-side #130 establishment fix, and the idle bytes stay M-300-exact. */
+ * for both. FIXED 2026-07-13: out[18]=cfg->out_channels was previously left STATIC
+ * at the init-time default (0x08) regardless of the box that actually linked — the
+ * box's own declared width, parsed off its cdea 01 03 0010 config-announce, was
+ * discarded by the recognizer instead of feeding this field. reac_master_set_box
+ * now writes the recognized box's in_ch into cfg->out_channels and re-stamps
+ * announce_blk immediately (grant/recognition time), so a live S-1608 gets 0x10
+ * and an S-0808 keeps 0x08. NOT modeled: reverting to the 0x08 idle default on
+ * drop/peer-gone — no golden capture of a real M-200's disconnect transition
+ * exists, so cfg->out_channels simply holds the last-recognized box's width
+ * until a DIFFERENT box is recognized (reac_pacer only calls set_box on a model
+ * change, matching the existing grant_burst carry-over). Flagged for the next
+ * capture pass. */
 static void gen_cfea(uint8_t out[34], const uint8_t src[6],
                      const struct reac_console_cfg *cfg, uint16_t box_count)
 {
@@ -438,7 +445,8 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
 	memcpy(out, head, 11);
 	memcpy(out + ANNOUNCE_MAC_IDX, src, 6);   /* OUR MAC = the L2 source */
 	out[17] = 0x28;                 /* 40: the FIXED REAC downstream slot total   */
-	out[18] = cfg->out_channels;    /* box width byte (idle-form; see note above) */
+	out[18] = cfg->out_channels;    /* box INPUT width (see note above); carried
+	                                 * in by reac_master_set_box on recognition */
 	out[19] = cfg->console_field;   /* console model (M-300 = 0, M-5000 = 1)      */
 	/* [20:22] = the ENROLLED-BOX COUNT (big-endian). THE blink fix (2026-07-12):
 	 * a real M-200 announces 0x0001 here once a box is enrolled; reac-pw hard-wired
@@ -628,7 +636,18 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
  * the box's analog width. Only the S-0808 (8/8) burst is transcribed byte-exact
  * so far; other widths keep it (the closest verified sweep) — the caller logs the
  * fallback. Adding a model: transcribe its M-200 grant burst from the matching
- * matrix-*.pcap and select it here. */
+ * matrix-*.pcap and select it here.
+ *
+ * ALSO carries the box's declared INPUT width into the cfea announce (FIXED
+ * 2026-07-13): a real M-200 announces cfea out[18] as the CONNECTED box's input
+ * width (0x10 for an S-1608, 0x08 for an S-0808 — see the gen_cfea block comment),
+ * but reac_ctrl.c's config-announce parser (~line 160) only classifies the RX
+ * event and never threaded the box's width through, so out[18] stayed frozen at
+ * whatever reac_master_init's cfg started with. We now stamp cfg.out_channels
+ * (the field gen_cfea reads) and re-generate+re-checksum announce_blk right here,
+ * at recognition time — enter_granting's own gen_cfea call (fired moments later
+ * by the same RX event, see reac_pacer.c) then just re-confirms it with the
+ * latched box_count. */
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 {
 	(void)out_ch;   /* S-0808 and S-1608 are both 8-OUT — the INPUT width distinguishes */
@@ -646,6 +665,11 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 		m->grant_burst     = GRANT_BURST;
 		m->grant_burst_len = REAC_M_GRANT_BURST_LEN;
 	}
+
+	m->cfg.out_channels = (uint8_t)in_ch;    /* cfea width byte := box input width */
+	uint16_t box_count = (m->state == REAC_M_GRANTING ||
+	                      m->state == REAC_M_ESTABLISHED) ? 1 : 0;
+	gen_cfea(m->announce_blk, m->src, &m->cfg, box_count);
 }
 
 /* Restart the control cycle at slot 0 (the burst head — the first slot emits a
