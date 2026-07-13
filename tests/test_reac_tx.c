@@ -1,29 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* Proof that the downstream encoder emits the on-wire layout a real Roland
- * stagebox de-braids onto its analog outputs: the obs-h8819 even/odd channel-
- * pair BRAID (the exact inverse of reac_upstream_decode), NOT plain-LE.
+/* Proof that the downstream encoder emits the REAC BRAID — the wire format
+ * confirmed by three independent implementations plus our goldens:
  *
- * Ground truth is a local un-braid (unbraid_ch below) copied byte-for-byte from
- * reac_upstream_decode's layout — the layout validated against the loud rig
- * captures (reac-captures/wired-reac-loud, zoneA-48k). The old encoder wrote
- * plain-LE sample-major, which those captures prove the box reads back as
- * byte-rotated NOISE (odd channels smear to full-scale). We therefore assert:
+ *   - reacdriver (per-gron, macOS): to-device conversion = 16-bit word
+ *     byte-swap of BIG-ENDIAN s24 host PCM (MbufUtils.cpp: out = in[1],in[0],
+ *     in[3],in[2],in[5],in[4] per channel pair) — asserted below to be
+ *     byte-identical to this braid;
+ *   - obs-h8819 (norihiro): convert_to_pcm24lep, listening-validated against a
+ *     real Roland M-200i downstream (our console generation);
+ *   - our rig: the S-1608/S-0808 upstream return uses this same braid,
+ *     validated with real microphones (#108);
+ *   - goldens: zoneA/zoneB (real M-5000, program audio) decode at coherence
+ *     0.99 under the braid at audio offset 50 and as noise under everything
+ *     else (VALIDATION-PLAN.md Stage B coherence table).
  *
- *   (a) a 1 kHz sine placed on ch 8 (operator's monitor port) reconstructs
- *       cleanly under the braid and lands ONLY on ch 8 — no cross-channel bleed;
- *   (b) a distinct DC per channel round-trips within one 24-bit ULP under the
- *       braid, catching any pair/stride swap;
- *   (c) NEGATIVE CONTROL: decoding the same frame with the plain-LE core
- *       (reac_decode) does NOT reconstruct ch 8 clean and DOES leak onto other
- *       channels — i.e. the old plain-LE path is exactly the reported noise.
+ * We assert:
+ *   (a) a -20 dBFS 440 Hz sine on box output 8 (ch 7, odd) reconstructs under
+ *       the braid un-pack within 0.5 dB, tracks the ideal sine, and lands ONLY
+ *       on ch 7 — every other box output is exactly silent;
+ *   (b) STRUCTURAL: the encoded audio region is byte-identical to packing each
+ *       channel pair as big-endian s24 and swapping bytes per 16-bit word —
+ *       reacdriver's to-device conversion ("LE bytes swapped");
+ *   (c) NEGATIVE CONTROL — the "right level, garbage content" complaint: the
+ *       plain-LE diagnostic layout (REAC_TXL_PLAIN), de-braided as a real box
+ *       does, plays the fed channel as a hash capped ~48 dB down (every
+ *       output's MID byte lands in its HIGH lane) that does NOT track the
+ *       sine. This is the pre-braid complaint AND the 2026-07-13 regression;
+ *   (d) both layouts are bijections over all 1440 audio bytes (no lane loss,
+ *       no double-writes), and a distinct DC per channel round-trips through
+ *       the braid within one 24-bit ULP (catches pair/stride swaps).
  */
 #include "reac_tx.h"
-#include "reac_decode.h"      /* plain-LE core: the NEGATIVE control */
 #include <reac/reac.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
@@ -36,9 +49,9 @@ static float s24le_to_f32(const uint8_t *p)
 	return (float)v / 8388608.0f;
 }
 
-/* Un-braid one channel of a downstream frame's audio region into 12 floats.
- * Byte layout identical to reac_upstream_decode / obs-h8819 convert_to_pcm24lep,
- * with the 40-ch downstream sample stride (N*3). This is the box's view. */
+/* Un-braid one channel of a downstream audio region into 12 floats — the box's
+ * view, byte-for-byte the obs-h8819 convert_to_pcm24lep / reac_upstream_decode
+ * layout with the 40-ch downstream stride. */
 static void unbraid_ch(const uint8_t *audio, int ch, float out[REAC_SAMPLES_PER_PKT])
 {
 	const int N = REAC_MAX_CHANNELS;
@@ -58,85 +71,154 @@ static void unbraid_ch(const uint8_t *audio, int ch, float out[REAC_SAMPLES_PER_
 #define CHK(cond) do { if (!(cond)) { \
 	fprintf(stderr, "FAIL: %s (line %d)\n", #cond, __LINE__); return 1; } } while (0)
 
+static float dbfs(float x) { return x > 0 ? 20.0f * log10f(x) : -999.0f; }
+
 int main(void)
 {
-	const struct reac_mode m = { 48000, 40, 12 };
-	static const uint8_t src[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 };
-	const int SINE_CH = 8;    /* the operator's monitor: box output port 8 (even) */
-	const int SINE_CH2 = 13;  /* an ODD channel too — this is where plain-LE smears
-	                           * to full-scale noise on the box (cf. zoneA ch13) */
+	/* hermetic: this test asserts the DEFAULT (braid) contract; a leaked
+	 * REAC_TX_LAYOUT diagnostic override must not turn it into a false failure. */
+	unsetenv("REAC_TX_LAYOUT");
 
-	/* ---- test (a): a 1 kHz half-scale sine on ch 8 and a distinct tone on the
-	 * odd channel 13; silence on every other channel. */
+	static const uint8_t src[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 };
+	const int SINE_CH = 7;         /* box output 8 (1-based), an ODD channel */
+	const double AMP = 0.1;        /* -20 dBFS */
+	const double F = 440.0, FS = 48000.0;
+	const int NFRAMES = 400;       /* 4800 samples of 440 Hz */
+
 	float chbuf[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
 	float *planar[REAC_MAX_CHANNELS];
-	const double f_sig = 1000.0, f_s = 48000.0;
-	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
-		planar[ch] = chbuf[ch];
-		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-			float ph = 2.0f * (float)M_PI * (float)f_sig * (float)s / (float)f_s;
-			if (ch == SINE_CH)       chbuf[ch][s] = 0.5f * sinf(ph);
-			else if (ch == SINE_CH2) chbuf[ch][s] = 0.4f * sinf(2.0f * ph);
-			else                     chbuf[ch][s] = 0.0f;
-		}
-	}
+	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) planar[ch] = chbuf[ch];
 
 	uint8_t frame[REAC_FRAME_BYTES];
-	int len = reac_tx_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT,
-	                        0x1234, src);
-	CHK(len == REAC_FRAME_BYTES);
+	float braid_peak = 0.0f, braid_maxdev = 0.0f, braid_bleed = 0.0f;
+	float plain_view_peak = 0.0f, plain_view_dev = 0.0f;
 
-	/* header well-formedness */
-	CHK(frame[12] == 0x88 && frame[13] == 0x19);           /* EtherType */
-	CHK(frame[14] == 0x34 && frame[15] == 0x12);           /* counter LE */
-	CHK(memcmp(frame + 6, src, 6) == 0);                   /* src MAC */
-	CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0); /* 0xC2 */
-	CHK(frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1); /* 0xEA */
-
-	const uint8_t *audio = frame + REAC_AUDIO_OFFSET;
-
-	/* Braid decode (the box's view): the sine must reconstruct on ch 8 and every
-	 * other channel must be exactly silent — no quantization garbage, no bleed. */
-	float sine_err = 0.0f, bleed = 0.0f;
-	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
-		float got[REAC_SAMPLES_PER_PKT];
-		unbraid_ch(audio, ch, got);
+	for (int fr = 0; fr < NFRAMES; fr++) {
 		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-			float e = fabsf(got[s] - chbuf[ch][s]);
-			if (ch == SINE_CH || ch == SINE_CH2) { if (e > sine_err) sine_err = e; }
-			else if (fabsf(got[s]) > bleed)      { bleed = fabsf(got[s]); }
+			double t = (double)(fr * REAC_SAMPLES_PER_PKT + s) / FS;
+			float v = (float)(AMP * sin(2.0 * M_PI * F * t));
+			for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++)
+				chbuf[ch][s] = (ch == SINE_CH) ? v : 0.0f;
+		}
+
+		int len = reac_tx_build(frame, planar, REAC_MAX_CHANNELS,
+		                        REAC_SAMPLES_PER_PKT, 0x1234, src);
+		CHK(len == REAC_FRAME_BYTES);
+		if (fr == 0) {
+			CHK(frame[12] == 0x88 && frame[13] == 0x19);
+			CHK(frame[14] == 0x34 && frame[15] == 0x12);          /* counter LE */
+			CHK(memcmp(frame + 6, src, 6) == 0);
+			CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0);
+			CHK(frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
+		}
+		const uint8_t *audio = frame + REAC_AUDIO_OFFSET;
+
+		/* (a) braid un-pack (the box's view): clean sine only on ch 7 */
+		for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
+			float got[REAC_SAMPLES_PER_PKT];
+			unbraid_ch(audio, ch, got);
+			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+				if (ch == SINE_CH) {
+					float d = fabsf(got[s] - chbuf[ch][s]);
+					if (d > braid_maxdev) braid_maxdev = d;
+					if (fabsf(got[s]) > braid_peak) braid_peak = fabsf(got[s]);
+				} else if (fabsf(got[s]) > braid_bleed) {
+					braid_bleed = fabsf(got[s]);
+				}
+			}
+		}
+
+		/* (b) STRUCTURAL == reacdriver: pack the pair as BE s24 and swap each
+		 * 16-bit word; must match our audio region byte-for-byte. */
+		if (fr == 0) {
+			uint8_t ref[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
+			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+				for (int k = 0; k < REAC_MAX_CHANNELS; k += 2) {
+					uint8_t be[6];   /* [e_hi,e_mid,e_lo, o_hi,o_mid,o_lo] */
+					for (int j = 0; j < 2; j++) {
+						float v = chbuf[k + j][s];
+						float x = v * 8388608.0f;
+						if (x > 8388607.0f) x = 8388607.0f;
+						if (x < -8388608.0f) x = -8388608.0f;
+						int32_t sv = (int32_t)lrintf(x);
+						be[j*3 + 0] = (uint8_t)((sv >> 16) & 0xFF);
+						be[j*3 + 1] = (uint8_t)((sv >> 8) & 0xFF);
+						be[j*3 + 2] = (uint8_t)(sv & 0xFF);
+					}
+					uint8_t *g = ref + (size_t)(s * REAC_MAX_CHANNELS + k) * REAC_RESOLUTION;
+					/* reacdriver MbufUtils: out = in[1],in[0],in[3],in[2],in[5],in[4] */
+					g[0] = be[1]; g[1] = be[0]; g[2] = be[3];
+					g[3] = be[2]; g[4] = be[5]; g[5] = be[4];
+				}
+			}
+			CHK(memcmp(audio, ref, sizeof ref) == 0);
+			printf("structural: braid == reacdriver wordswap16(BE s24) byte-for-byte\n");
+		}
+
+		/* (c) negative control: what a de-braiding box makes of the PLAIN
+		 * diagnostic layout — encode the same input plain and un-braid it. */
+		{
+			uint8_t plain_audio[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
+			memset(plain_audio, 0, sizeof plain_audio);
+			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
+				for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
+					float v = chbuf[ch][s];
+					float x = v * 8388608.0f;
+					if (x > 8388607.0f) x = 8388607.0f;
+					if (x < -8388608.0f) x = -8388608.0f;
+					int32_t sv = (int32_t)lrintf(x);
+					size_t pos[3];
+					reac_tx_layout_pos(REAC_TXL_PLAIN, s, ch, pos);
+					plain_audio[pos[0]] = (uint8_t)(sv & 0xFF);
+					plain_audio[pos[1]] = (uint8_t)((sv >> 8) & 0xFF);
+					plain_audio[pos[2]] = (uint8_t)((sv >> 16) & 0xFF);
+				}
+			float got[REAC_SAMPLES_PER_PKT];
+			unbraid_ch(plain_audio, SINE_CH, got);
+			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+				if (fabsf(got[s]) > plain_view_peak) plain_view_peak = fabsf(got[s]);
+				float d = fabsf(got[s] - chbuf[SINE_CH][s]);
+				if (d > plain_view_dev) plain_view_dev = d;
+			}
 		}
 	}
-	printf("braid: ch%d/ch%d sine max err = %.2e; worst other-channel level = %.2e\n",
-	       SINE_CH, SINE_CH2, sine_err, bleed);
-	CHK(sine_err < 1e-6f);   /* clean tones on the right channels */
-	CHK(bleed == 0.0f);      /* every other box output is dead silent */
 
-	/* NEGATIVE CONTROL: the old plain-LE core sees the braided bytes as garbage.
-	 * Both tones are mangled and the odd channel (13) smears toward full-scale —
-	 * exactly the noise the operator heard on the box outputs. We measure the
-	 * worst per-sample reconstruction error over ALL channels; a correct decode
-	 * would be ~0, plain-LE is gross. */
-	uint8_t s24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
-	int ns = reac_decode(frame, REAC_FRAME_BYTES, &m, s24);
-	CHK(ns == REAC_SAMPLES_PER_PKT);
-	float plain_worst = 0.0f, plain_ch13_peak = 0.0f;
-	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
-		for (int s = 0; s < ns; s++) {
-			float got = s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
-			float e = fabsf(got - chbuf[ch][s]);
-			if (e > plain_worst) plain_worst = e;
-			if (ch == SINE_CH2 && fabsf(got) > plain_ch13_peak)
-				plain_ch13_peak = fabsf(got);
-		}
+	printf("braid (wire format): box output 8 peak = %.4f (%.2f dBFS), "
+	       "sine max deviation = %.2e, worst other-output = %.2e\n",
+	       braid_peak, dbfs(braid_peak), braid_maxdev, braid_bleed);
+	CHK(fabsf(dbfs(braid_peak) - (-20.0f)) < 0.5f);  /* level within 0.5 dB */
+	CHK(braid_maxdev < 1e-3f);                       /* tracks the ideal sine */
+	CHK(braid_bleed == 0.0f);                        /* all other outputs silent */
+
+	printf("plain diagnostic de-braided by the box (the GARBAGE complaint): "
+	       "output 8 peak = %.4f (%.2f dBFS), deviation from sine = %.4f\n",
+	       plain_view_peak, dbfs(plain_view_peak), plain_view_dev);
+	/* the hash is capped ~48 dB down (mid byte in the hi lane + hi in mid)... */
+	CHK(plain_view_peak < 0.02f);
+	/* ...and audibly present but NOT the sine (garbage, not silence/attenuation) */
+	CHK(plain_view_peak > 1e-4f);
+	CHK(plain_view_dev > 0.05f);
+
+	/* (d) bijection over all 1440 audio bytes, both layouts */
+	for (int l = REAC_TXL_BRAID; l <= REAC_TXL_PLAIN; l++) {
+		uint8_t seen[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION] = { 0 };
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
+			for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
+				size_t pos[3];
+				reac_tx_layout_pos(l, s, ch, pos);
+				for (int j = 0; j < 3; j++) {
+					CHK(pos[j] < sizeof seen);
+					CHK(seen[pos[j]] == 0);
+					seen[pos[j]] = 1;
+				}
+			}
 	}
-	printf("plain-LE (broken): worst reconstruction err = %.2e; ch%d peak = %.2e "
-	       "(near full-scale smear)\n", plain_worst, SINE_CH2, plain_ch13_peak);
-	CHK(plain_worst > 0.1f);         /* plain-LE grossly corrupts the program ... */
-	CHK(plain_ch13_peak > 0.5f);     /* ... and the odd channel smears to noise */
+	CHK(reac_tx_layout_parse(NULL) == REAC_TXL_BRAID);
+	CHK(reac_tx_layout_parse("braid") == REAC_TXL_BRAID);
+	CHK(reac_tx_layout_parse("plain") == REAC_TXL_PLAIN);
+	CHK(reac_tx_layout_parse("bogus") == -1);
 
-	/* ---- test (b): distinct DC per channel, braid round-trip within one ULP.
-	 * A pair/stride swap would surface here as a mismatched or cross-wired DC. */
+	/* distinct DC per channel, braid round-trip within one ULP */
 	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++)
 		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			chbuf[ch][s] = (float)ch / 64.0f - 0.3f;
@@ -153,7 +235,8 @@ int main(void)
 	printf("braid: 40-ch distinct-DC round-trip max err = %.2e (tol 1e-6)\n", dc_err);
 	CHK(dc_err < 1e-6f);
 
-	printf("OK: downstream encoder emits the stagebox braid; clean sine on ch%d, "
-	       "no cross-wiring; plain-LE is the reported noise\n", SINE_CH);
+	printf("OK: downstream encoder emits the REAC braid (== reacdriver "
+	       "wordswap16(BE)); clean -20 dBFS sine on output 8; plain diagnostic "
+	       "reproduces the -42 dBFS garbage complaint\n");
 	return 0;
 }
