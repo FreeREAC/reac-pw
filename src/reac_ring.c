@@ -17,6 +17,13 @@ static uint32_t next_pow2(uint32_t v)
 int reac_ring_init(struct reac_ring *r, uint32_t channels, uint32_t capacity_frames)
 {
 	uint32_t cap = next_pow2(capacity_frames);
+	/* Defense-in-depth: reject a zero request or a rounding overflow. next_pow2
+	 * wraps to 0 when the power-of-two ceiling exceeds UINT32_MAX; cap 0 would set
+	 * mask = cap-1 = 0xFFFFFFFF over a 0-slot calloc (which glibc returns non-NULL
+	 * for, so the !r->buf guard never fires) and the first write would scribble the
+	 * heap. A garbage --rate reaches here as such a depth — fail cleanly. */
+	if (capacity_frames == 0 || cap == 0)
+		return -1;
 	r->buf = calloc((size_t)cap * channels, sizeof(float));
 	if (!r->buf)
 		return -1;
