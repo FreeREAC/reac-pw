@@ -15,8 +15,10 @@
  * power of two so the wrap is a mask.
  *
  * The realtime side NEVER blocks: on underrun process() emits silence and
- * bumps an underrun counter; on producer-side overrun the feeder drops the
- * oldest frame (the resampler/clock loop, not the ring, absorbs steady drift).
+ * bumps an underrun counter; on producer-side overrun the feeder writes only
+ * what fits and drops the NEWEST remainder (SPSC forbids the producer moving
+ * tail — the resampler/clock loop, not the ring, absorbs steady drift, and
+ * consumer-side trimming of the OLDEST is reac_ring_trim's job).
  */
 #ifndef REAC_RING_H
 #define REAC_RING_H
@@ -48,8 +50,10 @@ uint32_t reac_ring_writable(const struct reac_ring *r);
 
 /* PRODUCER (RX feeder thread). Push `n` per-channel samples from a planar,
  * de-interleaved float source `planar[c*n + s]`. If the ring can't hold all of
- * them it advances tail to drop the oldest (overrun) and still writes the
- * newest. Returns frames actually written. */
+ * them it writes as many as fit and drops the NEWEST remainder (an overrun):
+ * SPSC discipline forbids the producer from moving tail, so it never races the
+ * consumer to drop the oldest. Bounded-latency trimming of the oldest is a
+ * consumer-side job (reac_ring_trim). Returns frames actually written. */
 uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n);
 
 /* CONSUMER (PipeWire process()). Pop `n` per-channel samples into PipeWire's
