@@ -132,8 +132,12 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
 ## Part 2 — Roadmap (pending development)
 
 **reac-pw master**
-- **96 kHz OHRCA emit** — 1494-byte frames (RE the 2-byte trailer/CRC), chanmap `fe 01` + cfea console `01`,
-  pace 8000 fps. The only path to real 96 kHz (rate is the model, not `--rate` — see MASTER-HARDWARE-VERIFY.md).
+- **96 kHz OHRCA emit — DONE (task #156, 2026-07-14)**, parameterized off the existing
+  48 kHz path (fps = rate/12, console_field already wired); the frame stays 1492 B —
+  the "1494-byte OHRCA frame" plan below was based on a mirror-capture artifact,
+  RE'd and falsified this task. See MASTER-HARDWARE-VERIFY.md's "96 kHz OHRCA emit"
+  + "1494-byte frame is a capture artifact" sections. Still needs the on-wire
+  validation gate documented there (real M-5000 / S-1608-at-96k).
 - **Box output-slot mapping RE** — which downstream fabric slots a box reads as its outputs (Stage B).
 - Peer-gone / re-establish hardening for a box that drops mid-show.
 
