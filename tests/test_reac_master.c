@@ -162,6 +162,39 @@ int main(void)
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	CHK(f[16 + 17] == 0x28 && f[16 + 18] == 0x08);       /* inCh 40, outCh 8 */
 
+	/* 2b. reac_master_set_box carries the RECOGNIZED box's INPUT width into the
+	 * cfea announce (deviation fix, byte-cited vs real M-200 goldens): block byte
+	 * 16 = frame offset 34 = out[18] was left STATIC at the init-time default
+	 * regardless of the box that actually linked. A real M-200 emits 0x10 while
+	 * driving a 16-in S-1608 and 0x08 for an 8-in S-0808 (gen_cfea's block
+	 * comment); set_box now re-stamps announce_blk (gen_cfea + checksum)
+	 * immediately at recognition time, before any grant/RX event. */
+	{
+		struct reac_master mw;
+		reac_master_init(&mw, SRC, &s1608, FPS);
+
+		reac_master_set_box(&mw, 16, 8);             /* S-1608: 16 in / 8 out */
+		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
+		CHK(f[16 + 18] == 0x10);                     /* width byte tracks the box */
+		CHK(reac_ctrl_checksum_verify(f) == 0);       /* re-stamped, still valid */
+
+		reac_master_set_box(&mw, 8, 8);              /* S-0808: 8 in / 8 out */
+		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
+		CHK(f[16 + 18] == 0x08);
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+
+		/* the re-stamp must not regress the box-count field: recognizing a NEW
+		 * box model while already GRANTING/ESTABLISHED (a warm relink) must keep
+		 * announcing count=1, not fall back to the idle count=0. */
+		CHK(reac_master_rx(&mw, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
+		CHK(mw.state == REAC_M_GRANTING);
+		reac_master_set_box(&mw, 8, 8);              /* recognized mid-grant */
+		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
+		CHK(f[16 + 18] == 0x08);
+		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01); /* box-count stays latched */
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+	}
+
 	/* 3. the grant is the master's OWN burst sweep (byte-exact M-200 cdea 04 03),
 	 * NOT an echo of the box's JOIN (the echo model was falsified by
 	 * matrix-m200-s0808 2026-07-12 — a locked box gets the master's sweep). Block
