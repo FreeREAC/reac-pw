@@ -64,48 +64,57 @@ int main(void)
 	CHK(r.underruns == 1);
 	reac_frame_ring_free(&r);
 
-	/* 2b. drain-to-target depth guard math (task #152). Pure function: only trims
-	 * ABOVE the high watermark; below it (incl. the ~13-frame steady state) is a
-	 * no-op, so normal operation is never disturbed. */
-	CHK(reac_frame_ring_trim_count(0, 128, 64) == 0);
-	CHK(reac_frame_ring_trim_count(13, 128, 64) == 0);     /* on-rig steady state */
-	CHK(reac_frame_ring_trim_count(85, 128, 64) == 0);     /* a 1024-sample quantum burst */
-	CHK(reac_frame_ring_trim_count(128, 128, 64) == 0);    /* exactly at high: still no trim */
-	CHK(reac_frame_ring_trim_count(129, 128, 64) == 129 - 64);  /* one over: drain to target */
-	CHK(reac_frame_ring_trim_count(200, 128, 64) == 200 - 64);
-	CHK(reac_frame_ring_trim_count(1000, 128, 64) == 1000 - 64);
+	/* 2b. depth-guard band derivation + trim math (task #152). The band comes from
+	 * the ACTUAL producer burst (quantum/12 frames), not a guessed steady state:
+	 * HIGH = max(FLOOR=512, MULT=4 * quantum_frames), TARGET = HIGH/2. */
+	CHK(reac_pacer_guard_high(0) == REAC_PACER_GUARD_FLOOR_FRAMES);   /* no quantum yet -> floor */
+	CHK(reac_pacer_guard_high(85) == REAC_PACER_GUARD_FLOOR_FRAMES);  /* 1024-sample quantum: 4*85=340 < 512 */
+	CHK(reac_pacer_guard_high(128) == REAC_PACER_GUARD_FLOOR_FRAMES); /* 4*128=512 == floor */
+	CHK(reac_pacer_guard_high(200) == 4u * 200u);                     /* 2400-sample quantum: burst term wins */
+
+	/* Pure trim math: NEVER trims at the realistic live sawtooth peak (~113) or at
+	 * k*quantum bursts; only genuine runaway drift above HIGH trims. */
+	const uint32_t HI = 512, TG = 256;   /* the deployed band (floor governs) */
+	CHK(reac_frame_ring_trim_count(0, HI, TG) == 0);
+	CHK(reac_frame_ring_trim_count(38, HI, TG) == 0);      /* live sawtooth trough */
+	CHK(reac_frame_ring_trim_count(113, HI, TG) == 0);     /* live sawtooth PEAK (measured) */
+	CHK(reac_frame_ring_trim_count(340, HI, TG) == 0);     /* k*quantum pileup (4*85): still no trim */
+	CHK(reac_frame_ring_trim_count(512, HI, TG) == 0);     /* exactly at high: still no trim */
+	CHK(reac_frame_ring_trim_count(513, HI, TG) == 513 - TG);   /* one over: drain to target */
+	CHK(reac_frame_ring_trim_count(1000, HI, TG) == 1000 - TG); /* runaway drift toward the cap */
 	/* defensive: depth over a (mis)configured high but not over target -> no drop */
-	CHK(reac_frame_ring_trim_count(50, 40, 64) == 0);
+	CHK(reac_frame_ring_trim_count(300, 256, 400) == 0);
 
 	/* the ring trim advances tail by exactly that many (SPSC: consumer owns tail). */
 	struct reac_frame_ring g;
-	CHK(reac_frame_ring_init(&g, 512, 2048) == 0);         /* 512 slots -> 511 usable */
+	CHK(reac_frame_ring_init(&g, 1024, 2048) == 0);        /* 1024 slots -> 1023 usable */
 	uint8_t gf[REAC_FRAME_BYTES];
 	memset(gf, 0, sizeof gf);
-	for (int i = 0; i < 200; i++)                          /* fill to depth 200 (> high 128) */
+	for (int i = 0; i < 700; i++)                          /* fill to depth 700 (> high 512) */
 		CHK(reac_frame_ring_push(&g, gf, REAC_FRAME_BYTES) == 1);
-	CHK(reac_frame_ring_readable(&g) == 200);
-	CHK(reac_frame_ring_trim(&g, 128, 64) == 200 - 64);    /* dropped 136 oldest */
-	CHK(reac_frame_ring_readable(&g) == 64);               /* drained to target */
-	CHK(reac_frame_ring_trim(&g, 128, 64) == 0);           /* now below high: no-op */
-	CHK(reac_frame_ring_readable(&g) == 64);
+	CHK(reac_frame_ring_readable(&g) == 700);
+	CHK(reac_frame_ring_trim(&g, HI, TG) == 700 - TG);     /* dropped 444 oldest */
+	CHK(reac_frame_ring_readable(&g) == TG);               /* drained to target */
+	CHK(reac_frame_ring_trim(&g, HI, TG) == 0);            /* now below high: no-op */
+	CHK(reac_frame_ring_readable(&g) == TG);
 	reac_frame_ring_free(&g);
 
-	/* 2c. depth-telemetry gating (task #152): the per-drain depth line must NOT be
-	 * unconditional or it floods the long-lived master's journald log. A first
-	 * drain emits a baseline (heartbeat, log_last_ns==0); an immediate second drain
-	 * at the same depth with no new trim must stay SILENT; a guard trim forces a
-	 * line every time it fires. */
+	/* 2c. depth-telemetry gating (task #152, live-data fix): the depth SAWTOOTHS,
+	 * so the line must fire ONLY on the heartbeat or a guard trim — NEVER on a
+	 * depth change, or it spams every drain. First drain = baseline (heartbeat,
+	 * log_last_ns==0); a second drain, even after a LARGE depth swing but no trim,
+	 * must stay SILENT; a guard trim forces a line every time it fires. */
 	{
 		struct reac_pacer pg;
 		memset(&pg, 0, sizeof pg);
 		pg.fd = -1;
 		pg.fps = 4000;
 		pg.period_ns = reac_pacer_period_ns(4000);
-		CHK(reac_frame_ring_init(&pg.ring, 1024, 2048) == 0);
+		atomic_store(&pg.ring_depth_min, UINT32_MAX);
+		CHK(reac_frame_ring_init(&pg.ring, 2048, 2048) == 0);
 		uint8_t gpf[REAC_FRAME_BYTES];
 		memset(gpf, 0, sizeof gpf);
-		for (int i = 0; i < 13; i++)                       /* steady ~13 frames */
+		for (int i = 0; i < 38; i++)                       /* live sawtooth trough */
 			CHK(reac_frame_ring_push(&pg.ring, gpf, REAC_FRAME_BYTES) == 1);
 
 		FILE *gs = tmpfile();
@@ -113,14 +122,20 @@ int main(void)
 		reac_pacer_log_drain(&pg, gs);                     /* baseline (heartbeat) */
 		long after_first = ftell(gs);
 		CHK(after_first > 0);                              /* one depth line emitted */
-		reac_pacer_log_drain(&pg, gs);                     /* unchanged -> silent */
-		CHK(ftell(gs) == after_first);                     /* nothing more written */
 
-		/* a guard trim this interval forces a line even back-to-back. */
-		for (int i = 0; i < 200; i++)
+		/* sawtooth up to the ~113 peak: a big depth change but NO trim (< HIGH) and
+		 * within the heartbeat window -> the drain MUST stay silent. */
+		for (int i = 0; i < 75; i++)
 			reac_frame_ring_push(&pg.ring, gpf, REAC_FRAME_BYTES);
-		CHK(reac_frame_ring_trim(&pg.ring, REAC_PACER_RING_HIGH_FRAMES,
-		                         REAC_PACER_RING_TARGET_FRAMES) > 0);
+		CHK(reac_frame_ring_readable(&pg.ring) == 113);
+		reac_pacer_log_drain(&pg, gs);
+		CHK(ftell(gs) == after_first);                     /* silent despite the swing */
+
+		/* a guard trim forces a line even back-to-back. */
+		for (int i = 0; i < 500; i++)                      /* drive depth over HIGH (512) */
+			reac_frame_ring_push(&pg.ring, gpf, REAC_FRAME_BYTES);
+		CHK(reac_frame_ring_trim(&pg.ring, reac_pacer_guard_high(0),
+		                         reac_pacer_guard_high(0) / 2) > 0);
 		atomic_fetch_add(&pg.ring_trims, 1);               /* pacer loop bumps this on a trim */
 		reac_pacer_log_drain(&pg, gs);
 		CHK(ftell(gs) > after_first);                      /* trim forced a line */

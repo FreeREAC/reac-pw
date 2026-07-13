@@ -85,6 +85,13 @@ int reac_frame_ring_push(struct reac_frame_ring *r, const uint8_t *frame, uint16
 	return 1;
 }
 
+uint32_t reac_pacer_guard_high(uint32_t quantum_frames)
+{
+	uint32_t burst = REAC_PACER_GUARD_BURST_MULT * quantum_frames;
+	return burst > REAC_PACER_GUARD_FLOOR_FRAMES ? burst
+	                                             : REAC_PACER_GUARD_FLOOR_FRAMES;
+}
+
 uint32_t reac_frame_ring_trim_count(uint32_t depth, uint32_t high, uint32_t target)
 {
 	if (depth <= high)
@@ -400,35 +407,34 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 	}
 
 	/* Fix 2a: ring-depth telemetry, GATED so the long-lived master's journald log
-	 * isn't flooded (a 200 ms drain would be ~5 lines/s, burying the FSM events).
-	 * Emit the depth line only when it is interesting: the depth moved by
-	 * >= REAC_PACER_DEPTH_LOG_BAND frames since the last line, the guard trimmed
-	 * this interval (rare + important), or the ~10 s heartbeat elapsed so a healthy
-	 * run still leaves a periodic "depth N" marker. The peak is read-and-reset ONLY
-	 * when we log, so the line shows the max over the whole (up to ~10 s) interval,
-	 * not just the last 200 ms. NOT counted as a drained event (callers key off the
-	 * event count). */
-	uint32_t rdepth = reac_frame_ring_readable(&p->ring);
+	 * isn't flooded. The depth SAWTOOTHS with each producer burst (measured live
+	 * ~38..113 frames), so a per-change band is useless — it fires every drain.
+	 * Emit the depth line ONLY on the ~10 s heartbeat (a periodic health marker
+	 * carrying the interval min/max/last depth) or when the guard trimmed this
+	 * interval (rare + important). min/max are read-and-reset only when we emit,
+	 * so each line covers the whole interval, not just the last 200 ms. NOT counted
+	 * as a drained event (callers key off the event count). */
 	uint64_t rtrims = atomic_load_explicit(&p->ring_trims, memory_order_relaxed);
 	uint64_t now = mono_ns();
-
-	uint32_t ddelta = rdepth > p->log_last_depth
-	                  ? rdepth - p->log_last_depth : p->log_last_depth - rdepth;
-	int emit = (ddelta >= REAC_PACER_DEPTH_LOG_BAND) ||
-	           (rtrims != p->log_last_trims) ||
+	int emit = (rtrims != p->log_last_trims) ||
 	           (now - p->log_last_ns >= REAC_PACER_DEPTH_LOG_HB_NS);
 	if (emit) {
-		uint32_t rpeak = atomic_exchange_explicit(&p->ring_depth_peak, rdepth,
-		                                          memory_order_relaxed);
+		uint32_t rdepth = reac_frame_ring_readable(&p->ring);
+		uint32_t rmax = atomic_exchange_explicit(&p->ring_depth_peak, rdepth,
+		                                         memory_order_relaxed);
+		uint32_t rmin = atomic_exchange_explicit(&p->ring_depth_min, rdepth,
+		                                         memory_order_relaxed);
+		if (rmin > rmax)   /* nothing recorded yet (pre-first-slot): flatten to now */
+			rmin = rmax = rdepth;
 		uint64_t rframes = atomic_load_explicit(&p->ring_trim_frames,
 		                                        memory_order_relaxed);
 		double slot_ms = (double)p->period_ns / 1e6;
-		fprintf(out, "reac-pacer: ring depth %u frames (%.2f ms), peak %u (%.2f ms) | "
-		        "guard trims=%llu dropped=%llu frames\n",
-		        rdepth, (double)rdepth * slot_ms, rpeak, (double)rpeak * slot_ms,
+		fprintf(out, "reac-pacer: ring depth %u frames (%.2f ms) [interval min %u "
+		        "(%.2f ms) max %u (%.2f ms)] | guard trims=%llu dropped=%llu frames\n",
+		        rdepth, (double)rdepth * slot_ms,
+		        rmin, (double)rmin * slot_ms, rmax, (double)rmax * slot_ms,
 		        (unsigned long long)rtrims, (unsigned long long)rframes);
 		p->log_last_ns = now;
-		p->log_last_depth = rdepth;
 		p->log_last_trims = rtrims;
 	}
 
@@ -504,14 +510,22 @@ static void *pacer_loop(void *arg)
 		 * marginally fast vs. the fixed wire clock, walking the ring depth up over
 		 * long uptime toward the ~250 ms cap. As the ring's consumer (we own tail)
 		 * drop the OLDEST excess back to TARGET once depth exceeds HIGH — latency
-		 * stays bounded instead of drifting. Also record the peak depth for the
-		 * non-RT telemetry drain. Both are a handful of atomic ops; RT-safe. */
+		 * stays bounded instead of drifting. HIGH is derived from the ACTUAL
+		 * producer burst (the graph pushes up to one quantum = quantum/12 frames per
+		 * callback, so the depth sawtooths by that much): HIGH clears several bursts
+		 * so normal operation NEVER trims; TARGET = HIGH/2. Also track the depth
+		 * min/max for the non-RT telemetry drain. All a handful of atomic ops;
+		 * RT-safe. */
 		uint32_t depth = reac_frame_ring_readable(&p->ring);
 		if (depth > atomic_load_explicit(&p->ring_depth_peak, memory_order_relaxed))
 			atomic_store_explicit(&p->ring_depth_peak, depth, memory_order_relaxed);
-		uint32_t trimmed = reac_frame_ring_trim(&p->ring,
-		                                        REAC_PACER_RING_HIGH_FRAMES,
-		                                        REAC_PACER_RING_TARGET_FRAMES);
+		if (depth < atomic_load_explicit(&p->ring_depth_min, memory_order_relaxed))
+			atomic_store_explicit(&p->ring_depth_min, depth, memory_order_relaxed);
+		uint32_t qframes = atomic_load_explicit(&p->graph_quantum,
+		                                        memory_order_relaxed)
+		                   / (uint32_t)REAC_SAMPLES_PER_PKT;
+		uint32_t high = reac_pacer_guard_high(qframes);
+		uint32_t trimmed = reac_frame_ring_trim(&p->ring, high, high / 2);
 		if (trimmed) {
 			atomic_fetch_add_explicit(&p->ring_trims, 1, memory_order_relaxed);
 			atomic_fetch_add_explicit(&p->ring_trim_frames, trimmed,
@@ -595,6 +609,9 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	p->period_ns = reac_pacer_period_ns(cfg->fps);
 	p->prev_state = REAC_M_IDLE;
 	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
+	/* min starts at "unset" so the pacer thread's first slot records the true low;
+	 * the drain flattens min>max to the current depth if no slot has run yet. */
+	atomic_store_explicit(&p->ring_depth_min, UINT32_MAX, memory_order_relaxed);
 
 	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 	memcpy(p->src, cfg->src_mac ? cfg->src_mac : standin, 6);
