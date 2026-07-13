@@ -74,3 +74,29 @@ channels reach the console cleanly.** The stagebox is usable end-to-end.
   via `/sys/class/net/enp131s0/statistics/tx_packets` or the mirror.
 - Promiscuous mode is mandatory (the box unicasts to the spoofed master MAC, not our
   HW MAC); the pacer sets it device-wide, so all AF_PACKET sockets receive the box.
+
+## Sample rate is the desk MODEL, not a clock knob (RE 2026-07-13)
+
+Diffed a real M-5000 (96 kHz) vs M-300 (48 kHz) downstream (`real-s1608-coldboot-m5000`
+vs `m300-s1608-establish`):
+
+| | M-5000 (96 kHz) | M-300 (48 kHz) |
+|---|---|---|
+| frame | **1494 B (OHRCA)** | **1492 B (V-Mixer)** |
+| cfea console byte | `28 10 **01** …` | `28 10 **00** …` |
+| chanmap marker | `fe **01**` | `fe **00**` |
+
+There is **no explicit 48000/96000 field** anywhere. The box infers its rate from the
+desk IDENTITY: OHRCA (1494-byte frames + `01` markers) ⇒ 96 kHz; V-Mixer (1492-byte
+frames + `00`) ⇒ 48 kHz. reac-pw hardcodes the **1492-byte V-Mixer** frame
+(`reac_tx.c` / `reac_pacer.c`), so a box runs **48 kHz regardless of `--rate`**;
+`--rate 96000` only doubles our cadence against a box still decoding 48 kHz frames (a
+broken mismatch — the box streamed 48 kHz upstream while our pacer ran 8000 fps,
+rig-verified with both `m200` and `m5000`). So the master rate follows the model:
+reac-pw forces 48 kHz and rejects a `--rate` mismatch.
+
+**To drive 96 kHz** = impersonate a full OHRCA/M-5000 desk: emit **1494-byte** frames
+(the 1492 V-Mixer frame + the 2-byte OHRCA trailer — trailer/CRC algorithm still to
+RE), set the chanmap OHRCA marker `fe 01` + cfea console `01` (the `m5000` profile
+already sets cfea `[19]`), and pace at 8000 fps. That's a scoped OHRCA emit feature,
+not a rate flag.
