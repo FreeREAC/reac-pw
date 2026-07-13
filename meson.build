@@ -71,6 +71,7 @@ reac_pw_src = [
   'src/reac_slave.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_gain.c',
   'src/reac_boxreg.c',
 ]
 
@@ -199,6 +200,15 @@ courtship_test = executable('test_reac_courtship',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
+
+# --- unit test: the output-gain staging kernel (pure ramp, no PipeWire) --------
+# Exercises reac_gain_ramp_block directly: unity is a no-op, a target is reached
+# within the expected sample count, mute ramps to zero, and two channels ramp
+# independently. No socket/PipeWire — the pure kernel the RT sink path calls.
+gain_test = executable('test_reac_gain',
+  ['tests/test_reac_gain.c', 'src/reac_gain.c'],
+  include_directories : [include_directories('src')])
+test('reac_gain', gain_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
