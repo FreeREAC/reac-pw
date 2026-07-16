@@ -115,6 +115,15 @@ struct reac_sink_node {
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
 
+	/* reac.discovery.* (task #178): MAIN-LOOP-only shadow of the seq last stamped into
+	 * the filter's node properties, so on_log_timer re-publishes only when the discovery
+	 * table actually changed — the reac.link-state pattern above, keyed on seq.
+	 * Initialised to 0 to match the "0"/"[]" seeded at node creation: seq 0 is a REAL,
+	 * published state ("listening, nothing seen yet"), which a reader must be able to
+	 * tell apart from reac-pw publishing no discovery keys at all. */
+	uint32_t disco_seq_last;
+	const char *disco_ifname;               /* the segment we can honestly speak for */
+
 	/* ProcessLatency smoother (task #152): EMA of the drain-observed ring depth +
 	 * re-advertise hysteresis, driven from the 200 ms log timer. See reac_lat.h. */
 	struct reac_lat lat;
@@ -378,6 +387,56 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	}
 }
 
+/* MAIN LOOP: stamp reac.discovery.* — WHAT IS ON THIS SEGMENT, as opposed to what this
+ * master joined (task #178). The engine cannot do this itself: openmixer runs as a
+ * `systemctl --user` unit whose node has no CAP_NET_RAW (measured: CapEff 0), a user
+ * manager cannot grant a capability it does not hold, and setcap on the shared `node`
+ * binary would arm every Node process on the box. reac-pw already holds the capability
+ * and already decodes the frames, so it publishes what it sees and the engine reads it
+ * off the registry — the same seam reac.link-state already travels on.
+ *
+ * Publishes four keys, and the honesty of the set rests on all four:
+ *   scope   — the ONE interface these results speak for. Silence about a NIC we never
+ *             watched must never read as "nothing is there".
+ *   state   — "listening": passive only. reac-pw's discovery TRANSMITS NOTHING; it reads
+ *             frames the promiscuous socket already receives. That is what makes it safe
+ *             on the operator's live segment, where active-probing could disturb a
+ *             joined box.
+ *   seq     — bumped on every real change. A frozen seq lets a reader detect a wedged
+ *             publisher instead of trusting a stale list.
+ *   devices — the JSON snapshot, all-or-nothing.
+ *
+ * Reads p->disco, which is MAIN-THREAD-ONLY (built by reac_pacer_log_drain, called from
+ * this same timer just above) — no atomics needed and none used. */
+static void sink_publish_disco_props(struct reac_sink_node *n)
+{
+	if (!n->filter)
+		return;
+	if (n->pacer.disco.seq == n->disco_seq_last)
+		return;   /* unchanged: do not spam pw_filter_update_properties */
+
+	char devices[REAC_DISCO_JSON_MAX];
+	if (reac_disco_table_json(&n->pacer.disco, reac_pacer_mono_ns(), devices, sizeof devices) < 0)
+		return;   /* would not fit: publish NOTHING rather than a truncated list that
+		           * still parses — as a shorter, wrong set of devices. Leave the last
+		           * good snapshot standing and retry on the next change. */
+
+	char seq[16];
+	snprintf(seq, sizeof seq, "%u", n->pacer.disco.seq);
+
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_DISCO_SCOPE,   n->disco_ifname ? n->disco_ifname : "",
+		REAC_PROP_DISCO_STATE,   REAC_DISCO_STATE_LISTENING,
+		REAC_PROP_DISCO_SEQ,     seq,
+		REAC_PROP_DISCO_DEVICES, devices,
+		NULL);
+	if (props) {
+		pw_filter_update_properties(n->filter, NULL, &props->dict);
+		pw_properties_free(props);
+		n->disco_seq_last = n->pacer.disco.seq;
+	}
+}
+
 /* MAIN LOOP: advertise the node's graph->wire delay as SPA_PARAM_ProcessLatency
  * so PipeWire's latency algorithm folds it into the graph latency (the default
  * pw_filter latency handling applies a node ProcessLatency — we do NOT set
@@ -424,6 +483,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	struct reac_sink_node *n = data;
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
+	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
 	sink_publish_latency(n);
 }
 
@@ -511,6 +571,16 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
 			REAC_PROP_BOX_MODEL, "none",
 			REAC_PROP_BOX_WIDTH, "0x0",
+			/* Correct-at-boot discovery (task #178): from t=0 we are listening on
+			 * this NIC and have seen nothing yet — which is the truth, and is NOT
+			 * the same claim as "there is nothing here". Publishing the keys
+			 * immediately is what lets a reader tell a listening-but-empty reac-pw
+			 * apart from one that predates discovery (keys absent = could not scan).
+			 * Kept live by sink_publish_disco_props on the 200 ms log-timer. */
+			REAC_PROP_DISCO_SCOPE, cfg->ifname ? cfg->ifname : "",
+			REAC_PROP_DISCO_STATE, REAC_DISCO_STATE_LISTENING,
+			REAC_PROP_DISCO_SEQ, "0",
+			REAC_PROP_DISCO_DEVICES, "[]",
 			NULL),
 		&filter_events, n);
 	if (!n->filter) {
@@ -519,6 +589,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	}
 	n->link_state_last = REAC_LINK_PROBING;
+	/* Matches the "0"/"[]" seeded above, so an empty segment never triggers a
+	 * redundant re-publish; a first real sighting bumps seq to 1 and does. */
+	n->disco_seq_last = 0;
+	n->disco_ifname = cfg->ifname;
 	n->box_model_last = NULL;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
