@@ -40,6 +40,24 @@
 #define REAC_PROP_BOX_MODEL  "reac.box-model"
 #define REAC_PROP_BOX_WIDTH  "reac.box-width"
 
+/* reac.discovery.* — passive discovery (task #178): what is ON THE SEGMENT, as opposed
+ * to the reac.link-state/box-* keys above, which describe only the peer THIS master
+ * joined. Same seam, same node, same 200 ms poll; see reac_disco.h for the rules that
+ * keep the device list honest, and openmixer's
+ * docs/design/specs/2026-07-16-reac-discovery-via-reac-pw.md for the contract.
+ *
+ * A reader that finds reac-playback WITHOUT these keys is talking to a reac-pw that
+ * predates discovery — which is "could not scan", never "scanned and found nothing". */
+#define REAC_PROP_DISCO_SCOPE   "reac.discovery.scope"    /* the one NIC observed */
+#define REAC_PROP_DISCO_STATE   "reac.discovery.state"    /* REAC_DISCO_STATE_* */
+#define REAC_PROP_DISCO_SEQ     "reac.discovery.seq"      /* change counter; frozen = wedged */
+#define REAC_PROP_DISCO_DEVICES "reac.discovery.devices"  /* JSON array snapshot */
+
+/* reac-pw only ever LISTENS: it reports frames its promiscuous socket already receives
+ * and transmits nothing to discover. There is deliberately no "probing" value — active
+ * probing a live segment could disturb a joined box. */
+#define REAC_DISCO_STATE_LISTENING "listening"
+
 /* Values reac.link-state is stamped with (reac_link_state_name below). */
 enum reac_link_state {
 	REAC_LINK_PROBING = 0,
