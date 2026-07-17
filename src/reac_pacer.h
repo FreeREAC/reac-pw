@@ -32,6 +32,7 @@
 #include <stdatomic.h>
 
 #include "reac_master.h"
+#include "reac_disco.h"
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
 
@@ -118,6 +119,7 @@ enum reac_pacer_evkind {
 	REAC_PEV_DROP,           /* backward drop: a=reason, blk=block for BYE     */
 	REAC_PEV_WATCHDOG,       /* still PROBING after 10 s: a=box_seen           */
 	REAC_PEV_RECOGNIZED,     /* box model recognized: a=in_ch (matrix lookup)  */
+	REAC_PEV_SIGHTING,       /* passive discovery: a=role, b=model idx+1 (0=?) */
 };
 
 /* Cause codes for REAC_PEV_STATE blk[0]: 0..3 = the reac_master_rx_event that
@@ -191,6 +193,17 @@ struct reac_pacer {
 	_Atomic uint64_t grant_attempts; /* grant windows opened */
 	_Atomic uint64_t drops[8];       /* backward drops by reac_master_drop_reason */
 
+	/* Passive discovery (task #178). Two halves, deliberately on opposite sides of the
+	 * event ring so no new cross-thread primitive is needed:
+	 *   disco_gate — PACER-THREAD-ONLY. Decides which sightings earn a ring slot.
+	 *   disco      — MAIN-THREAD-ONLY. Built by reac_pacer_log_drain from the ring and
+	 *                read by the sink node's property poll. The pacer thread must never
+	 *                touch it.
+	 * See reac_disco.h; the seam it feeds is documented in openmixer's
+	 * docs/design/specs/2026-07-16-reac-discovery-via-reac-pw.md. */
+	struct reac_disco_gate disco_gate;
+	struct reac_disco_table disco;
+
 	/* FSM event log ring (producer = pacer thread, consumer = main loop) */
 	struct reac_pacer_event evring[REAC_PACER_EVRING];
 	_Atomic uint32_t ev_head, ev_tail;   /* free-running u32 indices */
@@ -237,6 +250,10 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
  * event ring, formatting each event to `out` (one line per event). Returns the
  * number of events drained. */
 int  reac_pacer_log_drain(struct reac_pacer *p, FILE *out);
+
+/* CLOCK_MONOTONIC in ns — the one clock every reac.discovery.* timestamp is measured
+ * against (sighting, staleness aging, and the published age_ms). */
+uint64_t reac_pacer_mono_ns(void);
 
 void reac_pacer_stop(struct reac_pacer *p);
 void reac_pacer_close(struct reac_pacer *p);
