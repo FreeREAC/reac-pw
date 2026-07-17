@@ -30,6 +30,7 @@
 #include "reac_link_state.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
+#include "reac_mac.h"
 
 #include <reac/reac.h>
 #include <pipewire/pipewire.h>
@@ -511,9 +512,13 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		atomic_init(&n->chan_target[c], 1.0f);
 	}
 
-	/* Our master src MAC (Roland OUI stand-in unless the caller supplies one). */
-	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-	memcpy(n->src, cfg->src_mac ? cfg->src_mac : standin, 6);
+	/* Our master src MAC. The caller (main.c master path) supplies the impersonated
+	 * desk's MAC; absent that, derive the Roland-OUI + this-NIC's-host-part default
+	 * from the one helper (reac_mac.h) rather than a scattered hard-coded host part. */
+	if (cfg->src_mac)
+		memcpy(n->src, cfg->src_mac, 6);
+	else
+		reac_mac_default_src(cfg->ifname, n->src);
 
 	/* The pacer is the master + the cadence clock. fps = rate / 12 (downstream is
 	 * 12 samples/frame at every rate). It opens the AF_PACKET TX socket. */
@@ -528,6 +533,8 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		.console = REAC_CONSOLE_CFG_S1608,
 	};
 	pcfg.console.console_field = cfg->console_field;
+	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */
+	pcfg.n_headamps = cfg->n_headamps;
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
 		pw_log_warn("reac:playback — cannot open AF_PACKET TX on '%s' "
 		            "(needs CAP_NET_RAW + a valid interface); sink not created",

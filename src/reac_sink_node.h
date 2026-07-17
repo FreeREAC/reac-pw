@@ -25,6 +25,7 @@
 
 struct pw_loop;
 struct reac_sink_node;
+struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp table */
 
 struct reac_sink_cfg {
 	const char *ifname;   /* TX NIC (raw AF_PACKET 0x8819) */
@@ -37,6 +38,9 @@ struct reac_sink_cfg {
 	const char *inst;         /* per-instance node suffix -> "reac-playback.<inst>"
 	                           * so one master per REAC VLAN coexists. NULL = bare. */
 	const char *label;        /* operator box name for the node description        */
+	/* Optional MASTER head-amp send table (task #155), forwarded to the pacer. */
+	const struct reac_headamp_setting *headamps;
+	int n_headamps;
 };
 
 /* Create the sink node. Opens an AF_PACKET 0x8819 TX socket on cfg->ifname

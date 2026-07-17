@@ -6,6 +6,7 @@
 #endif
 #include "reac_pacer.h"
 #include "reac_ctrl.h"     /* reac_ctrl_classify_box_frame */
+#include "reac_mac.h"
 
 #include <reac/reac.h>     /* REAC_FRAME_BYTES, REAC_HDR_COUNTER_OFF, ... */
 
@@ -617,6 +618,22 @@ static void *pacer_loop(void *arg)
 		if (emit == REAC_M_EMIT_CHANMAP)
 			p->last_chanmap_ns = mono_ns();     /* hb-after-walk latency base */
 
+		/* MASTER head-amp overlay (task #155), STRICTLY GUARDED so it can never
+		 * touch establishment: it only ever OVERWRITES a FILLER slot, and only once
+		 * ESTABLISHED. It never replaces a PROBE/GRANT/CHANMAP/CFEA/ENROLL frame, so
+		 * the verified grant/chanmap/announce cadence (reac_master_next) is
+		 * untouched. The table is inactive unless the operator set a cell, so with
+		 * no head-amp config this branch never fires and the wire is unchanged.
+		 * The counter + audio the frame already carries are preserved (stamp only
+		 * rewrites the control block [16:50]). RIG-GATED for on-wire validation
+		 * (needs reac-pw as MASTER to a real box + a 48V meter). */
+		if (emit == REAC_M_EMIT_FILLER &&
+		    p->master.state == REAC_M_ESTABLISHED && p->headamp.active) {
+			uint8_t hch, hparam, hval;
+			if (reac_headamp_tx_next(&p->headamp, &hch, &hparam, &hval))
+				reac_ctrl_stamp_headamp(frame, hch, hparam, hval);
+		}
+
 		/* Timer-driven backward transitions (grant-window expiry, peer-gone
 		 * budget) happen inside reac_master_next — mirror + log them here. */
 		if (p->master.state != p->prev_state)
@@ -677,14 +694,30 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * the drain flattens min>max to the current depth if no slot has run yet. */
 	atomic_store_explicit(&p->ring_depth_min, UINT32_MAX, memory_order_relaxed);
 
-	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-	memcpy(p->src, cfg->src_mac ? cfg->src_mac : standin, 6);
+	/* Default source MAC: the Roland OUI + this NIC's host part (reac_mac.h). The
+	 * master path in main.c always supplies cfg->src_mac (the impersonated desk's
+	 * MAC), so this is a defensive fallback that keeps the collision-safe default
+	 * in one helper rather than a scattered hard-coded host part. */
+	if (cfg->src_mac)
+		memcpy(p->src, cfg->src_mac, 6);
+	else
+		reac_mac_default_src(cfg->ifname, p->src);
 
 	/* A zero out_channels means the caller left the console cfg unset -> the
 	 * S-1608 default (reac_master_init(NULL)). */
 	const struct reac_console_cfg *ccfg =
 		cfg->console.out_channels ? &cfg->console : NULL;
 	reac_master_init(&p->master, p->src, ccfg, cfg->fps);
+
+	/* MASTER head-amp DMX send table (task #155). Off unless the caller passes at
+	 * least one setting: an all-unset table's next() always returns 0, so the
+	 * downstream stays byte-identical to a no-head-amp master. Loaded here (before
+	 * the pacer thread starts) so the table is single-writer from the RT thread on
+	 * — no cross-thread mutation, no race with establishment. */
+	reac_headamp_tx_init(&p->headamp, cfg->fps);
+	for (int i = 0; i < cfg->n_headamps; i++)
+		reac_headamp_tx_set(&p->headamp, cfg->headamps[i].ch,
+		                    cfg->headamps[i].param, cfg->headamps[i].value);
 
 	/* ~250 ms of frame ring at this rate (power-of-two rounded inside init). */
 	uint32_t depth = (uint32_t)(cfg->fps / 4);

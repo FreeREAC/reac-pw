@@ -566,6 +566,51 @@ size_t reac_ctrl_build_extra_frame(uint8_t *out, const uint8_t master[6],
 
 /* ---- Head-amp source control (op 04 03, record TAG 01 01) ---- */
 
+/* param/value validity for a head-amp record (phantom/pad are boolean, SENS is
+ * 0x00..0x37). Shared by the fresh-frame builder and the in-place stamp. */
+static int headamp_args_ok(uint8_t param, uint8_t value)
+{
+	switch (param) {
+	case REAC_HEADAMP_PHANTOM:
+	case REAC_HEADAMP_PAD:
+		return value <= 0x01;
+	case REAC_HEADAMP_SENS:
+		return value <= REAC_HEADAMP_SENS_MAX;
+	default:
+		return 0;
+	}
+}
+
+/* Write the head-amp type [16:18] + control block [18:50] into `frame` (a 0013
+ * record container: TAG 01 01 + CH PARAM VALUE + the INNER record checksum),
+ * then apply the OUTER block checksum at [49]. The control block is zeroed first,
+ * so this is safe to STAMP over an existing FILLER frame — the audio region
+ * [50:], the counter [14:16] and the ethernet header are untouched. Assumes the
+ * args have already passed headamp_args_ok. */
+static void put_headamp_block(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value)
+{
+	frame[16] = 0xcd; frame[17] = 0xea;       /* control-frame type */
+	memset(frame + REAC_CTRL_BLOCK_OFF, 0, 32);/* clear the 32-byte block [18:50] */
+	frame[18] = 0x04; frame[19] = 0x03;       /* the record container */
+	frame[20] = 0x00; frame[21] = 0x13;       /* BE len 0x0013 */
+	frame[22] = 0x00; frame[23] = 0x02;
+	frame[24] = 0x00; frame[25] = 0xfe;
+	frame[26] = 0x13 - 5;                     /* preamble length echo: oplen - 5 */
+	frame[27] = 0xf0; frame[28] = 0x41; frame[29] = 0x0a;   /* f0 41 0a 00 00 */
+	frame[32] = 0x12; frame[33] = 0x12;       /* record marker */
+	frame[34] = 0x01; frame[35] = 0x01;       /* TAG 01 01 = head-amp */
+	frame[36] = ch; frame[37] = param; frame[38] = value;
+	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256. (For this record
+	 * that reduces to CH+PARAM+VALUE+CKSUM == 0x7e, but compute the general
+	 * record sum — the rule is the record's, not the head-amp's.) */
+	unsigned s = 0;
+	for (int i = 34; i < 39; i++)
+		s += frame[i];
+	frame[39] = (uint8_t)((0x80 - s) & 0xff);
+	frame[40] = 0xf7;                         /* record terminator */
+	reac_ctrl_checksum_apply(frame);          /* OUTER block checksum at [49] */
+}
+
 size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
                                const uint8_t src[6], uint16_t counter,
                                uint8_t ch, uint8_t param, uint8_t value)
@@ -574,42 +619,48 @@ size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
 	 * (m200-headamp-re/ctl2.pcap): a 0013 record container whose record is
 	 * TAG 01 01 + CH PARAM VALUE + the INNER record checksum, over a zero
 	 * audio region at the downstream (master) width. */
-	switch (param) {
-	case REAC_HEADAMP_PHANTOM:
-	case REAC_HEADAMP_PAD:
-		if (value > 0x01)
-			return 0;
-		break;
-	case REAC_HEADAMP_SENS:
-		if (value > REAC_HEADAMP_SENS_MAX)
-			return 0;
-		break;
-	default:
+	if (!headamp_args_ok(param, value))
 		return 0;
-	}
 	size_t len = REAC_FRAME_BYTES;        /* master frames are downstream width */
 	memset(out, 0, len);
 	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	out[18] = 0x04; out[19] = 0x03;       /* the record container */
-	out[20] = 0x00; out[21] = 0x13;       /* BE len 0x0013 */
-	out[22] = 0x00; out[23] = 0x02;
-	out[24] = 0x00; out[25] = 0xfe;
-	out[26] = 0x13 - 5;                   /* preamble length echo: oplen - 5 */
-	out[27] = 0xf0; out[28] = 0x41; out[29] = 0x0a;   /* f0 41 0a 00 00 */
-	out[32] = 0x12; out[33] = 0x12;       /* record marker */
-	out[34] = 0x01; out[35] = 0x01;       /* TAG 01 01 = head-amp */
-	out[36] = ch; out[37] = param; out[38] = value;
-	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256. (For this
-	 * record that reduces to CH+PARAM+VALUE+CKSUM == 0x7e, but compute the
-	 * general record sum — the rule is the record's, not the head-amp's.) */
-	unsigned s = 0;
-	for (int i = 34; i < 39; i++)
-		s += out[i];
-	out[39] = (uint8_t)((0x80 - s) & 0xff);
-	out[40] = 0xf7;                       /* record terminator */
-	reac_ctrl_checksum_apply(out);        /* OUTER block checksum at [49] */
+	put_headamp_block(out, ch, param, value);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
+}
+
+int reac_ctrl_stamp_headamp(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value)
+{
+	/* Overlay a head-amp record onto an already-built downstream frame (the
+	 * MASTER-role emit path stamps it over a FILLER slot — see reac_headamp_tx).
+	 * Only the type [16:18] + control block [18:50] change; the audio, counter and
+	 * C2/EA tail the frame already carries are preserved. */
+	if (!headamp_args_ok(param, value))
+		return -1;
+	put_headamp_block(frame, ch, param, value);
+	return 0;
+}
+
+const char *reac_headamp_param_name(uint8_t param)
+{
+	switch (param) {
+	case REAC_HEADAMP_PHANTOM: return "phantom";
+	case REAC_HEADAMP_PAD:     return "pad";
+	case REAC_HEADAMP_SENS:    return "SENS";
+	default:                   return "?";
+	}
+}
+
+int reac_ctrl_headamp_record_verify(const uint8_t *frame)
+{
+	/* The inner record is TAG(2) CH PARAM VALUE CKSUM at frame[34..39]; the
+	 * console builds CKSUM so the six bytes sum to 0x80 mod 256 (byte-verified
+	 * on the M-200, m200-headamp-re/DECODE.md). A frame that fails this carries a
+	 * corrupted preamp record and its CH/PARAM/VALUE must not be trusted. */
+	unsigned s = 0;
+	for (int i = 34; i < 40; i++)
+		s += frame[i];
+	return ((s & 0xff) == 0x80) ? 0 : -1;
 }
 
 /* SENS dB <-> VALUE (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).

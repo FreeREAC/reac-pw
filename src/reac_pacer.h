@@ -33,6 +33,7 @@
 
 #include "reac_master.h"
 #include "reac_disco.h"
+#include "reac_headamp_tx.h"
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
 
@@ -148,11 +149,17 @@ struct reac_pacer_cfg {
 	const uint8_t *src_mac;   /* our master MAC (Roland OUI); NULL -> a stand-in */
 	struct reac_console_cfg console;  /* box I/O advertised downstream; a zero
 	                                   * out_channels -> the S-1608 default */
+	/* Optional MASTER head-amp send table (task #155): the operator's per-channel
+	 * phantom/pad/sens, loaded into the DMX re-assert scheduler at open. NULL/0 ->
+	 * the head-amp overlay is entirely off and the downstream is unchanged. */
+	const struct reac_headamp_setting *headamps;
+	int n_headamps;
 };
 
 struct reac_pacer {
 	struct reac_frame_ring ring;     /* graph -> pacer */
 	struct reac_master master;       /* the establishment state machine */
+	struct reac_headamp_tx headamp;  /* MASTER head-amp DMX send (off unless set) */
 	int fd;                          /* AF_PACKET socket */
 	int ifindex;
 	long period_ns;                  /* 1e9 / fps */
