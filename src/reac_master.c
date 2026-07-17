@@ -610,24 +610,29 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			}
 			return 0;
 		}
-		if (ev == REAC_M_RX_BOX_HEARTBEAT) {
-			/* The box's heartbeat = it has LOCKED (reached its own ESTABLISHED).
-			 * That is the definitive, timer-free confirmation — establish at once,
-			 * no burst-gate needed (the box already accepted the grant). Symmetric
-			 * to the heartbeat our slave emits once locked. */
-			enter_established(m);
-			return 1;
-		}
-		if (ev == REAC_M_RX_BOX_UNICAST || ev == REAC_M_RX_BOX_CONFIG) {
-			/* The box's unicast is the accept — BUT only once the FULL 32-frame
-			 * grant burst has been delivered. A cold-JOIN box switches to unicast
-			 * AFTER it sees the grant, so this gate is already satisfied; a WARM-
-			 * RELINK box is unicasting from the first slot, so without this gate the
-			 * very next unicast cut the burst to ~1 frame and the box never locked
-			 * solid (measured on the rig 2026-07-12: GRANTING->ESTABLISHED in 0.25 ms).
-			 * Before the burst completes, the unicast only confirms presence (keeps
-			 * granting); anti-#130 holds — establish still needs a box frame, never a
-			 * blind timer, and the grant window still expires BACK to PROBING. */
+		if (ev == REAC_M_RX_BOX_HEARTBEAT || ev == REAC_M_RX_BOX_UNICAST ||
+		    ev == REAC_M_RX_BOX_CONFIG) {
+			/* A box frame is the accept — BUT only once the FULL grant burst has
+			 * been delivered. Gate ALL of heartbeat/unicast/config on the same
+			 * burst-complete condition.
+			 *
+			 * The heartbeat used to establish at once, "no burst-gate needed (the
+			 * box already accepted the grant)". That assumption is FALSE: the box
+			 * heartbeats as soon as it has ANY lock — to us from a prior session, or
+			 * to a previous master — which arrives within ~1 ms, long before the
+			 * ~1.7 s ENROLL->grant dwell, let alone the burst. So the enrollment
+			 * sweep was NEVER emitted: the box kept its stale enrollment, linked,
+			 * heartbeat, passed audio, and IGNORED head-amp. Verified on the wire
+			 * 2026-07-17 — we emitted 1 group-A cell, not the 48+12 a real M-200
+			 * sends. The unicast path already gated for exactly this failure (a
+			 * WARM-RELINK box unicasting from slot 0 cut the burst to ~1 frame); the
+			 * heartbeat path had the identical flaw and skipped the gate.
+			 *
+			 * Before the burst completes, any box frame only confirms presence
+			 * (keeps granting, keeps emitting the sweep even though the box already
+			 * heartbeats). After, it establishes. anti-#130 holds — establish still
+			 * needs a box frame, never a blind timer, and the grant window still
+			 * expires BACK to PROBING. */
 			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
 				enter_established(m);   /* +1: the leading ENROLL slot; +grant_dwell: the dwell */
 				return 1;
