@@ -71,6 +71,7 @@ reac_pw_src = [
   'src/reac_slave.c',
   'src/reac_mac.c',
   'src/reac_headamp_tx.c',
+  'src/reac_headamp_prop.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',
@@ -292,3 +293,25 @@ headamp_tx_test = executable('test_reac_headamp_tx',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_headamp_tx', headamp_tx_test)
+
+# --- unit test: parse LIVE head-amp control out of a SPA_PARAM_Props pod (#203) -
+# Pure SPA-pod parse (no PipeWire, no graph): builds Props objects carrying
+# SPA_PROP_params keyed "reac.headamp.<ch>.<param>" and asserts the decode, the
+# per-param range gate, the Bool/Int/Float encodings, and (key,value) resync.
+headamp_prop_test = executable('test_reac_headamp_prop',
+  ['tests/test_reac_headamp_prop.c', 'src/reac_headamp_prop.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, spa_dep])
+test('reac_headamp_prop', headamp_prop_test)
+
+# --- unit test: the LIVE head-amp control handoff (#203) -----------------------
+# The lock-free SPSC command ring + drain that carries a per-channel change from
+# the PipeWire main loop to the RT pacer thread. Drives the pacer's ring + table
+# directly (no socket/RT privilege): functional queue->drain->emit, ring-full
+# drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
+headamp_live_test = executable('test_reac_headamp_live',
+  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
+   'src/reac_master.c', 'src/reac_ctrl.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_headamp_live', headamp_live_test)
