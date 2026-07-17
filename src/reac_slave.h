@@ -40,8 +40,12 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+#include <reac/reac.h>   /* REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT */
+
 #include "reac_fsm.h"
 #include "reac_ring.h"
+
+struct reac_ctrl_parsed;   /* reac_ctrl.h — a parsed received frame */
 
 /* How many of our input channels we return upstream (a box's width: S-1608 = 16,
  * S-0808 = 8). 628 B / 340 B box-width frames per reac_ctrl_build_upstream_filler. */
@@ -84,6 +88,25 @@ struct reac_slave {
 	int      counter_locked;      /* 1 once the offset is latched (reset on PHY-up) */
 	int      coldconnect_phase;   /* cycles the cdea 04 03 escalation 0014->0013->0016->001a */
 
+	/* --- received head-amp -> per-input GAIN (virtual-stagebox SENS/PAD apply) ---
+	 * A real box applies the console's per-channel SENS/PAD to its mic preamp
+	 * BEFORE the A/D, so the analog input reaches nominal on the wire. A virtual
+	 * box has no preamp, so it must apply the EQUIVALENT digital gain to the audio
+	 * it returns upstream — otherwise the master's head-amp does nothing and the
+	 * virtual box can't be used to test a session. We keep the raw received per-
+	 * input state and a PRECOMPUTED linear gain; the RT upstream path only
+	 * multiplies (no powf/alloc per frame). Indexed by OUR 0-based input index =
+	 * wire CH - ch_base; records for channels outside our box are ignored. Written
+	 * only by the engine/RX thread; ha_gain is published to the staging reader with
+	 * a relaxed atomic store (a torn float read would be benign, but the atomic
+	 * keeps it clean if staging ever moves off-thread). All-unity (1.0) until the
+	 * master sends head-amp, so the upstream is byte-identical to today until then. */
+	int      ch_base;                       /* our wire-channel base (S-0808 0x00, S-1608 0x20) */
+	uint8_t  ha_sens[REAC_MAX_CHANNELS];    /* received SENS value 0x00..0x37 per input */
+	uint8_t  ha_pad[REAC_MAX_CHANNELS];     /* received pad on/off per input */
+	uint8_t  ha_phantom[REAC_MAX_CHANNELS]; /* received +48V (state only; NOT a gain) */
+	_Atomic float ha_gain[REAC_MAX_CHANNELS]; /* precomputed linear input gain (relaxed) */
+
 	/* diagnostics (read from any thread) */
 	_Atomic uint64_t rx_master_frames;  /* master downstream frames we locked to */
 	_Atomic uint64_t tx_frames;         /* upstream frames we emitted */
@@ -122,6 +145,33 @@ struct reac_slave_decision {
 };
 
 void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg);
+
+/* ---- received head-amp -> input gain (PURE, offline-testable) -------------- */
+
+/* The virtual-stagebox gain model: an input sensitivity of S dBu means an input
+ * at S dBu reaches nominal, so the preamp gain is -S dB. reac_headamp_sens_db()
+ * already folds the pad into S (pad on -> +20 dBu -> 20 dB less gain). Returns the
+ * linear multiplier dbToLinear(-sens_db): higher `sens_value` (more sensitive,
+ * lower dBu) -> more gain; 1 dB per value step; pad on -> 20 dB (10x) less. Pure
+ * (powf only) — computed OFF the RT path, in the RX handler. */
+float reac_slave_headamp_gain(uint8_t sens_value, int pad_on);
+
+/* Ingest ONE received head-amp record (the caller must have record-checksum-
+ * verified it) into our per-input state, mapping the WIRE channel back to our
+ * 0-based input index (wire CH - ch_base). A record for a channel outside our box
+ * (or an unknown param) is ignored. On a SENS/PAD change the per-input linear gain
+ * is RECOMPUTED here (off the RT path) and published to the staging reader with a
+ * relaxed atomic store; phantom is tracked as state only (a voltage, never a
+ * gain). Returns our input index on an accepted record, or -1 when out of range /
+ * unknown. */
+int reac_slave_headamp_rx(struct reac_slave *s, const struct reac_ctrl_parsed *p);
+
+/* RT upstream path: multiply each of `nch` planar input blocks (ns samples) by
+ * its precomputed per-channel gain, IN PLACE. MULTIPLY-ONLY — no powf/alloc/
+ * syscall; the per-channel gain is loaded with a relaxed atomic. A unity (1.0)
+ * channel is left byte-identical. */
+void reac_slave_apply_input_gain(float *const planar[], int nch, int ns,
+                                 const _Atomic float *gain);
 
 /* PURE: feed one PARSED received frame (a master broadcast/unicast we saw) into
  * the FSM and return what to emit in response. `rx` is the parsed frame. The
