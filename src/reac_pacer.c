@@ -787,6 +787,15 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 		reac_headamp_tx_set(&p->headamp, cfg->headamps[i].ch,
 		                    cfg->headamps[i].param, cfg->headamps[i].value);
 
+	/* Point the master's GRANT sweep at this table: group A of the enrollment sweep
+	 * IS the initial head-amp state push (reac_grant.h), so the state we enroll a
+	 * box with must be the state the operator configured — not a second, divergent
+	 * copy. Borrowed pointer; both live in `p` and are touched only by the pacer
+	 * thread once running, so the sweep and the DMX re-assert always agree.
+	 * Rebuilt again on box recognition (reac_master_set_box) and by any later live
+	 * change, since the sweep is only consumed at grant time. */
+	reac_master_set_headamp_src(&p->master, &p->headamp);
+
 	/* ~250 ms of frame ring at this rate (power-of-two rounded inside init). */
 	uint32_t depth = (uint32_t)(cfg->fps / 4);
 	if (depth < 8)

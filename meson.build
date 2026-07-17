@@ -66,6 +66,7 @@ reac_pw_src = [
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
+  'src/reac_grant.c',
   'src/reac_master.c',
   'src/reac_pacer.c',
   'src/reac_slave.c',
@@ -158,6 +159,7 @@ test('reac_fsm', fsm_test)
 # IDLE->...->ESTABLISHED with the continuous 5-message cadence in both states.
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
+   'src/reac_grant.c', 'src/reac_headamp_tx.c',
    'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
   include_directories : [reac_aes67_inc, include_directories('src')],
   dependencies : [libreac_dep, m_dep])
@@ -170,7 +172,7 @@ test('reac_master', master_test)
 # generated control block sums to 0 mod 256. The #130 hardware-verify gate.
 s1608_test = executable('test_reac_s1608',
   ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_tx.c'],
+   'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_s1608', s1608_test)
@@ -189,7 +191,7 @@ test('reac_lat', lat_test)
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
-   'src/reac_ctrl.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
@@ -229,8 +231,8 @@ test('reac_vboxgain', vboxgain_test)
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
 courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_slave.c',
-   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_tx.c',
-   'src/reac_mac.c'],
+   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
+   'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
@@ -311,7 +313,22 @@ test('reac_headamp_prop', headamp_prop_test)
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
   ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
-   'src/reac_master.c', 'src/reac_ctrl.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+   'src/reac_master.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
+   'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_headamp_live', headamp_live_test)
+
+# --- unit test: the GRANT enrollment sweep — allocator + generated group A -----
+# The fix for "link established != channels enrolled" (GRANT-SWEEP.md, 2026-07-17).
+# Pins the slot ALLOCATOR (observed bases, the 0x2f fabric ceiling), the sweep SHAPE
+# (width x 3 group-A records, params 0/1/2 per channel, channels contiguous from
+# base), byte-exactness of every generated record against the proven head-amp
+# builder, the value-sourcing rule (head-amp table when set, safe default otherwise),
+# and that group B stays the fixed width-invariant constant. Pure — no socket.
+grant_test = executable('test_reac_grant',
+  ['tests/test_reac_grant.c', 'src/reac_grant.c', 'src/reac_ctrl.c',
+   'src/reac_headamp_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_grant', grant_test)
