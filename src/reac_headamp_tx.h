@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#include <reac/reac.h>   /* REAC_MAX_CHANNELS */
+#include "reac_ctrl.h"   /* REAC_HEADAMP_MAX_CH, enum reac_headamp_param */
 
 /* The three head-amp params (indices into the per-channel row), aligned with
  * enum reac_headamp_param (PHANTOM=0, PAD=1, SENS=2). */
@@ -61,7 +61,7 @@ struct reac_headamp_setting {
  * SPSC queue of these words. Because the whole triple lives in a single 32-bit
  * cell, one atomic store/load carries it indivisibly — the RT reader can never
  * observe a ch from one command spliced onto the value of another (a torn
- * triple). ch (0..REAC_MAX_CHANNELS-1), param (0..2) and value (0..0x37) each
+ * triple). ch (0..REAC_HEADAMP_MAX_CH-1), param (0..2) and value (0..0x37) each
  * fit a byte, so the three pack losslessly into the low 24 bits. */
 static inline uint32_t reac_headamp_pack(uint8_t ch, uint8_t param, uint8_t value)
 {
@@ -77,9 +77,9 @@ static inline void reac_headamp_unpack(uint32_t w, uint8_t *ch, uint8_t *param,
 }
 
 struct reac_headamp_tx {
-	uint8_t value[REAC_MAX_CHANNELS][REAC_HEADAMP_NPARAMS];
-	uint8_t set[REAC_MAX_CHANNELS][REAC_HEADAMP_NPARAMS];   /* operator-assigned */
-	uint8_t dirty[REAC_MAX_CHANNELS][REAC_HEADAMP_NPARAMS]; /* changed since emit */
+	uint8_t value[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS];
+	uint8_t set[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS];   /* operator-assigned */
+	uint8_t dirty[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS]; /* changed since emit */
 	int     active;            /* >=1 cell set -> the sender is armed */
 
 	int     reassert_period;   /* frames between full re-asserts (fps-scaled)   */
@@ -93,7 +93,7 @@ struct reac_headamp_tx {
 void reac_headamp_tx_init(struct reac_headamp_tx *t, int fps);
 
 /* Set one cell's absolute value and arm the sender. `ch` is the WIRE channel
- * (model_base + box_input-1, 0..REAC_MAX_CHANNELS-1); `param` is a
+ * (model_base + box_input-1, 0..REAC_HEADAMP_MAX_CH-1); `param` is a
  * reac_headamp_param. Marks the cell dirty so the change is emitted on the next
  * eligible slot (the edge). Returns 0, or -1 on a bad ch/param/value. */
 int reac_headamp_tx_set(struct reac_headamp_tx *t, uint8_t ch, uint8_t param,

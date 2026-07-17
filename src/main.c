@@ -68,7 +68,7 @@ static int parse_mac(const char *s, uint8_t out[6])
 }
 
 /* Parse "CH:PARAM:VALUE" (a master-role --headamp arg) into *out. CH is the WIRE
- * channel (0..REAC_MAX_CHANNELS-1); PARAM is phantom|pad|sens; VALUE is 0/1 for
+ * channel (0..REAC_HEADAMP_MAX_CH-1); PARAM is phantom|pad|sens; VALUE is 0/1 for
  * phantom|pad and the raw SENS code 0..0x37 for sens. Returns 0, or -1 if
  * malformed / out of range. */
 static int parse_headamp(const char *s, struct reac_headamp_setting *out)
@@ -86,7 +86,7 @@ static int parse_headamp(const char *s, struct reac_headamp_setting *out)
 		param = REAC_HEADAMP_SENS;
 	else
 		return -1;
-	if (ch >= REAC_MAX_CHANNELS)
+	if (ch >= REAC_HEADAMP_MAX_CH)
 		return -1;
 	if (param == REAC_HEADAMP_SENS) {
 		if (val > REAC_HEADAMP_SENS_MAX)
@@ -153,7 +153,7 @@ int main(int argc, char **argv)
 	/* --headamp CH:PARAM:VALUE (master role, repeatable): the per-channel head-amp
 	 * DMX table the master re-asserts to the box (task #155). At most one cell per
 	 * (channel,param); the table set() overwrites a repeat. */
-	struct reac_headamp_setting headamps[REAC_MAX_CHANNELS * REAC_HEADAMP_NPARAMS];
+	struct reac_headamp_setting headamps[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int n_headamps = 0;
 	const struct reac_mixer_profile *mixer =
 		reac_mixer_profile_by_name("m200");   /* master: which desk we impersonate */
@@ -257,7 +257,7 @@ int main(int argc, char **argv)
 				fprintf(stderr, "reac-pw: bad --headamp '%s' (want "
 				        "CH:phantom|pad|sens:VALUE; CH 0..%d wire channel; "
 				        "VALUE 0/1 for phantom|pad, 0..%d raw code for sens)\n",
-				        argv[i], REAC_MAX_CHANNELS - 1, REAC_HEADAMP_SENS_MAX);
+				        argv[i], REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX);
 				return 2;
 			}
 			n_headamps++;

@@ -204,6 +204,18 @@ enum reac_headamp_param {
 };
 #define REAC_HEADAMP_SENS_MAX 0x37
 
+/* The head-amp WIRE-CHANNEL space: 0x00..0x2f, so 0x30 = 48 addressable channels.
+ *
+ * This is NOT libreac's REAC_MAX_CHANNELS (40). The two are DIFFERENT spaces and
+ * conflating them is a bug (fixed 2026-07-17): REAC_MAX_CHANNELS is the count of
+ * AUDIO slots carried in a downstream frame, whereas a head-amp record's CH is a
+ * fabric wire channel = model_base + (box_input - 1), and the fabric runs to the
+ * 0x2f ceiling (the same ceiling reac_master.c's chanmap ring already encodes as
+ * REAC_M_FABRIC_RING = 48 channels + the 0xfe marker). A 16-input S-1608 based at
+ * 0x20 occupies 0x20..0x2f = 32..47, so a table bounded by 40 silently REJECTED
+ * that box's inputs 9..16 — its top half could never be given phantom/pad/sens. */
+#define REAC_HEADAMP_MAX_CH 0x30
+
 /* Build the head-amp command frame (master->box direction, downstream width:
  * a real console BROADCASTS these interleaved in its stream — pass the
  * broadcast MAC as the dst like every builder's first MAC arg). ch is the

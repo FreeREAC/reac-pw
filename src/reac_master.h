@@ -32,6 +32,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "reac_grant.h"   /* struct reac_grant_alloc, REAC_GRANT_SWEEP_MAX */
+
+struct reac_headamp_tx;   /* reac_headamp_tx.h — the head-amp state group A pushes */
+
 /* The master establishment states (names stable; semantics per #130):
  *   IDLE        — pacer not emitting / PHY down / shutdown ONLY. The first
  *                 reac_master_next() call (= the pacer's first slot) enters
@@ -255,15 +259,24 @@ struct reac_master {
 
 	/* GRANTING — hold for grant_dwell slots (ENROLL->grant DWELL, ~1.6 s,
 	 * fps-scaled at init) after the ENROLL arm frame, THEN emit the master's own
-	 * 32-frame grant burst (the cdea 04 03 sweep, byte-exact from a real M-200),
-	 * one block per grant_stride slots, then -> ESTABLISHED. grant_burst/_len
-	 * select the burst for the AUTODETECTED box model (reac_master_set_box → the
-	 * recognizer's model); default S-0808. */
+	 * grant sweep (the cdea 04 03 per-channel enrollment burst), one block per
+	 * grant_stride slots, then -> ESTABLISHED.
+	 *
+	 * The sweep is GENERATED (reac_grant_build_sweep) from `alloc` — the fabric
+	 * slots WE allocated to the connected box — not replayed from a captured
+	 * table. See reac_grant.h: group A is the head-amp state push for the
+	 * allocated channels, so a replayed sweep enrolls the wrong slots and every
+	 * later head-amp record is meaningless to the box (live 2026-07-17). It is
+	 * rebuilt on box recognition (reac_master_set_box) and whenever the head-amp
+	 * source changes (reac_master_set_headamp_src). */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
 	int      grant_dwell;     /* dwell slots between ENROLL and the grant burst
 	                           * (fps*REAC_M_GRANT_DWELL_SECONDS_X10/10, set at init) */
-	const uint8_t (*grant_burst)[34]; /* the selected model's burst table       */
+	struct reac_grant_alloc alloc;   /* the fabric slots we granted this box    */
+	uint8_t  grant_burst[REAC_GRANT_SWEEP_MAX][34];  /* the generated sweep     */
 	int      grant_burst_len; /* rows in grant_burst                            */
+	const struct reac_headamp_tx *headamp_src;  /* head-amp state group A pushes;
+	                           * NULL -> every channel takes the safe default    */
 	uint8_t  join_blk[32];    /* the box's cold-connect block (diagnostic)      */
 	uint8_t  box_mac[6];      /* the joining box's L2 source */
 	unsigned grant_attempts;  /* windows opened (diagnostic) */
@@ -303,12 +316,21 @@ struct reac_master {
 void reac_master_init(struct reac_master *m, const uint8_t src[6],
                       const struct reac_console_cfg *cfg, int fps);
 
-/* Select the grant burst for the AUTODETECTED box (the recognizer, #137). Keyed
- * on the box's in/out channel count so the master emits the correct model's
- * grant sweep. Unknown widths keep the current (default S-0808) burst and the
- * caller should log the fallback. Call from the FSM-owning thread on a box
- * recognition. */
+/* Allocate fabric slots for the AUTODETECTED box (the recognizer, #137) and
+ * REGENERATE the grant sweep for that allocation. Keyed on the box's INPUT width
+ * (the sweep enrolls the box's inputs; S-0808 and S-1608 are both 8-OUT, so the
+ * output count does not distinguish them). A width we cannot place keeps the
+ * current allocation + sweep and the caller should log the fallback. Call from
+ * the FSM-owning thread on a box recognition. */
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
+
+/* Point the grant sweep's group A at the head-amp state to push on enrollment.
+ * `tx` is BORROWED (not copied) and must outlive `m`; NULL -> the safe defaults.
+ * Regenerates the sweep immediately so a later grant enrolls the current state.
+ * The pacer owns both the master and the head-amp table on one thread, so no
+ * locking is implied. Call from the FSM-owning thread. */
+void reac_master_set_headamp_src(struct reac_master *m,
+                                 const struct reac_headamp_tx *tx);
 
 /* Feed one classified RX event into the FSM (call from the FSM-owning thread
  * only). `box_src` is the frame's L2 source; `blk32` is the 32-byte control

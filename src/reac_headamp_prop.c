@@ -4,7 +4,7 @@
 #include "reac_headamp_prop.h"
 #include "reac_ctrl.h"     /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 
-#include <reac/reac.h>     /* REAC_MAX_CHANNELS */
+#include <reac/reac.h>     /* REAC_SAMPLES_PER_PKT, ... */
 #include <spa/param/props.h>
 #include <spa/pod/pod.h>
 #include <spa/pod/iter.h>
@@ -64,7 +64,7 @@ static int parse_key(const char *rest, uint8_t *ch, uint8_t *param)
 	long c = strtol(rest, &dot, 10);
 	if (dot == rest || *dot != '.')
 		return -1;                       /* no digits, or no '.' after them */
-	if (c < 0 || c >= REAC_MAX_CHANNELS)
+	if (c < 0 || c >= REAC_HEADAMP_MAX_CH)
 		return -1;
 	int p = param_name_to_id(dot + 1);
 	if (p < 0)
