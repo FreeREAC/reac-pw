@@ -208,6 +208,17 @@ slave_test = executable('test_reac_slave',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
 
+# --- unit test: virtual-stagebox head-amp -> input gain (task #202) ------------
+# The slave APPLIES received SENS/PAD as per-input digital gain on the upstream
+# audio (a virtual box has no preamp). Pins the gain model, the wire-CH -> input
+# mapping, and the RT multiply-only apply. Same link set as slave_test.
+vboxgain_test = executable('test_reac_vboxgain',
+  ['tests/test_reac_vboxgain.c', 'src/reac_slave.c', 'src/reac_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_mac.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_vboxgain', vboxgain_test)
+
 # --- unit test: the full offline COURTSHIP (our master <-> our slave) ----------
 # Both establishment cores are pure, so the whole M-5000 <-> S-1608 sequence runs
 # as a frame-by-frame simulation with no socket: master emissions (next+stamp on
