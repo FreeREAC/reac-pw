@@ -137,6 +137,16 @@ struct reac_pacer_event {
 
 #define REAC_PACER_EVRING 128    /* power of two */
 
+/* Live head-amp control command ring (task #203). A controller (openmixer) sets a
+ * per-channel phantom/pad/sens prop on the master node; the PipeWire main-loop
+ * prop handler enqueues the change here and the RT pacer thread drains + applies
+ * it. SPSC, opposite direction from the event ring: PRODUCER = main loop,
+ * CONSUMER = the pacer thread. Each entry is a reac_headamp_pack()'d triple, so a
+ * whole (ch,param,value) command is one atomic word and the RT reader can never
+ * see a torn triple. 64 slots absorbs a controller pushing a full desk's worth of
+ * head-amp state in one gesture faster than the pacer drains one per slot. */
+#define REAC_HEADAMP_CMD_RING 128  /* power of two */
+
 /* Per-slot bounded non-blocking RX drain budget (8x wire-rate headroom per
  * 125 us slot; the box floods <=1 frame/slot on average). */
 #define REAC_PACER_RX_BUDGET 8
@@ -216,6 +226,18 @@ struct reac_pacer {
 	_Atomic uint32_t ev_head, ev_tail;   /* free-running u32 indices */
 	_Atomic uint64_t ev_drops;           /* events dropped (ring full) */
 
+	/* Live head-amp command ring (task #203): producer = PipeWire main loop
+	 * (reac_pacer_headamp_set), consumer = the RT pacer thread
+	 * (reac_pacer_headamp_drain). Each cell is a reac_headamp_pack()'d
+	 * (ch,param,value) — one atomic word, no torn triple. The pacer thread
+	 * remains the SOLE writer of the head-amp TABLE (it applies drained commands
+	 * via reac_headamp_tx_set), so the emit path (reac_headamp_tx_next) needs no
+	 * lock and stays RT-safe. */
+	_Atomic uint32_t ha_cmd[REAC_HEADAMP_CMD_RING];
+	_Atomic uint32_t ha_cmd_head, ha_cmd_tail;  /* free-running u32 indices */
+	_Atomic uint64_t ha_cmd_drops;              /* commands dropped (ring full) */
+	_Atomic uint64_t ha_cmd_applied;            /* commands drained + applied (diag) */
+
 	/* pacer-thread-local bookkeeping (single-writer, no atomics needed) */
 	int      fps;                    /* slot cadence (for the 10 s watchdog) */
 	enum reac_master_state prev_state;  /* to detect next()-driven transitions */
@@ -257,6 +279,26 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
  * event ring, formatting each event to `out` (one line per event). Returns the
  * number of events drained. */
 int  reac_pacer_log_drain(struct reac_pacer *p, FILE *out);
+
+/* LIVE head-amp control (task #203). PRODUCER side — call from the PipeWire main
+ * loop (the node's prop handler). Enqueues one per-channel (ch,param,value)
+ * change for the RT pacer thread to apply to the head-amp send table, so an
+ * external controller can drive the box preamps at runtime (mixer knob -> prop ->
+ * real box). Master-role only (a slave never SENDS head-amp). Non-blocking and
+ * lock-free: it packs the triple into one atomic word and pushes it into the
+ * SPSC command ring — no syscall, no lock, safe to call from the loop thread.
+ * Returns 1 if queued, 0 if the ring was full (the change is dropped; the DMX
+ * re-assert would carry a later value anyway). */
+int  reac_pacer_headamp_set(struct reac_pacer *p, uint8_t ch, uint8_t param,
+                            uint8_t value);
+
+/* CONSUMER side — drain every queued live head-amp command and apply it to the
+ * send table via reac_headamp_tx_set (arming the table + marking each cell dirty
+ * so the change goes out as an edge, then re-asserts). The RT pacer thread calls
+ * this once per slot; it is exposed so the offline test can drive the same
+ * apply path without the RT thread. Returns the number of commands applied.
+ * PACER-THREAD-ONLY in production (it is the sole writer of the head-amp table). */
+int  reac_pacer_headamp_drain(struct reac_pacer *p);
 
 /* CLOCK_MONOTONIC in ns — the one clock every reac.discovery.* timestamp is measured
  * against (sighting, staleness aging, and the published age_ms). */

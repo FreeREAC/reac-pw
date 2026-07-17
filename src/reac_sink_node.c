@@ -27,6 +27,7 @@
 #include "reac_tx.h"
 #include "reac_pacer.h"
 #include "reac_gain.h"
+#include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_link_state.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
@@ -208,7 +209,7 @@ static void on_process(void *data, struct spa_io_position *position)
  *
  * MAIN LOOP only: reads chan_vol[]/muted, which only param_changed writes. */
 static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_builder *b,
-                                  const struct spa_pod *params[4])
+                                  const struct spa_pod *params[5])
 {
 	params[0] = spa_pod_builder_add_object(b,
 		SPA_TYPE_OBJECT_PropInfo, SPA_PARAM_PropInfo,
@@ -228,6 +229,21 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		SPA_PROP_INFO_description, SPA_POD_String("Channel Volumes"),
 		SPA_PROP_INFO_type,        SPA_POD_CHOICE_RANGE_Float(1.0f, 0.0f, REAC_GAIN_VOL_MAX),
 		SPA_PROP_INFO_container,   SPA_POD_Id(SPA_TYPE_Array));
+
+	/* Head-amp control (task #203). Discoverable so a controller sees that this
+	 * master node accepts per-channel preamp commands; the values ride SPA_PROP_params
+	 * (an extensible (key,value) list) as "reac.headamp.<ch>.{phantom,pad,sens}" =
+	 * absolute setting. Advertised alongside volume/mute; the SET path is
+	 * on_param_changed -> reac_headamp_prop_parse -> the pacer command ring. Unlike
+	 * volume, head-amp state is NOT echoed in the Props state object below — it is
+	 * write-through control re-asserted on the wire by the DMX scheduler, not a node
+	 * property to read back. */
+	params[3] = spa_pod_builder_add_object(b,
+		SPA_TYPE_OBJECT_PropInfo, SPA_PARAM_PropInfo,
+		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_params),
+		SPA_PROP_INFO_description, SPA_POD_String(
+			"REAC head-amp: params \"reac.headamp.<ch>.{phantom,pad,sens}\" = value"),
+		SPA_PROP_INFO_type,        SPA_POD_String("reac.headamp.<ch>.<param>"));
 
 	/* Current state. The channelMap mirrors the AUX ports (playback_NN -> AUXc),
 	 * so a controller's per-channel sliders line up with the box outputs; `volume`
@@ -265,7 +281,7 @@ static void sink_publish(struct reac_sink_node *n)
 		return;
 	uint8_t buf[2048];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
-	const struct spa_pod *params[4];
+	const struct spa_pod *params[5];
 	uint32_t np = sink_build_params(n, &b, params);
 	pw_filter_update_params(n->filter, NULL, params, np);
 }
@@ -328,6 +344,21 @@ static void on_param_changed(void *data, void *port_data, uint32_t id,
 			n->chan_vol[c] = chanvols[c] < 0.0f ? 0.0f : chanvols[c];
 		changed = true;
 	}
+
+	/* LIVE head-amp control (task #203): the SAME Props object may carry per-channel
+	 * phantom/pad/sens changes under SPA_PROP_params ("reac.headamp.<ch>.<param>").
+	 * Parse them (pure, no state touched here) and hand each to the pacer's lock-free
+	 * command ring — the RT pacer thread applies them to the head-amp DMX send table,
+	 * so a mixer knob reaches the real box preamp live. This is the master node (the
+	 * sink owns the pacer), so it is master-role by construction; a slave has no
+	 * pacer/head-amp send path. Independent of the volume/mute `changed` re-publish
+	 * above — head-amp state is not echoed back in Props (it is write-through control,
+	 * re-asserted on the wire by the DMX scheduler, not a node property). */
+	struct reac_headamp_setting ha[REAC_MAX_CHANNELS * REAC_HEADAMP_NPARAMS];
+	int nha = reac_headamp_prop_parse(param, ha,
+	                                  (int)(sizeof ha / sizeof ha[0]));
+	for (int i = 0; i < nha; i++)
+		reac_pacer_headamp_set(&n->pacer, ha[i].ch, ha[i].param, ha[i].value);
 
 	if (changed)
 		sink_publish(n);
@@ -637,7 +668,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * without this wpctl/desktop volume would be silently ignored). */
 	uint8_t pbuf[2048];
 	struct spa_pod_builder pb = SPA_POD_BUILDER_INIT(pbuf, sizeof pbuf);
-	const struct spa_pod *cparams[4];
+	const struct spa_pod *cparams[5];
 	uint32_t ncp = sink_build_params(n, &pb, cparams);
 
 	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, cparams, ncp) < 0) {
