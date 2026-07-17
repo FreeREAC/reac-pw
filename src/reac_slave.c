@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>          /* powf — used off the RT path (RX handler) only */
 #include <unistd.h>
 #include <errno.h>
 #include <sys/socket.h>
@@ -70,6 +71,15 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 		: REAC_SLAVE_BOX_CHANNELS_DEFAULT;
 	s->sample_rate = cfg ? cfg->sample_rate : 0;
 
+	/* Head-amp -> input gain: default UNITY on every input until the master sends a
+	 * SENS/PAD record, so the upstream audio is byte-identical to today (the memset
+	 * already zeroed sens/pad/phantom). Our wire-channel base is the box's fabric
+	 * slot offset the console addresses head-amp by: a 16-input S-1608 sits at 0x20,
+	 * every other width (S-0808/S-4000S) at 0x00 (m200-headamp-re/DECODE.md). */
+	s->ch_base = (s->box_channels == 16) ? 0x20 : 0x00;
+	for (int c = 0; c < REAC_MAX_CHANNELS; c++)
+		s->ha_gain[c] = 1.0f;
+
 	/* Heartbeat cadence is ~1/s wall-clock, i.e. one keep-alive per frame-rate
 	 * worth of frames (fps = rate/12). A real box measured 8162 frames @96k and
 	 * 4017 @48k — the gap scales with the rate, so a fixed 8000 would beat at
@@ -125,6 +135,68 @@ struct reac_slave_decision reac_slave_step_phy(struct reac_slave *s, int up)
  * dwell while no master frame is arriving yet.
  * ------------------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------------- *
+ * Received head-amp -> per-input gain (the virtual-stagebox SENS/PAD apply).
+ *
+ * A real box applies the console's per-channel SENS/PAD to its mic preamp BEFORE
+ * the A/D; a virtual box has no preamp, so it must apply the equivalent DIGITAL
+ * gain to the audio it returns upstream — else the master's head-amp is inert and
+ * the box is useless for testing a session. The model + state update run off the
+ * RT path (in the RX handler); the RT upstream path only multiplies.
+ * ------------------------------------------------------------------------- */
+
+float reac_slave_headamp_gain(uint8_t sens_value, int pad_on)
+{
+	/* Input sensitivity S dBu = the level that reaches nominal, so the equivalent
+	 * preamp gain is -S dB. reac_headamp_sens_db() already folds the pad into S
+	 * (pad on -> +20 dBu -> 20 dB less gain), 1 dB per SENS value step. */
+	int gain_db = -reac_headamp_sens_db(sens_value, pad_on);
+	return powf(10.0f, (float)gain_db / 20.0f);
+}
+
+int reac_slave_headamp_rx(struct reac_slave *s, const struct reac_ctrl_parsed *p)
+{
+	/* Map the WIRE channel (model_base + box_input-1) back to our 0-based input
+	 * index; drop records for channels outside our box. */
+	int idx = (int)p->ch - s->ch_base;
+	if (idx < 0 || idx >= s->box_channels)
+		return -1;
+
+	switch (p->param) {
+	case REAC_HEADAMP_PHANTOM:
+		s->ha_phantom[idx] = p->value ? 1 : 0;
+		return idx;                    /* +48V is a voltage, not a gain — state only */
+	case REAC_HEADAMP_PAD:
+		s->ha_pad[idx] = p->value ? 1 : 0;
+		break;
+	case REAC_HEADAMP_SENS:
+		s->ha_sens[idx] = p->value;
+		break;
+	default:
+		return -1;                     /* unknown param — ignore */
+	}
+
+	/* SENS or PAD changed: PRECOMPUTE this input's linear gain here (off the RT
+	 * path — never per-sample) and publish it to the staging reader with a relaxed
+	 * atomic store. */
+	float g = reac_slave_headamp_gain(s->ha_sens[idx], s->ha_pad[idx]);
+	atomic_store_explicit(&s->ha_gain[idx], g, memory_order_relaxed);
+	return idx;
+}
+
+void reac_slave_apply_input_gain(float *const planar[], int nch, int ns,
+                                 const _Atomic float *gain)
+{
+	for (int c = 0; c < nch; c++) {
+		float g = atomic_load_explicit(&gain[c], memory_order_relaxed);
+		if (g == 1.0f)
+			continue;               /* unity — leave the block byte-identical */
+		float *b = planar[c];
+		for (int i = 0; i < ns; i++)
+			b[i] *= g;              /* MULTIPLY-ONLY on the RT path */
+	}
+}
+
 /* Pull our box_channels of input from the tx_ring into a planar view; on underrun
  * (or no ring) the channels are silent. Returns the per-channel sample count
  * staged (REAC_SAMPLES_PER_PKT or 0). */
@@ -141,7 +213,15 @@ static int stage_inputs(struct reac_slave *s,
 		return 0;
 	uint32_t got = reac_ring_read_planar(s->tx_ring, planar, (uint32_t)s->box_channels,
 	                                      REAC_SAMPLES_PER_PKT);
-	return got > 0 ? REAC_SAMPLES_PER_PKT : 0;
+	if (got == 0)
+		return 0;   /* underrun — the zeroed (silent) buffers need no gain */
+
+	/* Apply the received head-amp SENS/PAD as per-input digital gain, exactly as a
+	 * real box's preamp would before the A/D. MULTIPLY-ONLY (the gain was precomputed
+	 * in the RX handler); all-unity until the master sends head-amp, so this is a
+	 * no-op — the upstream stays byte-identical to today until the master drives it. */
+	reac_slave_apply_input_gain(planar, s->box_channels, REAC_SAMPLES_PER_PKT, s->ha_gain);
+	return REAC_SAMPLES_PER_PKT;
 }
 
 /* Emit one frame for the decision `d` on the wire. `bcast` = the broadcast dst
@@ -370,14 +450,31 @@ static void *slave_loop(void *arg)
 			if (reac_ctrl_headamp_record_verify(rxbuf) != 0) {
 				fprintf(stderr, "reac_slave: head-amp record (ch %u param %u) "
 				        "DROPPED — inner checksum bad\n", p.ch, p.param);
-			} else if (p.param == REAC_HEADAMP_SENS) {
-				fprintf(stderr, "reac_slave: head-amp RX ch %u %s value 0x%02x "
-				        "(%d dB, pad off)\n", p.ch,
-				        reac_headamp_param_name(p.param), p.value,
-				        reac_headamp_sens_db(p.value, 0));
 			} else {
-				fprintf(stderr, "reac_slave: head-amp RX ch %u %s %s\n", p.ch,
-				        reac_headamp_param_name(p.param), p.value ? "on" : "off");
+				/* APPLY it as our INPUT GAIN (task #202): a virtual box has no
+				 * preamp, so the console's SENS/PAD must scale the audio we send
+				 * upstream, or the master's head-amp is inert. Updates per-input
+				 * state + precomputes the linear gain off the RT path; returns our
+				 * 0-based input index, or -1 for a channel outside our box. */
+				int idx = reac_slave_headamp_rx(s, &p);
+				if (idx < 0) {
+					fprintf(stderr, "reac_slave: head-amp RX ch %u %s — not one of "
+					        "our %d inputs (base 0x%02x), ignored\n", p.ch,
+					        reac_headamp_param_name(p.param), s->box_channels,
+					        s->ch_base);
+				} else if (p.param == REAC_HEADAMP_SENS) {
+					fprintf(stderr, "reac_slave: head-amp RX ch %u (input %d) %s "
+					        "value 0x%02x (%d dB, pad %s) -> gain x%.3f\n", p.ch, idx,
+					        reac_headamp_param_name(p.param), p.value,
+					        reac_headamp_sens_db(p.value, s->ha_pad[idx]),
+					        s->ha_pad[idx] ? "on" : "off",
+					        atomic_load_explicit(&s->ha_gain[idx],
+					                             memory_order_relaxed));
+				} else {
+					fprintf(stderr, "reac_slave: head-amp RX ch %u (input %d) %s %s\n",
+					        p.ch, idx, reac_headamp_param_name(p.param),
+					        p.value ? "on" : "off");
+				}
 			}
 		}
 
