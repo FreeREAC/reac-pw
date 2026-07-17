@@ -78,9 +78,25 @@ enum reac_ctrl_kind reac_ctrl_parse(const uint8_t *frame, size_t len,
 	} else if (t0 == 0xcf && t1 == 0xea) {
 		out->kind = REAC_CTRL_MASTER_ANNOUNCE;
 	} else if (t0 == 0xcd && t1 == 0xea) {
-		if (out->op0 == 0x04 && out->op1 == 0x03)
-			out->kind = REAC_CTRL_GRANT;
-		else if (out->op0 == 0x01 && out->op1 == 0x03 && out->op_len == 0x0019)
+		if (out->op0 == 0x04 && out->op1 == 0x03) {
+			/* op 04 03 is a RECORD CONTAINER, not one opcode: after the
+			 * 12 12 marker at [32] comes a 2-byte TAG. TAG 01 00 = the
+			 * connect-grant; TAG 01 01 = a HEAD-AMP record (CH PARAM
+			 * VALUE) — a live M-200 emits ~628 head-amp records per 14
+			 * grants, so a joining slave must NOT read a preamp
+			 * knob-turn as its grant. Every other tag (03 02, 05 00,
+			 * 00 00 — the cold-connect inventory variants) stays GRANT
+			 * as before (ground truth: m200-headamp-re/DECODE.md). */
+			if (frame[32] == 0x12 && frame[33] == 0x12 &&
+			    frame[34] == 0x01 && frame[35] == 0x01) {
+				out->kind = REAC_CTRL_HEADAMP;
+				out->ch    = frame[36];
+				out->param = frame[37];
+				out->value = frame[38];
+			} else {
+				out->kind = REAC_CTRL_GRANT;
+			}
+		} else if (out->op0 == 0x01 && out->op1 == 0x03 && out->op_len == 0x0019)
 			out->kind = REAC_CTRL_MASTER_HB;       /* master established heartbeat */
 		else if (out->op0 == 0x01 && out->op1 == 0x03 && out->op_len == 0x0001)
 			out->kind = REAC_CTRL_BOX_HB;          /* a box keep-alive */
@@ -546,4 +562,70 @@ size_t reac_ctrl_build_extra_frame(uint8_t *out, const uint8_t master[6],
 	memcpy(out + REAC_CTRL_BLOCK_OFF, m->extra_block, 32);
 	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
 	return len;
+}
+
+/* ---- Head-amp source control (op 04 03, record TAG 01 01) ---- */
+
+size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
+                               const uint8_t src[6], uint16_t counter,
+                               uint8_t ch, uint8_t param, uint8_t value)
+{
+	/* The console-side preamp command, byte-truthed against a live M-200
+	 * (m200-headamp-re/ctl2.pcap): a 0013 record container whose record is
+	 * TAG 01 01 + CH PARAM VALUE + the INNER record checksum, over a zero
+	 * audio region at the downstream (master) width. */
+	switch (param) {
+	case REAC_HEADAMP_PHANTOM:
+	case REAC_HEADAMP_PAD:
+		if (value > 0x01)
+			return 0;
+		break;
+	case REAC_HEADAMP_SENS:
+		if (value > REAC_HEADAMP_SENS_MAX)
+			return 0;
+		break;
+	default:
+		return 0;
+	}
+	size_t len = REAC_FRAME_BYTES;        /* master frames are downstream width */
+	memset(out, 0, len);
+	put_hdr(out, master, src, counter, 0xcd, 0xea);
+	out[18] = 0x04; out[19] = 0x03;       /* the record container */
+	out[20] = 0x00; out[21] = 0x13;       /* BE len 0x0013 */
+	out[22] = 0x00; out[23] = 0x02;
+	out[24] = 0x00; out[25] = 0xfe;
+	out[26] = 0x13 - 5;                   /* preamble length echo: oplen - 5 */
+	out[27] = 0xf0; out[28] = 0x41; out[29] = 0x0a;   /* f0 41 0a 00 00 */
+	out[32] = 0x12; out[33] = 0x12;       /* record marker */
+	out[34] = 0x01; out[35] = 0x01;       /* TAG 01 01 = head-amp */
+	out[36] = ch; out[37] = param; out[38] = value;
+	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256. (For this
+	 * record that reduces to CH+PARAM+VALUE+CKSUM == 0x7e, but compute the
+	 * general record sum — the rule is the record's, not the head-amp's.) */
+	unsigned s = 0;
+	for (int i = 34; i < 39; i++)
+		s += out[i];
+	out[39] = (uint8_t)((0x80 - s) & 0xff);
+	out[40] = 0xf7;                       /* record terminator */
+	reac_ctrl_checksum_apply(out);        /* OUTER block checksum at [49] */
+	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
+
+/* SENS dB <-> VALUE (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).
+ * Ground-truthed on the M-200 SENS display: pad off 0x00 = -10 dBu .. 0x37 =
+ * -65 dBu; pad on 0x00 = +10 .. 0x37 = -45. */
+int reac_headamp_sens_db(uint8_t value, int pad_on)
+{
+	return -10 - (int)value + (pad_on ? 20 : 0);
+}
+
+uint8_t reac_headamp_sens_value(int db, int pad_on)
+{
+	int v = -10 - db + (pad_on ? 20 : 0);
+	if (v < 0)
+		v = 0;
+	if (v > REAC_HEADAMP_SENS_MAX)
+		v = REAC_HEADAMP_SENS_MAX;
+	return (uint8_t)v;
 }
