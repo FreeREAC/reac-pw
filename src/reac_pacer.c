@@ -506,6 +506,66 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 	return count;
 }
 
+/* ---- live head-amp control handoff (task #203) --------------------------- *
+ * A controller (openmixer) sets a per-channel phantom/pad/sens prop on the
+ * master node; the change must reach the box preamps at runtime. The head-amp
+ * send TABLE (reac_headamp_tx) is read AND advanced by the RT pacer thread every
+ * emit (reac_headamp_tx_next clears dirty flags + walks the re-assert sweep), so
+ * it must stay single-writer on that thread — a second writer from the loop
+ * thread would race the sweep cursor and the dirty bitmap. Instead the loop
+ * thread PACKS its change into one 32-bit word and pushes it through this SPSC
+ * ring; the RT thread drains + applies it via reac_headamp_tx_set (still the sole
+ * writer of the table). One atomic word per command means the RT reader can never
+ * observe a torn (ch,param,value). Same lock-free idiom as the event ring, roles
+ * reversed (loop = producer, pacer = consumer). */
+
+int reac_pacer_headamp_set(struct reac_pacer *p, uint8_t ch, uint8_t param,
+                           uint8_t value)
+{
+	uint32_t h = atomic_load_explicit(&p->ha_cmd_head, memory_order_relaxed);
+	uint32_t t = atomic_load_explicit(&p->ha_cmd_tail, memory_order_acquire);
+	if (h - t >= REAC_HEADAMP_CMD_RING) {
+		/* Full: drop this command. The DMX re-assert model makes this benign —
+		 * an absolute value is not a delta, so a later set of the same cell
+		 * supersedes it wholesale; nothing accumulates a wrong offset. */
+		atomic_fetch_add_explicit(&p->ha_cmd_drops, 1, memory_order_relaxed);
+		return 0;
+	}
+	atomic_store_explicit(&p->ha_cmd[h % REAC_HEADAMP_CMD_RING],
+	                      reac_headamp_pack(ch, param, value),
+	                      memory_order_relaxed);
+	/* Release: publish the cell store before the consumer can observe the new
+	 * head index (pairs with the acquire load in the drain below). */
+	atomic_store_explicit(&p->ha_cmd_head, h + 1, memory_order_release);
+	return 1;
+}
+
+int reac_pacer_headamp_drain(struct reac_pacer *p)
+{
+	int applied = 0;
+	uint32_t t = atomic_load_explicit(&p->ha_cmd_tail, memory_order_relaxed);
+	for (;;) {
+		uint32_t h = atomic_load_explicit(&p->ha_cmd_head, memory_order_acquire);
+		if (t == h)
+			break;
+		uint32_t w = atomic_load_explicit(&p->ha_cmd[t % REAC_HEADAMP_CMD_RING],
+		                                  memory_order_relaxed);
+		atomic_store_explicit(&p->ha_cmd_tail, ++t, memory_order_release);
+		uint8_t ch, param, value;
+		reac_headamp_unpack(w, &ch, &param, &value);
+		/* reac_headamp_tx_set validates (ch/param/value) and silently rejects a
+		 * bad triple, arms the table, and marks the cell dirty so the change goes
+		 * out as an edge on the next eligible FILLER slot, then re-asserts. Pure
+		 * array writes — no alloc, no syscall — RT-safe. */
+		reac_headamp_tx_set(&p->headamp, ch, param, value);
+		applied++;
+	}
+	if (applied)
+		atomic_fetch_add_explicit(&p->ha_cmd_applied, (uint64_t)applied,
+		                          memory_order_relaxed);
+	return applied;
+}
+
 /* ---- the RT pacer thread ------------------------------------------------ */
 
 static void *pacer_loop(void *arg)
@@ -617,6 +677,14 @@ static void *pacer_loop(void *arg)
 		reac_master_stamp(&p->master, frame, emit, tmpl_idx);
 		if (emit == REAC_M_EMIT_CHANMAP)
 			p->last_chanmap_ns = mono_ns();     /* hb-after-walk latency base */
+
+		/* Absorb any LIVE head-amp control changes a controller pushed since the
+		 * last slot (task #203). Drained on THIS thread so the head-amp table stays
+		 * single-writer here: reac_pacer_headamp_set only enqueues; we apply. Run
+		 * every slot regardless of FSM state so a change is already in the table the
+		 * instant we reach an ESTABLISHED FILLER slot below — cheap when the ring is
+		 * empty (two atomic loads). */
+		reac_pacer_headamp_drain(p);
 
 		/* MASTER head-amp overlay (task #155), STRICTLY GUARDED so it can never
 		 * touch establishment: it only ever OVERWRITES a FILLER slot, and only once

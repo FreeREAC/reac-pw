@@ -53,6 +53,29 @@ struct reac_headamp_setting {
 	uint8_t value;
 };
 
+/* Pack/unpack a (ch, param, value) head-amp command into ONE 32-bit word.
+ *
+ * This is the atomicity primitive for the LIVE control path (task #203): a
+ * controller's per-channel phantom/pad/sens change travels from the PipeWire
+ * main-loop thread (the prop handler) to the RT pacer thread through a lock-free
+ * SPSC queue of these words. Because the whole triple lives in a single 32-bit
+ * cell, one atomic store/load carries it indivisibly — the RT reader can never
+ * observe a ch from one command spliced onto the value of another (a torn
+ * triple). ch (0..REAC_MAX_CHANNELS-1), param (0..2) and value (0..0x37) each
+ * fit a byte, so the three pack losslessly into the low 24 bits. */
+static inline uint32_t reac_headamp_pack(uint8_t ch, uint8_t param, uint8_t value)
+{
+	return (uint32_t)ch << 16 | (uint32_t)param << 8 | (uint32_t)value;
+}
+
+static inline void reac_headamp_unpack(uint32_t w, uint8_t *ch, uint8_t *param,
+                                       uint8_t *value)
+{
+	*ch    = (uint8_t)((w >> 16) & 0xFF);
+	*param = (uint8_t)((w >> 8) & 0xFF);
+	*value = (uint8_t)(w & 0xFF);
+}
+
 struct reac_headamp_tx {
 	uint8_t value[REAC_MAX_CHANNELS][REAC_HEADAMP_NPARAMS];
 	uint8_t set[REAC_MAX_CHANNELS][REAC_HEADAMP_NPARAMS];   /* operator-assigned */
