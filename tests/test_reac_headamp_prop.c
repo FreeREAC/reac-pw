@@ -46,7 +46,7 @@ static void kv_int(struct spa_pod_builder *b, const char *k, int v)
 int main(void)
 {
 	uint8_t buf[2048];
-	struct reac_headamp_setting out[REAC_MAX_CHANNELS * REAC_HEADAMP_NPARAMS];
+	struct reac_headamp_setting out[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 
 	/* 1. A well-formed mix: three valid head-amp entries interleaved with an
 	 * unrelated params key, an out-of-range channel, and an out-of-range value.
@@ -60,7 +60,11 @@ int main(void)
 		spa_pod_builder_string(&b, "reac.headamp.6.pad");
 		spa_pod_builder_bool(&b, true);                       /* Bool encoding */
 		kv_int(&b, "some.other.control", 99);                 /* not head-amp */
-		kv_int(&b, "reac.headamp.40.phantom", 1);             /* ch out of range */
+		/* ch out of range. The bound is the head-amp WIRE-channel space
+		 * (0x00..0x2f), NOT libreac's 40 audio slots — ch 40 is a REAL channel
+		 * (an S-1608 based at 0x20 owns 0x20..0x2f), so 48 is the first invalid
+		 * one. This previously read 40 and so pinned the too-narrow bound. */
+		kv_int(&b, "reac.headamp.48.phantom", 1);
 		kv_int(&b, "reac.headamp.7.sens", 0x38);              /* value > SENS_MAX */
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 

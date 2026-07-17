@@ -354,7 +354,7 @@ static void on_param_changed(void *data, void *port_data, uint32_t id,
 	 * pacer/head-amp send path. Independent of the volume/mute `changed` re-publish
 	 * above — head-amp state is not echoed back in Props (it is write-through control,
 	 * re-asserted on the wire by the DMX scheduler, not a node property). */
-	struct reac_headamp_setting ha[REAC_MAX_CHANNELS * REAC_HEADAMP_NPARAMS];
+	struct reac_headamp_setting ha[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int nha = reac_headamp_prop_parse(param, ha,
 	                                  (int)(sizeof ha / sizeof ha[0]));
 	for (int i = 0; i < nha; i++)

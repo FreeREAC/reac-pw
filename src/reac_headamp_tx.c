@@ -30,7 +30,7 @@ static int param_value_ok(uint8_t param, uint8_t value)
 int reac_headamp_tx_set(struct reac_headamp_tx *t, uint8_t ch, uint8_t param,
                         uint8_t value)
 {
-	if (ch >= REAC_MAX_CHANNELS || !param_value_ok(param, value))
+	if (ch >= REAC_HEADAMP_MAX_CH || !param_value_ok(param, value))
 		return -1;
 	t->value[ch][param] = value;
 	t->set[ch][param] = 1;
@@ -50,7 +50,7 @@ static void emit_at(const struct reac_headamp_tx *t, int idx,
 	*value = t->value[c][p];
 }
 
-#define REAC_HEADAMP_NCELLS (REAC_MAX_CHANNELS * REAC_HEADAMP_NPARAMS)
+#define REAC_HEADAMP_NCELLS (REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS)
 
 int reac_headamp_tx_next(struct reac_headamp_tx *t, uint8_t *ch, uint8_t *param,
                          uint8_t *value)

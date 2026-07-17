@@ -207,6 +207,55 @@ int main(void)
 	CHK(memcmp(f + 16, m.grant_burst[0], 34) == 0);      /* burst block 0, byte-exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
+	/* 3b. The grant sweep is GENERATED from OUR allocation for the recognized box,
+	 * and — the load-bearing property — the slots it enrolls are the slots our
+	 * head-amp traffic later addresses. Replaying a captured S-0808 sweep at an
+	 * S-1608 is exactly the 2026-07-17 live failure: the box links, then ignores
+	 * every head-amp record for CH 0x20 because our grant never claimed it.
+	 * Full sweep-shape/byte coverage lives in tests/test_reac_grant.c; here we pin
+	 * that the MASTER wires the allocation through to the emitted grant. */
+	{
+		struct reac_master mg;
+
+		reac_master_init(&mg, SRC, &s1608, FPS);
+		reac_master_set_box(&mg, 16, 8);                 /* a real S-1608 links */
+		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
+		CHK(mg.grant_burst_len == 56);                   /* 8 + 16*3 */
+
+		reac_master_set_box(&mg, 8, 8);                  /* an S-0808 instead */
+		CHK(mg.alloc.base == 0x00 && mg.alloc.width == 8);
+		CHK(mg.grant_burst_len == 32);                   /* 8 + 8*3 — sweep RESIZED */
+
+		/* Every group-A record the sweep emits addresses a slot inside the
+		 * allocation. This is the invariant the replayed table violated. */
+		reac_master_set_box(&mg, 16, 8);
+		int groupa = 0;
+		for (int i = 0; i < mg.grant_burst_len; i++) {
+			const uint8_t *r = mg.grant_burst[i];
+			if (!(r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01))
+				continue;
+			groupa++;
+			CHK(r[20] >= mg.alloc.base);
+			CHK(r[20] < mg.alloc.base + mg.alloc.width);
+		}
+		CHK(groupa == 16 * 3);
+
+		/* An unplaceable width must NOT leave an empty grant: cfg.in_channels is
+		 * load-bearing now (it sizes the sweep) where the old code ignored cfg and
+		 * fell back to a replayed table, so a 0/garbage width would otherwise mean
+		 * "grant nothing" and silently mute the box. */
+		struct reac_console_cfg zero = { .out_channels = 8, .in_channels = 0,
+		                                 .console_field = 0 };
+		struct reac_master mz;
+		reac_master_init(&mz, SRC, &zero, FPS);
+		CHK(mz.grant_burst_len > 0);
+		CHK(mz.alloc.width > 0);
+
+		reac_master_set_box(&mg, 999, 8);                /* nonsense recognition */
+		CHK(mg.grant_burst_len == 56);                   /* previous sweep retained */
+		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
+	}
+
 	/* 4. PROBE / SUB01 / SUB02 are the fixed M-300 constants, byte-exact. */
 	build_and_stamp(&m, f, REAC_M_EMIT_PROBE, 0, planar);
 	CHK(memcmp(f + 16, GOLD_PROBE, 34) == 0);
