@@ -258,7 +258,7 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 	}
 	float vmean = n->channels > 0 ? sum / (float)n->channels : 1.0f;
 
-	params[3] = spa_pod_builder_add_object(b,
+	params[4] = spa_pod_builder_add_object(b,
 		SPA_TYPE_OBJECT_Props, SPA_PARAM_Props,
 		SPA_PROP_volume,         SPA_POD_Float(vmean),
 		SPA_PROP_mute,           SPA_POD_Bool(n->muted),
@@ -266,7 +266,7 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		                                       n->channels, vols),
 		SPA_PROP_channelMap,     SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id,
 		                                       n->channels, map));
-	return 4;
+	return 5;
 }
 
 /* Push the current per-channel gain (mute folded in) to the RT thread and
