@@ -127,6 +127,13 @@ ctrl_test = executable('test_reac_ctrl',
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)
 
+# --- unit test: head-amp source control (op 04 03 TAG 01 01, M-200-truthed) ---
+headamp_test = executable('test_reac_headamp',
+  ['tests/test_reac_headamp.c', 'src/reac_ctrl.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_headamp', headamp_test)
+
 # --- unit test: the multi-box registry (fabric slot allocation + names) -------
 boxreg_test = executable('test_reac_boxreg',
   ['tests/test_reac_boxreg.c', 'src/reac_boxreg.c'],

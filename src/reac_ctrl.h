@@ -33,7 +33,10 @@ enum reac_ctrl_kind {
 	REAC_CTRL_PROBE,         /* master cdea 01, sub-state cycling (hunting) */
 	REAC_CTRL_MASTER_HB,     /* master cdea 01 03 0019 (established heartbeat) */
 	REAC_CTRL_MASTER_ANNOUNCE,/* master cfea (announce) */
-	REAC_CTRL_GRANT,         /* master cdea 04 03 (the JOIN grant-burst) */
+	REAC_CTRL_GRANT,         /* master cdea 04 03, record TAG 01 00 (the JOIN
+	                          * grant-burst; also any 04 03 tag we don't know) */
+	REAC_CTRL_HEADAMP,       /* master cdea 04 03, record TAG 01 01 (head-amp:
+	                          * CH PARAM VALUE — a preamp knob, NOT a grant) */
 	REAC_CTRL_BOX_HB,        /* a box cdea 01 03 0001 81 (our keep-alive) */
 	REAC_CTRL_UNKNOWN_CTRL,  /* cdea/cfea we don't classify */
 };
@@ -48,6 +51,9 @@ struct reac_ctrl_parsed {
 	uint16_t op_len;         /* BE length [20:22] */
 	uint8_t  sel;            /* selector [22] (0x81/0x82/... or a channel byte) */
 	uint8_t  sel2;           /* second selector byte [23] (cold-connect: 0x02) */
+	uint8_t  ch;             /* HEADAMP only: wire channel (model_base + input-1) */
+	uint8_t  param;          /* HEADAMP only: enum reac_headamp_param */
+	uint8_t  value;          /* HEADAMP only: 0|1 (phantom/pad) or 0x00..0x37 (SENS) */
 };
 
 /* Checksum over the 32-byte control block [18:50]: set frame[49] so the block
@@ -182,5 +188,35 @@ size_t reac_ctrl_build_coldconnect_0016(uint8_t *out, const uint8_t master[6],
 size_t reac_ctrl_build_coldconnect_001a(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns);
+
+/* ---- Head-amp source control (op 04 03, record TAG 01 01) ----
+ * Ground-truthed on a live M-200 driving an S-0808 + S-1608 (reac-captures/
+ * m200-headamp-re/DECODE.md, 2026-07-17): op 04 03 is a RECORD CONTAINER, and
+ * the record after the 12 12 marker is TAG(2) DATA(n) CKSUM(1). TAG 01 01 is
+ * the console's preamp command, DATA = CH PARAM VALUE. CH is the WIRE channel:
+ * model_base + (box_input - 1), model_base S-0808/S-4000S 0x00, S-1608 0x20.
+ * Two nested checksums: the record TAG..CKSUM sums to 0x80 mod 256, and the
+ * enclosing 32-byte block keeps the usual sum-to-0 at [49]. */
+enum reac_headamp_param {
+	REAC_HEADAMP_PHANTOM = 0x00,   /* +48V on/off (value 0|1) */
+	REAC_HEADAMP_PAD     = 0x01,   /* -20 dB pad on/off (value 0|1) */
+	REAC_HEADAMP_SENS    = 0x02,   /* sensitivity (value 0x00..0x37, 1 dB/step) */
+};
+#define REAC_HEADAMP_SENS_MAX 0x37
+
+/* Build the head-amp command frame (master->box direction, downstream width:
+ * a real console BROADCASTS these interleaved in its stream — pass the
+ * broadcast MAC as the dst like every builder's first MAC arg). ch is the
+ * already-resolved wire channel. Returns the frame length, or 0 on a bad
+ * param/value combination. */
+size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
+                               const uint8_t src[6], uint16_t counter,
+                               uint8_t ch, uint8_t param, uint8_t value);
+
+/* SENS VALUE <-> dB (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).
+ * pad off: 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on: 0x00 = +10 .. 0x37 = -45.
+ * sens_value clamps into 0x00..0x37. */
+int     reac_headamp_sens_db(uint8_t value, int pad_on);
+uint8_t reac_headamp_sens_value(int db, int pad_on);
 
 #endif /* REAC_CTRL_H */

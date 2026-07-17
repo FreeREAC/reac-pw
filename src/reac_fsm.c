@@ -22,8 +22,11 @@ static inline int hb_period(const struct reac_fsm *fsm)
 
 static int is_master_frame(const struct reac_ctrl_parsed *rx)
 {
+	/* HEADAMP is master EVIDENCE (only a console emits preamp records) but it
+	 * is never a grant — the grant checks below stay on REAC_CTRL_GRANT. */
 	return rx->kind == REAC_CTRL_MASTER_HB || rx->kind == REAC_CTRL_MASTER_ANNOUNCE ||
-	       rx->kind == REAC_CTRL_PROBE || rx->kind == REAC_CTRL_GRANT;
+	       rx->kind == REAC_CTRL_PROBE || rx->kind == REAC_CTRL_GRANT ||
+	       rx->kind == REAC_CTRL_HEADAMP;
 }
 
 static void learn_master(struct reac_fsm *fsm, const struct reac_ctrl_parsed *rx)
