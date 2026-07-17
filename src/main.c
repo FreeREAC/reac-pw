@@ -35,6 +35,9 @@
 #include "reac_sink_node.h"
 #include "reac_slave.h"
 #include "reac_role.h"
+#include "reac_mac.h"
+#include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
+#include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
@@ -64,6 +67,39 @@ static int parse_mac(const char *s, uint8_t out[6])
 	return 0;
 }
 
+/* Parse "CH:PARAM:VALUE" (a master-role --headamp arg) into *out. CH is the WIRE
+ * channel (0..REAC_MAX_CHANNELS-1); PARAM is phantom|pad|sens; VALUE is 0/1 for
+ * phantom|pad and the raw SENS code 0..0x37 for sens. Returns 0, or -1 if
+ * malformed / out of range. */
+static int parse_headamp(const char *s, struct reac_headamp_setting *out)
+{
+	unsigned ch, val;
+	char pstr[16];
+	if (sscanf(s, "%u:%15[^:]:%u", &ch, pstr, &val) != 3)
+		return -1;
+	uint8_t param;
+	if (!strcmp(pstr, "phantom"))
+		param = REAC_HEADAMP_PHANTOM;
+	else if (!strcmp(pstr, "pad"))
+		param = REAC_HEADAMP_PAD;
+	else if (!strcmp(pstr, "sens"))
+		param = REAC_HEADAMP_SENS;
+	else
+		return -1;
+	if (ch >= REAC_MAX_CHANNELS)
+		return -1;
+	if (param == REAC_HEADAMP_SENS) {
+		if (val > REAC_HEADAMP_SENS_MAX)
+			return -1;
+	} else if (val > 1) {
+		return -1;
+	}
+	out->ch = (uint8_t)ch;
+	out->param = param;
+	out->value = (uint8_t)val;
+	return 0;
+}
+
 static void usage(const char *p)
 {
 	fprintf(stderr,
@@ -88,8 +124,15 @@ static void usage(const char *p)
 	  "                the openmixer label (default the model name).\n"
 	  "  --name NAME   per-instance PipeWire node suffix (reac-capture.NAME /\n"
 	  "                reac-playback.NAME) so one master per REAC VLAN/segment coexists.\n"
-	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: a Roland-OUI\n"
-	  "                stand-in (master 00:40:ab:00:00:01, slave 00:40:ab:c4:80:41).\n"
+	  "  --headamp CH:PARAM:VALUE  master role, repeatable: a per-channel head-amp\n"
+	  "                command the master re-asserts to the box (declarative/DMX).\n"
+	  "                CH = wire channel 0..39; PARAM = phantom|pad|sens; VALUE = 0/1\n"
+	  "                for phantom|pad, 0..55 raw SENS code for sens. RIG-GATED.\n"
+	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: master role\n"
+	  "                uses the impersonated desk's MAC; slave role uses the Roland OUI\n"
+	  "                (00:40:ab) + the last 3 bytes of the --tx NIC's own hardware\n"
+	  "                address, so it stays Roland-OUI-compatible yet can never collide\n"
+	  "                with a real box (e.g. an S-1608 at 00:40:ab:c4:80:41).\n"
 	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
 	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n", p);
 }
@@ -107,6 +150,11 @@ int main(int argc, char **argv)
 	int box_set = 0;                /* --box given (a master-role option)         */
 	const char *box_label = NULL;   /* --box name: openmixer label for this box  */
 	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
+	/* --headamp CH:PARAM:VALUE (master role, repeatable): the per-channel head-amp
+	 * DMX table the master re-asserts to the box (task #155). At most one cell per
+	 * (channel,param); the table set() overwrites a repeat. */
+	struct reac_headamp_setting headamps[REAC_MAX_CHANNELS * REAC_HEADAMP_NPARAMS];
+	int n_headamps = 0;
 	const struct reac_mixer_profile *mixer =
 		reac_mixer_profile_by_name("m200");   /* master: which desk we impersonate */
 
@@ -197,6 +245,22 @@ int main(int argc, char **argv)
 			box_set = 1;
 		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
 			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
+		} else if (!strcmp(argv[i], "--headamp") && i + 1 < argc) {
+			/* MASTER role: one per-channel head-amp cell the master re-asserts to
+			 * the box (declarative/DMX). Repeatable; the table dedups per cell. */
+			if (n_headamps >= (int)(sizeof headamps / sizeof headamps[0])) {
+				fprintf(stderr, "reac-pw: too many --headamp settings (max %d)\n",
+				        (int)(sizeof headamps / sizeof headamps[0]));
+				return 2;
+			}
+			if (parse_headamp(argv[++i], &headamps[n_headamps]) != 0) {
+				fprintf(stderr, "reac-pw: bad --headamp '%s' (want "
+				        "CH:phantom|pad|sens:VALUE; CH 0..%d wire channel; "
+				        "VALUE 0/1 for phantom|pad, 0..%d raw code for sens)\n",
+				        argv[i], REAC_MAX_CHANNELS - 1, REAC_HEADAMP_SENS_MAX);
+				return 2;
+			}
+			n_headamps++;
 		} else {
 			usage(argv[0]);
 			return 2;
@@ -219,6 +283,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "reac-pw: --box is a master-role option (it declares the box "
 		                "this master serves); for slave identity use --box-channels "
 		                "(e.g. --box-channels 16 = S-1608)\n");
+		return 2;
+	}
+	/* --headamp drives the box's preamps — only the MASTER commands them; as a slave
+	 * WE are the box and receive them (surfaced in the RX log). Reject the mix. */
+	if (role == REAC_ROLE_SLAVE && n_headamps > 0) {
+		fprintf(stderr, "reac-pw: --headamp is a master-role option (the master commands "
+		                "the box's preamps); a slave receives head-amp records, it does "
+		                "not send them\n");
 		return 2;
 	}
 
@@ -309,23 +381,44 @@ int main(int argc, char **argv)
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = master_src, .master_mac = NULL,
 		                              .console_field = mixer->console_field,
-		                              .inst = inst_name, .label = box_label };
+		                              .inst = inst_name, .label = box_label,
+		                              .headamps = n_headamps ? headamps : NULL,
+		                              .n_headamps = n_headamps };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
 			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
-		else
+		else {
 			fprintf(stderr, "reac-pw: MASTER role (impersonating %s) on '%s' — "
 			        "event-driven establishment: probing until the box's "
 			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
 			        "stderr\n", mixer->display, tx_if);
+			if (n_headamps)
+				fprintf(stderr, "reac-pw: head-amp DMX send armed — %d cell(s), "
+				        "re-asserted once established (RIG-GATED: verify 48V at the "
+				        "XLR pins)\n", n_headamps);
+		}
 	} else if (tx_if && role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the
 		 * carrier and the slave emits silent/own-input FILLER until that sink is
 		 * linked. The engine learns the master MAC from the wire — never set here. */
-		static const uint8_t box_oui_mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
-		const uint8_t *slave_src = src_mac_set ? src_mac : box_oui_mac;
+		uint8_t box_mac[6];
+		if (src_mac_set) {
+			memcpy(box_mac, src_mac, 6);
+		} else if (reac_mac_default_src(tx_if, box_mac) != 0) {
+			/* NIC hwaddr unreadable — the Roland-OUI + fixed-fallback host part is
+			 * still on-wire safe (outside the box/desk device-class ranges), but note
+			 * it so an ambiguous capture is explained. */
+			fprintf(stderr, "reac-pw: could not read %s hardware address for the box "
+			        "MAC host part; using the fixed fallback\n", tx_if);
+		}
+		const uint8_t *slave_src = box_mac;
+		fprintf(stderr, "reac-pw: slave box source MAC = "
+		        "%02x:%02x:%02x:%02x:%02x:%02x%s\n",
+		        box_mac[0], box_mac[1], box_mac[2], box_mac[3], box_mac[4], box_mac[5],
+		        src_mac_set ? " (--src-mac override)"
+		                    : " (Roland OUI + this NIC's host part; --src-mac overrides)");
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_slave_cfg slcfg = { .ifname = tx_if,

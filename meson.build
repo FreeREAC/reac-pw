@@ -69,6 +69,8 @@ reac_pw_src = [
   'src/reac_master.c',
   'src/reac_pacer.c',
   'src/reac_slave.c',
+  'src/reac_mac.c',
+  'src/reac_headamp_tx.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',
@@ -186,7 +188,7 @@ test('reac_lat', lat_test)
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
-   'src/reac_ctrl.c'],
+   'src/reac_ctrl.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
@@ -201,7 +203,7 @@ test('reac_pacer', pacer_test)
 # exercised correct-by-construction against the capture-derived control kinds.
 slave_test = executable('test_reac_slave',
   ['tests/test_reac_slave.c', 'src/reac_slave.c', 'src/reac_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_ring.c'],
+   'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
@@ -215,7 +217,8 @@ test('reac_slave', slave_test)
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
 courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_slave.c',
-   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_tx.c'],
+   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_tx.c',
+   'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
@@ -261,3 +264,20 @@ role_test = executable('test_reac_role',
   ['tests/test_reac_role.c'],
   include_directories : [include_directories('src')])
 test('reac_role', role_test)
+
+# --- unit test: the stand-in source-MAC helper (task #35, D.10) ---------------
+# Pure reac_mac_compose (Roland OUI + NIC host part; box/desk-safe fallback) — no
+# NIC touched. Proves the derived default can never equal a real box's MAC.
+mac_test = executable('test_reac_mac',
+  ['tests/test_reac_mac.c', 'src/reac_mac.c'],
+  include_directories : [include_directories('src')])
+test('reac_mac', mac_test)
+
+# --- unit test: the MASTER head-amp DMX send scheduler (task #155, C.7) --------
+# Pure state table + edge/periodic-re-assert scheduler — no socket, no FSM. Pins
+# the edge-on-change emission, the full-table re-assert sweep, and OFF-unless-set.
+headamp_tx_test = executable('test_reac_headamp_tx',
+  ['tests/test_reac_headamp_tx.c', 'src/reac_headamp_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_headamp_tx', headamp_tx_test)

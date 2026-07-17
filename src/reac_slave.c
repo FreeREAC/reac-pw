@@ -6,6 +6,7 @@
 #endif
 #include "reac_slave.h"
 #include "reac_ctrl.h"
+#include "reac_mac.h"
 
 #include <reac/reac.h>
 
@@ -76,8 +77,14 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	if (s->sample_rate > 0)
 		s->fsm.heartbeat_period = s->sample_rate / REAC_SAMPLES_PER_PKT;
 
-	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
-	memcpy(s->src, (cfg && cfg->src_mac) ? cfg->src_mac : standin, 6);
+	/* Default source MAC: the Roland OUI + THIS NIC's host part (never a real
+	 * box's — see reac_mac.h). main.c normally passes an already-derived src_mac,
+	 * so this is a defensive fallback for a NULL-src cfg (keeps the collision-safe
+	 * default in one place instead of a hard-coded box-colliding 0xc4:80:41). */
+	if (cfg && cfg->src_mac)
+		memcpy(s->src, cfg->src_mac, 6);
+	else
+		reac_mac_default_src(cfg ? cfg->ifname : NULL, s->src);
 }
 
 struct reac_slave_decision reac_slave_step_rx(struct reac_slave *s,
@@ -351,6 +358,28 @@ static void *slave_loop(void *arg)
 
 		struct reac_ctrl_parsed p;
 		reac_ctrl_parse(rxbuf, (size_t)n, &p);
+
+		/* Surface a received head-amp record (task B.4 / #33): the master (a real
+		 * console) broadcasts preamp commands as op 04 03 TAG 01 01 — proving we
+		 * classify a knob-turn as HEADAMP, not as our JOIN grant. Purely
+		 * observational: HEADAMP is master EVIDENCE in the FSM but never a grant
+		 * (reac_fsm.c is_master_frame), so logging it does NOT touch establishment.
+		 * Verify the inner record checksum first — a corrupted record must not be
+		 * reported as a real preamp value. */
+		if (p.kind == REAC_CTRL_HEADAMP) {
+			if (reac_ctrl_headamp_record_verify(rxbuf) != 0) {
+				fprintf(stderr, "reac_slave: head-amp record (ch %u param %u) "
+				        "DROPPED — inner checksum bad\n", p.ch, p.param);
+			} else if (p.param == REAC_HEADAMP_SENS) {
+				fprintf(stderr, "reac_slave: head-amp RX ch %u %s value 0x%02x "
+				        "(%d dB, pad off)\n", p.ch,
+				        reac_headamp_param_name(p.param), p.value,
+				        reac_headamp_sens_db(p.value, 0));
+			} else {
+				fprintf(stderr, "reac_slave: head-amp RX ch %u %s %s\n", p.ch,
+				        reac_headamp_param_name(p.param), p.value ? "on" : "off");
+			}
+		}
 
 		/* Only frames FROM a master are the clock + drive establishment; ignore any
 		 * frame whose source is us (loopback) or another box. The FSM learns the
