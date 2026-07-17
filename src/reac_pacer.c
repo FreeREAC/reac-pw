@@ -137,12 +137,18 @@ long reac_pacer_period_ns(int fps)
 	return (long)(1000000000.0 / (double)fps + 0.5);  /* 125000 @8000, 250000 @4000 */
 }
 
-static uint64_t mono_ns(void)
+/* CLOCK_MONOTONIC in ns. Exposed (reac_pacer.h) rather than file-static so the sink
+ * node's property poll timestamps reac.discovery.* ages against the SAME clock the
+ * pacer's sighting timestamps and staleness aging use — two clocks here would let a
+ * device read as fresh in one place and withdrawn in the other. */
+uint64_t reac_pacer_mono_ns(void)
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
+
+static uint64_t mono_ns(void) { return reac_pacer_mono_ns(); }
 
 /* Build a silent downstream FILLER (zero audio, zero control block) for an
  * underrun slot — keeps the cadence + counter + link alive when the graph has
@@ -213,6 +219,24 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 
 void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len)
 {
+	/* PASSIVE DISCOVERY first, and independently (task #178). The socket is already
+	 * promiscuous (see the PACKET_ADD_MEMBERSHIP rationale below), so every 0x8819
+	 * frame on this segment arrives here — including the ones the master classifier
+	 * is about to discard as none of its business: another master's broadcast
+	 * (reac_ctrl.c:141) and unicast between third parties (reac_ctrl.c:144). Those
+	 * discards ARE the discovery. Classify for sighting BEFORE the FSM filter, and
+	 * with a separate ownership-blind classifier, so recording what is out there can
+	 * never alter what the master does about it. */
+	struct reac_disco_sighting sight;
+	if (reac_disco_classify(frame, len, p->src, &sight) == 0 &&
+	    reac_disco_gate_should_push(&p->disco_gate, &sight, mono_ns())) {
+		/* The ring slot is bytes, not pointers: the model travels as its index in the
+		 * fixed matrix, +1 so 0 reads as "unidentified". */
+		int mi = reac_disco_model_index(sight.model);
+		pev_push(p, REAC_PEV_SIGHTING, (uint8_t)sight.role,
+		         (uint8_t)(mi + 1), sight.mac, NULL);
+	}
+
 	struct reac_ctrl_parsed parsed;
 	enum reac_master_rx_event ev;
 	if (reac_ctrl_classify_box_frame(frame, len, p->src, &parsed, &ev) != 0)
@@ -399,6 +423,36 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			        ts, bm ? bm->display : "(unknown)", mac);
 			break;
 		}
+		case REAC_PEV_SIGHTING: {
+			/* MAIN THREAD: fold the sighting into the discovery table the sink node
+			 * publishes from. `owned` is decided HERE, against the master's current
+			 * peer, so the pacer thread never has to reason about ownership. */
+			struct reac_disco_sighting s;
+			memset(&s, 0, sizeof s);
+			memcpy(s.mac, e.src, 6);
+			s.role = (enum reac_disco_role)e.a;
+			s.model = reac_disco_model_by_index((int)e.b - 1);
+			int owned = (p->master.state == REAC_M_ESTABLISHED &&
+			             memcmp(p->master.box_mac, e.src, 6) == 0);
+			/* A box declares its model ONCE, at enrolment. Every frame after that is
+			 * audio FILLER carrying no identity, so passive classification of a
+			 * long-established box yields role=box / model=unknown — verified live on
+			 * the rig: 24001 frames in 3 s, not one config-announce among them. For
+			 * OUR peer the model is not unknown at all: the master matched its
+			 * config-announce byte-for-byte at enrolment and publishes it as
+			 * reac.box-model. Reuse that rather than let discovery report "unknown"
+			 * for the very box the stagebox badge beside it names. Still no
+			 * inference — recognized_box is only ever a byte-exact match. */
+			if (!s.model && owned)
+				s.model = atomic_load_explicit(&p->recognized_box,
+				                               memory_order_acquire);
+			if (reac_disco_table_observe(&p->disco, &s, owned, e.mono_ns))
+				fprintf(out, "reac-disco: [%.6f] %s %s model=%s%s\n", ts,
+				        reac_disco_role_name(s.role), mac,
+				        s.model ? s.model->token : "unknown",
+				        owned ? " (ours)" : "");
+			break;
+		}
 		default:
 			fprintf(out, "reac-master: [%.6f] event kind %u a=%u b=%u\n",
 			        ts, e.kind, e.a, e.b);
@@ -416,6 +470,16 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 	 * as a drained event (callers key off the event count). */
 	uint64_t rtrims = atomic_load_explicit(&p->ring_trims, memory_order_relaxed);
 	uint64_t now = mono_ns();
+
+	/* Withdraw devices that have gone silent. Aging runs on the DRAIN cadence, not on
+	 * arrival, so a box that stops talking altogether — the case where no frame ever
+	 * arrives to trigger anything — still disappears. A stagebox vanishing with the UI
+	 * still showing it is precisely the silent-failure this exists to prevent. */
+	int gone = reac_disco_table_age(&p->disco, now);
+	if (gone)
+		fprintf(out, "reac-disco: [%.6f] %d device(s) went silent > %llu s — withdrawn\n",
+		        (double)now / 1e9, gone,
+		        (unsigned long long)(REAC_DISCO_STALE_NS / 1000000000ULL));
 	int emit = (rtrims != p->log_last_trims) ||
 	           (now - p->log_last_ns >= REAC_PACER_DEPTH_LOG_HB_NS);
 	if (emit) {

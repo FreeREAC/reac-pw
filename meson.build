@@ -75,6 +75,7 @@ reac_pw_src = [
   'src/reac_gain.c',
   'src/reac_boxreg.c',
   'src/reac_link_state.c',
+  'src/reac_disco.c',
 ]
 
 executable('reac-pw',
@@ -184,7 +185,7 @@ test('reac_lat', lat_test)
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
-  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_master.c',
+  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_ctrl.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -236,6 +237,21 @@ link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', 'src/reac_link_state.c'],
   include_directories : [include_directories('src')])
 test('reac_link_state', link_state_test)
+
+# --- unit test: passive discovery — the sighting classifier + table ------------
+# Pins the bars that make a device list trustworthy: presence ONLY from a real
+# 0x8819 Roland-OUI frame (never a packet count — openmixer #161), role from the
+# full byte signature rather than the frame kind (cdea 04 03 is both the box JOIN
+# and the master grant; cdea 01 03 0010 is a box frame parsing as kind PROBE), a
+# model only ever from the byte-exact config-block match, stale devices withdrawn,
+# and all-or-nothing JSON. Frames come from the reac_ctrl builders, so the test
+# runs on the same bytes the wire carries.
+disco_test = executable('test_reac_disco',
+  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c',
+   'src/reac_upstream.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_disco', disco_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
