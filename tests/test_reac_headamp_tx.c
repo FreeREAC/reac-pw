@@ -33,8 +33,9 @@ int main(void)
 	CHK(ch == 5 && p == REAC_HEADAMP_PHANTOM && v == 1);
 	CHK(reac_headamp_tx_next(&t, &ch, &p, &v) == 0);   /* edge consumed */
 
-	/* 3. Bad args are rejected and change nothing. */
-	CHK(reac_headamp_tx_set(&t, REAC_MAX_CHANNELS, REAC_HEADAMP_PHANTOM, 0) == -1);
+	/* 3. Bad args are rejected and change nothing. The channel bound is the
+	 * head-amp WIRE-channel space (0x00..0x2f) — see step 7. */
+	CHK(reac_headamp_tx_set(&t, REAC_HEADAMP_MAX_CH, REAC_HEADAMP_PHANTOM, 0) == -1);
 	CHK(reac_headamp_tx_set(&t, 0, 0x03, 0) == -1);                 /* bad param */
 	CHK(reac_headamp_tx_set(&t, 0, REAC_HEADAMP_PHANTOM, 2) == -1); /* bad bool  */
 	CHK(reac_headamp_tx_set(&t, 0, REAC_HEADAMP_SENS, 0x38) == -1); /* bad sens  */
@@ -70,6 +71,24 @@ int main(void)
 	CHK(reac_headamp_tx_set(&t, 6, REAC_HEADAMP_PHANTOM, 0) == 0);
 	CHK(reac_headamp_tx_next(&t, &ch, &p, &v) == 1);
 	CHK(ch == 6 && p == REAC_HEADAMP_PHANTOM && v == 0);
+
+	/* 7. The channel space is the head-amp WIRE-channel range 0x00..0x2f, NOT
+	 * libreac's REAC_MAX_CHANNELS (40 AUDIO slots). Conflating the two was a real
+	 * bug: a 16-input S-1608 is allocated at base 0x20 and so owns wire channels
+	 * 0x20..0x2f = 32..47, meaning its inputs 9..16 were SILENTLY REJECTED here and
+	 * could never be given phantom/pad/sens. A fresh table, so the sweep counts
+	 * above are untouched. */
+	struct reac_headamp_tx hi;
+	reac_headamp_tx_init(&hi, 100);
+	CHK(reac_headamp_tx_set(&hi, 0x2f, REAC_HEADAMP_PHANTOM, 1) == 0);  /* S-1608 in 16 */
+	CHK(reac_headamp_tx_set(&hi, 0x28, REAC_HEADAMP_SENS, 0x07) == 0);  /* S-1608 in  9 */
+	CHK(reac_headamp_tx_set(&hi, REAC_HEADAMP_MAX_CH, REAC_HEADAMP_PHANTOM, 1) == -1);
+	/* Both edges reach the wire, in ascending channel order (the dirty scan walks
+	 * the flattened table), so 0x28 precedes 0x2f. */
+	CHK(reac_headamp_tx_next(&hi, &ch, &p, &v) == 1);
+	CHK(ch == 0x28 && p == REAC_HEADAMP_SENS && v == 0x07);
+	CHK(reac_headamp_tx_next(&hi, &ch, &p, &v) == 1);
+	CHK(ch == 0x2f && p == REAC_HEADAMP_PHANTOM && v == 1);
 
 	printf("OK: head-amp DMX send — off-unless-set, edge-on-change, full re-assert sweep\n");
 	return 0;
