@@ -99,6 +99,58 @@ int main(void)
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
 	CHK(p.ch == 0x2f && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
 
+	/* 3c. STAMP overlay (the MASTER emit path, task #155/C.7): stamping a head-amp
+	 * record over an already-built FILLER frame reproduces the SAME control block
+	 * [18:50] as the captured M-200 record AND the fresh builder, while preserving
+	 * the counter, tail and audio the frame already carried. This is the offline
+	 * proof for the rig-gated master send. */
+	{
+		uint8_t frame[REAC_FRAME_BYTES];
+		memset(frame, 0, sizeof frame);
+		frame[14] = 0x11; frame[15] = 0x22;                 /* a counter */
+		for (int i = 50; i < REAC_FRAME_BYTES - 2; i++)     /* nonzero audio */
+			frame[i] = (uint8_t)(i & 0xff);
+		frame[REAC_FRAME_BYTES - 2] = 0xc2;
+		frame[REAC_FRAME_BYTES - 1] = 0xea;                 /* C2/EA tail */
+
+		CHK(reac_ctrl_stamp_headamp(frame, 0x00, REAC_HEADAMP_SENS, 0x08) == 0);
+		/* byte-exact vs the real M-200 ctl2.pcap record AND both checksums */
+		CHK(memcmp(frame + 18, WIRE_SENS_BLOCK, 32) == 0);
+		CHK(reac_ctrl_checksum_verify(frame) == 0);
+		CHK(reac_ctrl_headamp_record_verify(frame) == 0);
+		/* counter + tail + audio outside the block are untouched by the stamp */
+		CHK(frame[14] == 0x11 && frame[15] == 0x22);
+		CHK(frame[REAC_FRAME_BYTES - 2] == 0xc2 && frame[REAC_FRAME_BYTES - 1] == 0xea);
+		CHK(frame[50] == (uint8_t)(50 & 0xff));
+		CHK(frame[600] == (uint8_t)(600 & 0xff));
+		/* the stamp equals the fresh builder's block for the same (ch,param,value) */
+		{
+			uint8_t built[REAC_FRAME_BYTES];
+			CHK(reac_ctrl_build_headamp(built, BCAST, MASTER, 0x32d9,
+			                            0x00, REAC_HEADAMP_SENS, 0x08) == REAC_FRAME_BYTES);
+			CHK(memcmp(frame + 16, built + 16, 34) == 0);   /* type + block identical */
+		}
+		/* a bad param leaves the frame byte-for-byte untouched */
+		{
+			uint8_t before[REAC_FRAME_BYTES];
+			memcpy(before, frame, sizeof before);
+			CHK(reac_ctrl_stamp_headamp(frame, 0x00, 0x03, 0x00) == -1);
+			CHK(memcmp(before, frame, sizeof before) == 0);
+		}
+	}
+
+	/* 3d. RX-log helpers (task B.4): the inner-record checksum verify (a corrupt
+	 * record must be dropped, not surfaced) and the param-name mapping the slave
+	 * RX log uses. */
+	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 0x1234, 0x00, REAC_HEADAMP_PHANTOM, 0x01);
+	CHK(reac_ctrl_headamp_record_verify(f) == 0);
+	f[39] ^= 0xff;                                      /* corrupt the inner cksum */
+	CHK(reac_ctrl_headamp_record_verify(f) != 0);
+	CHK(!strcmp(reac_headamp_param_name(REAC_HEADAMP_PHANTOM), "phantom"));
+	CHK(!strcmp(reac_headamp_param_name(REAC_HEADAMP_PAD), "pad"));
+	CHK(!strcmp(reac_headamp_param_name(REAC_HEADAMP_SENS), "SENS"));
+	CHK(!strcmp(reac_headamp_param_name(0x7f), "?"));
+
 	/* 4. TAG dispatch (the #33 fix): the cold-connect records still parse as
 	 * GRANT — 0014 carries TAG 01 00, 0013 carries TAG 03 02 — while only
 	 * TAG 01 01 is HEADAMP. A live M-200 emits ~628 head-amp records per 14

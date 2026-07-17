@@ -213,6 +213,25 @@ size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
                                const uint8_t src[6], uint16_t counter,
                                uint8_t ch, uint8_t param, uint8_t value);
 
+/* Stamp a head-amp record over the type [16:18] + control block [18:50] of an
+ * ALREADY-BUILT downstream frame, preserving its audio [50:], counter and tail.
+ * The MASTER emit path (reac_headamp_tx + the pacer) uses this to overlay a
+ * head-amp command onto a FILLER slot without rebuilding the frame. Returns 0, or
+ * -1 on a bad param/value (the frame is left untouched). */
+int reac_ctrl_stamp_headamp(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value);
+
+/* Human-readable head-amp parameter name ("phantom" / "pad" / "SENS", or "?"
+ * for an unknown param) for logging a received or emitted record. */
+const char *reac_headamp_param_name(uint8_t param);
+
+/* Verify a HEADAMP record's INNER checksum. The record bytes TAG..CKSUM (frame
+ * offsets [34..39], i.e. block-relative [16..21]) must sum to 0x80 mod 256. Call
+ * BEFORE trusting a parsed head-amp CH/PARAM/VALUE so a corrupted knob record is
+ * never surfaced or acted on. The frame must already have parsed as
+ * REAC_CTRL_HEADAMP (it reads the fixed record offsets). Returns 0 when valid,
+ * -1 when the record checksum is wrong. */
+int reac_ctrl_headamp_record_verify(const uint8_t *frame);
+
 /* SENS VALUE <-> dB (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).
  * pad off: 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on: 0x00 = +10 .. 0x37 = -45.
  * sens_value clamps into 0x00..0x37. */
