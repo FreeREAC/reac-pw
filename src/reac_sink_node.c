@@ -408,10 +408,18 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	else
 		snprintf(width, sizeof width, "0x0");
 
+	/* Head-amp preamp count follows the recognized model's INPUT width (each box
+	 * input is a mic preamp); "0" until a model is recognized, mirroring the
+	 * box-width "0x0" seed. The `caps` key is a constant seeded at create, so it
+	 * is not re-stamped here (update_properties merges — untouched keys persist). */
+	char ha_channels[16];
+	snprintf(ha_channels, sizeof ha_channels, "%d", bm ? bm->in_ch : 0);
+
 	struct pw_properties *props = pw_properties_new(
-		REAC_PROP_LINK_STATE, reac_link_state_name(ls),
-		REAC_PROP_BOX_MODEL,  bm ? bm->token : "none",
-		REAC_PROP_BOX_WIDTH,  width,
+		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
+		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
+		REAC_PROP_BOX_WIDTH,       width,
+		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
 		NULL);
 	if (props) {
 		pw_filter_update_properties(n->filter, NULL, &props->dict);
@@ -609,6 +617,15 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
 			REAC_PROP_BOX_MODEL, "none",
 			REAC_PROP_BOX_WIDTH, "0x0",
+			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
+			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
+			 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
+			 * box's preamp shape and drives it on ONE node. `channels` seeds "0"
+			 * (no box recognized yet, mirroring box-model "none" / box-width "0x0")
+			 * and is bumped to the model's input width by sink_publish_link_props on
+			 * recognition; `caps` is the constant phantom/pad/sens trio. */
+			REAC_PROP_HEADAMP_CHANNELS, "0",
+			REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
 			/* Correct-at-boot discovery (task #178): from t=0 we are listening on
 			 * this NIC and have seen nothing yet — which is the truth, and is NOT
 			 * the same claim as "there is nothing here". Publishing the keys
