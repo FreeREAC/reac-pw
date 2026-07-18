@@ -30,6 +30,34 @@ struct spa_pod;
  * REAC_HEADAMP_PROP_PREFIX "<ch>." "<param-name>", e.g. "reac.headamp.3.phantom". */
 #define REAC_HEADAMP_PROP_PREFIX "reac.headamp."
 
+/* Head-amp CAPABILITY keys — the READ side of the same contract, published as
+ * NODE PROPERTIES (pw_properties, not SPA_PROP_params) on the SAME node that
+ * consumes the control keys above, so a consumer discovers the box's preamp
+ * shape and drives it on one node (task #205). Both are self-describing and
+ * driven by the recognized box model:
+ *
+ *   reac.headamp.channels — decimal count of preamp-capable box INPUTS. "0" until
+ *                           a model is recognized; then the model's input width
+ *                           (e.g. "16" for an S-1608, "8" for an S-0808).
+ *   reac.headamp.caps     — comma-separated preamp capabilities the box carries.
+ *                           "phantom,pad,sens" is the trio every current REAC
+ *                           stagebox preamp exposes; a model that differs would
+ *                           publish its own honest subset/superset here.
+ *
+ * These live in the node-property dict and never ride SPA_PROP_params, so they
+ * are a different namespace from the control keys and reac_headamp_prop_parse
+ * never sees them (its channel parse rejects the non-numeric "channels"/"caps"
+ * tails anyway). A reader that finds the control PropInfo but NOT these keys is
+ * talking to a reac-pw that predates capability publication. */
+#define REAC_PROP_HEADAMP_CHANNELS "reac.headamp.channels"
+#define REAC_PROP_HEADAMP_CAPS     "reac.headamp.caps"
+
+/* The capability set every REAC stagebox preamp in the fixed model matrix
+ * carries today (phantom 48V, -20 dB pad, 1 dB/step sensitivity). Seeded at
+ * node create and left standing; re-encode per-model here only if a future
+ * model's preamp genuinely differs. */
+#define REAC_HEADAMP_CAPS_DEFAULT  "phantom,pad,sens"
+
 /* Parse every "reac.headamp.<ch>.<param>" entry carried in `props` (a
  * SPA_PARAM_Props object pod)'s SPA_PROP_params list into `out` (capacity `max`).
  * Silently skips keys that are not head-amp keys, malformed channel/param names,
