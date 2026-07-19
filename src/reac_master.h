@@ -130,6 +130,20 @@ enum reac_master_drop_reason {
  * tick-driven) and fps-scaled at init like link_check_reload. */
 #define REAC_M_GRANT_DWELL_SECONDS_X10 16   /* 1.6 s, scaled by fps at init */
 
+/* Post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF). At scene recall a
+ * real M-200, WHILE ESTABLISHED, re-pushes the full head-amp scene and then emits an
+ * ordered SUB01 -> SUB02 pair; that pair drives the box's scene-FSM (FUN_0c0037ee)
+ * to its state-4 bulk commit (FUN_0c003c8a), which copies the head-amp staging into
+ * active for EVERY slot and flushes the phantom groups to hardware. reac-pw only ever
+ * emitted SUB01/SUB02 while PROBING, so it never fired the box's commit and only the
+ * anchor input latched 48V. When the flag is on, enter_established arms est_commit to
+ * (fps/SCENE_SETTLE_DEN + SUB_GAP) FILLER-eligible slots: SUB01 fires ~fps/SCENE_SETTLE_DEN
+ * slots in (well after the post-establish scene re-push has settled), SUB02 SUB_GAP
+ * slots later, then it disarms — the pair fires exactly ONCE per establishment. OFF
+ * leaves est_commit 0, so the locked cadence is byte-identical to today. */
+#define REAC_M_EST_COMMIT_SCENE_SETTLE_DEN 4   /* SUB01 after ~fps/4 (~250 ms) FILLER slots */
+#define REAC_M_EST_COMMIT_SUB_GAP          8   /* FILLER slots between SUB01 and SUB02 */
+
 /* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
  * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
  * ring positions, and a real master emits ONE window per start position — so the
@@ -292,6 +306,14 @@ struct reac_master {
 	int      link_check;        /* countdown to peer-gone */
 	int      link_check_reload; /* ~6.5 s of frames (fps-scaled), the reload value */
 
+	/* One-shot post-establish scene COMMIT countdown (REACPW_EST_COMMIT, default
+	 * OFF). Armed by enter_established ONLY when the flag is on (else 0 = inert);
+	 * counts down the FILLER-eligible ESTABLISHED slots and drives the ordered
+	 * SUB01 -> SUB02 pair that fires the box's scene-FSM state-4 bulk phantom commit
+	 * (see control_cadence). 0 when disarmed -> the LOCKED cadence is byte-identical
+	 * to today. */
+	int      est_commit;
+
 	/* Diagnostics (never gate the establishment) */
 	int      box_seen;        /* sustained box broadcast FILLER on the wire */
 	int      presence_tick;   /* countdown to clearing box_seen */
@@ -360,6 +382,12 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
  * Returns 0, or -1 on a bad kind/index. */
 int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
                       enum reac_master_emit emit, int tmpl_idx);
+
+/* REACPW_EST_COMMIT (default OFF) flag accessor — read once + cached. Exposed so the
+ * pacer's open-time head-amp seed and enter_established's est_commit arming read the
+ * SAME flag (single source of truth). Returns 1 when the post-establish scene commit
+ * is enabled, else 0. */
+int reac_master_est_commit_enabled(void);
 
 /* Human-readable names for the caller's logging. */
 const char *reac_master_state_name(enum reac_master_state s);
