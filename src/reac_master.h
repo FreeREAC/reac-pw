@@ -139,10 +139,27 @@ enum reac_master_drop_reason {
  * anchor input latched 48V. When the flag is on, enter_established arms est_commit to
  * (fps/SCENE_SETTLE_DEN + SUB_GAP) FILLER-eligible slots: SUB01 fires ~fps/SCENE_SETTLE_DEN
  * slots in (well after the post-establish scene re-push has settled), SUB02 SUB_GAP
- * slots later, then it disarms — the pair fires exactly ONCE per establishment. OFF
- * leaves est_commit 0, so the locked cadence is byte-identical to today. */
+ * slots later. OFF leaves est_commit 0, so the locked cadence is byte-identical to today.
+ *
+ * SUSTAIN, not one-shot (2026-07-21): a real WORKING console does not fire this pair
+ * once — it SUSTAINS SUB01->SUB02 continuously on the established cadence (a committing
+ * S-0808 capture shows ~134 SUB events over 79.5 s, ~1.7/s). A one-shot pair only ever
+ * flushes the box's STAGING->ACTIVE table the instant it fires, so any non-anchor input
+ * whose staging changed after that (or was never in place at the first flush) never
+ * commits. control_cadence's ESTABLISHED branch now RE-ARMS est_commit to fps/PERIOD_DEN
+ * FILLER-eligible slots the moment SUB02 fires, so the ordered pair repeats for the whole
+ * ESTABLISHED lifetime instead of disarming. PERIOD_DEN=1 => ~fps slots between pairs,
+ * i.e. ~1 pair/sec — inside the ~1.7/s real flood, so it never outruns the box's own
+ * commit rate. Still flag-gated: OFF never arms est_commit in the first place, so the
+ * re-arm branch is unreachable and inert. */
 #define REAC_M_EST_COMMIT_SCENE_SETTLE_DEN 4   /* SUB01 after ~fps/4 (~250 ms) FILLER slots */
 #define REAC_M_EST_COMMIT_SUB_GAP          8   /* FILLER slots between SUB01 and SUB02 */
+#define REAC_M_EST_COMMIT_PERIOD_DEN       1   /* sustain re-arm: fps/DEN FILLER-eligible
+                                                 * slots between SUB pairs (~1/s);
+                                                 * PERIOD_DEN=1 keeps it under the observed
+                                                 * ~1.7/s real cadence */
+#define REAC_M_EST_COMMIT_LIVE_SETTLE      4   /* small settle before a LIVE head-amp
+                                                 * re-arm's SUB01 (reac_master_set_headamp_src) */
 
 /* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
  * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
@@ -350,7 +367,14 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
  * `tx` is BORROWED (not copied) and must outlive `m`; NULL -> the safe defaults.
  * Regenerates the sweep immediately so a later grant enrolls the current state.
  * The pacer owns both the master and the head-amp table on one thread, so no
- * locking is implied. Call from the FSM-owning thread. */
+ * locking is implied. Call from the FSM-owning thread.
+ *
+ * REACPW_EST_COMMIT (default OFF): when on and the FSM is already ESTABLISHED,
+ * also re-arms est_commit for a PROMPT fresh SUB01->SUB02 pair (SUB_GAP + a small
+ * settle, not the full post-establish SCENE_SETTLE_DEN wait) so a LIVE head-amp
+ * edit re-flushes the box's STAGING->ACTIVE table right away instead of waiting
+ * for the sustained cadence's next scheduled re-arm. No-op with the flag off or
+ * before ESTABLISHED (est_commit is left untouched — 0 when the flag is off). */
 void reac_master_set_headamp_src(struct reac_master *m,
                                  const struct reac_headamp_tx *tx);
 
