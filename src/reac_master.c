@@ -543,6 +543,19 @@ void reac_master_set_headamp_src(struct reac_master *m,
 	/* Rebuild so the next grant enrolls the CURRENT head-amp state. Same
 	 * allocation — only group A's values change. */
 	rebuild_grant_sweep(m, m->alloc.width);
+
+	/* REACPW_EST_COMMIT (default OFF): a LIVE head-amp edit while already
+	 * ESTABLISHED rebuilt the sweep above, but the box will not re-copy its
+	 * STAGING table to ACTIVE until it sees a fresh SUB01->SUB02 pair (see
+	 * control_cadence). Re-arm PROMPTLY (SUB_GAP + a small settle, not the full
+	 * post-establish SCENE_SETTLE_DEN wait enter_established uses) so the edit
+	 * reaches hardware quickly instead of waiting for the sustained cadence's
+	 * next scheduled re-arm. Ordering: the rebuild above already ran, so the
+	 * pair still fires strictly AFTER the new staging is loaded. No-op with the
+	 * flag off (est_commit is untouched -> stays 0) or before ESTABLISHED
+	 * (nothing to flush yet — enter_established will arm the first pair). */
+	if (reac_master_est_commit_enabled() && m->state == REAC_M_ESTABLISHED)
+		m->est_commit = REAC_M_EST_COMMIT_SUB_GAP + REAC_M_EST_COMMIT_LIVE_SETTLE;
 }
 
 /* A/B TOGGLE (default ON): REACPW_ANNOUNCE_UNGRANTED.
@@ -705,13 +718,16 @@ static void enter_established(struct reac_master *m)
 	 * streams), phase-offset so they never contend for a slot. */
 	reset_control_cadence(m);
 	m->link_check = m->link_check_reload;
-	/* Arm the one-shot post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF):
-	 * count down (fps/SCENE_SETTLE_DEN + SUB_GAP) FILLER-eligible slots so
-	 * control_cadence fires SUB01 once the post-establish head-amp scene re-push has
-	 * settled, then SUB02 SUB_GAP slots later — the ordered pair that drives the box's
-	 * scene-FSM state-4 bulk phantom commit. OFF leaves est_commit 0 (never armed), so
-	 * the commit block in control_cadence is inert and the locked cadence is
-	 * byte-identical to today. Re-armed on every establishment -> fires ONCE each. */
+	/* Arm the post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF): count
+	 * down (fps/SCENE_SETTLE_DEN + SUB_GAP) FILLER-eligible slots so control_cadence
+	 * fires SUB01 once the post-establish head-amp scene re-push has settled, then
+	 * SUB02 SUB_GAP slots later — the ordered pair that drives the box's scene-FSM
+	 * state-4 bulk phantom commit. OFF leaves est_commit 0 (never armed), so the
+	 * commit block in control_cadence is inert and the locked cadence is byte-
+	 * identical to today. This only seeds the FIRST pair: control_cadence's
+	 * ESTABLISHED branch RE-ARMS est_commit to the shorter PERIOD_DEN cadence every
+	 * time SUB02 fires, so the pair keeps repeating for the whole ESTABLISHED
+	 * lifetime (SUSTAIN, not one-shot — see the flag's header comment). */
 	m->est_commit = reac_master_est_commit_enabled()
 		? m->fps / REAC_M_EST_COMMIT_SCENE_SETTLE_DEN + REAC_M_EST_COMMIT_SUB_GAP
 		: 0;
@@ -881,24 +897,33 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 			m->chanmap_cursor = (m->chanmap_cursor + 1) % m->chanmap_nframes;
 			return REAC_M_EMIT_CHANMAP;
 		}
-		/* One-shot post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF).
+		/* SUSTAINED post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF).
 		 * enter_established arms est_commit ONLY when the flag is on; when off it is 0
 		 * and this whole block is inert, so the LOCKED cadence stays byte-identical to
 		 * today (cfea + chanmap only — the "0 sub01/sub02 established" invariant holds).
 		 * When armed it counts down the FILLER-eligible slots reaching here (announce +
 		 * chanmap already returned above, so this NEVER displaces a 1/s keep-alive and
-		 * never collides with their offsets), and once the post-establish scene re-push
-		 * has settled it drives the box's scene-FSM state-4 bulk phantom commit by
-		 * emitting the ordered pair a real M-200 sends at scene recall: SUB01 first,
-		 * then SUB02 SUB_GAP slots later. Reaching 0 disarms it -> fires exactly ONCE
-		 * per establishment. SUB01/SUB02 are byte-identical to the M-200's, so the box
-		 * accepts them and stays ESTABLISHED. */
+		 * never collides with their offsets), and once the current settle has elapsed it
+		 * drives the box's scene-FSM state-4 bulk phantom commit by emitting the ordered
+		 * pair a real M-200 sends at scene recall: SUB01 first, then SUB02 SUB_GAP slots
+		 * later. Reaching 0 RE-ARMS to fps/PERIOD_DEN instead of disarming — a WORKING
+		 * console SUSTAINS this pair continuously on the established cadence (a
+		 * committing S-0808 capture shows ~134 SUB events over 79.5 s), and a one-shot
+		 * pair only ever flushes STAGING->ACTIVE the instant it fires, leaving any
+		 * non-anchor input whose staging changes afterward stuck unflushed. SUB01/SUB02
+		 * are byte-identical to the M-200's, so the box accepts them and stays
+		 * ESTABLISHED — this never times it back to PROBING. */
 		if (m->est_commit > 0) {
 			m->est_commit--;
 			if (m->est_commit == REAC_M_EST_COMMIT_SUB_GAP)
 				return REAC_M_EMIT_SUB01;   /* strictly before SUB02 */
-			if (m->est_commit == 0)
-				return REAC_M_EMIT_SUB02;   /* disarmed: once per establishment */
+			if (m->est_commit == 0) {
+				/* Re-arm for the NEXT pair before returning, so the sustained
+				 * cadence continues on subsequent FILLER-eligible slots without
+				 * needing enter_established to run again. */
+				m->est_commit = m->fps / REAC_M_EST_COMMIT_PERIOD_DEN;
+				return REAC_M_EMIT_SUB02;
+			}
 		}
 		return REAC_M_EMIT_FILLER;
 	}
