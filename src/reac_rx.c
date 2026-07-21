@@ -14,9 +14,9 @@
 
 #include <reac/reac.h>
 /* the reac-aes67 plain-LE decode core + the two wire sources, reused as-is */
-#include "reac_decode.h"
-#include "reac_capture.h"
-#include "pcap_source.h"
+#include <reac/reac_decode.h>
+#include <reac/reac_capture.h>
+#include <reac/pcap_source.h>
 /* the box-return (braided, box-width) decode — the master-role RX path */
 #include "reac_upstream.h"
 
