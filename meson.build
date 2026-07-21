@@ -332,3 +332,19 @@ grant_test = executable('test_reac_grant',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_grant', grant_test)
+
+# --- acceptance test: byte conformance across ALL --mixer profiles ------------
+# The finding: m200/m300/m5000 differ on the wire in exactly TWO bytes — the
+# source MAC and the cfea console_field byte (V-Mixer 0x00 / OHRCA 0x01), which
+# also drives the ENROLL console byte. Drives the real reac_master_init/set_box/
+# stamp path for each profile and asserts the per-console cfea/ENROLL identity
+# bytes against a new golden (reac_conformance_golden.inc) AND that the shared
+# generator (chanmap/probe/grant sweep) still reproduces the existing M-200/
+# M-300 goldens (reac_m200_golden.inc, reac_grant_golden.inc) regardless of
+# profile. Pure — no socket.
+conformance_test = executable('test_reac_conformance',
+  ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_ctrl.c',
+   'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_conformance', conformance_test)
