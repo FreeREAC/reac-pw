@@ -4,8 +4,8 @@
 # reac-pw — PipeWire-native REAC endpoint (RX source node; TX sink scaffold).
 #
 # Reuses, does not reinvent:
-#   - libreac           RX validate / counter / rate-detect      (subproject wrap)
-#   - reac-aes67 core   plain-LE decode + AF_PACKET + pcap reader (sibling source)
+#   - libreac  RX core: validate / counter / rate-detect + decode / capture / pcap
+#              (<reac/*.h>; system libreac-devel, or the bundled subproject fallback)
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
@@ -39,23 +39,8 @@ libreac_dep = dependency('libreac',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
-# --- reac-aes67 decode/capture/pcap core: reuse the sibling checkout ---------
-# These three files are dependency-free and already proven on-rig (plain-LE
-# sample-major decode, coherence 0.999). We compile them straight in rather than
-# fork them, exactly as reac-aes67's own Makefile compiles libreac's reac.c in.
-# Override with -Dreac_aes67=/path/to/reac-aes67 if the checkout lives elsewhere.
-reac_aes67 = get_option('reac_aes67')
-reac_aes67_src = [
-  reac_aes67 / 'src' / 'reac_decode.c',
-  reac_aes67 / 'src' / 'reac_capture.c',
-  reac_aes67 / 'src' / 'pcap_source.c',
-]
-foreach f : reac_aes67_src
-  if not import('fs').is_file(f)
-    error('reac-aes67 core not found at @0@ — clone github.com/FreeREAC/reac-aes67 as a sibling, or pass -Dreac_aes67=PATH'.format(reac_aes67))
-  endif
-endforeach
-reac_aes67_inc = include_directories(reac_aes67 / 'src')
+# The REAC decode / capture / pcap core now comes from libreac (libreac_dep,
+# >=0.2.0) via <reac/reac_decode.h> etc. — no sibling reac-aes67 checkout needed.
 
 # --- the reac-pw client -----------------------------------------------------
 reac_pw_src = [
@@ -83,8 +68,7 @@ reac_pw_src = [
 ]
 
 executable('reac-pw',
-  reac_pw_src + reac_aes67_src,
-  include_directories : [reac_aes67_inc],
+  reac_pw_src,
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep],
   install : true)
 
@@ -94,13 +78,12 @@ ring_test = executable('test_reac_ring',
   dependencies : [threads_dep])
 test('reac_ring', ring_test)
 
-# --- unit test: TX encoder round-trips through the reac-aes67 decode core -----
-# No PipeWire, no socket — pure encode->decode bit-compare. Compiles reac_tx.c +
-# reac_decode.c with both include trees (<reac/reac.h> from libreac_dep, the
-# reac_decode/reac_mode headers from reac_aes67_inc).
+# --- unit test: TX encoder round-trips through the libreac decode core ---------
+# No PipeWire, no socket — pure encode->decode bit-compare. reac_decode comes from
+# libreac_dep (<reac/reac_decode.h>).
 tx_test = executable('test_reac_tx',
-  ['tests/test_reac_tx.c', 'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
-  include_directories : [reac_aes67_inc, include_directories('src')],
+  ['tests/test_reac_tx.c', 'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
 
@@ -117,11 +100,8 @@ test('reac_upstream', upstream_test)
 # (synthetic 40-ch broadcast + the captured box return + a second box).
 rx_gate_test = executable('test_reac_rx_gate',
   ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c',
-   'src/reac_upstream.c',
-   reac_aes67 / 'src' / 'reac_decode.c',
-   reac_aes67 / 'src' / 'reac_capture.c',
-   reac_aes67 / 'src' / 'pcap_source.c'],
-  include_directories : [reac_aes67_inc, include_directories('src')],
+   'src/reac_upstream.c'],
+  include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
 
@@ -160,8 +140,8 @@ test('reac_fsm', fsm_test)
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
    'src/reac_grant.c', 'src/reac_headamp_tx.c',
-   'src/reac_tx.c', reac_aes67 / 'src' / 'reac_decode.c'],
-  include_directories : [reac_aes67_inc, include_directories('src')],
+   'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master', master_test)
 
