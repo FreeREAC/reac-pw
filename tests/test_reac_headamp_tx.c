@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_headamp_tx — the MASTER head-amp DMX send scheduler (task #155, item C.7).
- * Pure state + per-frame next(): pins OFF-unless-set, the edge emission on change,
- * and the periodic full-table re-assert (declarative/DMX, so a dropped record can
- * never leave stale box state). No socket, no FSM — the guard that keeps the
- * head-amp overlay from touching establishment is the pacer's FILLER-only stamp,
- * tested separately; here we only prove the scheduler's emission logic. */
+/* reac_headamp_tx — the MASTER head-amp send scheduler (task #155, item C.7).
+ * Pure state + per-frame next(): pins OFF-unless-set and the edge emission on
+ * change. There is NO periodic re-assert — the box holds a committed head-amp on
+ * its own, and re-pushing it (as an earlier build did every ~1.5 s) re-STAGES the
+ * value without re-driving the box's commit, thereby UN-committing it. No socket,
+ * no FSM — the guard that keeps the head-amp overlay from touching establishment is
+ * the pacer's FILLER-only stamp, tested separately; here we only prove the
+ * scheduler's emission logic. */
 #include "reac_headamp_tx.h"
 #include "reac_ctrl.h"     /* enum reac_headamp_param */
 
@@ -49,22 +51,17 @@ int main(void)
 			edges++;
 	CHK(edges == 2);   /* exactly the two new changes */
 
-	/* 5. Periodic full re-assert (DMX): with no further changes, one sweep of the
-	 * 3 SET cells fires once per re-assert period, re-broadcasting ABSOLUTE values.
-	 * Run one period + one full sweep worth of frames and collect the sweep. */
-	int seen_phantom5 = 0, seen_sens5 = 0, seen_phantom6 = 0, extra = 0, total = 0;
-	for (int i = 0; i < 300; i++) {
-		if (reac_headamp_tx_next(&t, &ch, &p, &v)) {
+	/* 5. NO periodic re-assert. Once every edge is consumed the scheduler is silent
+	 * — the box holds a committed head-amp on its own; a real M-200 does not re-push
+	 * to keep it alive (rig 2026-07-23: >56 s hold with zero head-amp on the wire).
+	 * The earlier 1.5 s partial re-assert re-STAGED the committed channels without
+	 * re-driving the box's commit and thereby UN-committed the phantom seconds after
+	 * it lit. Run a long stretch with no further changes and confirm nothing emits. */
+	int total = 0;
+	for (int i = 0; i < 1000; i++)
+		if (reac_headamp_tx_next(&t, &ch, &p, &v))
 			total++;
-			if (ch == 5 && p == REAC_HEADAMP_PHANTOM && v == 1) seen_phantom5++;
-			else if (ch == 5 && p == REAC_HEADAMP_SENS && v == 0x10) seen_sens5++;
-			else if (ch == 6 && p == REAC_HEADAMP_PHANTOM && v == 0) seen_phantom6++;
-			else extra++;
-		}
-	}
-	CHK(total == 3);           /* exactly one full sweep of the 3 cells in a period */
-	CHK(seen_phantom5 == 1 && seen_sens5 == 1 && seen_phantom6 == 1);
-	CHK(extra == 0);           /* only SET cells, absolute values, no phantoms */
+	CHK(total == 0);           /* committed state is held by the box, never re-pushed */
 
 	/* 6. A re-set to the SAME value still re-arms the edge (an operator re-press is
 	 * honoured), proving the change path does not depend on a value delta. */
@@ -90,6 +87,6 @@ int main(void)
 	CHK(reac_headamp_tx_next(&hi, &ch, &p, &v) == 1);
 	CHK(ch == 0x2f && p == REAC_HEADAMP_PHANTOM && v == 1);
 
-	printf("OK: head-amp DMX send — off-unless-set, edge-on-change, full re-assert sweep\n");
+	printf("OK: head-amp send — off-unless-set, edge-on-change, no periodic re-assert\n");
 	return 0;
 }

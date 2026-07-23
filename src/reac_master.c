@@ -795,12 +795,18 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			return 0;
 		}
 		if (ev == REAC_M_RX_BOX_HEARTBEAT) {
-			/* The box's heartbeat = it has LOCKED (reached its own ESTABLISHED).
-			 * That is the definitive, timer-free confirmation — establish at once,
-			 * no burst-gate needed (the box already accepted the grant). Symmetric
-			 * to the heartbeat our slave emits once locked. */
-			enter_established(m);
-			return 1;
+			/* HOLD GRANTING until the FULL grant sweep is delivered. The box
+			 * heartbeats within ~1 ms of GRANTING; establishing there cuts the sweep
+			 * to a couple of channels, so the box gets a PARTIAL head-amp scene and
+			 * reverts/mutes the unconfigured channels (rig 2026-07-23: "on for a
+			 * second, then all mute LEDs lit"). A real M-200 puts the COMPLETE 16x3
+			 * scene on the wire during the grant window (m200-s1608-keepalive) and the
+			 * box holds it. Match that: establish only once the whole sweep is out. */
+			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
+				enter_established(m);
+				return 1;
+			}
+			return 0;
 		}
 		if (ev == REAC_M_RX_BOX_UNICAST || ev == REAC_M_RX_BOX_CONFIG) {
 			/* The box's unicast is the accept — BUT only once the FULL 32-frame
@@ -917,13 +923,15 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 			m->est_commit--;
 			if (m->est_commit == REAC_M_EST_COMMIT_SUB_GAP)
 				return REAC_M_EMIT_SUB01;   /* strictly before SUB02 */
-			if (m->est_commit == 0) {
-				/* Re-arm for the NEXT pair before returning, so the sustained
-				 * cadence continues on subsequent FILLER-eligible slots without
-				 * needing enter_established to run again. */
-				m->est_commit = m->fps / REAC_M_EST_COMMIT_PERIOD_DEN;
+			if (m->est_commit == 0)
+				/* ONE-SHOT: fire the SUB01->SUB02 pair EXACTLY once after establish
+				 * and stop (est_commit stays 0, no re-arm). This is the Monday
+				 * 2026-07-20 behaviour that committed the anchor. d932c88 changed it to
+				 * SUSTAIN (re-arm to fps/PERIOD_DEN and keep re-firing), and the repeated
+				 * pair makes the box drop the link a few seconds after sync ("it syncs and
+				 * goes" — rig 2026-07-22). The single staging->active flush is enough to
+				 * commit; re-firing is what breaks it. */
 				return REAC_M_EMIT_SUB02;
-			}
 		}
 		return REAC_M_EMIT_FILLER;
 	}
