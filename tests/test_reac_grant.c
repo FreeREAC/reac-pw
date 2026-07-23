@@ -162,18 +162,25 @@ int main(void)
 	 * 4. VALUE SOURCING: the head-amp table when the cell is SET, the documented
 	 *    safe default otherwise.
 	 * ---------------------------------------------------------------- */
-	/* 4a. With no table at all, every channel takes the safe default: phantom OFF,
-	 * pad OFF, SENS 0x00 (= minimum gain, -10 dBu pad-off). Never phantom ON. */
+	/* 4a. With no table at all, every channel takes the default: phantom OFF, pad
+	 * OFF, and a NON-ZERO SENS. The box only enrols a channel whose arming scene
+	 * carries a real head-amp value; the old all-zero SENS default left every
+	 * un-preset channel un-enrollable, so no later op-0403 write ever committed it.
+	 * Phantom stays OFF — never default +48V. */
+	uint8_t def_sens = reac_grant_headamp_value(NULL, 0x20, REAC_HEADAMP_SENS);
+	CHK(def_sens != 0x00);   /* the enrol requirement: a real value, not minimum gain */
 	for (int i = 0; i < n; i++) {
 		if (!row_is_groupa(sweep[i]))
 			continue;
 		switch (row_param(sweep[i])) {
 		case REAC_HEADAMP_PHANTOM: CHK(row_value(sweep[i]) == 0); break;
 		case REAC_HEADAMP_PAD:     CHK(row_value(sweep[i]) == 0); break;
-		case REAC_HEADAMP_SENS:    CHK(row_value(sweep[i]) == 0x00); break;
+		case REAC_HEADAMP_SENS:    CHK(row_value(sweep[i]) == def_sens); break;
 		}
 	}
-	/* The default SENS really is minimum gain under the head-amp law. */
+	/* The head-amp law is unchanged — 0x00 is still -10 dBu (minimum gain); we
+	 * simply no longer DEFAULT there, because a channel must carry a real value to
+	 * be enrolled by the box. */
 	CHK(reac_headamp_sens_db(0x00, 0) == -10);
 
 	/* 4b. Set cells are honoured; unset cells beside them still default. The
@@ -198,7 +205,8 @@ int main(void)
 		if (ch == 0x20 && p == REAC_HEADAMP_PAD)     { CHK(v == 0);    checked++; }  /* unset */
 		if (ch == 0x2f && p == REAC_HEADAMP_PAD)     { CHK(v == 1);    checked++; }
 		if (ch == 0x2f && p == REAC_HEADAMP_PHANTOM) { CHK(v == 0);    checked++; }  /* unset */
-		if (ch == 0x21)                              { CHK(v == 0);    checked++; }  /* wholly unset */
+		if (ch == 0x21 && p == REAC_HEADAMP_SENS)    { CHK(v == def_sens); checked++; }  /* unset -> real default */
+		if (ch == 0x21 && p != REAC_HEADAMP_SENS)    { CHK(v == 0);        checked++; }  /* unset phantom/pad stay OFF */
 	}
 	CHK(checked == 8);   /* 5 named cells + the 3 params of ch 0x21 */
 
