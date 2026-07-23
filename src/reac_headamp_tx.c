@@ -70,30 +70,12 @@ int reac_headamp_tx_next(struct reac_headamp_tx *t, uint8_t *ch, uint8_t *param,
 		}
 	}
 
-	/* Periodic full re-assert (DMX): once per reassert_period, sweep every SET
-	 * cell, one record per SWEEP_STRIDE frames, re-broadcasting the absolute
-	 * values so a dropped record can never persist as stale box state. */
-	if (t->sweeping) {
-		if (--t->sweep_wait > 0)
-			return 0;
-		t->sweep_wait = REAC_HEADAMP_SWEEP_STRIDE;
-		while (t->sweep_idx < REAC_HEADAMP_NCELLS) {
-			int idx = t->sweep_idx++;
-			int c = idx / REAC_HEADAMP_NPARAMS, p = idx % REAC_HEADAMP_NPARAMS;
-			if (t->set[c][p]) {
-				emit_at(t, idx, ch, param, value);
-				return 1;
-			}
-		}
-		t->sweeping = 0;   /* swept the whole table; wait for the next period */
-		return 0;
-	}
-
-	if (--t->reassert_tick <= 0) {
-		t->reassert_tick = t->reassert_period;
-		t->sweeping = 1;
-		t->sweep_idx = 0;
-		t->sweep_wait = 1;   /* the first sweep record lands on the next call */
-	}
+	/* NO periodic re-assert. A real M-200 does NOT re-push head-amp to keep it alive:
+	 * rig 2026-07-23 it held S-1608 phantom for >56 s with ZERO head-amp on the wire (a
+	 * complete-scene re-push only ~every 120 s). reac-pw's old 1.5 s PARTIAL re-assert
+	 * re-touched exactly the committed channels and re-STAGED them without re-driving the
+	 * box's state-4 commit, so it UN-COMMITTED the phantom seconds after it lit ("live for
+	 * a moment, then dark", S-1608). The box HOLDS the commit on its own; the edge (dirty)
+	 * path above still carries every live operator change immediately. */
 	return 0;
 }
