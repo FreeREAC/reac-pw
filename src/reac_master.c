@@ -682,6 +682,15 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	memcpy(m->box_mac, box_src, 6);
 	if (blk32)
 		memcpy(m->join_blk, blk32, 32);
+	/* Refresh the arming sweep from the CURRENT head-amp state, so a (re)connecting box is
+	 * armed with the LIVE phantom/pad/sens the operator has set in the mixer — not a stale
+	 * snapshot. reac_master_set_box only rebuilds the sweep on a box MODEL change, so a
+	 * SAME-box reconnect after a live head-amp edit would otherwise re-arm the pre-edit
+	 * values and the box would come up not matching the interface. The sweep is a pure
+	 * function of (alloc, headamp_src) and this runs on the pacer thread — the same thread
+	 * that drains head-amp edits into the table — so there is no race. Keeps the current
+	 * sweep on a transient allocate/build failure (rebuild_grant_sweep is all-or-nothing). */
+	rebuild_grant_sweep(m, m->alloc.width);
 	/* cfea box-count on latch. With REACPW_ANNOUNCE_UNGRANTED (default ON) we hold
 	 * count=0 so the announce carries the RECOGNIZED-BUT-UNGRANTED window a real M-200
 	 * holds through the whole dwell; the count flips to 1 at enter_established.
