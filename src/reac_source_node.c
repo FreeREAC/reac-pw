@@ -252,3 +252,31 @@ void reac_source_node_destroy(struct reac_source_node *n)
 		pw_filter_destroy(n->filter);
 	free(n);
 }
+
+int reac_source_node_ensure(struct reac_source_node **slot,
+                            const struct reac_source_node_cfg *cfg,
+                            int channels, const char *label)
+{
+	if (!slot || !cfg)
+		return -1;
+	/* Normalise to the same width reac_source_node_new would settle on, so the
+	 * "same width?" test compares like with like (a startup channels=0 becomes 40).
+	 * A REAC box input width is model-unique (8=S-0808, 16=S-1608, 32=S-4000S), so a
+	 * same-width re-recognition is the same box — nothing to do. */
+	int want = (channels > 0 && channels <= REAC_MAX_CHANNELS) ? channels
+	                                                           : REAC_MAX_CHANNELS;
+	struct reac_source_node *cur = *slot;
+	if (cur && cur->channels == want)
+		return 0;
+	/* Absent, or a real width change (a live box swap): the old box's inputs no
+	 * longer exist, so tear the stale node down first, then build fresh at the new
+	 * width via the unchanged create API. The RX ring is shared + unchanged, so the
+	 * new node reads the same planes the feeder keeps filling. */
+	if (cur) {
+		reac_source_node_destroy(cur);
+		*slot = NULL;
+	}
+	*slot = reac_source_node_new(cfg->loop, cfg->ring, cfg->rx, cfg->sample_rate,
+	                             want, cfg->inst, label, cfg->master_role);
+	return *slot ? 0 : -1;
+}
