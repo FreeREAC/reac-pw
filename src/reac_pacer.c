@@ -260,7 +260,20 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 		atomic_store_explicit(&p->recognized_box, bm, memory_order_release);
 		/* Autodetect: select the grant burst for THIS matrix model (its in/out
 		 * width) so the master emits the correct model's sweep on the next grant. */
+		int prev_w = p->master.alloc.width;   /* the width we have ALREADY granted */
 		reac_master_set_box(&p->master, bm->in_ch, bm->out_ch);
+		/* set_box rebuilds the sweep for the recognized width but does NOT re-emit it.
+		 * The cold-connect JOIN carries no width, so the box was granted the stale
+		 * default (autodetect starts at the S-1608 16-wide/base-0x20 cfg). If the
+		 * recognized width DIFFERS, re-fire so the box gets its FULL-width enrollment
+		 * (the S-4000S 8->32 fix, and the correct 8-wide grant for the S-0808). A box
+		 * recognized at the width already granted (S-1608 at the 16 default) does NOT
+		 * re-fire -> its establishment stays byte-identical. */
+		if (bm->in_ch != prev_w &&
+		    (p->master.state == REAC_M_GRANTING ||
+		     p->master.state == REAC_M_ESTABLISHED) &&
+		    p->master.box_seen)
+			reac_master_regrant(&p->master);
 		pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)bm->in_ch, 0, parsed.src, NULL);
 	}
 
