@@ -128,6 +128,35 @@ static const uint8_t ENROLL_BLK[34] = {
 };
 #define REAC_ENROLL_CONSOLE_IDX 8   /* ENROLL_BLK[8] = console-model byte (0/1) */
 
+/* Wide-safe default enroll width (operator directive 2026-07-24: "40 is the safe
+ * default"). 32 = 4 input groups + 1 output group (4x0x41 + 1x0xc3) — the widest
+ * config any REAL box uses (the S-4000's own enrol, golden-validated) and the
+ * widest that keeps a valid output group. It USES the full 40-slot fabric with the
+ * maximum addressable inputs. A box's DECLARED width narrows this at recognition
+ * (reac_master_set_box). Bump to 40 (5x0x41, no output group) only for input-only
+ * VIRTUAL stageboxes — that exceeds every hardware capture. */
+#define REAC_ENROLL_DEFAULT_WIDTH 32
+
+/* Rewrite the ENROLL group map (block[9:19]) for `in_ch` input channels. A PURE
+ * FUNCTION OF WIDTH, no per-box constant: input groups (0x41) fill the input region
+ * [9:14] from the front; the remaining "non-input" groups (0xc3) fill the output
+ * region [14:19] from the back. Verified byte-for-byte against the M-200, M-300 and
+ * M-5000 golden enrols (8ch=1x41, 16ch=2x41, 32ch=4x41 — identical across all three
+ * console generations, only the [8] console byte differs) and extended to the full
+ * 40-slot fabric (5x41). Leaves [8] (console-model byte) and the frame template
+ * intact; re-checksums. */
+static void set_enroll_width(uint8_t blk[34], int in_ch)
+{
+	int n_in = in_ch / 8;                          /* input groups, 1..5 */
+	if (n_in < 1) n_in = 1;
+	if (n_in > 5) n_in = 5;
+	for (int i = 0; i < 5; i++) {
+		blk[9  + i] = (i <  n_in) ? 0x41 : 0x00;   /* input region  [9:14]  */
+		blk[14 + i] = (i >= n_in) ? 0xc3 : 0x00;   /* output region [14:19] */
+	}
+	stamp_block_cksum(blk);
+}
+
 /* The mixer profiles reac-pw can impersonate. MAC + console_field are the only
  * per-mixer identity; the grants are box-defined. MACs are the captured desk
  * addresses (matrix-m{200,300,5000}-*). M-200/M-300 are V-Mixer (console 0);
@@ -488,7 +517,10 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	 * (V-Mixer 0 / OHRCA 1). apply_block re-checksums at stamp time. */
 	memcpy(m->enroll_blk, ENROLL_BLK, 34);
 	m->enroll_blk[REAC_ENROLL_CONSOLE_IDX] = m->cfg.console_field;
-	stamp_block_cksum(m->enroll_blk);
+	/* Seed the WIDE-safe default enrol; the box's declared width narrows it at
+	 * recognition (reac_master_set_box). set_enroll_width re-checksums. */
+	set_enroll_width(m->enroll_blk, REAC_ENROLL_DEFAULT_WIDTH);
+	m->enroll_pending = 0;
 
 	/* Seed the probe rotation at phase 0 / sub 0x02 (hunting) so FILLER frames
 	 * carry a valid descriptor from the very first slot, before any probe fires. */
@@ -529,6 +561,19 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	 * over them (group B is width-invariant). A width we cannot place keeps the
 	 * current sweep — never an empty grant. */
 	rebuild_grant_sweep(m, in_ch);
+
+	/* Enrol the box's DECLARED input width. The cdea 0103 000d group map is the gate
+	 * the box reads to open its audio return to full width (verified byte-for-byte
+	 * across the M-200/M-300/M-5000 golden enrols: 8ch=1x41, 16ch=2x41, 32ch=4x41).
+	 * Without this the box only ever sees the wide DEFAULT enrol and the recognizer's
+	 * width never reaches the wire — the root cause of the S-4000 stuck at 8ch
+	 * (recognized 32, but enroll_blk stayed the static template). set_enroll_width
+	 * keeps [8] (console byte) and re-checksums. enroll_pending makes the GRANTING
+	 * dwell re-emit ONE ENROLL at the new width, so a box recognized AFTER the initial
+	 * (tick-0) ENROLL still widens — mirrors the golden, which sends its enrol ~200ms
+	 * into the session, after reading the box config. */
+	set_enroll_width(m->enroll_blk, in_ch);
+	m->enroll_pending = 1;
 
 	m->cfg.out_channels = (uint8_t)in_ch;    /* cfea width byte := box input width */
 	uint16_t box_count = (m->state == REAC_M_GRANTING ||
@@ -1006,6 +1051,16 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		if (m->grant_ticks == 0) {
 			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
 		} else if (m->grant_ticks <= m->grant_dwell) {
+			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
+			 * config-announce is parsed ~1ms into GRANTING, see reac_pacer.c): deliver
+			 * ONE fresh ENROLL at the now-DECLARED width before the grant burst, so the
+			 * box opens its audio return to full width (the S-4000 8->32 fix). The
+			 * golden sends its (single) enrol in this same dwell window ~200ms in. One
+			 * frame, taken from an announce/filler slot — the burst is unchanged. */
+			if (m->enroll_pending) {
+				m->enroll_pending = 0;
+				emit = REAC_M_EMIT_ENROLL;
+			} else
 			/* The dwell. With REACPW_ANNOUNCE_UNGRANTED (default ON) we HOLD the
 			 * RECOGNIZED-BUT-UNGRANTED cfea (box width set, count=0 — stamped by
 			 * enter_granting) on the wire at the free-running ~1/s announce cadence,

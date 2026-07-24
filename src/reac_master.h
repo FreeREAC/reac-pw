@@ -301,6 +301,11 @@ struct reac_master {
 	 * rebuilt on box recognition (reac_master_set_box) and whenever the head-amp
 	 * source changes (reac_master_set_headamp_src). */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
+	int      enroll_pending;  /* set by reac_master_set_box when the box's DECLARED
+	                           * width narrowed enroll_blk after the initial ENROLL;
+	                           * the GRANTING dwell re-emits ONE ENROLL at the new
+	                           * width (the box widens/narrows to it, matching the
+	                           * golden's post-recognition enrol) then clears this. */
 	int      grant_dwell;     /* dwell slots between ENROLL and the grant burst
 	                           * (fps*REAC_M_GRANT_DWELL_SECONDS_X10/10, set at init) */
 	struct reac_grant_alloc alloc;   /* the fabric slots we granted this box    */
