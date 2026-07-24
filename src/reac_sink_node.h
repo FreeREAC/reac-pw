@@ -25,6 +25,7 @@
 
 struct pw_loop;
 struct reac_sink_node;
+struct reac_source_node;       /* reac_source_node.h — the peer reac-capture node (#208) */
 struct reac_box_model;         /* reac_ctrl.h — the autodetected box (in/out widths) */
 struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp table */
 
@@ -79,6 +80,14 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
  * the pacer's recognized_box) — the main-loop autodetect watcher polls this to
  * decide the reac-capture / reac-playback widths. */
 const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n);
+
+/* Wire the peer reac-capture node's SLOT (#208) so the sink's main-loop badge timer
+ * also keeps the source node's reac.link-state / box-model / box-width in sync — the
+ * capture node has no pacer handle of its own. Pass the address of main's source-node
+ * pointer (`&src`) so a source rebuilt on a live box-width change is followed. Call once
+ * after both nodes exist; pass NULL slot to detach. */
+void reac_sink_node_set_peer_source(struct reac_sink_node *n,
+                                    struct reac_source_node **src_slot);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 

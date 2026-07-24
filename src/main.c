@@ -488,6 +488,10 @@ int main(int argc, char **argv)
 		adc.src = &src;
 		adc.sink = sink;
 		adc.scfg = src_cfg;
+		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
+		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
+		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
+		reac_sink_node_set_peer_source(sink, &src);
 		ad_timer = pw_loop_add_timer(loop, on_autodetect_timer, &adc);
 		if (ad_timer) {
 			struct timespec first = { 0, 200 * 1000000L };
