@@ -24,6 +24,7 @@
  * decodes, with the cdea/cfea control frames interspersed ~1/s. */
 
 #include "reac_sink_node.h"
+#include "reac_source_node.h" /* peer reac-capture badge push (#208) */
 #include "reac_tx.h"
 #include "reac_pacer.h"
 #include "reac_gain.h"
@@ -118,6 +119,12 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
+
+	/* #208: the peer reac-capture node's SLOT (main's `&src`), so the same log-timer
+	 * that keeps THIS sink's badge live also drives the source's — that node has no
+	 * pacer handle of its own. A SLOT (not the node) so a source rebuilt on a live
+	 * box-width change is followed automatically. NULL when no peer was wired. */
+	struct reac_source_node **peer_src;
 
 	/* reac.discovery.* (task #178): MAIN-LOOP-only shadow of the seq last stamped into
 	 * the filter's node properties, so on_log_timer re-publishes only when the discovery
@@ -427,6 +434,17 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		pw_filter_update_properties(n->filter, NULL, &props->dict);
 		pw_properties_free(props);
 	}
+
+	/* #208: keep the reac-capture (source) badge in lock-step with this playback side.
+	 * Reached only when ls/bm CHANGED (the early-return above), which is exactly when
+	 * the box establishes / drops / swaps — and a source rebuilt on a width change is a
+	 * bm change, so it is always re-stamped here. Slot-deref follows the current node;
+	 * same main loop, so this is thread-safe. */
+	if (n->peer_src && *n->peer_src)
+		reac_source_node_publish_link(*n->peer_src,
+		                              reac_link_state_name(ls),
+		                              bm ? bm->token : "none",
+		                              width);
 }
 
 /* MAIN LOOP: stamp reac.discovery.* — WHAT IS ON THIS SEGMENT, as opposed to what this
@@ -798,6 +816,13 @@ const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sin
 	if (!n)
 		return NULL;
 	return atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+}
+
+void reac_sink_node_set_peer_source(struct reac_sink_node *n,
+                                    struct reac_source_node **src_slot)
+{
+	if (n)
+		n->peer_src = src_slot;
 }
 
 void reac_sink_node_destroy(struct reac_sink_node *n)
