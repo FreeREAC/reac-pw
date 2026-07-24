@@ -10,46 +10,30 @@
 
 /* ---- The allocator ------------------------------------------------------- *
  *
- * EVIDENCE (GRANT-SWEEP.md + the goldens in reac-captures/captures/, all decoded
- * byte-for-byte):
+ * base(width) + width, one DERIVED RULE (not a per-model table), wire-proven
+ * byte-for-byte against the goldens in reac-captures/captures/:
  *
- *   box      inputs  observed base  group-A slots  golden
- *   S-0808     8        0x00          0x00..0x07   matrix-m200-s0808-2026-07-11
- *   S-1608    16        0x20          0x20..0x2f   matrix-m200-s1608-2026-07-11
- *   S-4000S   32        0x00          0x00..0x1f   matrix-m5000-s4000-unit{1,2}
+ *   box      inputs  base   group-A slots  golden
+ *   S-0808     8      0x00   0x00..0x07     matrix-m200-s0808-2026-07-11
+ *   S-1608    16      0x20   0x20..0x2f     matrix-m200-s1608-2026-07-11
+ *   S-4000S   32      0x00   0x00..0x1f     matrix-m200-s4000-2026-07-24 + matrix-m5000-s4000-unit{1,2}
  *
- * WHAT THE EVIDENCE DOES AND DOES NOT SETTLE. It settles that base+width are the
- * MASTER's decision and travel to the box in the grant (so the box has no hardwired
- * base to match), and that the 0x2f ceiling is real (a 32-wide box CANNOT base at
- * 0x20 — it would run to 0x3f). It does NOT settle a derivable placement LAW: three
- * points across two different desk models admit no unique rule (lowest-fit predicts
- * 0x00 for the S-1608 and is wrong; top-aligned predicts 0x28 for the S-0808 and is
- * wrong). GRANT-SWEEP.md's "width-many contiguous slots wherever they fit" is a
- * description of the freedom, not of the choice.
+ * THE RULE: base = (width == 16) ? 0x20 : 0x00. The S-1608 firmware sits its 16
+ * inputs at fabric offset 0x20; every other Roland width bases at 0x00. This is
+ * console-generation-INDEPENDENT — the S-4000S bases at 0x00 under both a real M-200
+ * (matrix-m200-s4000-2026-07-24) and a real M-5000, which settled what the earlier
+ * three-point set (one S-4000S golden, from an M-5000) could not. It is the SAME rule
+ * reac_slave.c uses to DECLARE its base (ch_base = box_channels==16 ? 0x20 : 0x00),
+ * and it equals the model's head-amp CH base baked into the rest of the stack
+ * (reac_ctrl.h, openmixer) — so master-read, slave-declare and head-amp all derive
+ * from ONE width value. 24 (S-2416) falls out with no new case: base 0x00, slots
+ * 0x00..0x17, frame 916 B. The base+width travel to the box in the grant (no hardwired
+ * base to match); the 0x2f fabric ceiling is real (a 32-wide box cannot base at 0x20 —
+ * it would run to 0x3f), gated by reac_grant_alloc_fits.
  *
- * SO: we pin the OBSERVED base per width rather than invent a law. Reasons, in
- * order: (a) it is the only placement each real box is known to have accepted;
- * (b) the S-1608's 0x20 origin is already baked into the rest of the stack as that
- * model's head-amp CH base (reac_ctrl.h's head-amp block comment, openmixer's
- * channel mapping), so choosing differently here would silently desync them;
- * (c) a wrong-but-self-consistent allocation is exactly the failure we are fixing —
- * being consistent with the REST OF THE WORLD is the whole point.
- *
- * This is a POLICY table, deliberately separated from the mechanism below it, so
- * multi-box allocation (#129 — several boxes sharing one fabric) can replace the
- * policy without touching the sweep generator. Today reac-pw grants ONE box at a
- * time, so a static policy is honest; the day two boxes must coexist, this becomes
- * a real free-list over the fabric and the observed bases become preferences. */
-struct grant_placement {
-	uint8_t width;
-	uint8_t base;
-};
+ * reac-pw grants ONE box at a time; when several boxes must share the fabric (#129)
+ * this becomes a free-list and the base rule becomes each box's placement preference. */
 
-static const struct grant_placement OBSERVED_PLACEMENT[] = {
-	{  8, 0x00 },   /* S-0808  */
-	{ 16, 0x20 },   /* S-1608  */
-	{ 32, 0x00 },   /* S-4000S */
-};
 
 int reac_grant_alloc_fits(int base, int width)
 {
@@ -67,26 +51,14 @@ int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
 	if (!out || in_ch <= 0 || in_ch > REAC_GRANT_MAX_WIDTH)
 		return -1;
 
-	/* The observed base for this width, when we have one AND it still fits. The
-	 * fits() gate is not ceremony: it is what forbids a 32-wide box from taking
-	 * the S-1608's 0x20, and it keeps a future policy edit from silently
-	 * allocating past the fabric. */
-	for (size_t i = 0; i < sizeof OBSERVED_PLACEMENT / sizeof OBSERVED_PLACEMENT[0]; i++) {
-		if (OBSERVED_PLACEMENT[i].width != in_ch)
-			continue;
-		if (!reac_grant_alloc_fits(OBSERVED_PLACEMENT[i].base, in_ch))
-			break;                       /* observed base no longer placeable */
-		out->base  = OBSERVED_PLACEMENT[i].base;
-		out->width = (uint8_t)in_ch;
-		return 0;
-	}
-
-	/* An unobserved width (or an observed base that does not fit): take the lowest
-	 * base that does. "Width-many contiguous slots wherever they fit", with the
-	 * fabric otherwise empty — reac-pw grants one box at a time (see #129). */
-	if (!reac_grant_alloc_fits(0, in_ch))
+	/* base(width): the S-1608's 16 inputs sit at fabric 0x20, every other width at
+	 * 0x00 (see the block comment; the SAME rule as reac_slave.c's ch_base). fits()
+	 * gates the 0x2f ceiling — it forbids a 32-wide box taking 0x20 (would run to
+	 * 0x3f) and keeps any width from allocating past the fabric. */
+	int base = (in_ch == 16) ? 0x20 : 0x00;
+	if (!reac_grant_alloc_fits(base, in_ch))
 		return -1;
-	out->base  = 0x00;
+	out->base  = (uint8_t)base;
 	out->width = (uint8_t)in_ch;
 	return 0;
 }
