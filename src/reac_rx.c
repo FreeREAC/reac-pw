@@ -180,6 +180,7 @@ static void *rx_loop(void *arg)
 			               * land in the past), flooding the ring. */
 				pcap_source_close(&ps); pcap_source_open(&ps, rx->cfg.source);
 				have_counter = 0; wall_first_ns = 0;
+				rx->have_prev_frame = 0; /* no cross-loop-seam duplicate match */
 				rx->ppm_have_last = 0; rx->ppm_win_frames = 0; /* drop the stale ppm
 				               * window so the next loop doesn't spike one bogus ppm
 				               * off a counter discontinuity across the seam */
@@ -194,6 +195,24 @@ static void *rx_loop(void *arg)
 			/* the other direction's stream (or another box): not ours */
 			atomic_fetch_add_explicit(&rx->frames_other, 1, memory_order_relaxed);
 			continue;
+		}
+
+		/* OHRCA duplicate-frame guard (see reac_rx.h): drop a frame byte-identical
+		 * to the one before it. A 48 kHz box over-clocked to the 96 kHz doubled
+		 * cadence re-sends each frame verbatim; feeding both doubles every 12-sample
+		 * block into a granular stutter and doubles the effective rate. Genuine
+		 * distinct frames are never byte-identical, so this is a no-op for a true
+		 * 48 kHz box or a real 96 kHz source. Runs before the counter/ppm/decode so
+		 * the rate estimator and the ring see the real (deduplicated) cadence. */
+		if (rx->have_prev_frame && (size_t)n == rx->prev_frame_len &&
+		    memcmp(frame, rx->prev_frame, (size_t)n) == 0) {
+			atomic_fetch_add_explicit(&rx->frames_dup, 1, memory_order_relaxed);
+			continue;
+		}
+		if ((size_t)n <= sizeof rx->prev_frame) {
+			memcpy(rx->prev_frame, frame, (size_t)n);
+			rx->prev_frame_len = (size_t)n;
+			rx->have_prev_frame = 1;
 		}
 
 		/* optional: pace pcap replay by capture timestamps so the rate loop
@@ -226,10 +245,11 @@ static void *rx_loop(void *arg)
 			dbg = getenv("REAC_DEBUG") != NULL;
 		if (dbg && now - last_stat_ns >= 2000000000ull) {
 			last_stat_ns = now;
-			fprintf(stderr, "reac_rx: ok=%llu other=%llu bad=%llu gaps=%llu"
+			fprintf(stderr, "reac_rx: ok=%llu dup=%llu other=%llu bad=%llu gaps=%llu"
 			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s | out: active_ch=%d"
 			        " peak=%.6f fill=%d\n",
 			        (unsigned long long)atomic_load(&rx->frames_ok),
+			        (unsigned long long)atomic_load(&rx->frames_dup),
 			        (unsigned long long)atomic_load(&rx->frames_other),
 			        (unsigned long long)atomic_load(&rx->frames_bad),
 			        (unsigned long long)atomic_load(&rx->counter_gaps),
