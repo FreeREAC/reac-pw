@@ -137,6 +137,39 @@ static void usage(const char *p)
 	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n", p);
 }
 
+/* MASTER autodetect (no --box): a main-loop watcher that polls the box the pacer
+ * recognized on the wire and (re)sizes the reac-capture / reac-playback nodes to its
+ * real widths. Node create/destroy MUST run on the main/loop thread; recognition runs
+ * in the RT pacer thread, which hands the model over via the pacer's atomic
+ * recognized_box (read here through reac_sink_node_recognized_box) — so no pw_* call is
+ * ever made from the pacer thread. The library owns the node lifecycle: this reads the
+ * width + label and calls the two ensure() entry points, nothing more. */
+struct autodetect_ctx {
+	struct reac_source_node    **src;   /* main's source slot (created/rebuilt here) */
+	struct reac_sink_node       *sink;  /* the master engine (owns the recognizer)   */
+	struct reac_source_node_cfg  scfg;  /* stable reac-capture create args           */
+	const struct reac_box_model *last;  /* last model acted on (edge-detects changes) */
+};
+
+static void on_autodetect_timer(void *data, uint64_t expirations)
+{
+	(void)expirations;
+	struct autodetect_ctx *c = data;
+	const struct reac_box_model *bm = reac_sink_node_recognized_box(c->sink);
+	if (!bm || bm == c->last)
+		return;   /* nothing recognized yet, or the same model as last poll */
+	c->last = bm;
+	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
+	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
+		fprintf(stderr, "reac-pw: could not size reac-capture to %d ch (%s)\n",
+		        bm->in_ch, bm->display);
+	if (reac_sink_node_ensure(c->sink, bm->out_ch, bm->display) != 0)
+		fprintf(stderr, "reac-pw: could not size reac-playback to %d ch (%s)\n",
+		        bm->out_ch, bm->display);
+	fprintf(stderr, "reac-pw: autodetected %s -> reac-capture %d in / reac-playback "
+	        "%d out\n", bm->display, bm->in_ch, bm->out_ch);
+}
+
 int main(int argc, char **argv)
 {
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
@@ -347,16 +380,18 @@ int main(int argc, char **argv)
 	pw_loop_add_signal(loop, SIGINT, on_signal, NULL);
 	pw_loop_add_signal(loop, SIGTERM, on_signal, NULL);
 
-	/* Master: expose the declared box's real inputs (16=S-1608, 8=S-0808); with no
-	 * --box, the full 40-slot fabric. Slave: the source is the 40-ch downstream. */
-	int src_ch = (role == REAC_ROLE_MASTER) ? master_box_in : 0;
-	struct reac_source_node *src = reac_source_node_new(loop, &ring, &rx, rx.sample_rate,
-	                                                    src_ch, inst_name, box_label,
-	                                                    role == REAC_ROLE_MASTER);
-	if (!src) {
-		fprintf(stderr, "reac-pw: failed to create reac:capture node\n");
-		return 1;
-	}
+	/* The reac-capture source is created AFTER the TX side, because whether to DEFER
+	 * it depends on whether a recognizer (the master pacer) exists. In pure autodetect
+	 * (master + a live TX pacer) it is deferred: nothing plugged -> nothing in the
+	 * graph, and the node appears sized to the box the moment it is recognized (the
+	 * autodetect timer below). Every other mode (slave, or pcap / no-TX master) has no
+	 * recognizer, so the node is created at its startup width. The cfg bundles the
+	 * process-lifetime constants so a later resize needs only the width + label. */
+	struct reac_source_node *src = NULL;
+	struct reac_source_node_cfg src_cfg = {
+		.loop = loop, .ring = &ring, .rx = &rx, .sample_rate = rx.sample_rate,
+		.inst = inst_name, .master_role = (role == REAC_ROLE_MASTER),
+	};
 
 	/* TX side: who drives the handshake + the clock depends on the role.
 	 *   master -> reac:playback sink: WE encode the graph downstream + the pacer
@@ -442,6 +477,39 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/* Now that we know whether a recognizer exists (master + a live TX pacer), either
+	 * DEFER the box nodes to autodetect or expose the source at its startup width. */
+	struct autodetect_ctx adc = {0};
+	struct spa_source *ad_timer = NULL;
+	if (role == REAC_ROLE_MASTER && sink) {
+		/* Pure autodetect: the pacer recognizes the box on the wire; a 200 ms main-
+		 * loop watcher then (re)sizes reac-capture / reac-playback to its widths. No
+		 * box node exists until then (nothing plugged = nothing in the graph). */
+		adc.src = &src;
+		adc.sink = sink;
+		adc.scfg = src_cfg;
+		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
+		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
+		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
+		reac_sink_node_set_peer_source(sink, &src);
+		ad_timer = pw_loop_add_timer(loop, on_autodetect_timer, &adc);
+		if (ad_timer) {
+			struct timespec first = { 0, 200 * 1000000L };
+			struct timespec interval = { 0, 200 * 1000000L };
+			pw_loop_update_timer(loop, ad_timer, &first, &interval, false);
+		}
+		fprintf(stderr, "reac-pw: MASTER autodetect — reac-capture / reac-playback "
+		        "appear sized to the box once it is recognized on the wire\n");
+	} else {
+		/* No recognizer (slave, or pcap / no-TX master): expose the source now. Slave
+		 * -> the 40-ch downstream; master -> the --box width (0 -> the 40-ch fabric). */
+		int src_ch = (role == REAC_ROLE_MASTER) ? master_box_in : 0;
+		if (reac_source_node_ensure(&src, &src_cfg, src_ch, box_label) != 0) {
+			fprintf(stderr, "reac-pw: failed to create reac:capture node\n");
+			return 1;
+		}
+	}
+
 	if (reac_rx_start(&rx) != 0) {
 		fprintf(stderr, "reac-pw: failed to start RX feeder\n");
 		return 1;
@@ -450,7 +518,9 @@ int main(int argc, char **argv)
 	pw_main_loop_run(g_loop);
 
 	reac_rx_stop(&rx);
-	reac_source_node_destroy(src);
+	if (ad_timer)
+		pw_loop_destroy_source(loop, ad_timer);   /* stop the autodetect watcher first */
+	reac_source_node_destroy(src);                /* may be NULL (never recognized) */
 	reac_sink_node_destroy(sink);
 	if (slave_open) {
 		reac_slave_stop(&slave);

@@ -93,27 +93,35 @@ int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
 
 /* ---- The group-A values -------------------------------------------------- *
  *
- * SAFE DEFAULTS for a channel the operator has not configured:
+ * DEFAULTS for a channel the operator has not configured. Two of the three stay
+ * safe-off; SENS is deliberately NON-ZERO, and that is the whole fix for the
+ * multi-week "head-amp never commits on a real box" chase:
  *
  *   phantom = 0 (OFF). Never default +48V on. Phantom into a ribbon mic or an
  *       unbalanced line source can destroy it, and a box we have just enrolled is
  *       by definition a box whose patch we do not yet know. The one direction that
  *       is never recoverable is the one we must not take by default.
- *   pad     = 0 (OFF). The pad is a -20 dB attenuator; leaving it off keeps the
- *       SENS default below meaningful in its own (pad-off) reference frame, and a
- *       pad is trivially added by the operator when a hot source clips.
- *   sens    = 0x00. Per the head-amp law (reac_headamp_sens_db):
- *       dBu = -10 - value + (pad ? 20 : 0), so value 0x00 with pad off is -10 dBu
- *       — the LEAST sensitive setting the preamp offers, i.e. MINIMUM gain. An
- *       unknown source therefore cannot arrive pre-amplified into clipping or into
- *       a feedback howl; the operator opens the gain deliberately, which is the
- *       direction that is safe to be wrong in. The real M-200 golden itself pushes
- *       0x00 on several channels (0x24, 0x25), so this is a value a live desk
- *       demonstrably enrolls with — not a value we invented.
+ *   pad     = 0 (OFF). A -20 dB attenuator the operator adds when a hot source
+ *       clips; clipping is recoverable, so off is the safe default.
+ *   sens    = REAC_GRANT_DEFAULT_SENS, NON-ZERO. The box only ENROLS a channel
+ *       whose arming scene carries a REAL (non-zero) head-amp value. A channel
+ *       armed all-zero is never enrolled, so no later op-0403 write — however
+ *       byte-perfect — ever commits it. An all-zero SENS default (what this was)
+ *       therefore silently disabled head-amp control on every un-preset channel:
+ *       the box ignored phantom/pad/sens forever. Operator-confirmed on the S-0808
+ *       (2026-07-23): a real-valued arming scene lit BOTH condensers; the all-zero
+ *       scene stayed dead. So we arm a real value. phantom stays OFF, so a non-zero
+ *       SENS cannot drive 48V; at worst a hot source clips and the operator pads it.
+ *       0x20 = -42 dBu pad-off (reac_headamp_sens_db) — moderate gain, and a value
+ *       the M-200 desk itself arms (its input 1), demonstrably one a box enrolls.
+ *
+ * OPEN (pending live S-1608 confirmation): whether SENS-alone with phantom=0 is
+ * enough to enrol, and the minimal enrolling value. Until proven, arm a known-good
+ * real value rather than probe for the floor.
  */
 #define REAC_GRANT_DEFAULT_PHANTOM 0x00
 #define REAC_GRANT_DEFAULT_PAD     0x00
-#define REAC_GRANT_DEFAULT_SENS    0x00
+#define REAC_GRANT_DEFAULT_SENS    0x20
 
 static uint8_t default_for(uint8_t param)
 {

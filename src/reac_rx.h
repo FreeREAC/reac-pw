@@ -80,11 +80,27 @@ struct reac_rx {
 	uint8_t up_src[6];
 	int     up_src_locked;
 
+	/* OHRCA duplicate-frame guard. A 48 kHz box driven at the 96 kHz doubled
+	 * cadence (the #156 OHRCA path) re-transmits each frame BYTE-IDENTICALLY —
+	 * measured on the S-4000S: 100% of adjacent same-counter pairs are equal,
+	 * ~125 us apart (a real second transmission, not a capture mirror). Feeding
+	 * both copies concatenates every 12-sample block, so each block plays twice
+	 * -> a granular per-frame stutter (the "granulated audio" symptom) and the
+	 * effective rate doubles (96 kHz into a 48 kHz reac-capture -> overrun).
+	 * We drop the exact repeat: it carries no new audio, and genuine distinct
+	 * frames (32 ch x 12 samp x 24-bit) are never byte-identical, so a true
+	 * 48 kHz box (no duplication) and a real 96 kHz box (distinct frames) are
+	 * both unaffected. Dropping the copy restores the true rate into the ring. */
+	uint8_t prev_frame[1560];   /* >= the rx frame buffer (REAC_FRAME_BYTES + 64) */
+	size_t  prev_frame_len;
+	int     have_prev_frame;
+
 	/* diagnostics */
 	_Atomic uint64_t frames_ok;
 	_Atomic uint64_t frames_bad;
 	_Atomic uint64_t frames_other; /* valid REAC, but the OTHER stream (gated out) */
 	_Atomic uint64_t counter_gaps; /* lost frames inferred from counter jumps */
+	_Atomic uint64_t frames_dup;   /* OHRCA byte-identical duplicates dropped */
 
 	/* the source node (RT thread) publishes its last ring-read stats here so the
 	 * non-RT telemetry below can print them — keeps fprintf off the RT path. */

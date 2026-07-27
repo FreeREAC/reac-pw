@@ -24,6 +24,7 @@
  * decodes, with the cdea/cfea control frames interspersed ~1/s. */
 
 #include "reac_sink_node.h"
+#include "reac_source_node.h" /* peer reac-capture badge push (#208) */
 #include "reac_tx.h"
 #include "reac_pacer.h"
 #include "reac_gain.h"
@@ -77,10 +78,12 @@ struct reac_sink_node {
 	struct pw_filter *filter;
 	struct reac_pacer pacer;
 	int pacer_open;
-	int channels;
+	int channels;             /* current filter port count; 0 = no filter yet */
 	int sample_rate;
 	uint8_t src[6];           /* our master MAC */
 	struct pw_loop *loop;
+	const char *inst;         /* per-instance node suffix (for filter (re)build) */
+	char label[64];           /* effective box label on the node description ("" = none) */
 	struct spa_source *log_timer;  /* 200 ms event-log drain on the main loop */
 	struct port_in *ports[REAC_MAX_CHANNELS];
 
@@ -116,6 +119,12 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
+
+	/* #208: the peer reac-capture node's SLOT (main's `&src`), so the same log-timer
+	 * that keeps THIS sink's badge live also drives the source's — that node has no
+	 * pacer handle of its own. A SLOT (not the node) so a source rebuilt on a live
+	 * box-width change is followed automatically. NULL when no peer was wired. */
+	struct reac_source_node **peer_src;
 
 	/* reac.discovery.* (task #178): MAIN-LOOP-only shadow of the seq last stamped into
 	 * the filter's node properties, so on_log_timer re-publishes only when the discovery
@@ -408,15 +417,34 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	else
 		snprintf(width, sizeof width, "0x0");
 
+	/* Head-amp preamp count follows the recognized model's INPUT width (each box
+	 * input is a mic preamp); "0" until a model is recognized, mirroring the
+	 * box-width "0x0" seed. The `caps` key is a constant seeded at create, so it
+	 * is not re-stamped here (update_properties merges — untouched keys persist). */
+	char ha_channels[16];
+	snprintf(ha_channels, sizeof ha_channels, "%d", bm ? bm->in_ch : 0);
+
 	struct pw_properties *props = pw_properties_new(
-		REAC_PROP_LINK_STATE, reac_link_state_name(ls),
-		REAC_PROP_BOX_MODEL,  bm ? bm->token : "none",
-		REAC_PROP_BOX_WIDTH,  width,
+		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
+		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
+		REAC_PROP_BOX_WIDTH,       width,
+		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
 		NULL);
 	if (props) {
 		pw_filter_update_properties(n->filter, NULL, &props->dict);
 		pw_properties_free(props);
 	}
+
+	/* #208: keep the reac-capture (source) badge in lock-step with this playback side.
+	 * Reached only when ls/bm CHANGED (the early-return above), which is exactly when
+	 * the box establishes / drops / swaps — and a source rebuilt on a width change is a
+	 * bm change, so it is always re-stamped here. Slot-deref follows the current node;
+	 * same main loop, so this is thread-safe. */
+	if (n->peer_src && *n->peer_src)
+		reac_source_node_publish_link(*n->peer_src,
+		                              reac_link_state_name(ls),
+		                              bm ? bm->token : "none",
+		                              width);
 }
 
 /* MAIN LOOP: stamp reac.discovery.* — WHAT IS ON THIS SEGMENT, as opposed to what this
@@ -519,6 +547,140 @@ static void on_log_timer(void *data, uint64_t expirations)
 	sink_publish_latency(n);
 }
 
+/* Build the node DESCRIPTION for `channels` outputs labelled `label` (NULL/"" ->
+ * the role-default text). Single formatter used at (re)build AND relabel. */
+static void sink_build_desc(char *desc, size_t sz, const char *label, int channels)
+{
+	if (label && *label)
+		snprintf(desc, sz, "%s — %d ch (REAC box outputs)", label, channels);
+	else
+		snprintf(desc, sz, "REAC %dch playback (downstream master TX)", channels);
+}
+
+/* Build (or rebuild) the reac-playback pw_filter at n->channels INPUT ports
+ * labelled `label`, connect it, and stamp the live badge props onto the fresh
+ * node. THE PACER IS NOT TOUCHED — this manages only the graph filter, so a resize
+ * never disturbs the running master/recognizer. On a rebuild the caller has already
+ * destroyed the old filter and nulled n->ports; the badge-prop shadows are reset to
+ * the create-time seeds here and immediately re-published from the pacer snapshot,
+ * so a rebuilt node shows the live link-state/box-model/discovery/latency at once
+ * (not only after the next 200 ms poll). Returns 0, or -1 (n->filter left NULL). */
+static int sink_open_filter(struct reac_sink_node *n, const char *label)
+{
+	char rate_str[16];
+	snprintf(rate_str, sizeof rate_str, "1/%d", n->sample_rate);
+
+	char nodename[64];
+	if (n->inst && *n->inst)
+		snprintf(nodename, sizeof nodename, "reac-playback.%s", n->inst);
+	else
+		snprintf(nodename, sizeof nodename, "reac-playback");
+
+	snprintf(n->label, sizeof n->label, "%s", label ? label : "");
+	char desc[128];
+	sink_build_desc(desc, sizeof desc, n->label[0] ? n->label : NULL, n->channels);
+
+	n->filter = pw_filter_new_simple(
+		n->loop,
+		"reac:playback",
+		pw_properties_new(
+			PW_KEY_MEDIA_TYPE, "Audio",
+			PW_KEY_MEDIA_CATEGORY, "Playback", /* a sink consumes audio */
+			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
+			PW_KEY_NODE_NAME, nodename,
+			PW_KEY_NODE_DESCRIPTION, desc,
+			/* The wire is the rate authority; advertise the REAC rate so PipeWire
+			 * resamples whatever the app plays into our pps. */
+			PW_KEY_NODE_RATE, rate_str,
+			/* Correct-at-(re)build badge props (task #154): seeded to the "probing/
+			 * none/0x0" baseline and immediately re-stamped from the pacer below.
+			 * Kept live by sink_publish_link_props on the 200 ms log-timer. */
+			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
+			REAC_PROP_BOX_MODEL, "none",
+			REAC_PROP_BOX_WIDTH, "0x0",
+			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
+			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
+			 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
+			 * box's preamp shape and drives it on ONE node. `channels` seeds "0" and
+			 * is bumped to the model's input width by sink_publish_link_props on
+			 * recognition; `caps` is the constant phantom/pad/sens trio. */
+			REAC_PROP_HEADAMP_CHANNELS, "0",
+			REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
+			/* Correct-at-(re)build discovery (task #178): from this node's t=0 we are
+			 * listening on this NIC; seq "0"/"[]" is re-stamped from the pacer's disco
+			 * table below. Kept live by sink_publish_disco_props on the log-timer. */
+			REAC_PROP_DISCO_SCOPE, n->disco_ifname ? n->disco_ifname : "",
+			REAC_PROP_DISCO_STATE, REAC_DISCO_STATE_LISTENING,
+			REAC_PROP_DISCO_SEQ, "0",
+			REAC_PROP_DISCO_DEVICES, "[]",
+			NULL),
+		&filter_events, n);
+	if (!n->filter)
+		return -1;
+
+	/* Shadows to the seeds just published; then re-publish from the live pacer state
+	 * so a (re)built node converges within this call rather than after a 200 ms poll.
+	 * link_drops_seen tracks the CURRENT cumulative drops so the rebuild does not
+	 * flash a spurious "dropped" overlay. */
+	n->link_state_last = REAC_LINK_PROBING;
+	n->box_model_last = NULL;
+	n->disco_seq_last = 0;
+	n->link_drops_seen = 0;
+	for (int i = 0; i < 8; i++)
+		n->link_drops_seen += atomic_load_explicit(&n->pacer.drops[i],
+		                                            memory_order_relaxed);
+	reac_lat_init(&n->lat);
+
+	for (int c = 0; c < n->channels; c++) {
+		char pname[24], achan[12];
+		snprintf(pname, sizeof pname, "playback_%02d", c + 1);
+		/* Discrete mono box output — AUX channel so no tool pairs them as stereo. */
+		snprintf(achan, sizeof achan, "AUX%d", c);
+		n->ports[c] = pw_filter_add_port(
+			n->filter,
+			PW_DIRECTION_INPUT,
+			PW_FILTER_PORT_FLAG_MAP_BUFFERS,
+			sizeof(struct port_in),
+			pw_properties_new(
+				PW_KEY_FORMAT_DSP, "32 bit float mono audio",
+				PW_KEY_PORT_NAME, pname,
+				PW_KEY_AUDIO_CHANNEL, achan,
+				NULL),
+			NULL, 0);
+		/* A NULL port would later be handed to pw_filter_get_dsp_buffer on the RT
+		 * thread (SPA_CONTAINER_OF on NULL = a wild deref). Fail the (re)build. */
+		if (!n->ports[c]) {
+			pw_filter_destroy(n->filter);
+			n->filter = NULL;
+			return -1;
+		}
+		n->ports[c]->channel = c;
+	}
+
+	/* Advertise the volume/mute PropInfo + the current (persisted) Props at connect,
+	 * so a controller sees the controls the moment the node appears and standard
+	 * volume tools drive the box outputs (the raw filter has no audioadapter, so
+	 * without this wpctl/desktop volume would be silently ignored). */
+	uint8_t pbuf[2048];
+	struct spa_pod_builder pb = SPA_POD_BUILDER_INIT(pbuf, sizeof pbuf);
+	const struct spa_pod *cparams[5];
+	uint32_t ncp = sink_build_params(n, &pb, cparams);
+
+	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, cparams, ncp) < 0) {
+		pw_filter_destroy(n->filter);
+		n->filter = NULL;
+		return -1;
+	}
+
+	/* Stamp the live badges + graph->wire latency onto the fresh node now (the
+	 * shadows above were reset to the seeds, so these publish the current pacer
+	 * state immediately). */
+	sink_publish_link_props(n);
+	sink_publish_disco_props(n);
+	sink_publish_latency(n);
+	return 0;
+}
+
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
                                           struct reac_ring *tx_ring,
                                           const struct reac_sink_cfg *cfg)
@@ -528,12 +690,17 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	struct reac_sink_node *n = calloc(1, sizeof *n);
 	if (!n)
 		return NULL;
-	n->channels = cfg->channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : cfg->channels;
+	n->loop = loop;
+	n->inst = cfg->inst;          /* stable for the process; used by every filter build */
+	n->disco_ifname = cfg->ifname;
+	n->channels = 0;              /* no graph filter yet — DEFERRED to reac_sink_node_ensure */
 	n->sample_rate = cfg->sample_rate;
+	snprintf(n->label, sizeof n->label, "%s", cfg->label ? cfg->label : "");
 
 	/* Output gain starts at UNITY (calloc would leave it 0 == fully muted). The
 	 * ramp step is one REAC_GAIN_RAMP_MS worth of samples at the wire rate; a
-	 * safe fallback keeps it positive if the rate is somehow unset. */
+	 * safe fallback keeps it positive if the rate is somehow unset. Persisted across
+	 * a filter rebuild (indexed by channel, so a resize keeps each channel's gain). */
 	float ramp_samples = REAC_GAIN_RAMP_MS * (float)n->sample_rate / 1000.0f;
 	n->ramp_step = ramp_samples > 1.0f ? 1.0f / ramp_samples : 1.0f;
 	n->muted = false;
@@ -551,8 +718,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	else
 		reac_mac_default_src(cfg->ifname, n->src);
 
-	/* The pacer is the master + the cadence clock. fps = rate / 12 (downstream is
-	 * 12 samples/frame at every rate). It opens the AF_PACKET TX socket. */
+	/* The pacer is the master + the cadence clock + the box RECOGNIZER. fps = rate/12
+	 * (downstream is 12 samples/frame at every rate). It opens the AF_PACKET TX socket
+	 * and, once started, probes + establishes + identifies the box on the wire — all
+	 * INDEPENDENT of the graph filter, so recognition works before any node exists. */
 	struct reac_pacer_cfg pcfg = {
 		.ifname = cfg->ifname,
 		.fps = n->sample_rate / REAC_SAMPLES_PER_PKT,
@@ -575,129 +744,29 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	}
 	n->pacer_open = 1;
 
-	char rate_str[16];
-	snprintf(rate_str, sizeof rate_str, "1/%d", n->sample_rate);
-
-	char nodename[64];
-	if (cfg->inst && *cfg->inst)
-		snprintf(nodename, sizeof nodename, "reac-playback.%s", cfg->inst);
-	else
-		snprintf(nodename, sizeof nodename, "reac-playback");
-	char desc[128];
-	if (cfg->label && *cfg->label)
-		snprintf(desc, sizeof desc, "%s — %d ch (REAC box outputs)", cfg->label, n->channels);
-	else
-		snprintf(desc, sizeof desc, "REAC %dch playback (downstream master TX)", n->channels);
-
-	n->filter = pw_filter_new_simple(
-		loop,
-		"reac:playback",
-		pw_properties_new(
-			PW_KEY_MEDIA_TYPE, "Audio",
-			PW_KEY_MEDIA_CATEGORY, "Playback", /* a sink consumes audio */
-			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
-			PW_KEY_NODE_NAME, nodename,
-			PW_KEY_NODE_DESCRIPTION, desc,
-			/* The wire is the rate authority; advertise the REAC rate so PipeWire
-			 * resamples whatever the app plays into our pps. */
-			PW_KEY_NODE_RATE, rate_str,
-			/* Correct-at-boot badge props (task #154): the pacer thread hasn't
-			 * started yet at this point, but a real master enters PROBING
-			 * unconditionally on its first frame (#130) — IDLE is a sub-ms
-			 * transient, so "probing" is truthful from t=0. Kept live by
-			 * sink_publish_link_props on the 200 ms log-timer below. */
-			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
-			REAC_PROP_BOX_MODEL, "none",
-			REAC_PROP_BOX_WIDTH, "0x0",
-			/* Correct-at-boot discovery (task #178): from t=0 we are listening on
-			 * this NIC and have seen nothing yet — which is the truth, and is NOT
-			 * the same claim as "there is nothing here". Publishing the keys
-			 * immediately is what lets a reader tell a listening-but-empty reac-pw
-			 * apart from one that predates discovery (keys absent = could not scan).
-			 * Kept live by sink_publish_disco_props on the 200 ms log-timer. */
-			REAC_PROP_DISCO_SCOPE, cfg->ifname ? cfg->ifname : "",
-			REAC_PROP_DISCO_STATE, REAC_DISCO_STATE_LISTENING,
-			REAC_PROP_DISCO_SEQ, "0",
-			REAC_PROP_DISCO_DEVICES, "[]",
-			NULL),
-		&filter_events, n);
-	if (!n->filter) {
-		reac_pacer_close(&n->pacer);
-		free(n);
-		return NULL;
-	}
+	/* Badge-prop shadows for the (yet-to-exist) filter. Seeded to the baseline so the
+	 * first sink_open_filter re-stamps to the live pacer state. */
 	n->link_state_last = REAC_LINK_PROBING;
-	/* Matches the "0"/"[]" seeded above, so an empty segment never triggers a
-	 * redundant re-publish; a first real sighting bumps seq to 1 and does. */
-	n->disco_seq_last = 0;
-	n->disco_ifname = cfg->ifname;
 	n->box_model_last = NULL;
+	n->disco_seq_last = 0;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
-
-	for (int c = 0; c < n->channels; c++) {
-		char pname[24], achan[12];
-		snprintf(pname, sizeof pname, "playback_%02d", c + 1);
-		/* Discrete mono box output — AUX channel so no tool pairs them as stereo. */
-		snprintf(achan, sizeof achan, "AUX%d", c);
-		n->ports[c] = pw_filter_add_port(
-			n->filter,
-			PW_DIRECTION_INPUT,
-			PW_FILTER_PORT_FLAG_MAP_BUFFERS,
-			sizeof(struct port_in),
-			pw_properties_new(
-				PW_KEY_FORMAT_DSP, "32 bit float mono audio",
-				PW_KEY_PORT_NAME, pname,
-				PW_KEY_AUDIO_CHANNEL, achan,
-				NULL),
-			NULL, 0);
-		/* A NULL port would later be handed to pw_filter_get_dsp_buffer on the RT
-		 * thread (SPA_CONTAINER_OF on NULL = a wild deref). Fail construction. */
-		if (!n->ports[c]) {
-			pw_filter_destroy(n->filter);
-			reac_pacer_close(&n->pacer);
-			free(n);
-			return NULL;
-		}
-		n->ports[c]->channel = c;
-	}
-
-	/* Advertise the volume/mute PropInfo + the initial (unity) Props at connect,
-	 * so a controller sees the controls the moment the node appears and standard
-	 * volume tools drive the box outputs (the raw filter has no audioadapter, so
-	 * without this wpctl/desktop volume would be silently ignored). */
-	uint8_t pbuf[2048];
-	struct spa_pod_builder pb = SPA_POD_BUILDER_INIT(pbuf, sizeof pbuf);
-	const struct spa_pod *cparams[5];
-	uint32_t ncp = sink_build_params(n, &pb, cparams);
-
-	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, cparams, ncp) < 0) {
-		pw_filter_destroy(n->filter);
-		reac_pacer_close(&n->pacer);
-		free(n);
-		return NULL;
-	}
-
-	/* Advertise the graph->wire delay now (the first poll seeds the EMA from the
-	 * still-empty ring and always advertises). Kept live + smoothed by
-	 * sink_publish_latency on the 200 ms log timer below as the ring depth moves. */
-	sink_publish_latency(n);
 
 	/* Start the SCHED_FIFO pacer thread. The master FSM probes immediately and
 	 * unconditionally (a real unlinked M-5000 always hunts) and only GRANTS on
 	 * the box's own cold-connect — no presence assumption, no timer advance
-	 * (defect #130). Audio FILLER flows in every state, so the loopback demo
-	 * still hears the stream while the FSM stays honestly in PROBING. */
+	 * (defect #130). The graph node is created later (on recognition), but the
+	 * pacer free-runs silent FILLER meanwhile, so establishment is unaffected. */
 	if (reac_pacer_start(&n->pacer) != 0) {
 		pw_log_warn("reac:playback — cannot start cadence pacer thread");
-		pw_filter_destroy(n->filter);
 		reac_pacer_close(&n->pacer);
 		free(n);
 		return NULL;
 	}
 
-	/* The FSM/RX log drain: 200 ms period on the main loop we already hold. */
-	n->loop = loop;
+	/* The FSM/RX log drain: 200 ms period on the main loop we already hold. It also
+	 * keeps the badge/discovery/latency props live once a filter exists (it no-ops
+	 * on n->filter == NULL, so it is safe before recognition). */
 	n->log_timer = pw_loop_add_timer(loop, on_log_timer, n);
 	if (n->log_timer) {
 		struct timespec first = { 0, 200 * 1000000L };
@@ -705,11 +774,55 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		pw_loop_update_timer(loop, n->log_timer, &first, &interval, false);
 	}
 
-	pw_log_info("reac:playback MASTER on '%s' (%d ch, %d Hz, %d fps pacer) — "
-	            "probing; establishment is event-driven on the box's JOIN",
-	            cfg->ifname, n->channels, n->sample_rate,
-	            n->sample_rate / REAC_SAMPLES_PER_PKT);
+	pw_log_info("reac:playback MASTER engine on '%s' (%d Hz, %d fps pacer) — probing; "
+	            "the reac-playback graph node appears sized to the box on recognition",
+	            cfg->ifname, n->sample_rate, n->sample_rate / REAC_SAMPLES_PER_PKT);
 	return n;
+}
+
+int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *label)
+{
+	if (!n)
+		return -1;
+	int want = channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : channels;
+	if (want < 1)
+		return -1;
+	char want_label[64];
+	snprintf(want_label, sizeof want_label, "%s", label ? label : "");
+	if (n->filter && n->channels == want && strcmp(want_label, n->label) == 0)
+		return 0;   /* identical box (same width AND label): nothing to do */
+	/* Absent, or a box change — either a different width OR a same-out-width swap that
+	 * only changes the label (e.g. S-1608 -> S-4000S, both 8 out). Either way REBUILD
+	 * the graph filter: pw_filter_update_properties does NOT re-stamp a live node's
+	 * node.description / reac.box-model / discovery props to the registry (they stay at
+	 * their connect-time values — verified on the rig), so relabelling a connected
+	 * filter is not possible; only a fresh filter's CREATION-time props propagate.
+	 * sink_open_filter re-stamps all of them. The pacer/recognizer is UNTOUCHED
+	 * (pw_filter_destroy quiesces the data thread's process() before it returns, so
+	 * n->channels / n->ports are swapped in a clean gap — no RT race), and the
+	 * per-channel gain state persists across the rebuild. */
+	if (n->filter) {
+		pw_filter_destroy(n->filter);
+		n->filter = NULL;
+	}
+	for (int c = 0; c < REAC_MAX_CHANNELS; c++)
+		n->ports[c] = NULL;
+	n->channels = want;
+	return sink_open_filter(n, label);
+}
+
+const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n)
+{
+	if (!n)
+		return NULL;
+	return atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+}
+
+void reac_sink_node_set_peer_source(struct reac_sink_node *n,
+                                    struct reac_source_node **src_slot)
+{
+	if (n)
+		n->peer_src = src_slot;
 }
 
 void reac_sink_node_destroy(struct reac_sink_node *n)
