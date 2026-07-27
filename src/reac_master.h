@@ -335,6 +335,10 @@ struct reac_master {
 	 * (see control_cadence). 0 when disarmed -> the LOCKED cadence is byte-identical
 	 * to today. */
 	int      est_commit;
+	int      op0100_burst;    /* REACPW_OP0100_BURST: FILLER slots left to emit as
+	                           * sub-state-0x03 op-0100 probes after establish (0 = off) */
+	int      post_enroll_tick; /* REACPW_POST_ENROLL: 1/s enroll keepalive counter, armed
+	                            * ONLY while ESTABLISHED (box already mapped at 0x20) */
 
 	/* Diagnostics (never gate the establishment) */
 	int      box_seen;        /* sustained box broadcast FILLER on the wire */
@@ -417,6 +421,11 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
  * SAME flag (single source of truth). Returns 1 when the post-establish scene commit
  * is enabled, else 0. */
 int reac_master_est_commit_enabled(void);
+
+/* Audio-presence link hold (REACPW_AUDIO_KEEPALIVE): reload the peer-gone budget from any
+ * frame off the locked box's MAC (the box's continuous upstream audio), so a box with a
+ * sparse control heartbeat (no-enroll) is not falsely dropped while still present. */
+void reac_master_note_box_present(struct reac_master *m);
 
 /* Human-readable names for the caller's logging. */
 const char *reac_master_state_name(enum reac_master_state s);

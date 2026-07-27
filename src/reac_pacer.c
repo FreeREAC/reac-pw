@@ -238,6 +238,22 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 		         (uint8_t)(mi + 1), sight.mac, NULL);
 	}
 
+	/* Audio-presence link hold (REACPW_AUDIO_KEEPALIVE, default off): the box streams
+	 * upstream continuously but stops its control heartbeat ~8s in without an enroll, so
+	 * classify returns non-zero for those pure frames and link_check decayed to a FALSE
+	 * peer-gone while the box was still present. Reload from any frame off the locked box's
+	 * MAC (frame[6:12] = L2 src). RX-only; TX bytes unchanged. */
+	{
+		static int ka = -1;
+		if (ka < 0) {
+			const char *v = getenv("REACPW_AUDIO_KEEPALIVE");
+			ka = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+			            v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+		}
+		if (ka && memcmp(frame + 6, p->master.box_mac, 6) == 0)
+			reac_master_note_box_present(&p->master);
+	}
+
 	struct reac_ctrl_parsed parsed;
 	enum reac_master_rx_event ev;
 	if (reac_ctrl_classify_box_frame(frame, len, p->src, &parsed, &ev) != 0)

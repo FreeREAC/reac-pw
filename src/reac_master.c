@@ -145,14 +145,92 @@ static const uint8_t ENROLL_BLK[34] = {
  * console generations, only the [8] console byte differs) and extended to the full
  * 40-slot fabric (5x41). Leaves [8] (console-model byte) and the frame template
  * intact; re-checksums. */
+/* MEASUREMENT KNOB (default UNSET = today's behaviour, byte-identical when unset).
+ * REACPW_ENROLL_GROUPS=N forces the ENROLL input-group COUNT instead of deriving it
+ * as in_ch/8. Why this is a measurement and not a guess (2026-07-24): 8ch=1x41 and
+ * 32ch=4x41 are REAL goldens, but a capture census (6 captures, 3 console generations,
+ * 2 S-1608 units) shows NO console ever sends an ENROLL to a 16-in box — so 16ch=2x41
+ * is an INTERPOLATION that has never been observed on any wire. Meanwhile the box
+ * declares its own width in groups of FOUR (config-announce payload[4..15], count of
+ * 0x02 x 4 = in_ch, verified 3/3), so even the group SIZE is unverified here. Live
+ * effect being measured: with the derived 2 groups the S-1608 exposes only 8 channels
+ * at 0x28..0x2f instead of 16 at its declared base 0x20. Range 1..5. */
+static int enroll_groups_override(void)
+{
+	static int cached = -2;   /* -2 unread, -1 unset/invalid, >0 forced count */
+	if (cached == -2) {
+		const char *v = getenv("REACPW_ENROLL_GROUPS");
+		cached = -1;
+		if (v && v[0]) {
+			char *end = NULL;
+			long n = strtol(v, &end, 10);
+			if (end && *end == '\0' && n >= 1 && n <= 5)
+				cached = (int)n;
+		}
+	}
+	return cached;
+}
+
+/* Companion to enroll_groups_override: WHERE the input-group run starts inside the
+ * 5-slot input region. Default UNSET = 0 = front-filled = byte-identical to today. */
+static int enroll_offset_override(void)
+{
+	static int cached = -2;
+	if (cached == -2) {
+		const char *v = getenv("REACPW_ENROLL_OFFSET");
+		cached = 0;
+		if (v && v[0]) {
+			char *end = NULL;
+			long n = strtol(v, &end, 10);
+			if (end && *end == '\0' && n >= 0 && n <= 4)
+				cached = (int)n;
+		}
+	}
+	return cached;
+}
+
+/* TEST KNOB REACPW_NO_ENROLL=1: suppress the pre-grant ENROLL entirely (default OFF =
+ * today's behaviour). Firmware-motivated (2026-07-24): the box applies head-amp for any
+ * CH<0x30 with no enrolled-set gate, and reac-pw already writes the correct 0x20..0x2f;
+ * the ENROLL is what shifts the box's slot->XLR config +8 (S-1608 top bank over the gate).
+ * The M-200 sends none. This tests whether, with a CONFIRMED lock, the box's native
+ * 0x20 layout lights XLR1..16 from reac-pw's existing 0x20-writes. */
+static int no_enroll(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_NO_ENROLL");
+		cached = (v && (v[0]=='1'||v[0]=='y'||v[0]=='Y'||v[0]=='t'||v[0]=='T')) ? 1 : 0;
+	}
+	return cached;
+}
+
 static void set_enroll_width(uint8_t blk[34], int in_ch)
 {
 	int n_in = in_ch / 8;                          /* input groups, 1..5 */
+	int ov = enroll_groups_override();
+	if (ov > 0)
+		n_in = ov;                             /* REACPW_ENROLL_GROUPS override */
 	if (n_in < 1) n_in = 1;
 	if (n_in > 5) n_in = 5;
+	/* PLACEMENT (REACPW_ENROLL_OFFSET=K, default 0 = today's byte-identical layout).
+	 * The input groups have always been written FROM THE FRONT, with no notion of the
+	 * base the box just declared in its config-announce (payload[3]<<4 — 0x20 for the
+	 * S-1608, 0x00 for the S-0808/S-4000, verified 3/3). Since the 0x84 boxes declare
+	 * base 0x00, front-filling is trivially correct for them and the placement has
+	 * NEVER been exercised — count was swept (N=2/4), position never was. K shifts the
+	 * run of 0x41 within the 5-slot input region [9:14]; the complement stays 0xc3 in
+	 * the output region so every slot keeps exactly one role. Swept, not guessed,
+	 * because the group UNIT (4 vs 8 channels) is still unresolved. */
+	int off = enroll_offset_override();
+	if (off < 0) off = 0;
+	if (off > 4) off = 4;
+	if (off + n_in > 5) n_in = 5 - off;            /* keep the run inside [9:14] */
+	if (n_in < 1) n_in = 1;
 	for (int i = 0; i < 5; i++) {
-		blk[9  + i] = (i <  n_in) ? 0x41 : 0x00;   /* input region  [9:14]  */
-		blk[14 + i] = (i >= n_in) ? 0xc3 : 0x00;   /* output region [14:19] */
+		int is_in = (i >= off && i < off + n_in);
+		blk[9  + i] = is_in ? 0x41 : 0x00;         /* input region  [9:14]  */
+		blk[14 + i] = is_in ? 0x00 : 0xc3;         /* output region [14:19] */
 	}
 	stamp_block_cksum(blk);
 }
@@ -504,8 +582,15 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 		m->cfg.in_channels = REAC_CONSOLE_CFG_S1608.in_channels;
 	}
 	/* Peer-gone budget = ~6.5 s of frames (the measured M-200i hold), rate-scaled
-	 * so it is the same wall-clock at 44.1/48/96k (#130). */
-	m->link_check_reload = (m->fps * REAC_M_LINKCHECK_SECONDS_X10) / 10;
+	 * so it is the same wall-clock at 44.1/48/96k (#130). REACPW_LINKCHECK_SECONDS
+	 * overrides the wall-clock seconds (diagnostic: a huge value pins the link up to
+	 * test whether the ~8s no-enroll cycle is reac-pw's peer-gone vs a box-internal reset). */
+	int lc_x10 = REAC_M_LINKCHECK_SECONDS_X10;
+	{
+		const char *v = getenv("REACPW_LINKCHECK_SECONDS");
+		if (v) { int s = atoi(v); if (s > 0) lc_x10 = s * 10; }
+	}
+	m->link_check_reload = (m->fps * lc_x10) / 10;
 	if (m->link_check_reload < 1)
 		m->link_check_reload = 1;
 
@@ -765,9 +850,63 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	         announce_ungranted_enabled() ? 0 : 1);
 }
 
+/* NEW (default 0 = OFF, byte-identical when unset): REACPW_OP0100_BURST=N — after
+ * establish, emit N FILLER-eligible slots as sub-state-0x03 op-0100 probes (the rotating
+ * gen_probe; sub=0x03 because probe_prepare reads state==ESTABLISHED). Replicates the real
+ * M-200's post-recognition sub-0x03 op-0100 progression that reac-pw's probe-silent locked
+ * cadence otherwise NEVER sends — the S-1608 firmware (FUN_0c003548) recognizes a master ONLY
+ * on sub-state-0x03, so without it a NO_ENROLL box never fully locks its head-amp commit and
+ * re-cold-connects (48V flicker). Read once + cached like the file's other getenv knobs. */
+static int op0100_burst_len(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_OP0100_BURST");
+		cached = v ? atoi(v) : 0;
+		if (cached < 0)
+			cached = 0;
+	}
+	return cached;
+}
+
+/* NEW (default OFF): REACPW_POST_ENROLL=1 — send the enroll (cdea 01 03 000d) as a ~1/s
+ * KEEPALIVE while ESTABLISHED, NOT at cold-connect. The box maps its base at cold-connect;
+ * with REACPW_NO_ENROLL=1 that map is 0x20 (all 16 reachable). Once established at 0x20 the
+ * box needs the enroll to KEEP its session/head-amp committed (without it it stops
+ * heartbeating ~8s in and re-cold-connects — operator's "phantom then unsyncs"). Sending the
+ * enroll AFTER the 0x20 map is set holds the session WITHOUT re-mapping to +8 (rig hypothesis:
+ * remap only happens on the cold-connect enroll). Pair with NO_ENROLL + OP0100_BURST. */
+static int post_enroll_enabled(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_POST_ENROLL");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
+/* Reload the link-check + presence budget from a bare box-frame sighting. The pacer calls
+ * this (REACPW_AUDIO_KEEPALIVE) for ANY frame off the locked box's MAC so the box's CONTINUOUS
+ * upstream audio holds the link even when its sparse control heartbeat (no-enroll case) would
+ * otherwise let link_check decay to a FALSE peer-gone while the box is still present+streaming.
+ * ESTABLISHED-only; never forces a state change, only defers the peer-gone drop. */
+void reac_master_note_box_present(struct reac_master *m)
+{
+	if (m->state != REAC_M_ESTABLISHED)
+		return;
+	m->link_check = m->link_check_reload;
+	m->box_seen = 1;
+	m->presence_tick = REAC_M_PRESENCE_TIMEOUT;
+}
+
 static void enter_established(struct reac_master *m)
 {
 	m->state = REAC_M_ESTABLISHED;
+	/* Arm the sub-0x03 op-0100 recognition burst (REACPW_OP0100_BURST, default 0/off). */
+	m->op0100_burst = op0100_burst_len();
+	m->post_enroll_tick = 0;
 	/* Same continuous control cadence as PROBING (PROBE + the four 1/s
 	 * streams), phase-offset so they never contend for a slot. */
 	reset_control_cadence(m);
@@ -987,6 +1126,20 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 				 * commit; re-firing is what breaks it. */
 				return REAC_M_EMIT_SUB02;
 		}
+		/* sub-0x03 op-0100 recognition burst (REACPW_OP0100_BURST): FILLER-eligible only
+		 * (announce + chanmap already returned above), so it never displaces a keep-alive.
+		 * probe_idx=0 is non-special -> gen_probe, sub=0x03 since state==ESTABLISHED. */
+		if (m->op0100_burst > 0) {
+			m->op0100_burst--;
+			m->probe_idx = 0;
+			return REAC_M_EMIT_PROBE;
+		}
+		/* post-establish enroll KEEPALIVE (REACPW_POST_ENROLL): ~1/s, FILLER-eligible.
+		 * Holds the box's session at the already-set 0x20 map without a cold-connect remap. */
+		if (post_enroll_enabled() && ++m->post_enroll_tick >= m->fps) {
+			m->post_enroll_tick = 0;
+			return REAC_M_EMIT_ENROLL;
+		}
 		return REAC_M_EMIT_FILLER;
 	}
 
@@ -1048,7 +1201,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * unicast the instant it sees the grant, so it locks off even a partial
 		 * burst. No forward timer — window expiry with no accept falls BACK to
 		 * PROBING (anti-#130); the box's JOIN retry grid re-opens it. */
-		if (m->grant_ticks == 0) {
+		if (m->grant_ticks == 0 && !no_enroll()) {
 			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
 		} else if (m->grant_ticks <= m->grant_dwell) {
 			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
@@ -1057,7 +1210,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			 * box opens its audio return to full width (the S-4000 8->32 fix). The
 			 * golden sends its (single) enrol in this same dwell window ~200ms in. One
 			 * frame, taken from an announce/filler slot — the burst is unchanged. */
-			if (m->enroll_pending) {
+			if (m->enroll_pending && !no_enroll()) {
 				m->enroll_pending = 0;
 				emit = REAC_M_EMIT_ENROLL;
 			} else
