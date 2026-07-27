@@ -25,6 +25,8 @@
 
 struct pw_loop;
 struct reac_sink_node;
+struct reac_source_node;       /* reac_source_node.h — the peer reac-capture node (#208) */
+struct reac_box_model;         /* reac_ctrl.h — the autodetected box (in/out widths) */
 struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp table */
 
 struct reac_sink_cfg {
@@ -43,13 +45,49 @@ struct reac_sink_cfg {
 	int n_headamps;
 };
 
-/* Create the sink node. Opens an AF_PACKET 0x8819 TX socket on cfg->ifname
- * (needs CAP_NET_RAW) and registers cfg->channels INPUT ports; process() encodes
- * + emits. Returns NULL (and logs) if the TX socket can't open. `tx_ring` is
- * reserved for the future slot-pacer cut; the direct-emit path ignores it. */
+/* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
+ * socket on cfg->ifname (needs CAP_NET_RAW), starts the SCHED_FIFO cadence pacer
+ * (which drives establishment AND recognizes the box on the wire) and the main-
+ * loop event/log drain. The pw_filter GRAPH NODE is NOT created here — it is
+ * DEFERRED to reac_sink_node_ensure so nothing is exposed in the graph until a
+ * box is autodetected (or the caller sizes it explicitly). Returns NULL (and
+ * logs) if the TX socket can't open. `tx_ring` is reserved for the future
+ * slot-pacer cut; the direct-emit path ignores it. cfg->channels is ignored (the
+ * width comes from ensure); cfg->label seeds the first ensure's label. */
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
                                           struct reac_ring *tx_ring,
                                           const struct reac_sink_cfg *cfg);
+
+/* Bring the reac-playback GRAPH NODE to `channels` INPUT ports labelled `label`,
+ * WITHOUT disturbing the running pacer/master (the sink owns the recognizer, so it
+ * must never be torn down to resize). ONE entry point, callable from the
+ * recognition path:
+ *   - no filter yet                    -> create it at `channels`/`label`.
+ *   - exists, same width AND label      -> no-op (identical box).
+ *   - exists, width OR label changed    -> destroy + rebuild the pw_filter (the
+ *       pacer keeps running throughout). A rebuild is used even when only the label
+ *       changes (a same-out-width swap, e.g. S-1608 -> S-4000S) because
+ *       pw_filter_update_properties does NOT re-stamp a live node's node.description
+ *       / box-model / discovery props to the registry — only a fresh filter's
+ *       creation-time props propagate.
+ * Gain state + the pacer persist across a rebuild; the fresh filter's badge props
+ * (link-state / box-model / discovery / latency) are stamped from the pacer
+ * snapshot. Returns 0, or -1 on a failed (re)build. */
+int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *label);
+
+/* The box model the pacer last recognized on the wire (its config-announce matched
+ * a fixed-matrix row), or NULL if none yet. Cross-thread-safe (an atomic load of
+ * the pacer's recognized_box) — the main-loop autodetect watcher polls this to
+ * decide the reac-capture / reac-playback widths. */
+const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n);
+
+/* Wire the peer reac-capture node's SLOT (#208) so the sink's main-loop badge timer
+ * also keeps the source node's reac.link-state / box-model / box-width in sync — the
+ * capture node has no pacer handle of its own. Pass the address of main's source-node
+ * pointer (`&src`) so a source rebuilt on a live box-width change is followed. Call once
+ * after both nodes exist; pass NULL slot to detach. */
+void reac_sink_node_set_peer_source(struct reac_sink_node *n,
+                                    struct reac_source_node **src_slot);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 

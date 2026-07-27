@@ -28,7 +28,7 @@
 #include "reac_master.h"
 #include "reac_ctrl.h"
 #include "reac_tx.h"
-#include "reac_decode.h"
+#include <reac/reac_decode.h>
 #include <reac/reac.h>
 
 #include <stdio.h>
