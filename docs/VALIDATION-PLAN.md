@@ -1,8 +1,15 @@
 # reac-pw ↔ openmixer — validation plan + roadmap
 
-Ordered plan to validate and merge **reac-pw PR #8** (per-VLAN multi-box, box-width
-named nodes, rate=model) and **openmixer PR #156** (per-box stagebox UI + re-link).
-Each step gates the next; merge a PR only after the step that validates it passes.
+Ordered plan that validated and merged **reac-pw PR #8** (per-VLAN multi-box,
+box-width named nodes) and **openmixer PR #156** (per-box stagebox UI + re-link).
+Each step gated the next; a PR merged only after the step that validated it passed.
+**Both are merged** — Part 1 is kept as the procedure (it is the re-test protocol,
+and Stage B carries a two-day mis-diagnosis written up so it is never repeated),
+Part 2 is the live roadmap.
+
+One claim from PR #8's title did not survive: "rate = model". The console identity
+byte says which desk we impersonate, not which rate the operator chose — see #73
+and `MASTER-HARDWARE-VERIFY.md`'s superseded-rate note.
 
 ## Part 1 — Validation (in order)
 
