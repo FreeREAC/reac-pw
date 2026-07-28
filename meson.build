@@ -51,7 +51,6 @@ reac_pw_src = [
   'src/main.c',
   'src/reac_ring.c',
   'src/reac_rx.c',
-  'src/reac_upstream.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
@@ -94,7 +93,7 @@ test('reac_tx', tx_test)
 # --- unit test: the UPSTREAM (stagebox->master) frame decode -------------------
 # Captured-frame fixtures (MAC-sanitized) + the resolved braid layout; no I/O.
 upstream_test = executable('test_reac_upstream',
-  ['tests/test_reac_upstream.c', 'src/reac_upstream.c'],
+  ['tests/test_reac_upstream.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_upstream', upstream_test)
@@ -103,8 +102,7 @@ test('reac_upstream', upstream_test)
 # Runs the real feeder thread over a temp pcap that interleaves both streams
 # (synthetic 40-ch broadcast + the captured box return + a second box).
 rx_gate_test = executable('test_reac_rx_gate',
-  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c',
-   'src/reac_upstream.c'],
+  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
@@ -115,15 +113,14 @@ test('reac_rx_gate', rx_gate_test)
 # exactly one twin dropped per frame, single-cadence ring, and a negative —
 # distinct frames at doubled cadence pass untouched (dup == 0).
 rx_dup_test = executable('test_reac_rx_dup',
-  ['tests/test_reac_rx_dup.c', 'src/reac_rx.c', 'src/reac_ring.c',
-   'src/reac_upstream.c'],
+  ['tests/test_reac_rx_dup.c', 'src/reac_rx.c', 'src/reac_ring.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_dup', rx_dup_test)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
-  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_upstream.c'],
+  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)
@@ -260,8 +257,7 @@ test('reac_link_state', link_state_test)
 # and all-or-nothing JSON. Frames come from the reac_ctrl builders, so the test
 # runs on the same bytes the wire carries.
 disco_test = executable('test_reac_disco',
-  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c',
-   'src/reac_upstream.c'],
+  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_disco', disco_test)

@@ -18,7 +18,7 @@
 #include <reac/reac_capture.h>
 #include <reac/pcap_source.h>
 /* the box-return (braided, box-width) decode — the master-role RX path */
-#include "reac_upstream.h"
+#include <reac/reac_upstream.h>
 
 /* s24 LE (3 bytes) -> normalized float in [-1, 1) */
 static inline float s24le_to_f32(const uint8_t *p)

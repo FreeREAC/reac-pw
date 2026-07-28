@@ -30,7 +30,7 @@
 #include <reac/reac.h>
 #include "reac_ring.h"
 #include "reac_rx.h"
-#include "reac_upstream.h"
+#include <reac/reac_upstream.h>
 
 #include "upstream_fixtures.inc"
 
