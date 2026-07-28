@@ -50,7 +50,12 @@ meson test -C _build
 %files
 %license LICENSE
 %doc README.md
-%{_bindir}/reac-pw
+# File capabilities, applied by rpm itself (%%caps survives rpm -V / --restore;
+# no setcap scriptlet needed): raw 0x8819 capture/emit without root (cap_net_raw)
+# + SCHED_FIFO for the cadence pacer (cap_sys_nice). openmixer's packaged
+# reac-pw-master.service ExecStartPre getcap-guards on exactly these, and
+# scripts/deploy-live.sh refuses a live restart without them.
+%caps(cap_net_raw,cap_sys_nice=ep) %{_bindir}/reac-pw
 %{_unitdir}/reac-pw.service
 %dir %{_sysconfdir}/reac-pw
 %config(noreplace) %{_sysconfdir}/reac-pw/reac-pw.conf
