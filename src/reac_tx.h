@@ -31,25 +31,6 @@ struct reac_tx {
 	uint16_t counter;  /* free-running u16, +1 per emitted frame */
 };
 
-/* Downstream audio byte layouts, selectable at startup via REAC_TX_LAYOUT
- * (the Stage B A/B listen test, docs/VALIDATION-PLAN.md). Default = BRAID,
- * the REAC wire format (reacdriver to-device wordswap16(BE) == obs-h8819
- * convert_to_pcm24lep, listening-validated on a real M-200i == our #108
- * upstream == the zoneA/zoneB M-5000 goldens at coherence 0.99). "plain" is
- * the reac-aes67 reac_decode layout — the (contested) M-5000-generation
- * variant (#135) — kept as the A/B diagnostic: on a de-braiding box it plays
- * a ~-42 dBFS mid-byte hash of the program. */
-enum reac_tx_layout {
-	REAC_TXL_BRAID = 0,   /* pair braid: even->g[3],g[0],g[1]; odd->g[4],g[5],g[2] */
-	REAC_TXL_PLAIN,       /* "plain": (s*40+ch)*3 lo,mid,hi — M-5000-gen claim / diagnostic */
-};
-
-/* Parse a REAC_TX_LAYOUT value ("braid"/NULL/"" -> BRAID); -1 if unknown. */
-int reac_tx_layout_parse(const char *name);
-/* Byte positions (lo,mid,hi) of sample s / channel ch in the 1440 B audio
- * region under `layout`. Bijective over all 1440 bytes for both layouts. */
-void reac_tx_layout_pos(int layout, int s, int ch, size_t pos[3]);
-
 /* Build one downstream REAC frame into out[REAC_FRAME_BYTES] from planar float
  * input planar[ch][s] (ns samples/channel, nch channels mapped onto the 40-ch
  * frame; the rest are silent). `counter` is stamped at bytes 14-15 LE; `src` is
