@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_master.h"
+#include "reac_master_fsm.h" /* the pure (state, event) -> edge decision table */
 #include "reac_ctrl.h"   /* reac_ctrl_checksum_apply, REAC_CTRL_* offsets */
 #include "reac_grant.h"  /* the generated enrollment sweep + slot allocator */
 
@@ -676,6 +677,40 @@ static void enter_established(struct reac_master *m)
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 1);
 }
 
+/* The full ENROLL + dwell + sweep has been emitted: the box-accept gate (and
+ * the tick self-complete threshold). +1 is the leading ENROLL slot;
+ * +grant_dwell the ENROLL->grant hold. Establishing EARLIER cuts the sweep —
+ * a warm-relink box unicasts from slot 0 and cut the burst to ~1 frame (rig
+ * 2026-07-12: GRANTING->ESTABLISHED in 0.25 ms, LED blinking); a heartbeat
+ * accept mid-sweep leaves a PARTIAL head-amp scene and the box mutes the
+ * unconfigured channels (rig 2026-07-23: "on for a second, then all mute LEDs
+ * lit"). A real M-200 puts the COMPLETE 16x3 scene on the wire during the
+ * grant window (m200-s1608-keepalive) and the box holds it. */
+static int grant_delivered(const struct reac_master *m)
+{
+	return m->grant_ticks >=
+	       m->grant_dwell + m->grant_burst_len * m->grant_stride + 1;
+}
+
+/* Execute one edge of the decision table (reac_master_fsm_step): latch the
+ * drop reason, then run the entry action for the target state. box_src/blk32
+ * feed enter_granting only (the JOIN latch; NULL blk32 for the warm-relink
+ * CONFIG path keeps the previous join_blk, as before). */
+static void apply_edge(struct reac_master *m, const struct reac_master_edge *e,
+                       const uint8_t box_src[6], const uint8_t blk32[32])
+{
+	if (e->drop != REAC_M_DROP_NONE)
+		m->drop_reason = e->drop;
+	if (!e->enter)
+		return;
+	switch (e->next) {
+	case REAC_M_PROBING:     enter_probing(m);                      break;
+	case REAC_M_GRANTING:    enter_granting(m, box_src, blk32);     break;
+	case REAC_M_ESTABLISHED: enter_established(m);                  break;
+	case REAC_M_IDLE:        break;   /* never a transition target */
+	}
+}
+
 int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
                    const uint8_t box_src[6], const uint8_t blk32[32])
 {
@@ -684,114 +719,32 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 	m->presence_tick = REAC_M_PRESENCE_TIMEOUT;
 
 	/* The pacer is ticking us if RX arrives; IDLE only means "first slot not
-	 * emitted yet" — treat it as PROBING so an early JOIN is not lost. */
-	if (m->state == REAC_M_IDLE)
-		enter_probing(m);
-
-	switch (m->state) {
-	case REAC_M_IDLE:   /* unreachable (promoted above) */
-	case REAC_M_PROBING:
-		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			enter_granting(m, box_src, blk32);
-			return 1;
-		}
-		if (ev == REAC_M_RX_BOX_CONFIG) {
-			/* WARM RELINK: a previously-synced box skips flood + cold-connect
-			 * and re-appears streaming unicast, re-declaring itself with its
-			 * config-announce (no 04 03 JOIN). This is a SPECIFIC checksum-valid
-			 * frame, not mere presence, so it does not break the anti-#130 rule.
-			 * Route it through GRANTING to fire the 32-frame grant burst — the
-			 * frame the box needs to cross GRANTING->LOCKED and go SOLID. The
-			 * earlier cut jumped straight to ESTABLISHED and skipped the burst,
-			 * which is exactly why the box reached our-side established but its
-			 * own light kept BLINKING (measured 2026-07-12, matrix-m200-s0808:
-			 * the real M-200 emits the burst here). */
-			enter_granting(m, box_src, NULL);
-			return 1;
-		}
-		/* Presence-flood / stray unicast: diagnostic only. Presence alone
-		 * must NOT trigger the grant (the anti-#130 golden rule). */
-		return 0;
-
-	case REAC_M_GRANTING:
-		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			/* The SAME box keeps cold-connecting on its own ~100 ms retry grid
-			 * for as long as it hasn't seen the grant — which now spans the
-			 * ~1.6 s ENROLL->grant dwell (grant_dwell) too. Resetting on every
-			 * such retry would perpetually restart the dwell and the box would
-			 * never be granted, so HOLD for the same box (symmetric to the
-			 * same-box hold already used in ESTABLISHED, below). A JOIN from a
-			 * DIFFERENT box is a genuinely new box: re-latch and restart the
-			 * window for it. */
-			if (memcmp(box_src, m->box_mac, 6) != 0) {
-				enter_granting(m, box_src, blk32);
-				return 1;
-			}
-			return 0;
-		}
-		if (ev == REAC_M_RX_BOX_HEARTBEAT) {
-			/* HOLD GRANTING until the FULL grant sweep is delivered. The box
-			 * heartbeats within ~1 ms of GRANTING; establishing there cuts the sweep
-			 * to a couple of channels, so the box gets a PARTIAL head-amp scene and
-			 * reverts/mutes the unconfigured channels (rig 2026-07-23: "on for a
-			 * second, then all mute LEDs lit"). A real M-200 puts the COMPLETE 16x3
-			 * scene on the wire during the grant window (m200-s1608-keepalive) and the
-			 * box holds it. Match that: establish only once the whole sweep is out. */
-			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
-				enter_established(m);
-				return 1;
-			}
-			return 0;
-		}
-		if (ev == REAC_M_RX_BOX_UNICAST || ev == REAC_M_RX_BOX_CONFIG) {
-			/* The box's unicast is the accept — BUT only once the FULL 32-frame
-			 * grant burst has been delivered. A cold-JOIN box switches to unicast
-			 * AFTER it sees the grant, so this gate is already satisfied; a WARM-
-			 * RELINK box is unicasting from the first slot, so without this gate the
-			 * very next unicast cut the burst to ~1 frame and the box never locked
-			 * solid (measured on the rig 2026-07-12: GRANTING->ESTABLISHED in 0.25 ms).
-			 * Before the burst completes, the unicast only confirms presence (keeps
-			 * granting); anti-#130 holds — establish still needs a box frame, never a
-			 * blind timer, and the grant window still expires BACK to PROBING. */
-			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
-				enter_established(m);   /* +1: the leading ENROLL slot; +grant_dwell: the dwell */
-				return 1;
-			}
-			return 0;
-		}
-		if (ev == REAC_M_RX_BOX_BYE) {
-			m->drop_reason = REAC_M_DROP_BYE;
-			enter_probing(m);
-			return 1;
-		}
-		return 0;
-
-	case REAC_M_ESTABLISHED:
-		/* Every box RX event reloads the 600-frame link-check budget. */
-		m->link_check = m->link_check_reload;
-		if (ev == REAC_M_RX_BOX_BYE) {
-			m->drop_reason = REAC_M_DROP_BYE;
-			enter_probing(m);
-			return 1;
-		}
-		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			/* A JOIN from a DIFFERENT box -> re-grant the new one. But the SAME
-			 * box keeps JOINing on its cold-connect retry grid WHILE it completes
-			 * its own TX_MUTE dwell to lock — re-granting on each such JOIN tore
-			 * down the stable locked stream the box needs, so it never finished
-			 * locking (rig 2026-07-12: box cold-connects forever, LED blinks faster,
-			 * no heartbeat). HOLD ESTABLISHED for the same box (its JOINs just keep
-			 * the link alive); only a MAC change re-courts. */
-			if (memcmp(box_src, m->box_mac, 6) != 0) {
-				m->drop_reason = REAC_M_DROP_MAC_CHANGE;
-				enter_granting(m, box_src, blk32);
-				return 1;
-			}
-			return 0;   /* same box still settling — stay locked, hold the stream */
-		}
-		return 0;
+	 * emitted yet" — promote to PROBING so an early JOIN is not lost. */
+	if (m->state == REAC_M_IDLE) {
+		struct reac_master_edge s =
+			reac_master_fsm_step(m->state, REAC_M_EV_START);
+		apply_edge(m, &s, NULL, NULL);
 	}
-	return 0;
+
+	/* Every box RX event while established reloads the link-check budget
+	 * (budget mechanics, not a transition decision — including an event that
+	 * then transitions out, as before). */
+	if (m->state == REAC_M_ESTABLISHED)
+		m->link_check = m->link_check_reload;
+
+	/* Fold the guards into the event, then take the table's edge. The rows
+	 * carry the rig rationale for every guard — same-box JOIN retries hold
+	 * the dwell/lock, presence never grants (anti-#130), accepts establish
+	 * only after full delivery — see reac_master_fsm.c + docs/MASTER-FSM.md. */
+	enum reac_master_ev dev =
+		reac_master_fsm_classify(ev, blk32 != NULL,
+		                         memcmp(box_src, m->box_mac, 6) == 0,
+		                         grant_delivered(m));
+	struct reac_master_edge e = reac_master_fsm_step(m->state, dev);
+	apply_edge(m, &e, box_src,
+	           (dev == REAC_M_EV_JOIN_NEW || dev == REAC_M_EV_JOIN_SAME)
+	               ? blk32 : NULL);
+	return e.transitioned;
 }
 
 /* The CYCLE-LOCKED control cadence a real master advertises in BOTH the unlinked
@@ -874,8 +827,11 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 	m->counter++;                 /* free-running, wraps at 16 bits like the desk's */
 
 	/* First emitted slot: the pacer is running, so we probe — always. */
-	if (m->state == REAC_M_IDLE)
-		enter_probing(m);
+	if (m->state == REAC_M_IDLE) {
+		struct reac_master_edge s =
+			reac_master_fsm_step(m->state, REAC_M_EV_START);
+		apply_edge(m, &s, NULL, NULL);
+	}
 
 	/* Presence diagnostic decay (logging only — never a state input). */
 	if (m->box_seen && --m->presence_tick <= 0)
@@ -954,8 +910,12 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * not "granting into silence"; the ~6.5 s link-check budget in ESTABLISHED
 		 * drops back to PROBING if the box is genuinely gone (anti-#130 preserved as
 		 * a BACKWARD safety, just not a forward-blocking gate). */
-		if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1)
-			enter_established(m);
+		if (grant_delivered(m)) {
+			struct reac_master_edge e =
+				reac_master_fsm_step(m->state,
+				                     REAC_M_EV_GRANT_DELIVERED);
+			apply_edge(m, &e, NULL, NULL);
+		}
 		break;
 
 	case REAC_M_ESTABLISHED:
@@ -964,8 +924,9 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * it (reac_master_rx). */
 		emit = control_cadence(m, &idx);
 		if (--m->link_check <= 0) {
-			m->drop_reason = REAC_M_DROP_PEER_GONE;
-			enter_probing(m);
+			struct reac_master_edge e =
+				reac_master_fsm_step(m->state, REAC_M_EV_LINK_LOST);
+			apply_edge(m, &e, NULL, NULL);
 		}
 		break;
 	}
