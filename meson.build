@@ -209,6 +209,11 @@ test('reac_pacer', pacer_test)
 # absence of overshoot / slew + clamp bounds / rejection of insane samples, honest
 # degradation (free-run is never called locked; a vanished reference HOLDS the last
 # good rate), and a replay of a noisy counter series that must not be chased.
+# Since #77 it also pins reference QUALITY: the name heuristic may only REJECT
+# (an unrecognised professional interface must never be demoted), an operator
+# designation outranks the heuristic, the DLL's measured residual variance
+# outranks both, and our own estimator's noise floor sits provably inside the
+# "we cannot tell" band so it can never be reported as an unstable reference.
 clock_test = executable('test_reac_clock',
   ['tests/test_reac_clock.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -223,7 +228,9 @@ test('reac_clock', clock_test)
 # the elected PipeWire driver (graph) and a stagebox that is itself the clock master
 # (box) — including the closed-loop case of a box slaved to US, where the cadence
 # must park rather than run away. Also the label seqlock and the reference hierarchy
-# end to end.
+# end to end, and (#77) the quality path: a hardware-but-display-derived graph clock
+# losing to the box, an operator-designated reference reported by tier as well as by
+# name, and a measurably jittery one flagged rather than ejected.
 pacer_clock_test = executable('test_reac_pacer_clock',
   ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_clock.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',

@@ -49,6 +49,12 @@ struct reac_sink_cfg {
 	 * free-runs on CLOCK_MONOTONIC exactly as before and no reference is even
 	 * read. See docs/ENV-KNOBS.md (REACPW_CLOCK_FOLLOW). */
 	int clock_follow;
+	/* Operator-DESIGNATED clock reference (#77): a case-insensitive SUBSTRING of
+	 * the device name ("Babyface"), from REACPW_CLOCK_REF. A device that matches
+	 * outranks every name heuristic — the operator knows their hardware and we do
+	 * not. NULL/empty (the default) designates nothing, and nothing about the
+	 * grading or the selection changes. Inert unless clock_follow is set. */
+	const char *clock_ref;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
