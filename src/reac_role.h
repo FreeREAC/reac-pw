@@ -6,12 +6,18 @@
  *
  * REAC has no fixed master: any box can be the master and the rest slave to it
  * (REAC-PROTOCOL-AND-TESTS.md §2/§4). openmixer must fit either role:
- *   - master (default): WE drive the cdea/cfea establishment + own the clock (the
- *     SCHED_FIFO pacer); a stagebox slaves to us.
- *   - slave: an EXTERNAL master drives; we RESPOND and LOCK to its cadence (the
- *     master owns the clock) + return our input channels upstream.
+ *   - master (default): WE drive the cdea/cfea establishment and WE GENERATE THE
+ *     PACE (the SCHED_FIFO pacer's cadence); a stagebox slaves to us.
+ *   - slave: an EXTERNAL master drives; we RESPOND and lock to its cadence (frame
+ *     arrival is our slot clock) + return our input channels upstream.
  * Both share the encoder/decoder + the PipeWire nodes; only WHO drives the
- * handshake + the clock differs. */
+ * handshake and WHO GENERATES THE PACE differs.
+ *
+ * The role says nothing about the CLOCK REFERENCE. Generating the pace does not
+ * make us the clock master — the cadence we generate should itself be disciplined
+ * to a reference (a word clock, a PHC, locked graph hardware), and there is exactly
+ * one clock master on a network. See reac_clock.h; keeping role / pace / clock
+ * reference distinct is deliberate. */
 #ifndef REAC_ROLE_H
 #define REAC_ROLE_H
 
