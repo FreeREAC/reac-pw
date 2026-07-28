@@ -123,8 +123,11 @@ enum reac_pacer_evkind {
 	REAC_PEV_RECOGNIZED,     /* box model recognized: a=in_ch (matrix lookup)  */
 	REAC_PEV_SIGHTING,       /* passive discovery: a=role, b=model idx+1 (0=?) */
 	REAC_PEV_CLOCK,          /* clock discipline changed (#75): a=reac_clock_source,
-	                          * b=reac_clock_state, blk[0..3]=applied ppm*1000 LE
-	                          * int32. ONLY ever pushed when following is ENABLED —
+	                          * b=reac_clock_state | (reac_clock_quality << 4)
+	                          * (#77 — both enums are <16, and blk is full: 4 bytes
+	                          * of ppm + a 28-byte label leaves no room), blk[0..3]=
+	                          * applied ppm*1000 LE int32, blk[4..]=device label.
+	                          * ONLY ever pushed when following is ENABLED —
 	                          * with the knob unset the transcript is unchanged.   */
 };
 
@@ -300,6 +303,12 @@ struct reac_pacer {
 	_Atomic int      clock_ppm_milli[REAC_CLOCK_SRC_COUNT];  /* ppm * 1000     */
 	_Atomic uint64_t clock_stamp_ns[REAC_CLOCK_SRC_COUNT];   /* last publish   */
 	struct reac_clock_label clock_label[REAC_CLOCK_SRC_COUNT];  /* which device */
+	/* What the PUBLISHER inferred about each reference from its device name and
+	 * the operator's designation (#77). The pacer thread only ranks — it never
+	 * parses a name — so this is one relaxed int per source, published beside the
+	 * sample it describes. Zero-initialised to UNUSABLE is fine because a source
+	 * with no publisher has no availability bit either. */
+	_Atomic int      clock_quality[REAC_CLOCK_SRC_COUNT];    /* reac_clock_quality */
 
 	/* pacer-thread-local bookkeeping (single-writer, no atomics needed) */
 	struct reac_clock_disc clock;    /* PACER THREAD ONLY */
@@ -385,11 +394,16 @@ uint64_t reac_pacer_mono_ns(void);
  * name, the recognized box, ...) so the transcript is actionable; NULL leaves the
  * current label alone.
  *
+ * `quality` is what the publisher INFERRED about that device (#77) — it is the
+ * publisher that holds the name and the operator's designation, and the pacer
+ * thread that ranks. Pass REAC_CLOCK_Q_UNGRADED to express no opinion; that is
+ * the pre-#77 behaviour exactly.
+ *
  * Publishing while clock following is DISABLED is harmless and changes nothing —
  * the pacer never reads these slots. */
 void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
                               int present, int ppm_milli, const char *label,
-                              uint64_t now_ns);
+                              enum reac_clock_quality quality, uint64_t now_ns);
 
 /* PACER THREAD ONLY. Re-evaluate the discipline (rate-limited internally to one
  * evaluation per REAC_CLOCK_TICK_SLOTS) and return the period this slot should

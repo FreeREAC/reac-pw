@@ -85,6 +85,10 @@ struct reac_sink_node {
 	struct pw_loop *loop;
 	const char *inst;         /* per-instance node suffix (for filter (re)build) */
 	char label[64];           /* effective box label on the node description ("" = none) */
+	char clock_ref[64];       /* operator-designated clock reference (#77); "" = none.
+	                           * OWN copy, not the caller's pointer: it is read from
+	                           * the RT graph thread on every quantum. Const after
+	                           * construction, so no synchronisation is needed. */
 	struct spa_source *log_timer;  /* 200 ms event-log drain on the main loop */
 	struct port_in *ports[REAC_MAX_CHANNELS];
 
@@ -182,17 +186,28 @@ static void on_process(void *data, struct spa_io_position *position)
 	 * are rejected here, which makes the pacer fall back to the box counter slope
 	 * or to an honest free-run.
 	 *
+	 * ADMITTED IS NOT THE SAME AS GOOD ENOUGH (#77). "There is an oscillator
+	 * behind this" and "that oscillator is fit to own a REAC segment" are two
+	 * questions, and an HDMI sink answers yes to the first and no to the second.
+	 * So we also GRADE the device here — this callback is the only place that
+	 * holds the driver's name — and publish the grade beside the sample. The
+	 * grading itself is deliberately incapable of promoting an unrecognised
+	 * device; see reac_clock_name_quality. An operator designation
+	 * (REACPW_CLOCK_REF) outranks it, and the DLL's measured stability outranks
+	 * them both — that ranking lives in reac_clock_quality_apply, not here.
+	 *
 	 * Guarded by the knob so the default path costs one predictable branch and not
-	 * a single store. RT-safe when it does run: a strncmp against a 64-byte name
-	 * plus three relaxed atomics, no allocation and no syscall. */
+	 * a single store. RT-safe when it does run: a handful of bounded scans over a
+	 * 64-byte name plus four relaxed atomics, no allocation and no syscall. */
 	if (n->pacer.clock_follow) {
 		const struct spa_io_clock *c = &position->clock;
 		int usable = !(c->flags & SPA_IO_CLOCK_FLAG_FREEWHEEL) &&
 		             reac_clock_name_is_hardware(c->name);
+		enum reac_clock_quality q = reac_clock_grade_name(c->name, n->clock_ref);
 		reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_GRAPH, usable,
 		                         (int)(reac_clock_ppm_from_rate_diff(c->rate_diff)
 		                               * 1000.0),
-		                         c->name, c->nsec);
+		                         c->name, q, c->nsec);
 	}
 
 	const float *in[REAC_MAX_CHANNELS];
@@ -608,16 +623,24 @@ static void sink_publish_box_clock(struct reac_sink_node *n)
 		 * staleness ageing would catch a silent publisher anyway, this is just the
 		 * earlier and more explicit half of the same honesty. */
 		if (!established || seq == 0)
-			reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_BOX, 0, 0, NULL, 0);
+			reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_BOX, 0, 0, NULL,
+			                         REAC_CLOCK_Q_UNGRADED, 0);
 		return;
 	}
 	n->box_ppm_seq = seq;
 	const struct reac_box_model *bm =
 		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const char *label = bm ? bm->display : "box";
+	/* A stagebox is a stagebox: the name heuristic has nothing to say about one
+	 * (it grades UNGRADED, as intended), but the operator CAN designate a box
+	 * that is itself the segment's clock master — the case the issue calls a
+	 * first-class alternative to the RME. Measurement never promotes this tier;
+	 * see the closed-loop asymmetry in reac_clock.h. */
 	reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_BOX, 1,
 	                         atomic_load_explicit(&n->rate_src->ppm_error_milli,
 	                                              memory_order_relaxed),
-	                         bm ? bm->display : "box", reac_pacer_mono_ns());
+	                         label, reac_clock_grade_name(label, n->clock_ref),
+	                         reac_pacer_mono_ns());
 }
 
 static void on_log_timer(void *data, uint64_t expirations)
@@ -820,6 +843,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */
 	pcfg.n_headamps = cfg->n_headamps;
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
+	if (cfg->clock_ref) {                    /* #77; "" = designate nothing */
+		strncpy(n->clock_ref, cfg->clock_ref, sizeof n->clock_ref - 1);
+		n->clock_ref[sizeof n->clock_ref - 1] = '\0';
+	}
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
 		pw_log_warn("reac:playback — cannot open AF_PACKET TX on '%s' "
 		            "(needs CAP_NET_RAW + a valid interface); sink not created",
