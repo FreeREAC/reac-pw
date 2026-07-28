@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
-%global debug_package %{nil}
 Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
@@ -38,6 +37,9 @@ is self-contained (no network fetch).
 
 %build
 # Explicit meson (the host uses a pip-installed meson, not the dnf macros).
+# %%set_build_flags exports the Fedora CFLAGS/LDFLAGS (incl. -g and the linker
+# build-id) so the plain buildtype still yields a real debuginfo package.
+%set_build_flags
 meson setup _build --prefix=%{_prefix} --buildtype=plain \
       -Dreac_aes67=third_party/reac-aes67-core
 meson compile -C _build
