@@ -18,23 +18,23 @@ cdea/cfea JOIN/HOLD handshake so a real Roland stagebox slaves to it (see Status
 
 Everything REAC-specific is reused, not reinvented:
 
-- **libreac** (`FreeREAC/libreac`, header `<reac/reac.h>`) — frame validate, the
-  byte-14/15 counter, gap math, `reac_detect_rate_fd` / `reac_rate_snap`. Pulled
-  as a meson subproject.
-- **reac-aes67 core** (`FreeREAC/reac-aes67`, `src/`) — `reac_decode.c` (plain-LE
-  sample-major `(s*40+ch)*3`, on-rig coherence 0.999), `reac_capture.c` (live
-  AF_PACKET), `pcap_source.c` (classic pcap reader). Compiled straight in from a
-  sibling checkout.
+- **libreac >= 0.3.0** (`FreeREAC/libreac`, headers `<reac/*.h>`) — the single
+  REAC byte-layout oracle: frame validate, the byte-14/15 counter, gap math,
+  `reac_detect_rate_fd` / `reac_rate_snap`, the braid codec
+  (`<reac/reac_braid.h>`), the f32↔s24 sample pair (`<reac/reac_sample.h>`),
+  the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 trailer rule
+  (`reac_frame_clean_len`), plus `reac_decode.c` (the legacy plain-LE downstream
+  path), `reac_capture.c` (live AF_PACKET) and `pcap_source.c` (classic pcap
+  reader). System `libreac-devel` via pkg-config, or the meson wrap fallback.
 
-reac-pw itself is only the lock-free ring, the RX feeder, and the two PipeWire
-nodes.
+reac-pw itself is only the lock-free ring, the RX feeder, the control plane
+(cdea/cfea builders + checksums) and the PipeWire nodes.
 
 ## Build and run
 
 External deps are just PipeWire and SPA via pkg-config (Fedora: `pipewire-devel`),
-plus pthreads and libm. libreac is fetched by the meson wrap; the reac-aes67 core
-is read from a sibling checkout (`../reac-aes67-pub` by default — override with
-`-Dreac_aes67=PATH`).
+plus pthreads and libm. libreac resolves to the system `libreac-devel` when new
+enough, else the meson wrap fetches and builds it as a subproject.
 
 ```
 meson setup   build
@@ -70,7 +70,7 @@ the packet rate (pps = rate/12), never on the wire.
 
 - **`reac:capture` (source).** A `pw_filter` with 40 mono-F32 DSP output ports —
   exactly the ring's planar layout. A non-realtime feeder thread reads frames,
-  validates and counter-stamps with libreac, decodes with the reac-aes67 core,
+  validates, counter-stamps and decodes with libreac,
   and writes whole REAC frames into a lock-free SPSC ring. The only realtime code
   is `on_process()`: it dequeues one PipeWire quantum per channel and returns —
   no format or rate conversion, that's the adapter on each outgoing link.

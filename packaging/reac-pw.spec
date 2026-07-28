@@ -17,7 +17,7 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac)
+BuildRequires:  pkgconfig(libreac) >= 0.3.0
 Requires:       pipewire
 
 %description
@@ -28,9 +28,10 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-Links dynamically against the system libreac (>= 0.2.0), which carries the
-shared REAC byte-layout core: frame validation, 24-bit decode, capture and
-pcap replay. Nothing is vendored.
+Links dynamically against the system libreac (>= 0.3.0), which carries the
+shared REAC byte-layout core: frame validation, 24-bit decode (incl. the braid
+codec, the f32<->s24 sample pair and the box-upstream decode), the OHRCA +2
+trailer rule, capture and pcap replay. Nothing is vendored.
 
 %prep
 %autosetup -n %{name}-%{version}
