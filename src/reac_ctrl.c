@@ -3,8 +3,7 @@
 
 #include "reac_ctrl.h"
 #include <reac/reac.h>
-#include <reac/reac_braid.h>   /* reac_braid_pos — the layout oracle */
-#include <reac/reac_sample.h>  /* reac_f32_to_s24le */
+#include <reac/reac_encode.h>  /* reac_braid_encode — the layout oracle's encode side */
 #include <string.h>
 #include <math.h>
 
@@ -203,28 +202,23 @@ static size_t box_frame_len(int n_ch)
 	return (size_t)AUDIO_OFF + (size_t)n_ch * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION + 2;
 }
 
-/* Place n_ch planar float channels (ns samples each) into the box's braided audio
- * region at `audio` (frame[50:..]), the exact layout reac_upstream_decode() inverts
- * (task #108, the ex-"FPGA scramble" of task #61). Byte positions come from
- * libreac's reac_braid_pos() — the single layout oracle (<reac/reac_braid.h> has
- * the byte map + evidence). Slot placement is plain ascending. A real M-5000
- * expects exactly this from a box's return. Shared by EVERY box->master frame
- * that carries audio — the upstream FILLER, the broadcast presence-flood, AND
- * the cold-connect — because on a real box the audio region varies every frame
- * (it is live input, NOT static inventory). */
-static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, int ns)
-{
-	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
-	for (int s = 0; s < frames; s++)
-		for (int ch = 0; ch < n_ch; ch++) {
-			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
-			uint8_t s24[3];
-			size_t pos[3];
-			reac_f32_to_s24le(v, s24);
-			reac_braid_pos(s, ch, n_ch, pos);
-			audio[pos[0]] = s24[0]; audio[pos[1]] = s24[1]; audio[pos[2]] = s24[2];
-		}
-}
+/* The braided audio region of every box->master frame that carries audio — the
+ * upstream FILLER, the broadcast presence-flood AND the cold-connect, because on
+ * a real box that region varies every frame (it is live input, NOT static
+ * inventory). Slot placement is plain ascending; a real M-5000 expects exactly
+ * this from a box's return.
+ *
+ * The loop itself moved to libreac on 2026-07-29 as reac_braid_encode()
+ * (<reac/reac_encode.h>): it was byte-for-byte the same loop as the downstream
+ * encoder's, which is the point — the braid is the REAC wire format in BOTH
+ * directions (task #108, the ex-"FPGA scramble" of task #61), and it is the
+ * exact inverse of reac_upstream_decode(). What stayed here is everything the
+ * layout is not: the 32-byte control block, its two nested checksums, the
+ * box-model matrix and the frame envelope, all of which are handshake state
+ * owned by the role FSM. Passing n_ch as both the frame width and the plane
+ * count preserves the pre-move behaviour exactly (this builder is always given
+ * one plane per box input).
+ */
 
 /* ---- FIXED box-model matrix (byte-verified real announce blocks) ----
  * Role decides authority (docs/REAC-BOX-STATE-DIAGRAM.md): as a SLAVE (we ARE a
@@ -581,7 +575,7 @@ static size_t ctrl_emit(uint8_t *out, const struct ctrl_frame *f,
 	put_hdr(out, dst, src, counter, f->type0, f->type1);
 	ctrl_lay_block(out, f, m, args);
 	if (f->audio)
-		place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
+		reac_braid_encode(out + AUDIO_OFF, n_ch, planar, n_ch, ns);
 	ctrl_finish(out, f);
 	out[len - 2] = REAC_END_MARKER_0;
 	out[len - 1] = REAC_END_MARKER_1;

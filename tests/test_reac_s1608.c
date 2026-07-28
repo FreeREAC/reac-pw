@@ -24,6 +24,7 @@
 #include "reac_ctrl.h"
 #include "reac_tx.h"
 #include <reac/reac.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -51,7 +52,7 @@ static const uint8_t OUR_MAC[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static void stamp(const struct reac_master *m, uint8_t *f,
                   enum reac_master_emit emit, int idx)
 {
-	reac_tx_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, 0x1234, OUR_MAC);
+	reac_downstream_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, 0x1234, OUR_MAC);
 	reac_master_stamp(m, f, emit, idx);
 }
 
@@ -106,7 +107,7 @@ static int test_probe_rotation(void)
 		uint16_t cnt;
 		int idx;
 		enum reac_master_emit e = reac_master_next(&m, &cnt, &idx);
-		reac_tx_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, cnt, OUR_MAC);
+		reac_downstream_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, cnt, OUR_MAC);
 		reac_master_stamp(&m, f, e, idx);
 
 		if (e == REAC_M_EMIT_PROBE) {
