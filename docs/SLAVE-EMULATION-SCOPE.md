@@ -7,13 +7,20 @@ inputs. This is the clock-*tractable* half of REAC: the desk owns the crystal
 and reac-pw slaves to its cadence — the inverse of the master role's unproven
 hardware-clock blocker (#131).
 
-**Why slave first (vs master):** the 2026-07-11 mixer-vs-box matrix
-(`reac-firmware-re/MIXER-VS-BOX-MATRIX.md`) proved the box side is fully
-characterized and that the master-side box-mute is a physical/clock-domain
-problem — not L2 content. As a slave, reac-pw *receives* the desk's
-hardware-locked cadence and phase-aligns to it (the proven `reac-repacer-clk`
-principle), so it sidesteps that blocker while building the same disciplined
-pacer master will later need.
+**Why slave first (vs master) — the original rationale, since falsified.** The
+2026-07-11 mixer-vs-box matrix (`reac-firmware-re/MIXER-VS-BOX-MATRIX.md`) proved
+the box side is fully characterized, and concluded that the master-side box-mute was
+a physical/clock-domain problem rather than L2 content. Slaving first would sidestep
+that blocker, since a slave *receives* the desk's hardware-locked cadence.
+
+⚠ The blocker was not a clock. The master role now locks a real S-0808 and S-1608
+SOLID from `CLOCK_MONOTONIC` pacing; the gap was the PROTOCOL — cfea box-count, the
+missing ENROLL, the byte-exact grant sweep, grant self-complete + HOLD, the box
+heartbeat ([`REAC-MIXER-PROTOCOL.md`](REAC-MIXER-PROTOCOL.md), "Rigorously RULED
+OUT: TX timing jitter"). The reciprocal falsification happened on this side too — a
+real M-200 enrols our `CLOCK_MONOTONIC`-paced slave (see W5 CONNECTED below). #131
+survives only as a fidelity item, not a blocker. The slave-first ORDER was still
+right, and the work below still stands; only its stated reason does not.
 
 ## Already implemented (verified in-tree, do NOT re-scope)
 
@@ -107,11 +114,15 @@ with a quiet room.
 
 Files: `src/reac_rx.c` (`gate_accepts`, `feed_frame`).
 
-### W5 — On-wire validation against a real master  ·  rig time  ·  the proof
-`test_reac_courtship.c` only proves our-slave ↔ our-master. Prove a real desk
-GRANTs our cold-connect, reaches ESTABLISHED, streams to us, and shows our
-upstream on its input meters. Box templates are fully RE'd (low risk) but this
-is the milestone that counts.
+### W5 — On-wire validation against a real master  ·  **PASSED on V-Mixer, OPEN on OHRCA**
+`test_reac_courtship.c` only proves our-slave ↔ our-master, so a shared wrong
+assumption passes it. The wire test: a real desk GRANTs our cold-connect, reaches
+ESTABLISHED, streams to us, and shows our upstream on its input meters.
+
+Result: a real cold-booted **M-200** grants and enrols reac-pw, and holds 300 s —
+"W5 CONNECTED" below, with the census and the config-announce frame that unlocked
+it. The **M-5000** grants us and then reverts to hunting; still open. The input-meter
+half is blocked on W1 (nothing fills `tx_ring` in the slave role yet).
 
 ## Build order (each ends in a wire test)
 
@@ -125,8 +136,10 @@ is the milestone that counts.
    minutes, no slips.*
 
 ## Open risks
-- **W4 layout** — silent-noise failure mode if the per-generation layout is wrong.
-- **W5 reciprocal handshake** — desk granting our slave is unproven on the wire.
+- **W4 layout** — plausible-noise failure mode while RX decodes plain-LE and TX
+  encodes the braid (#80). It does not fail loudly; wire-verify with loud program.
+- **W5 on OHRCA** — the M-5000 grants our slave and then re-hunts. Settled on
+  V-Mixer (M-200 enrols us and holds).
 - **W2 phase-lock** — the clock piece; tractable (desk owns clock) but slips
   must be avoided (downstream frame-slip injects a 12-sample phase step).
 
