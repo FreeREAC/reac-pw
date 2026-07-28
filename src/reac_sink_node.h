@@ -23,6 +23,8 @@
 
 #include "reac_ring.h"
 
+struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */
+
 struct pw_loop;
 struct reac_sink_node;
 struct reac_source_node;       /* reac_source_node.h — the peer reac-capture node (#208) */
@@ -43,6 +45,10 @@ struct reac_sink_cfg {
 	/* Optional MASTER head-amp send table (task #155), forwarded to the pacer. */
 	const struct reac_headamp_setting *headamps;
 	int n_headamps;
+	/* Clock discipline (#75), forwarded to the pacer. 0 (the default) = the pacer
+	 * free-runs on CLOCK_MONOTONIC exactly as before and no reference is even
+	 * read. See docs/ENV-KNOBS.md (REACPW_CLOCK_FOLLOW). */
+	int clock_follow;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
@@ -88,6 +94,13 @@ const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sin
  * after both nodes exist; pass NULL slot to detach. */
 void reac_sink_node_set_peer_source(struct reac_sink_node *n,
                                     struct reac_source_node **src_slot);
+
+/* Wire the RX feeder as the BOX clock reference's measurement source (#75): the
+ * sink's existing main-loop timer forwards reac_rx's filtered counter-slope ppm to
+ * the pacer's discipline. Borrowed pointer, main-loop use only, no RT path
+ * touched. Never wired -> the box tier is simply never available, and with clock
+ * following disabled the forward is not even attempted. */
+void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 

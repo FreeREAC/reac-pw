@@ -140,7 +140,15 @@ static void usage(const char *p)
 	  "                for N whole seconds before the grant burst (default: the built-in\n"
 	  "                ~1.6 s dwell; a real M-200 holds a cold box ~27 s)\n"
 	  "  REAC_DEBUG=1  opt-in RX/source telemetry on stderr (~every 2 s: frame/dup/gap\n"
-	  "                counters, ring fill, active channels)\n", p);
+	  "                counters, ring fill, active channels)\n"
+	  "  REACPW_CLOCK_FOLLOW=1  master role: DISCIPLINE the TX cadence to the best\n"
+	  "                available clock reference (NIC/external PHC > a hardware-driven\n"
+	  "                PipeWire graph clock > the box's counter slope) instead of\n"
+	  "                free-running on CLOCK_MONOTONIC. The period is steered\n"
+	  "                continuously and bounded; the phase is never stepped. The\n"
+	  "                reference in use is printed on every change, and with none\n"
+	  "                available we free-run and SAY so. Unset = today's behaviour,\n"
+	  "                byte- and timing-identical. RIG-GATED.\n", p);
 }
 
 /* MASTER autodetect (no --box): a main-loop watcher that polls the box the pacer
@@ -417,7 +425,10 @@ int main(int argc, char **argv)
 		                              .console_field = mixer->console_field,
 		                              .inst = inst_name, .label = box_label,
 		                              .headamps = n_headamps ? headamps : NULL,
-		                              .n_headamps = n_headamps };
+		                              .n_headamps = n_headamps,
+		                              /* #75: default OFF -> the pacer free-runs on
+		                               * CLOCK_MONOTONIC exactly as it always has. */
+		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
@@ -480,6 +491,12 @@ int main(int argc, char **argv)
 	 * DEFER the box nodes to autodetect or expose the source at its startup width. */
 	struct autodetect_ctx adc = {0};
 	struct spa_source *ad_timer = NULL;
+	/* #75: the RX feeder is the BOX clock reference's measurement source — it already
+	 * tracks the box's counter slope and publishes a filtered ppm error. The sink's
+	 * existing 200 ms timer forwards it to the pacer's discipline. Wired
+	 * unconditionally; it is only ever read when clock following is enabled. */
+	if (sink)
+		reac_sink_node_set_rate_source(sink, &rx);
 	if (role == REAC_ROLE_MASTER && sink) {
 		/* Pure autodetect: the pacer recognizes the box on the wire; a 200 ms main-
 		 * loop watcher then (re)sizes reac-capture / reac-playback to its widths. No
