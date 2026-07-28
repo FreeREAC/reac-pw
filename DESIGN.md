@@ -183,58 +183,59 @@ frame what to stamp (`reac_master_next` + `reac_master_stamp`, which writes type
 re-applying the cdea/cfea checksum and leaving audio + counter + `C2 EA` tail
 intact).
 
-**EVENT-DRIVEN establishment (task #130).** A real M-5000 never advances the
+**EVENT-DRIVEN establishment (task #130).** A real desk never advances the
 handshake on a timer — the earlier cut auto-advanced PROBING→GRANTING after ~1 s
-and reached ESTABLISHED against a silent wire. Now every FORWARD transition is
-gated on a received box control frame; the only timers left move BACKWARD to
-PROBING (safety fallbacks):
+and reached ESTABLISHED against a silent wire. Every FORWARD transition out of
+PROBING is gated on a received, validated box control frame.
 
-```
-              pacer starts emitting
-IDLE ────────────────────────────────▶ PROBING  (FILLER + cdea 01 probes ~180/s,
-                                          │       00-heavy ss cycle + cfea @1 Hz)
-                 rx box JOIN (cdea 04 03, │       — presence alone NEVER grants —
-                 validated cold-connect)  ▼
-                                       GRANTING (ECHO the box's own JOIN block,
-                                          │       1 grant / 12 slots, ~150 ms window)
-                 rx first box UNICAST     ▼
-                 (audio / hb / any)    ESTABLISHED (FILLER audio + chanmap @1/s
-                                                    + cfea @1/s, phase-offset)
+**The state diagram lives in one place: [docs/MASTER-FSM.md](docs/MASTER-FSM.md).**
+It is read from `src/reac_master.c` + `src/reac_master_fsm.c`, states, entry
+actions, triggers and deliberate ignores, each with the rig date that produced it.
+The copy that used to sit here drifted within two days of being written — it still
+showed GRANTING as an ECHO of the box's JOIN block, and a grant-window-expiry
+timer back to PROBING. Both were replaced on the rig 2026-07-12: the grant is a
+GENERATED enrollment sweep (below), and the window expiry became a forward
+self-complete because timing back to PROBING made a real S-0808 re-attempt forever
+(27 grant-timeouts, LED blinking faster). `DROP_GRANT_TIMEOUT` is now vestigial.
 
-SAFETY FALLBACKS (backward only, with a typed drop reason + log line):
-  GRANTING     ──window expiry, no unicast──▶ PROBING   (grant-timeout; the box
-                                                          retries JOIN on ~100 ms)
-  ESTABLISHED  ──600-frame budget drained──▶ PROBING    (peer-gone; every box RX
-                                                          event reloads the budget)
-  ESTABLISHED  ──box hb selector 0x00──────▶ PROBING    (explicit BYE)
-  ESTABLISHED  ──JOIN from another MAC─────▶ GRANTING   (mac-change: re-latch +
-                                                          re-court the new box)
-```
+Two properties this file is still the right home for, because they are design
+rules rather than transitions:
 
-The counter free-runs across every transition. There is no presence gate: the
-box only emits its cold-connect on a real PHY link-down/up (§13b), so a master
-that waits for "presence" before probing deadlocks — probing is unconditional
-the moment the pacer emits. Presence (sustained box broadcast FILLER) is only a
-*diagnostic* flag with a 600-frame decay, logged on gained/lost edges.
+- The counter free-runs across every transition.
+- There is no presence gate. The box only emits its cold-connect on a real PHY
+  link-down/up (§13b), so a master that waits for "presence" before probing
+  deadlocks against a box whose PHY never bounced — probing is unconditional the
+  moment the pacer emits. Presence (sustained box broadcast FILLER) is a
+  *diagnostic* flag with a 600-frame decay, logged on gained/lost edges.
 
-**Byte source-of-truth.** The chanmap/announce/probe blocks are the EXACT
-32-byte blocks captured off the real M-5000 (reac-captures/wired-reac-a-
-bothdirs-2026-06-09, master `00:40:ab:ca:15:4d`); `Sum(block[18..49]) mod 256
-== 0` holds on every one. Two deliberate departures from replay-verbatim:
+**Byte source-of-truth.** The probe/SUB01/SUB02 blocks are FIXED protocol
+constants replayed verbatim from a real **M-300** driving an S-1608
+(`reac-captures/m300-s1608-*.pcap`, 2026-07-10, master `00:40:ab:c9:d8:5b`);
+`Sum(block[18..49]) mod 256 == 0` holds on every one. Chanmap and cfea are
+GENERATED and diffed against those captures. The per-console identity byte is the
+only thing that varies across M-200 / M-300 / M-5000 —
+`tests/test_reac_conformance.c` proves the three differ on the wire in exactly
+two bytes (source MAC + console field) and share one generator for the rest.
 
-- **The grant is an echo, not a canned block.** The golden transcript shows the
-  master echoing the box's own `cdea 04 03` back as the broadcast grant burst,
-  so `REAC_M_EMIT_GRANT` stamps the received `join_blk` verbatim (~100 frames
-  over the ~150 ms window — the transcribed density, not an every-slot flood).
-  The §13d `0013/0e` vs `0014/0f` alternation is not byte-verifiable offline
-  (the /tmp pcaps are lost); the JOIN/grant hex dumps in the event log exist so
-  the first live power-cycle yields the corrective bytes if echo-verbatim is
-  not enough.
-- **The cfea announce embeds OUR src MAC.** The capture embeds the desk's own
-  MAC in the announce payload; replaying it verbatim advertised `ca:15:4d`
-  while our L2 src is `00:40:ab:00:00:01` — an inconsistent on-wire identity
-  and a documented slave-disconnect trigger. `reac_master_init` rewrites the
-  MAC field + recomputes the checksum.
+Two deliberate departures from replay-verbatim:
+
+- **The grant is a GENERATED enrollment sweep, not an echo and not a canned
+  block.** This originally said the master echoes the box's own `cdea 04 03`
+  back, and `REAC_M_EMIT_GRANT` stamped the received `join_blk` verbatim. That
+  is wrong and it cost a rig session: a burst transcribed from an M-200 granting
+  an S-0808 (8 inputs at base `0x00`), replayed at a 16-input S-1608 (base
+  `0x20`), LINKS and streams audio and then ignores every head-amp record —
+  28 byte-perfect records in 40 s, 48 V never lit, because our grant never
+  claimed those slots. `src/reac_grant.c` now generates the sweep over the slots
+  WE allocate to the connected box, and `REAC_M_EMIT_GRANT` stamps one block of
+  it. The load-bearing property is an agreement: the slots the sweep enrols must
+  be the slots our head-amp traffic later addresses — both halves pinned by
+  `tests/test_reac_grant.c`.
+- **The cfea announce embeds OUR src MAC.** A captured announce carries the
+  desk's own MAC in its payload; replaying that verbatim advertises one identity
+  while our L2 source is another — an inconsistent on-wire identity and a
+  documented slave-disconnect trigger. `gen_cfea` always writes OUR MAC and
+  recomputes the checksum.
 
 The cdea/cfea control frames ride the 8000 fps broadcast **in-band**, occupying
 audio slots exactly as the real master does (§9 reac-repacer note: control
