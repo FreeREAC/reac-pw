@@ -3,6 +3,8 @@
 
 #include "reac_ctrl.h"
 #include <reac/reac.h>
+#include <reac/reac_braid.h>   /* reac_braid_pos — the layout oracle */
+#include <reac/reac_sample.h>  /* reac_f32_to_s24le */
 #include <string.h>
 #include <math.h>
 
@@ -28,15 +30,6 @@ static inline void put_hdr(uint8_t *f, const uint8_t dst[6], const uint8_t src[6
 	f[CNT_OFF] = (uint8_t)(counter & 0xff);
 	f[CNT_OFF + 1] = (uint8_t)(counter >> 8);
 	f[TYPE_OFF] = t0; f[TYPE_OFF + 1] = t1;
-}
-
-static inline void f32_to_s24le(float v, uint8_t *p)
-{
-	float x = v * 8388608.0f;
-	if (x > 8388607.0f) x = 8388607.0f;
-	if (x < -8388608.0f) x = -8388608.0f;
-	int32_t s = (int32_t)lrintf(x);
-	p[0] = (uint8_t)(s & 0xFF); p[1] = (uint8_t)((s >> 8) & 0xFF); p[2] = (uint8_t)((s >> 16) & 0xFF);
 }
 
 void reac_ctrl_checksum_apply(uint8_t *frame)
@@ -191,13 +184,13 @@ static size_t box_frame_len(int n_ch)
 
 /* Place n_ch planar float channels (ns samples each) into the box's braided audio
  * region at `audio` (frame[50:..]), the exact layout reac_upstream_decode() inverts
- * (task #108, the ex-"FPGA scramble" of task #61): per time sample each channel PAIR
- * shares a 6-byte group; the even channel's s24 LE (lo,mid,hi) bytes sit at
- * group[3],group[0],group[1] and the odd channel's at group[4],group[5],group[2].
- * Slot placement is plain ascending. A real M-5000 expects exactly this from a box's
- * return. Shared by EVERY box->master frame that carries audio — the upstream FILLER,
- * the broadcast presence-flood, AND the cold-connect — because on a real box the audio
- * region varies every frame (it is live input, NOT static inventory). */
+ * (task #108, the ex-"FPGA scramble" of task #61). Byte positions come from
+ * libreac's reac_braid_pos() — the single layout oracle (<reac/reac_braid.h> has
+ * the byte map + evidence). Slot placement is plain ascending. A real M-5000
+ * expects exactly this from a box's return. Shared by EVERY box->master frame
+ * that carries audio — the upstream FILLER, the broadcast presence-flood, AND
+ * the cold-connect — because on a real box the audio region varies every frame
+ * (it is live input, NOT static inventory). */
 static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, int ns)
 {
 	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
@@ -205,14 +198,10 @@ static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, 
 		for (int ch = 0; ch < n_ch; ch++) {
 			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
 			uint8_t s24[3];
-			f32_to_s24le(v, s24);
-			uint8_t *g = audio + (size_t)s * n_ch * REAC_RESOLUTION
-			                   + (size_t)(ch & ~1) * REAC_RESOLUTION;
-			if ((ch & 1) == 0) {
-				g[3] = s24[0]; g[0] = s24[1]; g[1] = s24[2];
-			} else {
-				g[4] = s24[0]; g[5] = s24[1]; g[2] = s24[2];
-			}
+			size_t pos[3];
+			reac_f32_to_s24le(v, s24);
+			reac_braid_pos(s, ch, n_ch, pos);
+			audio[pos[0]] = s24[0]; audio[pos[1]] = s24[1]; audio[pos[2]] = s24[2];
 		}
 }
 
