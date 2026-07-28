@@ -237,11 +237,19 @@ Two deliberate departures from replay-verbatim:
   documented slave-disconnect trigger. `gen_cfea` always writes OUR MAC and
   recomputes the checksum.
 
-The cdea/cfea control frames ride the 8000 fps broadcast **in-band**, occupying
-audio slots exactly as the real master does (§9 reac-repacer note: control
-frames replace audio slots, never add to the stream). Channel `0x13` falls in a
-7th chanmap frame the 120 s capture missed (coverage 47/48 slots) — a fidelity
-gap, not a link blocker.
+The cdea/cfea control frames ride the broadcast **in-band** (fps = rate/12, so
+4000 at 48 kHz and 8000 at 96 kHz), occupying audio slots exactly as the real
+master does (§9 reac-repacer note: control frames replace audio slots, never add
+to the stream).
+
+The chanmap coverage gap this paragraph used to record — "channel `0x13` falls in
+a 7th chanmap frame the 120 s capture missed, coverage 47/48" — is closed. The
+sweep is generated, not replayed: `gen_chanmap` emits the full
+`REAC_M_CHANMAP_RING` = 49 windows (the 48 head-amp positions `0x00..0x2f` plus
+the `0xfe` section marker), measured live off an M-200 driving an S-1608 (#130).
+That was the fix for the class where a one-frame `0x00..0x06` map left every box
+mute: a box enrols only after it sees the window mapping ITS OWN slots, so the map
+has to be space-wide, not console-width.
 
 **RX path + logging.** The pacer's TX fd (bound to the REAC NIC + 0x8819,
 `PACKET_IGNORE_OUTGOING` best-effort) is drained non-blocking up to 8 frames
