@@ -18,6 +18,8 @@
 #include "reac_grant.h"
 #include "reac_ctrl.h"
 #include "reac_headamp_tx.h"
+#include "reac_boxreg.h"   /* the AUDIO-fabric allocator — the other slot space */
+#include "reac_slots.h"
 
 #include <reac/reac.h>
 #include <stdio.h>
@@ -55,9 +57,10 @@ int main(void)
 	CHK(reac_grant_allocate(&a, 32) == 0);
 	CHK(a.base == 0x00 && a.width == 32);   /* S-4000S — 0x20 would overrun */
 
-	/* 1b. The 0x2f FABRIC CEILING. This is the rule that FORCES a 32-wide box to
-	 * base at 0x00: at 0x20 it would run to 0x3f, past the ceiling. A per-width
-	 * base constant would have happily allocated it there. */
+	/* 1b. The 0x2f HEAD-AMP CEILING (REAC_HEADAMP_CEILING, reac_slots.h — NOT the
+	 * 40-slot audio fabric). This is the rule that FORCES a 32-wide box to base at
+	 * 0x00: at 0x20 it would run to 0x3f, past the ceiling. A per-width base
+	 * constant would have happily allocated it there. */
 	CHK(reac_grant_alloc_fits(0x20, 16) == 1);   /* 0x20..0x2f — exactly to the ceiling */
 	CHK(reac_grant_alloc_fits(0x20, 32) == 0);   /* 0x20..0x3f — REJECTED */
 	CHK(reac_grant_alloc_fits(0x00, 32) == 1);   /* 0x00..0x1f */
@@ -91,7 +94,7 @@ int main(void)
 	/* 2a. Group A: width x 3 records, params 0/1/2 per channel, channels
 	 * CONTIGUOUS from the allocated base and never past it. */
 	int ga = 0, gb = 0;
-	int param_seen[REAC_GRANT_FABRIC_SLOTS][REAC_HEADAMP_NPARAMS];
+	int param_seen[REAC_HEADAMP_SLOTS][REAC_HEADAMP_NPARAMS];
 	memset(param_seen, 0, sizeof param_seen);
 	for (int i = 0; i < n; i++) {
 		if (row_is_groupa(sweep[i])) {
@@ -106,7 +109,7 @@ int main(void)
 	}
 	CHK(ga == 16 * 3);
 	CHK(gb == 6);
-	for (int c = 0; c < REAC_GRANT_FABRIC_SLOTS; c++) {
+	for (int c = 0; c < REAC_HEADAMP_SLOTS; c++) {
 		int in_box = (c >= s1608.base && c < s1608.base + s1608.width);
 		for (int p = 0; p < REAC_HEADAMP_NPARAMS; p++)
 			CHK(param_seen[c][p] == (in_box ? 1 : 0));   /* exactly [0,1,2], once each */
@@ -306,9 +309,91 @@ int main(void)
 			CHK(memcmp(gen[i], GOLD_S1608_SWEEP[i], 34) == 0);
 	}
 
+	/* ---------------------------------------------------------------- *
+	 * 5. THE TWO SLOT SPACES ARE NOT THE SAME SPACE (#69).
+	 *
+	 *    reac_slots.h defines both because the ONE ceiling this repo used to have
+	 *    was named after the audio fabric and measured the head-amp space. Both
+	 *    halves are load-bearing and they fail in OPPOSITE directions, so both are
+	 *    pinned here, on the SAME span, side by side:
+	 *
+	 *      - AUDIO fabric = 40 slots. The master advertises it: cfea [17] = 0x28
+	 *        (tests/test_reac_s1608.c's CAP_CFEA golden), and the ENROLL group map
+	 *        spans exactly those 40 as 5 groups x 8. A box placed past slot 39 has
+	 *        channels the downstream frame cannot carry — they go missing only once
+	 *        real boxes are on the wire.
+	 *      - HEAD-AMP space = 48 slots, 0x00..0x2f. Every desk in the corpus places
+	 *        an S-1608 at base 0x20, and it is 16 wide, so its run reaches CH 47.
+	 *        Clamping this to 40 makes that box's inputs 9..16 unaddressable — the
+	 *        "48V never lit" bug class.
+	 *
+	 *    The span base 32 / width 16 is exactly where the two verdicts must differ:
+	 *    LEGAL as head-amp, ILLEGAL as audio. Mutation-checked: widening
+	 *    REAC_AUDIO_FABRIC_SLOTS to 48 fails 5b even with every named-constant
+	 *    assertion below removed, and clamping the head-amp ceiling to 40 fails 5a.
+	 * ---------------------------------------------------------------- */
+	CHK(REAC_AUDIO_FABRIC_SLOTS == 40);      /* cfea [17] = 0x28              */
+	CHK(REAC_HEADAMP_SLOTS      == 48);      /* CH 0x00..0x2f                 */
+	CHK(REAC_HEADAMP_CEILING    == 0x2f);
+	CHK(REAC_HEADAMP_SLOTS > REAC_AUDIO_FABRIC_SLOTS);   /* the whole point   */
+
+	/* 5a. HEAD-AMP: an S-1608 based at 0x20 is legal THROUGH CH 47, and the sweep
+	 * really does address that top channel with all three params. */
+	CHK(reac_grant_alloc_fits(0x20, 16) == 1);
+	{
+		struct reac_grant_alloc s1608_top = { .base = 0x20, .width = 16 };
+		uint8_t top[REAC_GRANT_SWEEP_MAX][34];
+		int tn = reac_grant_build_sweep(top, REAC_GRANT_SWEEP_MAX, &s1608_top, NULL);
+		CHK(tn == 56);
+		int seen47 = 0, max_ch = 0;
+		for (int i = 0; i < tn; i++) {
+			if (!row_is_groupa(top[i]))
+				continue;
+			int ch = row_ch(top[i]);
+			if (ch > max_ch)
+				max_ch = ch;
+			if (ch == 0x2f)
+				seen47++;
+		}
+		CHK(max_ch == 0x2f);                   /* 47 — the box's input 16      */
+		CHK(seen47 == REAC_HEADAMP_NPARAMS);   /* phantom + pad + sens         */
+		CHK(max_ch >= REAC_AUDIO_FABRIC_SLOTS);  /* past the audio fabric, and
+		                                          * correct — the whole finding */
+	}
+
+	/* 5b. AUDIO: the SAME span is refused by the audio allocator. reac_boxreg is
+	 * where a box's audio is placed; a 16-wide box at base 32 would end at slot 47,
+	 * past the 40 the frame carries, so both the pinned and the automatic path must
+	 * refuse it. */
+	{
+		struct reac_boxreg r;
+		reac_boxreg_init(&r, 0);                       /* 0 -> the full fabric */
+		CHK(r.fabric == REAC_AUDIO_FABRIC_SLOTS);
+		CHK(REAC_BOXREG_FABRIC == REAC_AUDIO_FABRIC_SLOTS);
+
+		/* pinned at the S-1608's HEAD-AMP base: audio 32..47 — REFUSED */
+		CHK(reac_boxreg_declare(&r, 16, "S-1608", 32) == -1);
+		/* the last legal 16-wide audio placement is 24..39, one slot lower */
+		CHK(reac_boxreg_declare(&r, 16, "S-1608", 24) >= 0);
+
+		/* automatic allocation cannot cross 40 either: 32 + 16 = 48 slots asked
+		 * of a 40-slot fabric, so the second box has nowhere to go. */
+		struct reac_boxreg q;
+		const uint8_t A[6] = { 0x00,0x40,0xab,0xc4,0x06,0x80 };
+		const uint8_t B[6] = { 0x00,0x40,0xab,0xc4,0x80,0x3b };
+		reac_boxreg_init(&q, 0);
+		CHK(reac_boxreg_add(&q, A, 32) == 0);          /* S-4000S -> 0..31 */
+		CHK(q.box[0].base == 0 && q.box[0].nch == 32);
+		CHK(reac_boxreg_add(&q, B, 16) == -1);         /* would end at 47 — NO */
+		CHK(reac_boxreg_add(&q, B, 8)  == 1);          /* 32..39 fits exactly */
+		CHK(q.box[1].base == 32 && q.box[1].base + q.box[1].nch == 40);
+	}
+
 	printf("OK: grant enrollment sweep — allocator (8->0x00 16->0x20 32->0x00, 0x2f ceiling), "
 	       "generated group A (width x 3, byte-exact vs the proven builder), "
 	       "values from the head-amp table else safe defaults, group B fixed, "
-	       "and the seeded sweep is BYTE-IDENTICAL to a real M-200 x S-1608 grant (56 frames)\n");
+	       "the seeded sweep is BYTE-IDENTICAL to a real M-200 x S-1608 grant (56 frames), "
+	       "and the 48-slot head-amp space and the 40-slot audio fabric disagree on "
+	       "base 32 x width 16 exactly as they must\n");
 	return 0;
 }
