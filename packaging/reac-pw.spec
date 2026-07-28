@@ -18,7 +18,6 @@ BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
 BuildRequires:  pkgconfig(libreac)
-BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 
 %description
@@ -46,8 +45,12 @@ meson compile -C _build
 
 %install
 DESTDIR=%{buildroot} meson install -C _build
-install -Dm0644 packaging/reac-pw.service %{buildroot}%{_unitdir}/reac-pw.service
-install -Dm0644 packaging/reac-pw.conf     %{buildroot}%{_sysconfdir}/reac-pw/reac-pw.conf
+# Deliberately NO unit and NO /etc/reac-pw here: the canonical integration is
+# openmixer-server's packaged USER unit (reac-pw-master.service, driven by
+# ~/.config/openmixer/reac.env from Setup -> Adapters). Shipping the legacy
+# SYSTEM unit too would put two daemons in contention for the REAC NIC.
+# packaging/reac-pw.service stays in-repo as the standalone/no-openmixer
+# reference; install it by hand if you run reac-pw without openmixer.
 
 %check
 meson test -C _build
@@ -61,18 +64,6 @@ meson test -C _build
 # reac-pw-master.service ExecStartPre getcap-guards on exactly these, and
 # scripts/deploy-live.sh refuses a live restart without them.
 %caps(cap_net_raw,cap_sys_nice=ep) %{_bindir}/reac-pw
-%{_unitdir}/reac-pw.service
-%dir %{_sysconfdir}/reac-pw
-%config(noreplace) %{_sysconfdir}/reac-pw/reac-pw.conf
-
-%post
-%systemd_post reac-pw.service
-
-%preun
-%systemd_preun reac-pw.service
-
-%postun
-%systemd_postun_with_restart reac-pw.service
 
 %changelog
 * Sun Jun 14 2026 Pau Aliagas <linuxnow@gmail.com> - 0.1.0-1
