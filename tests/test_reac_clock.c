@@ -345,6 +345,307 @@ int main(void)
 		CHK(big_moves == 0);
 	}
 
+	/* ---- 5. reference QUALITY (#77) -------------------------------------- *
+	 * The GRAPH tier used to ask one question — "is this hardware?" — and admit
+	 * anything that answered yes. Owning a REAC segment's pace with a display
+	 * clock is jitter propagated with authority, so the tier now also asks
+	 * whether the thing is fit for the job. Every rule below exists to make that
+	 * refinement safe: the heuristic may only REJECT, the operator outranks the
+	 * heuristic, and the MEASUREMENT outranks both. */
+
+	/* The ladder is an ORDER, and UNGRADED deliberately sits ABOVE MARGINAL:
+	 * "no evidence" must never be worse than an earned demotion. */
+	CHK(REAC_CLOCK_Q_UNUSABLE < REAC_CLOCK_Q_MARGINAL);
+	CHK(REAC_CLOCK_Q_MARGINAL < REAC_CLOCK_Q_UNGRADED);
+	CHK(REAC_CLOCK_Q_UNGRADED < REAC_CLOCK_Q_GOOD);
+	CHK(REAC_CLOCK_Q_GOOD     < REAC_CLOCK_Q_DESIGNATED);
+
+	/* Eligibility to OWN a segment: UNGRADED qualifies — refusing an operator
+	 * their rig because we have never heard of their converter is the
+	 * vendor-allow-list failure wearing a different hat. MARGINAL does not: that
+	 * verdict was measured. */
+	CHK(reac_clock_quality_can_own(REAC_CLOCK_Q_UNGRADED)   == 1);
+	CHK(reac_clock_quality_can_own(REAC_CLOCK_Q_GOOD)       == 1);
+	CHK(reac_clock_quality_can_own(REAC_CLOCK_Q_DESIGNATED) == 1);
+	CHK(reac_clock_quality_can_own(REAC_CLOCK_Q_MARGINAL)   == 0);
+	CHK(reac_clock_quality_can_own(REAC_CLOCK_Q_UNUSABLE)   == 0);
+
+	/* THE NAME HEURISTIC MAY ONLY REJECT. What it rejects, it rejects for what
+	 * the clock IS, never for who made it: software timers, and sinks whose word
+	 * clock descends from a pixel clock. */
+	CHK(reac_clock_name_quality("clock.system.monotonic") == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality("Dummy-Driver")           == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality("Freewheel-Driver")       == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality("alsa_output.pci-0000_01_00.1.hdmi-stereo")
+	    == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality("HDMI 1")                 == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality("Built-in Audio DisplayPort 3")
+	    == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality(NULL)                     == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_name_quality("")                       == REAC_CLOCK_Q_UNUSABLE);
+
+	/* ...and it promotes NOTHING. The RME the operator bought for its PLL grades
+	 * exactly the same as an interface nobody here has ever heard of. That
+	 * identity IS the no-allow-list rule — if this ever stops holding, someone
+	 * has started demoting hardware for being unfamiliar. */
+	CHK(reac_clock_name_quality("api.alsa.pcm.sink") == REAC_CLOCK_Q_UNGRADED);
+	CHK(reac_clock_name_quality("alsa_output.usb-RME_Babyface_Pro-00.pro-output-0")
+	    == REAC_CLOCK_Q_UNGRADED);
+	CHK(reac_clock_name_quality("Obscure Pro Converter Mk4")
+	    == REAC_CLOCK_Q_UNGRADED);
+	CHK(reac_clock_name_quality("Built-in Audio Analog Stereo")
+	    == REAC_CLOCK_Q_UNGRADED);
+
+	/* Designation: case-insensitive SUBSTRING, and strictly opt-in — an empty
+	 * designation must never quietly promote the first device to appear. */
+	CHK(reac_clock_name_is_designated(
+	        "alsa_output.usb-RME_Babyface_Pro-00.pro-output-0", "babyface") == 1);
+	CHK(reac_clock_name_is_designated("RME Babyface Pro", "BABYFACE") == 1);
+	CHK(reac_clock_name_is_designated("RME Babyface Pro", "Fireface") == 0);
+	CHK(reac_clock_name_is_designated("RME Babyface Pro", "")   == 0);
+	CHK(reac_clock_name_is_designated("RME Babyface Pro", NULL) == 0);
+	CHK(reac_clock_name_is_designated(NULL, "babyface")         == 0);
+
+	/* The publisher's whole inferred verdict: designation promotes an ungraded
+	 * device, and does NOT rescue a disqualified one. An operator may choose
+	 * among plausible references; they may not designate a pixel clock into a
+	 * word clock. */
+	CHK(reac_clock_grade_name("RME Babyface Pro", "babyface")
+	    == REAC_CLOCK_Q_DESIGNATED);
+	CHK(reac_clock_grade_name("RME Babyface Pro", NULL) == REAC_CLOCK_Q_UNGRADED);
+	CHK(reac_clock_grade_name("Built-in Audio HDMI 1", "hdmi")
+	    == REAC_CLOCK_Q_UNUSABLE);
+	CHK(reac_clock_grade_name("Dummy-Driver", "dummy") == REAC_CLOCK_Q_UNUSABLE);
+
+	/* MEASURED BEATS INFERRED — the whole table, every asymmetry as one case. */
+	{
+		const enum reac_clock_source G = REAC_CLOCK_SRC_GRAPH;
+		const enum reac_clock_source B = REAC_CLOCK_SRC_BOX;
+		/* structural rejection is sticky against BOTH overrides */
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_UNUSABLE,
+		                             REAC_CLOCK_STAB_STABLE) == REAC_CLOCK_Q_UNUSABLE);
+		/* measured instability demotes an unremarkable device... */
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_UNGRADED,
+		                             REAC_CLOCK_STAB_UNSTABLE) == REAC_CLOCK_Q_MARGINAL);
+		/* ...and a DESIGNATED one too. Designation outranks the heuristic, not
+		 * the evidence; an operator whose reference wanders needs telling. */
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_DESIGNATED,
+		                             REAC_CLOCK_STAB_UNSTABLE) == REAC_CLOCK_Q_MARGINAL);
+		/* measured stability is a PROMOTION, earned */
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_UNGRADED,
+		                             REAC_CLOCK_STAB_STABLE) == REAC_CLOCK_Q_GOOD);
+		/* but never above a designation, which is already the top */
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_DESIGNATED,
+		                             REAC_CLOCK_STAB_STABLE) == REAC_CLOCK_Q_DESIGNATED);
+		/* NEVER for the BOX tier: a box slaved to us hands our own correction
+		 * back, so a perfect residual there is perfectly meaningless */
+		CHK(reac_clock_quality_apply(B, REAC_CLOCK_Q_UNGRADED,
+		                             REAC_CLOCK_STAB_STABLE) == REAC_CLOCK_Q_UNGRADED);
+		/* ...while a box that genuinely wanders is still demoted */
+		CHK(reac_clock_quality_apply(B, REAC_CLOCK_Q_UNGRADED,
+		                             REAC_CLOCK_STAB_UNSTABLE) == REAC_CLOCK_Q_MARGINAL);
+		/* no evidence changes nothing, in either direction */
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_UNGRADED,
+		                             REAC_CLOCK_STAB_UNKNOWN) == REAC_CLOCK_Q_UNGRADED);
+		CHK(reac_clock_quality_apply(G, REAC_CLOCK_Q_MARGINAL,
+		                             REAC_CLOCK_STAB_UNKNOWN) == REAC_CLOCK_Q_MARGINAL);
+	}
+
+	/* The ADMISSION BAR skips a disqualified candidate and carries on DOWN the
+	 * same list — the tier ordering is untouched by any of this. */
+	{
+		enum reac_clock_quality q[REAC_CLOCK_SRC_COUNT];
+		for (int i = 0; i < REAC_CLOCK_SRC_COUNT; i++)
+			q[i] = REAC_CLOCK_Q_UNGRADED;
+		const uint32_t GB = REAC_CLOCK_AVAIL_GRAPH | REAC_CLOCK_AVAIL_BOX;
+		/* an HDMI sink is the elected driver: we fall THROUGH to the box, not to
+		 * free-run, and certainly not onto the display clock */
+		q[REAC_CLOCK_SRC_GRAPH] = REAC_CLOCK_Q_UNUSABLE;
+		CHK(reac_clock_select_graded(REAC_ROLE_MASTER, GB, q,
+		                             REAC_CLOCK_Q_MARGINAL) == REAC_CLOCK_SRC_BOX);
+		/* nothing left that clears the bar -> honest free-run */
+		q[REAC_CLOCK_SRC_BOX] = REAC_CLOCK_Q_UNUSABLE;
+		CHK(reac_clock_select_graded(REAC_ROLE_MASTER, GB, q,
+		                             REAC_CLOCK_Q_MARGINAL) == REAC_CLOCK_SRC_FREERUN);
+		/* a MARGINAL graph clock still outranks a healthy box at the default bar:
+		 * we flag rather than eject (see the header — ejecting flaps a live
+		 * segment on our own opinion), and a raised bar is how a caller opts in */
+		q[REAC_CLOCK_SRC_GRAPH] = REAC_CLOCK_Q_MARGINAL;
+		q[REAC_CLOCK_SRC_BOX]   = REAC_CLOCK_Q_UNGRADED;
+		CHK(reac_clock_select_graded(REAC_ROLE_MASTER, GB, q,
+		                             REAC_CLOCK_Q_MARGINAL) == REAC_CLOCK_SRC_GRAPH);
+		CHK(reac_clock_select_graded(REAC_ROLE_MASTER, GB, q,
+		                             REAC_CLOCK_Q_UNGRADED) == REAC_CLOCK_SRC_BOX);
+		/* and the ungraded selector is the graded one with nothing excluded */
+		CHK(reac_clock_select_graded(REAC_ROLE_MASTER, GB, NULL,
+		                             REAC_CLOCK_Q_MARGINAL)
+		    == reac_clock_select(REAC_ROLE_MASTER, GB));
+	}
+
+	/* ---- 6. the MEASURED stability signal -------------------------------- *
+	 * The part that matters most: a claim from the device's badge is a guess, the
+	 * variance of the loop's own residual is evidence. */
+
+	/* A rock-steady reference EARNS its grade — and only after enough evidence. */
+	{
+		struct reac_dll d;
+		reac_dll_init(&d, NOMINAL_NS);
+		CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_UNKNOWN);
+		for (int i = 0; i < 400; i++)
+			reac_dll_update(&d, 12.0);
+		CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_STABLE);
+		CHK(reac_dll_resid_sigma(&d) < REAC_DLL_STABLE_PPM);
+		CHK(reac_clock_quality_apply(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_Q_UNGRADED,
+		                             reac_dll_stability(&d)) == REAC_CLOCK_Q_GOOD);
+	}
+
+	/* ACQUISITION IS NOT INSTABILITY. A big step followed as a slew-limited glide
+	 * is a healthy loop doing its job, and its residual ramp has an enormous
+	 * variance. If that ever counted, every good reference would be demoted for
+	 * its first seconds — so assert the verdict is NEVER unstable, at any point. */
+	{
+		struct reac_dll d;
+		reac_dll_init(&d, NOMINAL_NS);
+		for (int i = 0; i < 600; i++) {
+			reac_dll_update(&d, 150.0);
+			CHK(reac_dll_stability(&d) != REAC_CLOCK_STAB_UNSTABLE);
+		}
+		CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_STABLE);
+	}
+
+	/* OUR OWN ESTIMATOR'S NOISE IS NOT THE REFERENCE'S JITTER. reac_rx recomputes
+	 * its counter slope ~4x/s and carries a couple of ppm of window noise, so a
+	 * series at that level is INDISTINGUISHABLE from a perfect reference read
+	 * through our own instrument. "We cannot tell" is the only honest verdict and
+	 * the thresholds are spaced to give it: neither promoted nor demoted. */
+	{
+		struct reac_dll d;
+		reac_dll_init(&d, NOMINAL_NS);
+		uint32_t s = 12345u;
+		for (int i = 0; i < 4000; i++) {
+			s = s * 1103515245u + 12345u;
+			double jitter = ((double)((s >> 16) & 0xffff) / 65535.0 - 0.5) * 6.0;
+			reac_dll_update(&d, 31.0 + jitter);
+			CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_UNKNOWN);
+		}
+	}
+
+	/* A REFERENCE THAT WANDERS IS DEMOTED, whatever its badge says. Mostly quiet
+	 * with periodic excursions: the mean residual stays small enough that the
+	 * loop still reads as tracking, and only the VARIANCE gives it away — which
+	 * is exactly why the variance is the signal and the mean is not. */
+	{
+		struct reac_dll d;
+		reac_dll_init(&d, NOMINAL_NS);
+		for (int i = 0; i < 4000; i++)
+			reac_dll_update(&d, (i % 40 == 0) ? 60.0 : 20.0);
+		CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_UNSTABLE);
+		CHK(reac_dll_resid_sigma(&d) > REAC_DLL_UNSTABLE_PPM);
+		/* ...and that demotion survives an operator's designation, and takes the
+		 * reference out of the "fit to own a segment" class. */
+		enum reac_clock_quality q =
+			reac_clock_quality_apply(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_Q_DESIGNATED,
+			                         reac_dll_stability(&d));
+		CHK(q == REAC_CLOCK_Q_MARGINAL);
+		CHK(reac_clock_quality_can_own(q) == 0);
+	}
+
+	/* The accumulator belongs to ONE reference: a switch forgets the series, but
+	 * NEVER the loop's memory — holdover is a separate promise and #77 does not
+	 * touch it. */
+	{
+		struct reac_dll d;
+		reac_dll_init(&d, NOMINAL_NS);
+		for (int i = 0; i < 400; i++)
+			reac_dll_update(&d, 12.0);
+		CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_STABLE);
+		double held = reac_dll_applied_ppm(&d);
+		uint64_t seen = d.updates;
+		reac_dll_stability_reset(&d);
+		CHK(reac_dll_stability(&d) == REAC_CLOCK_STAB_UNKNOWN);
+		CHK(reac_dll_applied_ppm(&d) == held);
+		CHK(d.updates == seen);
+		CHK(reac_dll_period_ns(&d) != NOMINAL_NS);
+	}
+
+	/* ---- 7. quality through the discipline, and in the transcript -------- */
+
+	/* A structurally disqualified graph clock does not get to own the segment:
+	 * the discipline falls through to the box exactly as if the driver were
+	 * absent, and never once reports a lock to the display clock. */
+	{
+		struct reac_clock_disc c;
+		reac_clock_disc_init(&c, REAC_ROLE_MASTER, NOMINAL_NS);
+		reac_clock_disc_set_quality(&c, REAC_CLOCK_SRC_GRAPH,
+		                            reac_clock_name_quality("Built-in Audio HDMI 1"));
+		reac_clock_disc_set_quality(&c, REAC_CLOCK_SRC_BOX, REAC_CLOCK_Q_UNGRADED);
+		for (int i = 0; i < 500; i++)
+			reac_clock_disc_update(&c,
+			                       REAC_CLOCK_AVAIL_GRAPH | REAC_CLOCK_AVAIL_BOX,
+			                       9.0, 1);
+		CHK(c.src == REAC_CLOCK_SRC_BOX);
+		CHK(c.state == REAC_CLOCK_LOCKED);
+		/* and the box is never PROMOTED on a measurement (closed-loop caveat) */
+		CHK(reac_clock_disc_quality(&c) == REAC_CLOCK_Q_UNGRADED);
+	}
+
+	/* A designated, measurably steady graph clock: the tier is reported, the
+	 * change is a transcript event, and the line names device AND tier. */
+	{
+		struct reac_clock_disc c;
+		char buf[224];
+		reac_clock_disc_init(&c, REAC_ROLE_MASTER, NOMINAL_NS);
+		/* ungraded until anyone says otherwise — the pre-#77 behaviour exactly */
+		CHK(c.quality[REAC_CLOCK_SRC_GRAPH] == REAC_CLOCK_Q_UNGRADED);
+		CHK(reac_clock_disc_quality(&c) == REAC_CLOCK_Q_UNGRADED);
+		reac_clock_disc_set_quality(&c, REAC_CLOCK_SRC_GRAPH,
+		                            reac_clock_grade_name("RME Babyface Pro",
+		                                                  "babyface"));
+		reac_clock_disc_update(&c, REAC_CLOCK_AVAIL_GRAPH, 18.0, 1);
+		CHK(reac_clock_disc_quality(&c) == REAC_CLOCK_Q_DESIGNATED);
+		uint32_t gen = c.generation;
+		for (int i = 0; i < 500; i++)
+			reac_clock_disc_update(&c, REAC_CLOCK_AVAIL_GRAPH, 18.0, 1);
+		CHK(c.state == REAC_CLOCK_LOCKED);
+		CHK(c.generation > gen);          /* the tier is never implicit */
+		CHK(strcmp(reac_clock_describe_full(c.role, c.src, c.state,
+		                                    reac_clock_disc_quality(&c),
+		                                    "RME Babyface Pro", buf, sizeof buf),
+		           "master (pace: generated here) — locked to graph clock "
+		           "(RME Babyface Pro), quality: operator-designated") == 0);
+	}
+
+	/* The line degrades honestly: no device known, no opinion held, and NEITHER
+	 * printed once there is no reference to name. */
+	{
+		char buf[224];
+		CHK(strcmp(reac_clock_describe_full(REAC_ROLE_MASTER, REAC_CLOCK_SRC_GRAPH,
+		                                    REAC_CLOCK_LOCKING,
+		                                    REAC_CLOCK_Q_UNGRADED, NULL,
+		                                    buf, sizeof buf),
+		           "master (pace: generated here) — acquiring graph clock") == 0);
+		CHK(strcmp(reac_clock_describe_full(REAC_ROLE_MASTER, REAC_CLOCK_SRC_GRAPH,
+		                                    REAC_CLOCK_LOCKED,
+		                                    REAC_CLOCK_Q_MARGINAL, "Onboard",
+		                                    buf, sizeof buf),
+		           "master (pace: generated here) — locked to graph clock "
+		           "(Onboard), quality: marginal") == 0);
+		CHK(strcmp(reac_clock_describe_full(REAC_ROLE_MASTER, REAC_CLOCK_SRC_FREERUN,
+		                                    REAC_CLOCK_HOLDOVER,
+		                                    REAC_CLOCK_Q_GOOD, "RME Babyface Pro",
+		                                    buf, sizeof buf),
+		           "master (pace: generated here) — holdover: reference lost, "
+		           "holding the last good rate") == 0);
+		/* and the three-field form is exactly this with neither */
+		char a[224], b[224];
+		reac_clock_describe(REAC_ROLE_SLAVE, REAC_CLOCK_SRC_WIRE,
+		                    REAC_CLOCK_LOCKED, a, sizeof a);
+		reac_clock_describe_full(REAC_ROLE_SLAVE, REAC_CLOCK_SRC_WIRE,
+		                         REAC_CLOCK_LOCKED, REAC_CLOCK_Q_UNGRADED, NULL,
+		                         b, sizeof b);
+		CHK(strcmp(a, b) == 0);
+	}
+
 	printf("test_reac_clock: OK\n");
 	return 0;
 }

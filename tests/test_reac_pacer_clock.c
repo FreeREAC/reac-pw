@@ -67,14 +67,17 @@ int main(void)
 		pacer_clock_init(&p, 0);              /* the default: knob unset */
 
 		/* Publish everything, including a reference wild enough to saturate the
-		 * loop and one that would be rejected outright. */
+		 * loop, one that would be rejected outright, and (#77) graded references
+		 * at both ends of the ladder — a designation must not wake the discipline
+		 * up any more than a good ppm does. */
 		for (int i = 0; i < 200; i++) {
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 150000,
-			                         "RME Babyface Pro", now);
+			                         "RME Babyface Pro", REAC_CLOCK_Q_DESIGNATED,
+			                         now);
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, -900000,
-			                         "S-1608", now);
+			                         "S-1608", REAC_CLOCK_Q_UNGRADED, now);
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_PHC, 1, 1000000000,
-			                         "phc0", now);
+			                         "phc0", REAC_CLOCK_Q_UNGRADED, now);
 			long period = run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 			/* Every slot advances the deadline by the nominal period — the exact
 			 * constant a build without this code uses. */
@@ -86,6 +89,7 @@ int main(void)
 		CHK(p.clock.src == REAC_CLOCK_SRC_FREERUN);
 		CHK(p.clock.state == REAC_CLOCK_UNLOCKED);
 		CHK(p.clock.generation == 0);
+		CHK(reac_clock_disc_quality(&p.clock) == REAC_CLOCK_Q_UNGRADED);
 		CHK(p.slot_period_ns == NOMINAL_NS);
 		/* No transcript event either: the log is byte-identical too. */
 		CHK(atomic_load(&p.ev_head) == 0);
@@ -126,7 +130,7 @@ int main(void)
 		/* The RME appears as the graph driver, running +18 ppm vs the host. */
 		for (int i = 0; i < 200; i++) {
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 18000,
-			                         "RME Babyface Pro", now);
+			                         "RME Babyface Pro", REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
@@ -156,7 +160,8 @@ int main(void)
 		/* The RME is unplugged mid-run: hold the last good rate, report holdover,
 		 * never snap and never keep claiming lock. */
 		long held = p.slot_period_ns;
-		reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 0, 0, NULL, now);
+		reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 0, 0, NULL,
+		                         REAC_CLOCK_Q_UNGRADED, now);
 		run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		CHK(p.clock.state == REAC_CLOCK_HOLDOVER);
 		CHK(p.slot_period_ns == held);
@@ -179,7 +184,7 @@ int main(void)
 		pacer_clock_init(&p, 1);
 		for (int i = 0; i < 200; i++) {
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 12000,
-			                         "RME Babyface Pro", now);
+			                         "RME Babyface Pro", REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.state == REAC_CLOCK_LOCKED);
@@ -203,7 +208,7 @@ int main(void)
 		pacer_clock_init(&p, 1);
 		for (int i = 0; i < 200; i++) {
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, -23000,
-			                         "S-1608", now);
+			                         "S-1608", REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.src == REAC_CLOCK_SRC_BOX);
@@ -223,9 +228,10 @@ int main(void)
 		/* The RME is then plugged in: a PHC-less rig ranks the graph clock above
 		 * the box, so we switch and re-earn the lock. */
 		for (int i = 0; i < 200; i++) {
-			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, -23000, "S-1608", now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, -23000, "S-1608",
+			                         REAC_CLOCK_Q_UNGRADED, now);
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 5000,
-			                         "RME Babyface Pro", now);
+			                         "RME Babyface Pro", REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
@@ -244,7 +250,8 @@ int main(void)
 		pacer_clock_init(&p, 1);
 		for (int i = 0; i < 4000; i++) {
 			int echoed = (int)(reac_dll_applied_ppm(&p.clock.dll) * 1000.0);
-			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, echoed, "S-0808", now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, echoed, "S-0808",
+			                         REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.src == REAC_CLOCK_SRC_BOX);
@@ -258,10 +265,12 @@ int main(void)
 		uint64_t now = 1000000000ull;
 		pacer_clock_init(&p, 1);
 		for (int i = 0; i < 200; i++) {
-			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, 40000, "S-1608", now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, 40000, "S-1608",
+			                         REAC_CLOCK_Q_UNGRADED, now);
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 20000,
-			                         "RME Babyface Pro", now);
-			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_PHC, 1, 7000, "phc0", now);
+			                         "RME Babyface Pro", REAC_CLOCK_Q_UNGRADED, now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_PHC, 1, 7000, "phc0",
+			                         REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.src == REAC_CLOCK_SRC_PHC);
@@ -269,14 +278,116 @@ int main(void)
 		CHK(fabs(reac_dll_applied_ppm(&p.clock.dll) - 7.0) < 0.01);
 		/* the PHC goes, the graph clock takes over — not the box */
 		for (int i = 0; i < 200; i++) {
-			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_PHC, 0, 0, NULL, now);
-			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, 40000, "S-1608", now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_PHC, 0, 0, NULL,
+			                         REAC_CLOCK_Q_UNGRADED, now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, 40000, "S-1608",
+			                         REAC_CLOCK_Q_UNGRADED, now);
 			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 20000,
-			                         "RME Babyface Pro", now);
+			                         "RME Babyface Pro", REAC_CLOCK_Q_UNGRADED, now);
 			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		}
 		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
 		CHK(p.clock.state == REAC_CLOCK_LOCKED);
+	}
+
+	/* ---- 6. reference QUALITY through the wiring (#77) -------------------- *
+	 * The rig case the issue is actually about: something IS the elected PipeWire
+	 * driver, it IS hardware, and it is still the wrong thing to hand a whole REAC
+	 * segment's pace to. */
+	{
+		struct reac_pacer p;
+		uint64_t now = 1000000000ull;
+		pacer_clock_init(&p, 1);
+
+		/* An HDMI sink is the graph driver and a stagebox is on the segment. The
+		 * display clock is present, hardware, and publishing a perfectly plausible
+		 * ppm — and it must still lose to the box. */
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 11000,
+			                         "alsa_output.pci-0000_01_00.1.hdmi-stereo",
+			                         reac_clock_grade_name(
+			                             "alsa_output.pci-0000_01_00.1.hdmi-stereo",
+			                             NULL),
+			                         now);
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_BOX, 1, -23000, "S-1608",
+			                         REAC_CLOCK_Q_UNGRADED, now);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_BOX);
+		CHK(p.clock.state == REAC_CLOCK_LOCKED);
+		{
+			char *buf = NULL;
+			size_t len = 0;
+			FILE *f = open_memstream(&buf, &len);
+			CHK(f != NULL);
+			reac_pacer_log_drain(&p, f);
+			fclose(f);
+			CHK(strstr(buf, "locked to box counter slope (S-1608)") != NULL);
+			/* not once, in any state, do we claim the display clock */
+			CHK(strstr(buf, "graph clock") == NULL);
+			free(buf);
+		}
+	}
+
+	/* The expected rig configuration, designated by the operator: the transcript
+	 * carries the tier next to the device, and the packing of state+quality into
+	 * one event byte survives the round trip through the RT ring. */
+	{
+		struct reac_pacer p;
+		uint64_t now = 1000000000ull;
+		pacer_clock_init(&p, 1);
+		const char *rme = "alsa_output.usb-RME_Babyface_Pro-00.pro-output-0";
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1, 18000, rme,
+			                         reac_clock_grade_name(rme, "babyface"), now);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
+		CHK(p.clock.state == REAC_CLOCK_LOCKED);
+		CHK(reac_clock_disc_quality(&p.clock) == REAC_CLOCK_Q_DESIGNATED);
+		CHK(reac_clock_quality_can_own(reac_clock_disc_quality(&p.clock)) == 1);
+		{
+			char *buf = NULL;
+			size_t len = 0;
+			FILE *f = open_memstream(&buf, &len);
+			CHK(f != NULL);
+			reac_pacer_log_drain(&p, f);
+			fclose(f);
+			/* the label truncates into the 28-byte event slot; the tier does not */
+			CHK(strstr(buf, "locked to graph clock (alsa_output.usb-RME_Ba") != NULL);
+			CHK(strstr(buf, "quality: operator-designated") != NULL);
+			CHK(strstr(buf, " ppm, period ") != NULL);
+			free(buf);
+		}
+	}
+
+	/* A graph clock that MEASURES badly is flagged, not ejected: it keeps the
+	 * segment (ejecting it would reset the measurement, re-admit it, and flap a
+	 * live rig on our own opinion) while the transcript says plainly that it is
+	 * not fit to own one. */
+	{
+		struct reac_pacer p;
+		uint64_t now = 1000000000ull;
+		pacer_clock_init(&p, 1);
+		for (int i = 0; i < 3000; i++) {
+			reac_pacer_clock_publish(&p, REAC_CLOCK_SRC_GRAPH, 1,
+			                         (i % 40 == 0) ? 60000 : 20000,
+			                         "Some Converter", REAC_CLOCK_Q_UNGRADED, now);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);          /* still following it */
+		CHK(reac_clock_disc_quality(&p.clock) == REAC_CLOCK_Q_MARGINAL);
+		CHK(reac_clock_quality_can_own(reac_clock_disc_quality(&p.clock)) == 0);
+		{
+			char *buf = NULL;
+			size_t len = 0;
+			FILE *f = open_memstream(&buf, &len);
+			CHK(f != NULL);
+			reac_pacer_log_drain(&p, f);
+			fclose(f);
+			CHK(strstr(buf, "(Some Converter), quality: marginal") != NULL);
+			free(buf);
+		}
 	}
 
 	printf("test_reac_pacer_clock: OK\n");
