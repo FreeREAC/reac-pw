@@ -5,7 +5,10 @@
  *
  * Fixtures are REAL captured frames from the rig (reac-captures zoneA-48k /
  * zoneB-48k, MAC-sanitized to the stand-in 00:40:ab:c4:80:f6 per that repo's
- * convention): an S-1608 16-ch 628 B return and an S-0808 8-ch 340 B return.
+ * convention): an S-1608 16-ch 628 B return, an S-0808 8-ch 340 B return, and
+ * two consecutive S-4000 32-ch 1206 B OHRCA returns (matrix-m200-s4000
+ * 2026-07-24; 1206 = 52 + 32*36 + the +2 CRC trailer after the end marker,
+ * with a 1204 B trailerless variant on the same wire).
  * The expected planar PCM tables were produced by the capture-side analysis
  * that resolved the layout (2026-07-10, task #108): the upstream audio region
  * uses the obs-h8819 even/odd channel-pair byte BRAID (even ch = group bytes
@@ -63,7 +66,39 @@ int main(void)
 				bad++;
 	CHK(bad == 0);
 
-	/* 3. decode the captured 8-ch frame */
+	/* 3. S-4000 32-ch OHRCA returns (1206 B = 52 + 32*36 + the +2 CRC trailer):
+	 * shape accepted with AND without the trailer, both captured frames decode
+	 * to the independently-computed PCM tables, and the trailer is NOT decoded
+	 * as audio — the 1206 B and 1204 B reads of the same frame are byte-equal. */
+	CHK(reac_upstream_channels(1206) == 32); /* +2 trailer stripped */
+	CHK(reac_upstream_channels(1204) == 32); /* trailerless variant */
+	CHK(reac_upstream_channels(1205) == -1);
+	ns = reac_upstream_decode(UP32A, sizeof UP32A, out);
+	CHK(ns == REAC_SAMPLES_PER_PKT);
+	CHK(reac_frame_counter(UP32A) == 0xff9c);
+	bad = 0;
+	for (int ch = 0; ch < 32; ch++)
+		for (int s = 0; s < 12; s++)
+			if (s24_at(out, 32, ch, s) != UP32A_PCM[ch][s])
+				bad++;
+	CHK(bad == 0);
+	/* the trailer bytes never reach the audio: decoding the same real frame at
+	 * its clean 1204 B length yields the identical planar PCM */
+	uint8_t out2[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
+	CHK(reac_upstream_decode(UP32A, 1204, out2) == REAC_SAMPLES_PER_PKT);
+	CHK(memcmp(out, out2, (size_t)32 * 12 * 3) == 0);
+	/* the second consecutive frame (counter +1) pins the per-frame stability */
+	ns = reac_upstream_decode(UP32B, sizeof UP32B, out);
+	CHK(ns == REAC_SAMPLES_PER_PKT);
+	CHK(reac_frame_counter(UP32B) == 0xff9d);
+	bad = 0;
+	for (int ch = 0; ch < 32; ch++)
+		for (int s = 0; s < 12; s++)
+			if (s24_at(out, 32, ch, s) != UP32B_PCM[ch][s])
+				bad++;
+	CHK(bad == 0);
+
+	/* 4. decode the captured 8-ch frame */
 	ns = reac_upstream_decode(UP8, sizeof UP8, out);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	bad = 0;
@@ -73,7 +108,7 @@ int main(void)
 				bad++;
 	CHK(bad == 0);
 
-	/* 4. validation rejects */
+	/* 5. validation rejects */
 	uint8_t f[628];
 	memcpy(f, UP16, sizeof f);
 	f[12] = 0x08; /* not 0x8819 */
@@ -90,7 +125,7 @@ int main(void)
 		fprintf(stderr, "%d check(s) failed\n", fails);
 		return 1;
 	}
-	printf("OK: upstream decode — 16-ch 628 B + 8-ch 340 B captured frames, braid "
+	printf("OK: upstream decode — 16-ch 628 B + 8-ch 340 B + 32-ch 1206/1204 B captured frames, braid "
 	       "layout, full PCM match, shape/validation rejects\n");
 	return 0;
 }
