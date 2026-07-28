@@ -1,7 +1,10 @@
 # OHRCA upstream frame duplication (the "granulated audio" bug)
 
 **Status:** audio FIXED 2026-07-25 (operator-confirmed clean); mechanism CORRECTED
-same day by the operator. Fix lives in `src/reac_rx.c` + `src/reac_upstream.c`.
+same day by the operator. The dedup half lives in `src/reac_rx.c`; the trailer-strip
+half moved into libreac on 2026-07-28 (`87297ca`) and is now
+`<reac/reac_upstream.h>` / `reac_frame_clean_len` — there is no `src/reac_upstream.c`
+in this repo.
 
 > **CORRECTION (operator, 2026-07-25):** REAC stageboxes send each frame ONCE,
 > slaved to the master clock. The duplication was NOT the box re-transmitting —
@@ -95,7 +98,8 @@ to the one immediately before it.** Safe and self-adapting:
 - Restores the true 48 kHz cadence into `reac-capture`, so the rate estimator and
   ring see the real rate.
 
-`src/reac_upstream.c`: strip the OHRCA **+2 CRC-16 trailer** (`1206 → 1204`,
+libreac's upstream decode (`<reac/reac_upstream.h>`, was `src/reac_upstream.c` here
+until 2026-07-28): strip the OHRCA **+2 CRC-16 trailer** (`1206 → 1204`,
 `52 + 32·36 + 2`). Required — without it the S-4000 frames fail the `%36` width
 check and `reac-capture` is silent. Confirmed a real box field, not the Ethernet
 FCS: in one capture reac-pw's own downstream frames are all 1492 B (no +2) while the
