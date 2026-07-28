@@ -32,12 +32,33 @@ static inline void put_hdr(uint8_t *f, const uint8_t dst[6], const uint8_t src[6
 	f[TYPE_OFF] = t0; f[TYPE_OFF + 1] = t1;
 }
 
-void reac_ctrl_checksum_apply(uint8_t *frame)
+void reac_ctrl_block_cksum_stamp(uint8_t block[REAC_CTRL_BLOCK_LEN])
 {
 	unsigned s = 0;
-	for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_CKSUM_OFF; i++)
-		s += frame[i];
-	frame[REAC_CTRL_CKSUM_OFF] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+	for (int i = 0; i < REAC_CTRL_BLOCK_LEN - 1; i++)
+		s += block[i];
+	block[REAC_CTRL_BLOCK_LEN - 1] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+}
+
+void reac_ctrl_record_cksum_stamp(uint8_t *rec, size_t n)
+{
+	unsigned s = 0;
+	for (size_t i = 0; i + 1 < n; i++)
+		s += rec[i];
+	rec[n - 1] = (uint8_t)((0x80 - s) & 0xff);
+}
+
+int reac_ctrl_record_cksum_verify(const uint8_t *rec, size_t n)
+{
+	unsigned s = 0;
+	for (size_t i = 0; i < n; i++)
+		s += rec[i];
+	return ((s & 0xff) == 0x80) ? 0 : -1;
+}
+
+void reac_ctrl_checksum_apply(uint8_t *frame)
+{
+	reac_ctrl_block_cksum_stamp(frame + REAC_CTRL_BLOCK_OFF);
 }
 
 int reac_ctrl_checksum_verify(const uint8_t *frame)
@@ -589,13 +610,9 @@ static void put_headamp_block(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t
 	frame[32] = 0x12; frame[33] = 0x12;       /* record marker */
 	frame[34] = 0x01; frame[35] = 0x01;       /* TAG 01 01 = head-amp */
 	frame[36] = ch; frame[37] = param; frame[38] = value;
-	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256. (For this record
-	 * that reduces to CH+PARAM+VALUE+CKSUM == 0x7e, but compute the general
-	 * record sum — the rule is the record's, not the head-amp's.) */
-	unsigned s = 0;
-	for (int i = 34; i < 39; i++)
-		s += frame[i];
-	frame[39] = (uint8_t)((0x80 - s) & 0xff);
+	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256 (the general
+	 * record rule — see reac_ctrl_record_cksum_stamp). */
+	reac_ctrl_record_cksum_stamp(frame + 34, 6);
 	frame[40] = 0xf7;                         /* record terminator */
 	reac_ctrl_checksum_apply(frame);          /* OUTER block checksum at [49] */
 }
@@ -646,10 +663,7 @@ int reac_ctrl_headamp_record_verify(const uint8_t *frame)
 	 * console builds CKSUM so the six bytes sum to 0x80 mod 256 (byte-verified
 	 * on the M-200, m200-headamp-re/DECODE.md). A frame that fails this carries a
 	 * corrupted preamp record and its CH/PARAM/VALUE must not be trusted. */
-	unsigned s = 0;
-	for (int i = 34; i < 40; i++)
-		s += frame[i];
-	return ((s & 0xff) == 0x80) ? 0 : -1;
+	return reac_ctrl_record_cksum_verify(frame + 34, 6);
 }
 
 /* SENS dB <-> VALUE (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).

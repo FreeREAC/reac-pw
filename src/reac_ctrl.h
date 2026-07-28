@@ -26,6 +26,7 @@
 #define REAC_CTRL_BLOCK_OFF   18   /* control block / checksum region start */
 #define REAC_CTRL_BLOCK_END   50   /* one past end (= audio offset)         */
 #define REAC_CTRL_CKSUM_OFF    49  /* checksum byte (last of the block)     */
+#define REAC_CTRL_BLOCK_LEN   32   /* the checksummed block, [18:50]        */
 
 enum reac_ctrl_kind {
 	REAC_CTRL_NONE = 0,      /* not a 0x8819 frame */
@@ -60,6 +61,23 @@ struct reac_ctrl_parsed {
  * sums to 0 mod 256. Verify returns 0 when Sum(frame[18..49]) mod 256 == 0. */
 void reac_ctrl_checksum_apply(uint8_t *frame);
 int  reac_ctrl_checksum_verify(const uint8_t *frame);
+
+/* The underlying sum-to-ZERO rule, on a bare 32-byte block (no frame offsets):
+ * set block[31] so Sum(block[0..31]) mod 256 == 0. This is THE cdea/cfea
+ * control-block checksum — reac_ctrl_checksum_apply() is this on
+ * frame + REAC_CTRL_BLOCK_OFF, and reac_master's 34-byte control templates
+ * (type word + block) apply it at template + 2. One implementation; the two
+ * offset bases were previously maintained as independent loops. */
+void reac_ctrl_block_cksum_stamp(uint8_t block[REAC_CTRL_BLOCK_LEN]);
+
+/* The INNER record rule, sum-to-0x80: a DT1-style record (TAG.. payload..
+ * CKSUM, e.g. the 6-byte head-amp record at frame[34:40]) carries its last
+ * byte such that the whole record sums to 0x80 mod 256 (byte-verified on the
+ * M-200, m200-headamp-re/DECODE.md). stamp sets rec[n-1]; verify returns 0
+ * when Sum(rec[0..n-1]) mod 256 == 0x80. The rule is the record's, not the
+ * head-amp's — any future TAG reuses these. */
+void reac_ctrl_record_cksum_stamp(uint8_t *rec, size_t n);
+int  reac_ctrl_record_cksum_verify(const uint8_t *rec, size_t n);
 
 /* Classify a raw ethernet frame; fills *out. Returns out->kind. master_mac is
  * the ethernet SOURCE for any master frame — callers learn/pin it from
