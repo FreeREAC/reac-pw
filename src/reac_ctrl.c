@@ -3,6 +3,8 @@
 
 #include "reac_ctrl.h"
 #include <reac/reac.h>
+#include <reac/reac_braid.h>   /* reac_braid_pos — the layout oracle */
+#include <reac/reac_sample.h>  /* reac_f32_to_s24le */
 #include <string.h>
 #include <math.h>
 
@@ -30,21 +32,33 @@ static inline void put_hdr(uint8_t *f, const uint8_t dst[6], const uint8_t src[6
 	f[TYPE_OFF] = t0; f[TYPE_OFF + 1] = t1;
 }
 
-static inline void f32_to_s24le(float v, uint8_t *p)
+void reac_ctrl_block_cksum_stamp(uint8_t block[REAC_CTRL_BLOCK_LEN])
 {
-	float x = v * 8388608.0f;
-	if (x > 8388607.0f) x = 8388607.0f;
-	if (x < -8388608.0f) x = -8388608.0f;
-	int32_t s = (int32_t)lrintf(x);
-	p[0] = (uint8_t)(s & 0xFF); p[1] = (uint8_t)((s >> 8) & 0xFF); p[2] = (uint8_t)((s >> 16) & 0xFF);
+	unsigned s = 0;
+	for (int i = 0; i < REAC_CTRL_BLOCK_LEN - 1; i++)
+		s += block[i];
+	block[REAC_CTRL_BLOCK_LEN - 1] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+}
+
+void reac_ctrl_record_cksum_stamp(uint8_t *rec, size_t n)
+{
+	unsigned s = 0;
+	for (size_t i = 0; i + 1 < n; i++)
+		s += rec[i];
+	rec[n - 1] = (uint8_t)((0x80 - s) & 0xff);
+}
+
+int reac_ctrl_record_cksum_verify(const uint8_t *rec, size_t n)
+{
+	unsigned s = 0;
+	for (size_t i = 0; i < n; i++)
+		s += rec[i];
+	return ((s & 0xff) == 0x80) ? 0 : -1;
 }
 
 void reac_ctrl_checksum_apply(uint8_t *frame)
 {
-	unsigned s = 0;
-	for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_CKSUM_OFF; i++)
-		s += frame[i];
-	frame[REAC_CTRL_CKSUM_OFF] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+	reac_ctrl_block_cksum_stamp(frame + REAC_CTRL_BLOCK_OFF);
 }
 
 int reac_ctrl_checksum_verify(const uint8_t *frame)
@@ -191,13 +205,13 @@ static size_t box_frame_len(int n_ch)
 
 /* Place n_ch planar float channels (ns samples each) into the box's braided audio
  * region at `audio` (frame[50:..]), the exact layout reac_upstream_decode() inverts
- * (task #108, the ex-"FPGA scramble" of task #61): per time sample each channel PAIR
- * shares a 6-byte group; the even channel's s24 LE (lo,mid,hi) bytes sit at
- * group[3],group[0],group[1] and the odd channel's at group[4],group[5],group[2].
- * Slot placement is plain ascending. A real M-5000 expects exactly this from a box's
- * return. Shared by EVERY box->master frame that carries audio — the upstream FILLER,
- * the broadcast presence-flood, AND the cold-connect — because on a real box the audio
- * region varies every frame (it is live input, NOT static inventory). */
+ * (task #108, the ex-"FPGA scramble" of task #61). Byte positions come from
+ * libreac's reac_braid_pos() — the single layout oracle (<reac/reac_braid.h> has
+ * the byte map + evidence). Slot placement is plain ascending. A real M-5000
+ * expects exactly this from a box's return. Shared by EVERY box->master frame
+ * that carries audio — the upstream FILLER, the broadcast presence-flood, AND
+ * the cold-connect — because on a real box the audio region varies every frame
+ * (it is live input, NOT static inventory). */
 static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, int ns)
 {
 	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
@@ -205,14 +219,10 @@ static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, 
 		for (int ch = 0; ch < n_ch; ch++) {
 			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
 			uint8_t s24[3];
-			f32_to_s24le(v, s24);
-			uint8_t *g = audio + (size_t)s * n_ch * REAC_RESOLUTION
-			                   + (size_t)(ch & ~1) * REAC_RESOLUTION;
-			if ((ch & 1) == 0) {
-				g[3] = s24[0]; g[0] = s24[1]; g[1] = s24[2];
-			} else {
-				g[4] = s24[0]; g[5] = s24[1]; g[2] = s24[2];
-			}
+			size_t pos[3];
+			reac_f32_to_s24le(v, s24);
+			reac_braid_pos(s, ch, n_ch, pos);
+			audio[pos[0]] = s24[0]; audio[pos[1]] = s24[1]; audio[pos[2]] = s24[2];
 		}
 }
 
@@ -600,13 +610,9 @@ static void put_headamp_block(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t
 	frame[32] = 0x12; frame[33] = 0x12;       /* record marker */
 	frame[34] = 0x01; frame[35] = 0x01;       /* TAG 01 01 = head-amp */
 	frame[36] = ch; frame[37] = param; frame[38] = value;
-	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256. (For this record
-	 * that reduces to CH+PARAM+VALUE+CKSUM == 0x7e, but compute the general
-	 * record sum — the rule is the record's, not the head-amp's.) */
-	unsigned s = 0;
-	for (int i = 34; i < 39; i++)
-		s += frame[i];
-	frame[39] = (uint8_t)((0x80 - s) & 0xff);
+	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256 (the general
+	 * record rule — see reac_ctrl_record_cksum_stamp). */
+	reac_ctrl_record_cksum_stamp(frame + 34, 6);
 	frame[40] = 0xf7;                         /* record terminator */
 	reac_ctrl_checksum_apply(frame);          /* OUTER block checksum at [49] */
 }
@@ -657,10 +663,7 @@ int reac_ctrl_headamp_record_verify(const uint8_t *frame)
 	 * console builds CKSUM so the six bytes sum to 0x80 mod 256 (byte-verified
 	 * on the M-200, m200-headamp-re/DECODE.md). A frame that fails this carries a
 	 * corrupted preamp record and its CH/PARAM/VALUE must not be trusted. */
-	unsigned s = 0;
-	for (int i = 34; i < 40; i++)
-		s += frame[i];
-	return ((s & 0xff) == 0x80) ? 0 : -1;
+	return reac_ctrl_record_cksum_verify(frame + 34, 6);
 }
 
 /* SENS dB <-> VALUE (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).

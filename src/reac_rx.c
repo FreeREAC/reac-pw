@@ -18,16 +18,9 @@
 #include <reac/reac_capture.h>
 #include <reac/pcap_source.h>
 /* the box-return (braided, box-width) decode — the master-role RX path */
-#include "reac_upstream.h"
-
-/* s24 LE (3 bytes) -> normalized float in [-1, 1) */
-static inline float s24le_to_f32(const uint8_t *p)
-{
-	int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16));
-	if (v & 0x00800000)
-		v |= ~0x00FFFFFF; /* sign-extend bit 23 */
-	return (float)v / 8388608.0f; /* 2^23 */
-}
+#include <reac/reac_upstream.h>
+/* reac_s24le_to_f32 — the one conversion pair (exact inverse of the TX side) */
+#include <reac/reac_sample.h>
 
 static uint64_t mono_ns(void)
 {
@@ -73,7 +66,7 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT] = { 0 };
 	for (int ch = 0; ch < nch; ch++)
 		for (int s = 0; s < ns; s++)
-			planar[ch * ns + s] = s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
+			planar[ch * ns + s] = reac_s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
 	reac_ring_write(rx->ring, planar, (uint32_t)ns);
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
 }

@@ -6,14 +6,15 @@
 # Builds the static RX/measure core and exposes libreac_dep with <reac/reac.h>.
 
 project('libreac', 'c',
-  version : '0.1.0',
+  version : '0.3.0',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2'])
 
 libreac_inc = include_directories('include')
 
 libreac_lib = static_library('reac',
-  ['src/reac.c'],
+  ['src/reac.c', 'src/reac_decode.c', 'src/reac_upstream.c',
+   'src/reac_capture.c', 'src/pcap_source.c'],
   include_directories : libreac_inc,
   install : false)
 

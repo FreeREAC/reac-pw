@@ -52,14 +52,12 @@ static const uint8_t SUB02_BLK[34] = { 0xcd, 0xea, 0x01, 0x02, 0x00, 0x0e, 0x00,
 /* The cfea master-MAC field sits at template idx 11..16 (block [9:15]). */
 #define ANNOUNCE_MAC_IDX 11
 
-/* Set blk[33] so the 32-byte control block [2:34] sums to 0 mod 256 (the
- * cdea/cfea checksum rule; identical to reac_ctrl_checksum_apply on a frame). */
+/* Set blk[33] so the 32-byte control block [2:34] sums to 0 mod 256 — the
+ * cdea/cfea checksum rule, delegated to the ONE implementation in reac_ctrl
+ * (a 34-byte template is type word + block, so the block starts at +2). */
 static void stamp_block_cksum(uint8_t blk[34])
 {
-	unsigned s = 0;
-	for (int i = 2; i < 33; i++)   /* block bytes [18:49] = template [2:33] */
-		s += blk[i];
-	blk[33] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+	reac_ctrl_block_cksum_stamp(blk + 2);
 }
 
 /* ---- PROBE: the rotating hunt sequence (#130) -----------------------------
