@@ -46,11 +46,19 @@ arrival + the master's counter — never a free-running pacer. Verify
 desk owns the clock: "recover + align," not "generate a crystal."
 Files: `src/reac_slave.c`, `src/reac_rx.c` (arrival hook).
 
-### W3 — Configurable box width + identity  ·  effort S
-Present as a chosen box via `--box-channels {8,16,32}`; set config-announce
-(`01030010`) width and the per-unit `0014 [20]/[22]` field to match a plausible
-box. Currently hardcoded to `REAC_SLAVE_BOX_CHANNELS_DEFAULT`.
-Files: `src/main.c`, `src/reac_slave.c`, `src/reac_ctrl.c`.
+### W3 — Configurable box width + identity  ·  **DONE**
+Was: "currently hardcoded to `REAC_SLAVE_BOX_CHANNELS_DEFAULT`". It is not — that
+constant is only the default when no flag is given (`src/main.c:201`). `--box-channels N`
+(even, 2..40) sets the width directly, and `--box-model {s1608,s0808,s4000s}` picks a
+whole FIXED-matrix row — selector, ASCII name frame, `0402000d`, descriptor and width
+in one choice (`src/main.c:258-278`, `BOX_MODELS` at `src/reac_ctrl.c:237`). The width
+threads through every builder: `reac_slave.c` passes `s->box_channels` into
+`reac_ctrl_build_config_announce` and each cold-connect variant
+(`src/reac_slave.c:258-324`).
+
+Model rows are the law here, not a knob — see the fixed model matrix in
+[`REAC-BOX-STATE-DIAGRAM.md`](REAC-BOX-STATE-DIAGRAM.md), all three rows
+live-verified on a real M-200 (2026-07-12). There is no "S-1608 with 8 channels".
 
 ### W4 — Downstream decode: OHRCA frame length + per-generation layout  ·  effort S–M
 Two distinct issues found in `src/reac_rx.c`:
@@ -78,11 +86,24 @@ a bespoke counter-seeded CRC-16. Standard CRC-16 sweeps missed because it was ne
 a CRC-16; it was 2 bytes of the CRC-32 FCS. Lesson: verify capture ground-truth
 (mirror/SPAN byte-faithfulness) before RE-ing a "trailer".
 
-**(b) Per-generation audio layout.** `reac_rx` decodes downstream via
-`reac_decode` = **plain-LE**, which is CORRECT for the M-5000 (OHRCA) but WRONG
-for M-200/M-300 (they braid the downstream → would decode as noise). No change
-needed for the M-5000; add a per-generation switch/autodetect before targeting a
-V-Mixer desk. Wrong layout = silent noise, so wire-verify.
+**(b) Downstream audio layout — plain-LE is wrong for EVERY desk (revised
+2026-07-13).** `reac_rx` still decodes downstream via `reac_decode` = **plain-LE**
+(`src/reac_rx.c:51`). This item originally read "CORRECT for the M-5000 (OHRCA) but
+WRONG for M-200/M-300", i.e. a per-generation switch. That split is dead: the
+zoneA/zoneB goldens are the M-5000's OWN two REAC ports carrying program audio, and
+they decode at coherence 0.988/0.981 under the braid versus 0.234/0.236 under
+plain-LE (the table in [`VALIDATION-PLAN.md`](VALIDATION-PLAN.md) Stage B). The
+"plain-LE is rig-validated on a live M-5000, coherence 0.999" evidence that produced
+the split is explained there as a mid→hi lane shift amplifying quiet braided audio
+256× into a coherent-looking image — wrong-layout decodes can look BETTER than the
+truth on quiet material.
+
+So there is nothing per-generation to switch: the braid is the wire format in both
+directions (libreac's `<reac/reac_braid.h>` is the oracle, and `src/reac_tx.c`
+already encodes with it unconditionally since the `REAC_TX_LAYOUT` override was
+removed in a4f7359). The RX side has not been moved over — tracked as **#80**.
+Wrong layout = plausible-sounding noise, so wire-verify with LOUD program, never
+with a quiet room.
 
 Files: `src/reac_rx.c` (`gate_accepts`, `feed_frame`).
 
