@@ -184,15 +184,25 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
 {
-	/* NO LONGER CLAMPS. This used to force a V-Mixer-identified master to 48 kHz
-	 * on the theory that a box takes its rate from the impersonated desk MODEL.
-	 * That was never demonstrated, and the operator reports the opposite from the
-	 * hardware: the stagebox adapts to the rate it is driven at, regardless of
-	 * console family. Refusing a legitimate --rate on an unproven inference cost
-	 * more than it protected, so the request is honoured as given (issue #73).
+	/* THE RATE IS A CHOICE MADE AT THE MASTER — not a property of the desk model.
 	 *
-	 * Kept as a function rather than deleted so callers and tests keep one place
-	 * to ask "what rate should we emit?" if a real rule is ever demonstrated. */
+	 * On a real Roland desk the operator picks the REAC sample rate from a menu;
+	 * the desk then drives the segment at it and every stagebox follows. The box
+	 * has no rate setting of its own and no say in the matter — it adapts to the
+	 * cadence it is given. reac-pw IS the master, so `--rate` is our equivalent of
+	 * that menu, and there is nothing to clamp it against.
+	 *
+	 * This function used to force a V-Mixer-identified master to 48 kHz and report
+	 * `--rate 96000` as clamped, on the theory that the console identity byte
+	 * selects the rate (00 = V-Mixer => 48k only, 01 = OHRCA => 96k). That was an
+	 * inference, never demonstrated, and it is wrong: the identity byte says which
+	 * desk we are impersonating, not which rate the operator chose. Likewise the
+	 * old "OHRCA is natively 96 kHz" default — an M-5000 runs at whatever its REAC
+	 * menu is set to, so a profile-dependent default was equally unfounded.
+	 *
+	 * So: honour the request, and default to 48 kHz (the working standard for live
+	 * work) for every profile. Kept as a function rather than deleted so that a
+	 * real, demonstrated rule would have one obvious home. See issue #73. */
 	(void)mixer;
 	if (clamped)
 		*clamped = 0;
