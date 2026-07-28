@@ -28,8 +28,9 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-The source tarball vendors libreac and the reac-aes67 decode core so the build
-is self-contained (no network fetch).
+Links dynamically against the system libreac (>= 0.2.0), which carries the
+shared REAC byte-layout core: frame validation, 24-bit decode, capture and
+pcap replay. Nothing is vendored.
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -38,9 +39,11 @@ is self-contained (no network fetch).
 # Explicit meson (the host uses a pip-installed meson, not the dnf macros).
 # %%set_build_flags exports the Fedora CFLAGS/LDFLAGS (incl. -g and the linker
 # build-id) so the plain buildtype still yields a real debuginfo package.
+# --wrap-mode=nofallback: the libreac dependency MUST resolve to the system
+# libreac-devel (pkg-config), never the bundled subproject wrap -- the RPM links
+# libreac dynamically (runtime dep auto-generated from the libreac.so.0 soname).
 %set_build_flags
-meson setup _build --prefix=%{_prefix} --buildtype=plain \
-      -Dreac_aes67=third_party/reac-aes67-core
+meson setup _build --prefix=%{_prefix} --buildtype=plain --wrap-mode=nofallback
 meson compile -C _build
 
 %install
