@@ -5,14 +5,24 @@ segment, each box's inputs landing at its own slice of the 40-slot fabric, expos
 `reac-capture` channels (and, later, each box's outputs fed from `reac-playback`).
 Optional per-box **names**. See also `MASTER-HARDWARE-VERIFY.md` (single-box, verified).
 
-## What is single-box today
+## What is single-box today (re-checked against the code 2026-07-29)
 
 - `reac_master` FSM tracks ONE box (`box_mac`); a JOIN from a different MAC is
-  `DROP_MAC_CHANGE` — it drops the current box and re-grants the new one.
+  `DROP_MAC_CHANGE` — it drops the current box and re-grants the new one
+  (`docs/MASTER-FSM.md`, the ESTABLISHED → GRANTING row).
 - `reac_rx` locks `up_src` to the FIRST box and decodes its `nch` channels into ring
-  slots `0..nch-1`; frames from any other box are gated out (`frames_other`).
+  slots `0..nch-1`; frames from any other box are gated out (`frames_other`) —
+  `src/reac_rx.c:88-93`, `src/reac_rx.c:192`.
 - One `reac_ring` (40 ch), one shared write cursor; `reac_source_node` reads it into
-  the 40 `reac-capture` ports.
+  the `reac-capture` ports.
+
+**Piece 1 of the build order below has since landed.** `src/reac_boxreg.{h,c}` is the
+registry described under "Box registry (shared)": MAC → (base, nch, name) over the
+40-slot AUDIO fabric, `REAC_BOXREG_MAX_BOXES` = 5, allocation by first-JOIN order with
+pre-declared boxes able to pin a base. It is unit-tested standalone
+(`tests/test_reac_boxreg.c`) and is what `reac_grant` reasons against, but **it is not
+yet wired into `reac_rx`'s gate or `reac_source_node`'s placement** — that is piece 2,
+and it is why the three bullets above still describe the runtime accurately.
 
 ## Target architecture
 
@@ -60,7 +70,8 @@ recognised model + MAC tail. Deterministic base assignment (join order) unless `
 pins it. This piece needs NO second box and NO wire RE — testable on the S-1608.
 
 ## Build order
-1. **Names + box registry scaffold** (single box) — testable now, requested.
+1. **Names + box registry scaffold** (single box) — **DONE**: `src/reac_boxreg.{h,c}`
+   + `tests/test_reac_boxreg.c`. Not yet consumed by the RX gate (see above).
 2. **RX box-table + per-box ring** (still 1 active box; unit-test 2 synthetic boxes) —
    structural, single-box behaviour preserved.
 3. **Master per-box grant/keep-alive** (unit-tested; live-validate when the S-0808 is
@@ -68,5 +79,12 @@ pins it. This piece needs NO second box and NO wire RE — testable on the S-160
 4. **Downstream per-box outputs** — gated on a real 2-box capture to RE slot assignment.
 
 ## Status
-Design only for 3–4; pieces 1–2 are the safe, testable start. The S-0808 must be
-transmitting (it is not currently) to validate 3; a real desk + 2-box capture unblocks 4.
+Piece 1 landed; 2–4 are still design. The S-0808 must be transmitting (it was not, as
+of 2026-07-12) to validate 3; a real desk + 2-box capture unblocks 4.
+
+One constraint the registry work made concrete, and which any multi-box allocator must
+respect: a box's AUDIO must land inside the 40 slots a downstream frame carries, NOT
+the 48-slot head-amp/chanmap space. The two are separate, both are load-bearing, and
+each has been conflated in the opposite direction already — `src/reac_slots.h` names
+both once with their capture evidence, and `docs/PLACEMENT-EVIDENCE.md` carries the
+corpus behind them (#69, #129).
