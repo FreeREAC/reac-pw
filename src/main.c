@@ -134,7 +134,13 @@ static void usage(const char *p)
 	  "                address, so it stays Roland-OUI-compatible yet can never collide\n"
 	  "                with a real box (e.g. an S-1608 at 00:40:ab:c4:80:41).\n"
 	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
-	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n", p);
+	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n"
+	  "environment (see docs/ENV-KNOBS.md; unset = default behavior, byte-identical):\n"
+	  "  REACPW_GRANT_DWELL_S=N  master role: hold the recognized-but-ungranted dwell\n"
+	  "                for N whole seconds before the grant burst (default: the built-in\n"
+	  "                ~1.6 s dwell; a real M-200 holds a cold box ~27 s)\n"
+	  "  REAC_DEBUG=1  opt-in RX/source telemetry on stderr (~every 2 s: frame/dup/gap\n"
+	  "                counters, ring fill, active channels)\n", p);
 }
 
 /* MASTER autodetect (no --box): a main-loop watcher that polls the box the pacer
