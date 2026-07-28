@@ -585,16 +585,23 @@ int main(void)
 
 		int clamped;
 
-		/* V-Mixer (m200/m300): ALWAYS 48 kHz, whatever --rate says (unset,
-		 * matching, or mismatched) — the original clamp, now profile-driven. */
+		/* THE REQUESTED RATE IS HONOURED, for every desk profile.
+		 *
+		 * This block used to assert the opposite: that a V-Mixer-identified
+		 * master was forced to 48 kHz and --rate 96000 was reported as clamped.
+		 * That encoded an INFERENCE (rate rides the desk identity) which was
+		 * never demonstrated; the operator reports from the hardware that a
+		 * stagebox adapts to the rate it is driven at, whatever console family
+		 * the master claims. The clamp is gone and these assertions now pin the
+		 * honest contract, so the old belief cannot creep back (issue #73).
+		 *
+		 * `clamped` is retained in the signature and is always 0 — kept so a
+		 * real, demonstrated rule would have one place to live. */
 		CHK(reac_mixer_resolve_rate(m200, 0, &clamped) == 48000 && !clamped);
 		CHK(reac_mixer_resolve_rate(m200, 48000, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200, 96000, &clamped) == 48000 && clamped);
-		CHK(reac_mixer_resolve_rate(m300, 96000, &clamped) == 48000 && clamped);
-
-		/* OHRCA (m5000): native 96 kHz when --rate is unset; honors an explicit
-		 * --rate (no clamp — it is the desk that gates 48k, not us). */
-		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == 96000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, 96000, &clamped) == 96000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m300, 96000, &clamped) == 96000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == 48000 && !clamped);
 		CHK(reac_mixer_resolve_rate(m5000, 96000, &clamped) == 96000 && !clamped);
 		CHK(reac_mixer_resolve_rate(m5000, 48000, &clamped) == 48000 && !clamped);
 
@@ -602,7 +609,7 @@ int main(void)
 		 * rate; the pacer's per-fps period (reac_pacer_period_ns) is already
 		 * covered by test_reac_pacer.c — pin the rate->fps mapping here. */
 		int fps_m200_48k  = reac_mixer_resolve_rate(m200, 0, NULL) / REAC_SAMPLES_PER_PKT;
-		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, 0, NULL) / REAC_SAMPLES_PER_PKT;
+		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, 96000, NULL) / REAC_SAMPLES_PER_PKT;
 		CHK(fps_m200_48k == 4000);
 		CHK(fps_m5000_96k == 8000);
 

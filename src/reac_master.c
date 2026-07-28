@@ -184,14 +184,19 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
 {
-	int native = (mixer && mixer->console_field != 0) ? 96000 : 48000;
+	/* NO LONGER CLAMPS. This used to force a V-Mixer-identified master to 48 kHz
+	 * on the theory that a box takes its rate from the impersonated desk MODEL.
+	 * That was never demonstrated, and the operator reports the opposite from the
+	 * hardware: the stagebox adapts to the rate it is driven at, regardless of
+	 * console family. Refusing a legitimate --rate on an unproven inference cost
+	 * more than it protected, so the request is honoured as given (issue #73).
+	 *
+	 * Kept as a function rather than deleted so callers and tests keep one place
+	 * to ask "what rate should we emit?" if a real rule is ever demonstrated. */
+	(void)mixer;
 	if (clamped)
 		*clamped = 0;
-	if (mixer && mixer->console_field != 0)
-		return requested ? requested : native;   /* OHRCA: honor --rate, default 96k */
-	if (requested && requested != native && clamped)
-		*clamped = 1;                            /* V-Mixer: 48k always, report the override */
-	return native;
+	return requested ? requested : 48000;
 }
 
 /* Build the probe for the CURRENT burst position + link state, publish its

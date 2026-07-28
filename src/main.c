@@ -333,33 +333,29 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/* The box infers its sample rate from the DESK MODEL we impersonate, NOT the
-	 * packet cadence: rig-diffed (2026-07-13) an M-5000 vs an M-300 downstream —
-	 * the rate signal is the desk IDENTITY (cfea console byte + ENROLL console
-	 * byte: `01` = OHRCA/M-5000 => 96 kHz native, `00` = V-Mixer/M-200,M-300 =>
-	 * 48 kHz only). There is no explicit 48000/96000 field. The downstream FRAME
-	 * SHAPE itself does NOT vary by model (task #156 RE: the "1494-byte OHRCA
-	 * frame" some captures show is a mirror/SPAN capture artifact — the 2 extra
-	 * bytes are the standard Ethernet FCS, not a REAC field; see reac_tx.h /
-	 * tests/test_reac_tx.c), so the only thing that changes for 96 kHz is the
-	 * pacer's cadence (fps = rate/12, already rate-driven) and the console-
-	 * identity bytes (already wired through --mixer's console_field).
+	/* SAMPLE RATE — what we actually know, and what we do not.
 	 *
-	 * A V-Mixer desk has no wire rate field at all, so it is ALWAYS 48 kHz
-	 * regardless of `--rate` (reac_mixer_resolve_rate) — that part of the
-	 * original clamp is preserved. An OHRCA desk (M-5000) is native 96 kHz and
-	 * honors `--rate`; see docs/MASTER-HARDWARE-VERIFY.md. */
-	if (role == REAC_ROLE_MASTER) {
-		int clamped = 0;
-		int resolved = reac_mixer_resolve_rate(mixer, rxcfg.forced_rate, &clamped);
-		if (clamped)
-			fprintf(stderr, "reac-pw: master impersonating %s emits %d Hz "
-			        "V-Mixer downstream only; --rate %d ignored (the box takes "
-			        "its rate from the impersonated desk MODEL, not the "
-			        "cadence) — use --mixer m5000 for 96 kHz.\n",
-			        mixer->display, resolved, rxcfg.forced_rate);
-		rxcfg.forced_rate = resolved;
-	}
+	 * A previous revision of this comment asserted that the box infers its rate
+	 * from the DESK IDENTITY (cfea/ENROLL console byte: 01 = OHRCA/M-5000 =>
+	 * 96 kHz, 00 = V-Mixer => 48 kHz only), and clamped --rate accordingly.
+	 * That was an INFERENCE, never demonstrated, and the operator reports the
+	 * opposite from the hardware: a stagebox ADAPTS to the rate it is driven at,
+	 * independently of which console family the master claims to be. The clamp
+	 * built on that inference has been removed — it refused a legitimate request
+	 * on the strength of a guess.
+	 *
+	 * The console byte plainly signals SOMETHING (it is byte-verified in both the
+	 * cfea announce and the ENROLL), but "which desk family" is not the same
+	 * claim as "which sample rate", and we have no capture that separates them.
+	 *
+	 * Beware this paragraph's history: the same block also claimed the upstream
+	 * "+2 bytes" were the Ethernet FCS. That was FALSIFIED 2026-07-25 — on the
+	 * S-4000S they are a real OHRCA CRC-16 (docs/OHRCA-UPSTREAM-DUPLICATE-FRAMES.md,
+	 * fixtures UP32A/UP32B). Two wrong claims from one paragraph: state what is
+	 * measured, mark the rest as open. See issue #73.
+	 *
+	 * So: --rate is honoured as given. The pacer cadence is fps = rate/12 at every
+	 * rate (12 samples per frame is invariant across every captured rate). */
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
