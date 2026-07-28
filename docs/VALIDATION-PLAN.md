@@ -92,7 +92,9 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
   than the truth on quiet material — always fingerprint with program-level
   audio and check for the 256×/uniform-byte signatures. #135 should
   re-validate a real M-5000 with loud program before keying the encode per
-  mixer profile (`REAC_TX_LAYOUT=plain` keeps the variant available).
+  mixer profile (the `REAC_TX_LAYOUT=plain` A/B override was removed after
+  the braid was confirmed; the plain layout survives as the negative control
+  in `tests/test_reac_tx.c`).
 
 **Stage B re-test / listen protocol:**
 
@@ -108,8 +110,9 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
    LED steady) beyond protocol ESTABLISHED before judging audio.
 4. Source at −30/−40 dBFS, monitor at minimum, hand on the power switch; expect
    the session soft-volume (~−9 dB observed) in level judgements.
-5. `REAC_TX_LAYOUT=plain` A/B reproduces the historical garbage symptom on
-   demand (diagnostic only).
+5. The historical plain-LE garbage symptom is reproduced offline by the
+   negative control in `tests/test_reac_tx.c` (the runtime `REAC_TX_LAYOUT`
+   A/B override was removed once the braid was confirmed).
 
 ### Stage C — openmixer per-box UI (validates PR #156)
 6. **Build + unit tests** — `cd ~/Devel/audio/openmixer && git checkout feat/reac-per-box-stagebox
@@ -153,8 +156,9 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
   REAC ports decode braided, and the plain "coherence 0.999" is explained by the
   mid→hi lane shift amplifying quiet braided audio 256× into a coherent-looking image
   (see Stage B). Re-validate a real M-5000 with LOUD program before adding a
-  mixer-profile-keyed encode; until then the braid is the default and
-  `REAC_TX_LAYOUT=plain` keeps the M-5000-gen candidate selectable. This also means
+  mixer-profile-keyed encode; until then the braid is the only encode (the
+  `REAC_TX_LAYOUT=plain` runtime override was removed — the plain layout lives on
+  as the `tests/test_reac_tx.c` negative control). This also means
   reac-aes67's `reac_decode` plain de-interleave likely needs the same braid fix.
 
 **openmixer**
