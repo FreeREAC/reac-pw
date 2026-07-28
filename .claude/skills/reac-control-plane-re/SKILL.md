@@ -16,10 +16,10 @@ you find a fact here, it is a bug — move it to the right document.
 | Frame layout, control multiplex, DT1 records | `reac-protocol` → `spec/reac.ksy` (formal, CI-validated against libreac) + `wire-format.md` |
 | Byte layout in code | **libreac** — the executable oracle (`reac_braid.h`, `reac_upstream.h`, `reac_frame_clean_len()`). Never fork a second decoder. |
 | Master establishment states | `docs/MASTER-FSM.md` (diagram + transition table) |
-| Slave/box establishment | `docs/REAC-BOX-STATE-DIAGRAM.md`, `docs/REAC-CONNECTION-FSM.md` |
+| Slave/box establishment | `docs/REAC-BOX-STATE-DIAGRAM.md`, `docs/SLAVE-EMULATION-SCOPE.md`; the full reconstruction is `REAC-CONNECTION-FSM.md` in the private `reac-firmware-re` |
 | Slot placement (per-model bases) | `docs/PLACEMENT-EVIDENCE.md` — 82 captures; the base is **negotiated**, the carrier is not yet isolated |
 | The two address spaces | `src/reac_slots.h` — audio fabric = 40 slots; head-amp/chanmap = 48 (`0x00..0x2f`). **Never conflate them.** |
-| Environment knobs | `docs/ENV-KNOBS.md` (and `--help`). Main carries exactly two. |
+| Environment knobs | `docs/ENV-KNOBS.md` (and `--help`). Read the count off either — it grows. |
 | Duplicate-frame guard, OHRCA +2 | `docs/OHRCA-UPSTREAM-DUPLICATE-FRAMES.md` |
 | Captures + analysis tooling | `reac-captures/` (corpus) and its `analysis/` (`reac_pcap.py` streaming parser — reuse it, do not write another) |
 
@@ -67,7 +67,6 @@ the box.
 ## The loop
 
 ```bash
-cd ~/Devel/audio/reac-pw
 ninja -C build && sudo -n setcap cap_net_raw,cap_sys_nice+ep build/reac-pw
 pkill -x reac-pw                 # -x ALWAYS: pkill -f '<pattern>' matches the
                                  # killing shell's own cmdline and kills it (exit 144)

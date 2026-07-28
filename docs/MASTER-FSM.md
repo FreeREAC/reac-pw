@@ -110,11 +110,14 @@ real M-200/M-300 captures. The decision core refactor moves only the
 transition DECISIONS; the emit sites and their timing constants are the
 goldens' territory.
 
-## Decision-core mapping (#61)
+## Decision-core mapping (#61) — LANDED
 
-The refactor classifies the guards above INTO the event, so the step function
-is a pure `(state, event) → (next state, entry action, drop reason)` table
-(the shape `src/reac_fsm.h` already gave the slave side):
+`src/reac_master_fsm.{h,c}` is that table, and `reac_master.c` routes every
+transition through it (3436a7d, 0a09d32, both 2026-07-28 — this document was
+written from the pre-table code two commits earlier, which is why the section
+below reads as a plan). The guards above are classified INTO the event, so the
+step function is a pure `(state, event) → (next state, entry action, drop reason)`
+mapping (the shape `src/reac_fsm.h` already gave the slave side):
 
 - rx kinds fold to: `PRESENCE` (bcast filler, JOIN without block),
   `JOIN_NEW` / `JOIN_SAME` (MAC compare against the latched box),
