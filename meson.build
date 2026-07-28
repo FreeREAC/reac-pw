@@ -101,6 +101,19 @@ tx_test = executable('test_reac_tx',
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
 
+# --- BYTE-IDENTITY gate for the encoder's move into libreac -------------------
+# main auto-deploys to the live rig, so this pins the emitted BYTES, not just the
+# behaviour: FNV-1a-64 digests of a deterministic corpus (1120 downstream frames,
+# 9240 box->master frames across every builder and box width), whose expected
+# constants were computed by running the PRE-MOVE encoder. libreac's own
+# tests/test_encode.c pins the same downstream constant from the other side of
+# the wrap. A mismatch is a wire-format regression — never update the constant.
+encode_golden_test = executable('test_reac_encode_golden',
+  ['tests/test_reac_encode_golden.c', 'src/reac_ctrl.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_encode_golden', encode_golden_test)
+
 # --- unit test: the UPSTREAM (stagebox->master) frame decode -------------------
 # Captured-frame fixtures (MAC-sanitized) + the resolved braid layout; no I/O.
 upstream_test = executable('test_reac_upstream',
