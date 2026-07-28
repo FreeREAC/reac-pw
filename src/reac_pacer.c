@@ -787,29 +787,6 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 		reac_headamp_tx_set(&p->headamp, cfg->headamps[i].ch,
 		                    cfg->headamps[i].param, cfg->headamps[i].value);
 
-	/* Post-establish SCENE COMMIT seed (REACPW_EST_COMMIT, default OFF): stage the
-	 * COMPLETE granted head-amp scene so the box's staging holds EVERY channel before
-	 * the SUB01 -> SUB02 commit fires. The DMX re-assert only sweeps SET cells
-	 * (reac_headamp_tx gates on ->set), so an operator who configured just a few
-	 * channels would leave the rest never re-asserted post-grant and thus absent from
-	 * staging at commit time — only the anchor input would latch. Seed every GRANTED
-	 * channel (m->alloc base..base+w-1, already reflecting the console cfg from
-	 * reac_master_init above) with its EFFECTIVE value: the operator's when set, else
-	 * the same safe default the grant sweep already enrolled (reac_grant_headamp_value).
-	 * That marks the cell SET so the existing sweep re-pushes it. Because the seeded
-	 * value EQUALS what reac_grant_headamp_value returns for an unset cell, the grant
-	 * burst bytes rebuilt by reac_master_set_headamp_src below are UNCHANGED — only the
-	 * post-establish DMX coverage widens. OFF: the loop is skipped and the table (hence
-	 * the whole downstream) is byte-identical to today. */
-	if (reac_master_est_commit_enabled()) {
-		int base = p->master.alloc.base;
-		int end  = base + p->master.alloc.width;
-		for (int ch = base; ch < end; ch++)
-			for (uint8_t param = 0; param < REAC_HEADAMP_NPARAMS; param++)
-				reac_headamp_tx_set(&p->headamp, (uint8_t)ch, param,
-				    reac_grant_headamp_value(&p->headamp, (uint8_t)ch, param));
-	}
-
 	/* Point the master's GRANT sweep at this table: group A of the enrollment sweep
 	 * IS the initial head-amp state push (reac_grant.h), so the state we enroll a
 	 * box with must be the state the operator configured — not a second, divergent
