@@ -40,6 +40,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "reac_slots.h"   /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_grant.h"   /* struct reac_grant_alloc, REAC_GRANT_SWEEP_MAX */
 
 struct reac_headamp_tx;   /* reac_headamp_tx.h — the head-amp state group A pushes */
@@ -138,14 +139,18 @@ enum reac_master_drop_reason {
  * tick-driven) and fps-scaled at init like link_check_reload. */
 #define REAC_M_GRANT_DWELL_SECONDS_X10 16   /* 1.6 s, scaled by fps at init */
 
-/* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
- * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
+/* The CHANMAP is a RING of 49 positions: head-amp channels 0x00..0x2f (48) followed
+ * by the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
  * ring positions, and a real master emits ONE window per start position — so the
  * full sweep is exactly 49 frames (measured live off an M-200 driving an S-1608,
  * 2026-07-11, #130). An earlier 11-frame figure came from an M-300 capture too
- * short to contain the whole rotation. */
-#define REAC_M_FABRIC_RING        49
-#define REAC_M_CHANMAP_FRAMES_MAX REAC_M_FABRIC_RING
+ * short to contain the whole rotation.
+ *
+ * This ring spans the HEAD-AMP slot space, not the 40-slot AUDIO fabric — it was
+ * spelled REAC_M_FABRIC_RING, which said "fabric" while counting head-amp channels
+ * (#69). Both spaces are defined once in reac_slots.h. */
+#define REAC_M_CHANMAP_RING       REAC_HEADAMP_RING   /* 49 = 48 slots + 0xfe */
+#define REAC_M_CHANMAP_FRAMES_MAX REAC_M_CHANMAP_RING
 
 /* Console I/O config: everything the downstream generator needs to synthesize
  * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
@@ -156,7 +161,9 @@ enum reac_master_drop_reason {
 struct reac_console_cfg {
 	uint8_t out_channels;   /* box analog outputs: cfea outCh [18]. (Does NOT
 	                         * size the chanmap: a real master sweeps the whole
-	                         * 40-slot fabric regardless of console width, #130.)
+	                         * 48-slot chanmap ring regardless of console
+	                         * width, #130 — that ring is the HEAD-AMP space,
+	                         * not the 40-slot audio fabric, see reac_slots.h.)
 	                         * S-1608 = 8, M-5000 downstream box = 16.        */
 	uint8_t in_channels;    /* box analog inputs: sizes the UPSTREAM parser
 	                         * (box->master); carried for the caller, not a
@@ -285,7 +292,7 @@ struct reac_master {
 	                           * golden's post-recognition enrol) then clears this. */
 	int      grant_dwell;     /* dwell slots between ENROLL and the grant burst
 	                           * (fps*REAC_M_GRANT_DWELL_SECONDS_X10/10, set at init) */
-	struct reac_grant_alloc alloc;   /* the fabric slots we granted this box    */
+	struct reac_grant_alloc alloc;   /* the head-amp slots we granted this box  */
 	uint8_t  grant_burst[REAC_GRANT_SWEEP_MAX][34];  /* the generated sweep     */
 	int      grant_burst_len; /* rows in grant_burst                            */
 	const struct reac_headamp_tx *headamp_src;  /* head-amp state group A pushes;

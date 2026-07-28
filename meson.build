@@ -329,10 +329,13 @@ test('reac_headamp_live', headamp_live_test)
 # (width x 3 group-A records, params 0/1/2 per channel, channels contiguous from
 # base), byte-exactness of every generated record against the proven head-amp
 # builder, the value-sourcing rule (head-amp table when set, safe default otherwise),
-# and that group B stays the fixed width-invariant constant. Pure — no socket.
+# and that group B stays the fixed width-invariant constant. ALSO pins the two slot
+# spaces apart (#69): the same base-32 x width-16 span is LEGAL as head-amp (an
+# S-1608 reaching CH 47) and ILLEGAL as audio (past the 40 slots the frame carries),
+# which is why reac_boxreg links in here. Pure — no socket.
 grant_test = executable('test_reac_grant',
   ['tests/test_reac_grant.c', 'src/reac_grant.c', 'src/reac_ctrl.c',
-   'src/reac_headamp_tx.c'],
+   'src/reac_headamp_tx.c', 'src/reac_boxreg.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_grant', grant_test)

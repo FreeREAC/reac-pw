@@ -4,7 +4,7 @@
 /* reac_boxreg — the multi-box registry.
  *
  * A master can drive several stageboxes on one REAC segment. Each box owns a
- * contiguous slice of the 40-slot fabric: its `nch` inputs land at slots
+ * contiguous slice of the 40-slot AUDIO fabric: its `nch` inputs land at slots
  * [base, base+nch). This registry maps a box's L2 MAC -> (base, nch, name) so
  * the RX can place each box's decoded audio at its fabric slots and the UI can
  * label them. Allocation is by first-seen (JOIN) order: the next box takes the
@@ -18,13 +18,23 @@
 
 #include <stdint.h>
 
+#include "reac_slots.h"   /* the two slot spaces: audio fabric vs head-amp */
+
 #define REAC_BOXREG_MAX_BOXES 5      /* 5 x 8ch = 40 = a full fabric of S-0808s */
 #define REAC_BOXREG_NAME_MAX  32
-#define REAC_BOXREG_FABRIC     40    /* the REAC fabric slot count */
+
+/* THE AUDIO FABRIC, not the head-amp space. A box's audio has to land in the 40
+ * slots a downstream frame actually carries — the width the master advertises in
+ * cfea [17] = 0x28 and the ENROLL group map spans as 5 groups x 8. The head-amp /
+ * chanmap space is 48 wide (0x00..0x2f) and an S-1608's inputs sit at CH 32..47
+ * there, which is emphatically NOT a licence to allocate a box's audio past slot
+ * 39: bounding this allocator by 48 would silently place channels past the end of
+ * the frame (#69, docs/PLACEMENT-EVIDENCE.md). */
+#define REAC_BOXREG_FABRIC    REAC_AUDIO_FABRIC_SLOTS   /* 40 */
 
 struct reac_box {
 	uint8_t  mac[6];                     /* L2 source; all-zero = a pre-declared slot */
-	int      base;                       /* first fabric slot (0..39) */
+	int      base;                       /* first AUDIO fabric slot (0..39) */
 	int      nch;                        /* box input width (even, 2..40) */
 	int      established;                 /* handshake complete (RX/FSM sets this) */
 	int      pinned;                     /* base was pre-declared, not auto-allocated */
@@ -34,10 +44,10 @@ struct reac_box {
 struct reac_boxreg {
 	struct reac_box box[REAC_BOXREG_MAX_BOXES];
 	int n;          /* boxes registered */
-	int fabric;     /* total fabric slots (<= REAC_BOXREG_FABRIC) */
+	int fabric;     /* total AUDIO fabric slots (<= REAC_BOXREG_FABRIC) */
 };
 
-/* Reset the registry to empty with `fabric` total slots (0 or >FABRIC -> 40). */
+/* Reset the registry to empty with `fabric` total AUDIO slots (0 or >FABRIC -> 40). */
 void reac_boxreg_init(struct reac_boxreg *r, int fabric);
 
 /* Index of the box with this MAC, or -1. */

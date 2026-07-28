@@ -51,10 +51,15 @@
  * (c) a wrong-but-self-consistent allocation is exactly the failure we are fixing —
  * being consistent with the REST OF THE WORLD is the whole point.
  *
- * NOTE ON THE CEILING. REAC_GRANT_FABRIC_CEILING = 0x2f is the HEAD-AMP / chanmap
- * channel space (48 slots), NOT the audio fabric: cfea advertises 40 audio slots and
- * the ENROLL map spans exactly those 40. The S-1608 runs to 0x2f = 47, past 40 — so
- * group-A CH is not an audio-fabric index. Keep the two spaces apart (see #129).
+ * NOTE ON THE CEILING — RESOLVED IN CODE (#69). The 0x2f ceiling this allocator
+ * enforces is the HEAD-AMP / chanmap channel space (48 slots), NOT the audio fabric:
+ * cfea advertises 40 audio slots ([17] = 0x28) and the ENROLL map spans exactly those
+ * 40 (5 groups x 8). The S-1608 runs to 0x2f = 47, past 40 — so group-A CH is not an
+ * audio-fabric index. The constant used to be spelled REAC_GRANT_FABRIC_CEILING,
+ * which named the audio fabric while measuring the head-amp space; both spaces are
+ * now defined once, honestly, in reac_slots.h and this allocator takes the head-amp
+ * one. Where a box's AUDIO lands stays reac_boxreg's decision over
+ * REAC_AUDIO_FABRIC_SLOTS. Multi-box allocation (#129) must keep them apart.
  *
  * This is a POLICY table, deliberately separated from the mechanism below it, so
  * multi-box allocation (#129 — several boxes sharing one fabric) can replace the
@@ -79,8 +84,10 @@ int reac_grant_alloc_fits(int base, int width)
 	if (base < 0)
 		return 0;
 	/* The ceiling test, stated as the doc states it: the LAST slot the box would
-	 * own is base+width-1, and it must not pass 0x2f. */
-	return (base + width - 1) <= REAC_GRANT_FABRIC_CEILING;
+	 * own is base+width-1, and it must not pass 0x2f. HEAD-AMP space — see the
+	 * ceiling note above and reac_slots.h: 0x20+16 = 0x2f is legal here precisely
+	 * because it is NOT an audio-fabric index. */
+	return (base + width - 1) <= REAC_HEADAMP_CEILING;
 }
 
 int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
@@ -91,7 +98,7 @@ int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
 	/* The observed base for this width, when we have one AND it still fits. The
 	 * fits() gate is not ceremony: it is what forbids a 32-wide box from taking
 	 * the S-1608's 0x20, and it keeps a future policy edit from silently
-	 * allocating past the fabric. */
+	 * allocating past the head-amp space. */
 	for (size_t i = 0; i < sizeof OBSERVED_PLACEMENT / sizeof OBSERVED_PLACEMENT[0]; i++) {
 		if (OBSERVED_PLACEMENT[i].width != in_ch)
 			continue;
@@ -104,7 +111,7 @@ int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
 
 	/* An unobserved width (or an observed base that does not fit): take the lowest
 	 * base that does. "Width-many contiguous slots wherever they fit", with the
-	 * fabric otherwise empty — reac-pw grants one box at a time (see #129). */
+	 * space otherwise empty — reac-pw grants one box at a time (see #129). */
 	if (!reac_grant_alloc_fits(0, in_ch))
 		return -1;
 	out->base  = 0x00;
@@ -227,8 +234,8 @@ int reac_grant_build_sweep(uint8_t sweep[][34], int max,
 	if (!reac_grant_alloc_fits(alloc->base, w))
 		return -1;
 	/* Every slot we are about to address must be a real head-amp channel — the
-	 * fabric ceiling already guarantees this, but assert it against the head-amp
-	 * channel space too so the two can never drift apart unnoticed. */
+	 * fits() ceiling already guarantees this, but assert it against reac_ctrl's
+	 * own bound too so the two can never drift apart unnoticed. */
 	if (alloc->base + w > REAC_HEADAMP_MAX_CH)
 		return -1;
 	int n = REAC_GRANT_SWEEP_LEN(w);
