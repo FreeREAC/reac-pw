@@ -299,8 +299,8 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
  * 0xfe section marker at the wrap (idx 48). */
 static uint8_t ring_at(int i)
 {
-	i %= REAC_M_FABRIC_RING;
-	return (i == REAC_M_FABRIC_RING - 1) ? REAC_CHANMAP_MARKER : (uint8_t)i;
+	i %= REAC_M_CHANMAP_RING;
+	return (i == REAC_M_CHANMAP_RING - 1) ? REAC_CHANMAP_MARKER : (uint8_t)i;
 }
 
 /* The master's window emit ORDER (measured off the M-200): the marker window
@@ -310,7 +310,7 @@ static uint8_t ring_at(int i)
 static int chanmap_start(int f)
 {
 	if (f == 0)
-		return REAC_M_FABRIC_RING - 1;      /* the 0xfe marker window */
+		return REAC_M_CHANMAP_RING - 1;      /* the 0xfe marker window */
 	int i    = f - 1;                       /* 0..47 */
 	int base = 7 - (i / 6);                 /* 7,6,5,4,3,2,1,0 */
 	int k    = i % 6;                       /* 0..5 */
@@ -323,7 +323,7 @@ static int chanmap_start(int f)
 static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 {
 	(void)cfg;
-	for (int f = 0; f < REAC_M_FABRIC_RING; f++) {
+	for (int f = 0; f < REAC_M_CHANMAP_RING; f++) {
 		uint8_t *blk = frames[f];
 		memset(blk, 0, 34);
 		blk[0] = 0xcd; blk[1] = 0xea;
@@ -346,7 +346,7 @@ static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 		blk[31] = 0x00; blk[32] = 0x00;       /* terminator */
 		stamp_block_cksum(blk);
 	}
-	return REAC_M_FABRIC_RING;
+	return REAC_M_CHANMAP_RING;
 }
 
 /* Allocate `in_ch` fabric slots and regenerate the grant sweep for them. Keeps the

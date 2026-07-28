@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "reac_slots.h"    /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_master.h"   /* enum reac_master_rx_event (the classifier's verdict) */
 
 #define REAC_CTRL_BLOCK_OFF   18   /* control block / checksum region start */
@@ -226,13 +227,14 @@ enum reac_headamp_param {
  *
  * This is NOT libreac's REAC_MAX_CHANNELS (40). The two are DIFFERENT spaces and
  * conflating them is a bug (fixed 2026-07-17): REAC_MAX_CHANNELS is the count of
- * AUDIO slots carried in a downstream frame, whereas a head-amp record's CH is a
- * fabric wire channel = model_base + (box_input - 1), and the fabric runs to the
- * 0x2f ceiling (the same ceiling reac_master.c's chanmap ring already encodes as
- * REAC_M_FABRIC_RING = 48 channels + the 0xfe marker). A 16-input S-1608 based at
+ * AUDIO slots carried in a downstream frame (REAC_AUDIO_FABRIC_SLOTS), whereas a
+ * head-amp record's CH is a wire channel = model_base + (box_input - 1), running to
+ * the 0x2f ceiling (the same ceiling reac_master.c's chanmap ring already encodes as
+ * REAC_M_CHANMAP_RING = 48 channels + the 0xfe marker). A 16-input S-1608 based at
  * 0x20 occupies 0x20..0x2f = 32..47, so a table bounded by 40 silently REJECTED
- * that box's inputs 9..16 — its top half could never be given phantom/pad/sens. */
-#define REAC_HEADAMP_MAX_CH 0x30
+ * that box's inputs 9..16 — its top half could never be given phantom/pad/sens.
+ * Both spaces are defined once in reac_slots.h (#69); this is the head-amp one. */
+#define REAC_HEADAMP_MAX_CH REAC_HEADAMP_SLOTS
 
 /* Build the head-amp command frame (master->box direction, downstream width:
  * a real console BROADCASTS these interleaved in its stream — pass the
