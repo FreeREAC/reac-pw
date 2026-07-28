@@ -110,9 +110,9 @@ block by `in_ch` (`reac_box_model_by_channels`), so width and declaration cannot
 decoupled today without a patched build; and `reac_ctrl_checksum_apply` already
 re-stamps the block, so a changed byte stays checksum-valid.
 
-## One correction this study forces
+## One correction this study forces — RESOLVED IN CODE (#69)
 
-`src/reac_grant.c` reasons about a "`0x2f` fabric ceiling". That ceiling is real but it
+`src/reac_grant.c` reasoned about a "`0x2f` fabric ceiling". That ceiling is real but it
 belongs to the **head-amp / chanmap channel space (48 slots, `0x00..0x2f`)**, which is
 *not* the audio fabric: cfea advertises 40 audio slots (`[17] = 0x28`) and the ENROLL
 group map spans exactly those 40 (5 groups × 8). The S-1608's group-A run reaches
@@ -121,9 +121,33 @@ the two spaces is the 40-vs-48 mismatch already flagged in
 `reac-firmware-re/MULTI-BOX-DESIGN.md`; multi-box allocation (#129) must keep them
 separate.
 
+**Landed 2026-07-28 (#69).** `REAC_GRANT_FABRIC_CEILING` — named after the audio
+fabric while measuring the head-amp space — is gone. Both spaces are now defined
+once, with these citations, in `src/reac_slots.h`:
+
+| constant | value | space | evidence |
+|---|---|---|---|
+| `REAC_AUDIO_FABRIC_SLOTS` / `_CEILING` | 40 / 39 | AUDIO | cfea `[17] = 0x28`; the ENROLL group map's 5 × 8; libreac `REAC_MAX_CHANNELS` |
+| `REAC_HEADAMP_SLOTS` / `_CEILING` | 48 / `0x2f` | HEAD-AMP | S-1608 at base `0x20`, 16 wide → group-A run to `0x2f` = 47 |
+| `REAC_HEADAMP_RING` | 49 | HEAD-AMP | the 48 chanmap positions + the `0xfe` section marker |
+
+Every site now takes the space it belongs to: the grant allocator and
+`reac_grant_alloc_fits` are HEAD-AMP (their bound is the CH the sweep addresses, so
+`0x20 + 16 = 0x2f` must stay legal); `reac_ctrl.h`'s `REAC_HEADAMP_MAX_CH` and
+`reac_master.h`'s chanmap ring (renamed `REAC_M_FABRIC_RING` → `REAC_M_CHANMAP_RING`)
+are HEAD-AMP; `reac_boxreg`'s fabric is AUDIO and must never be widened to 48.
+`tests/test_reac_grant.c` §5 pins both directions on the one span where they must
+disagree — base 32 × width 16 is head-amp-legal through CH 47 and audio-illegal.
+
+**No bytes moved.** The head-amp ceiling kept its `0x2f` value and the audio fabric
+its 40, so this is a naming/binding correction: every golden, fixture and assertion
+is untouched and the full suite stayed green across each commit.
+
 ## Verdict
 
-**OUTCOME C — still undetermined, deliberately.** No code change: the current
+**OUTCOME C — still undetermined, deliberately.** No change to the PLACEMENT LAW
+(the slot-space split above is a separate, landed correction — it renames and rebinds
+constants without moving a byte): the current
 `OBSERVED_PLACEMENT` table predicts all 42 usable rows correctly, so there is nothing
 to fix, and replacing it with any of the three candidate laws would be picking one of
 three indistinguishable hypotheses and calling it knowledge. What changed is the
