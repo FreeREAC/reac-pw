@@ -5,8 +5,12 @@
 # is no sibling-checkout dependency). Writes reac-pw-<version>.tar.gz to the repo
 # root. Override the core location with REAC_AES67=/path/to/reac-aes67 checkout.
 set -e
-V="${1:-0.1.0}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# Version single-source: meson.build's project version (the spec's fallback tracks
+# it; a release build overrides both via $1 here + --define version_override there).
+MESON_V=$(sed -n "s/^ *version *: *'\([^']*\)'.*/\1/p" "$ROOT/meson.build" | head -1)
+V="${1:-$MESON_V}"
+[ -n "$V" ] || { echo "could not read version from $ROOT/meson.build"; exit 1; }
 AES="${REAC_AES67:-$ROOT/../reac-aes67-pub}"
 [ -f "$AES/src/reac_decode.c" ] || { echo "reac-aes67 core not found at $AES"; exit 1; }
 

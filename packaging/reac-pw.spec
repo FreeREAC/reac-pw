@@ -2,7 +2,10 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 %global debug_package %{nil}
 Name:           reac-pw
-Version:        0.1.0
+# Overridable at build time -- the tarball/CI wrapper passes
+#   --define "version_override $(git describe --tags ...)"
+# so releases version from git tags; the fallback tracks meson.build's version.
+Version:        %{?version_override}%{!?version_override:0.1.0}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
