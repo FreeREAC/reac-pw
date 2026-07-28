@@ -25,7 +25,15 @@
  * control block to stamp (reac_master_next + reac_master_stamp). The cdea/cfea
  * cadence is carried in-band on the 8000 fps broadcast exactly as the real
  * master does (control frames occupy audio slots, never add to the stream).
- */
+ *
+ * The transition DECISIONS live in an explicit (state, event) -> edge table
+ * (reac_master_fsm.h, spec docs/MASTER-FSM.md); reac_master_rx and the cadence
+ * are its event producers, the enter_* functions its entry actions. One
+ * deliberate forward timer exists since the 2026-07-12 rig fix: GRANTING
+ * self-completes to ESTABLISHED once the full ENROLL + dwell + sweep is
+ * delivered (GRANTING is only ever entered on a validated box frame, so this
+ * is not granting into silence; the established peer-gone budget is the
+ * backward safety). All other timers still only move BACKWARD to PROBING. */
 #ifndef REAC_MASTER_H
 #define REAC_MASTER_H
 

@@ -56,6 +56,7 @@ reac_pw_src = [
   'src/reac_fsm.c',
   'src/reac_grant.c',
   'src/reac_master.c',
+  'src/reac_master_fsm.c',
   'src/reac_pacer.c',
   'src/reac_slave.c',
   'src/reac_mac.c',
@@ -151,12 +152,22 @@ test('reac_fsm', fsm_test)
 # constants are byte-exact, the grant echoes the JOIN, and the FSM sequences
 # IDLE->...->ESTABLISHED with the continuous 5-message cadence in both states.
 master_test = executable('test_reac_master',
-  ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_headamp_tx.c',
+  ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
    'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master', master_test)
+
+# --- unit test: the MASTER establishment decision core (pure table) ------------
+# Every (state, event) pair of the transition table — all 4 x 11 = 44, ignores
+# included — asserted against docs/MASTER-FSM.md, plus the classifier fold
+# (rx kind x have-block/same-box/grant-delivered guards). Pure — no socket, no
+# struct reac_master.
+master_fsm_test = executable('test_reac_master_fsm',
+  ['tests/test_reac_master_fsm.c', 'src/reac_master_fsm.c'],
+  include_directories : [include_directories('src')])
+test('reac_master_fsm', master_fsm_test)
 
 # --- acceptance test: the S-1608 downstream is byte-exact vs the M-300 capture -
 # Feeds the generator the S-1608 config and asserts the generated CHANMAP equals
@@ -164,8 +175,8 @@ test('reac_master', master_test)
 # + checksum (and is fully byte-exact when our MAC is the M-300's), and every
 # generated control block sums to 0 mod 256. The #130 hardware-verify gate.
 s1608_test = executable('test_reac_s1608',
-  ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
+  ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_s1608', s1608_test)
@@ -184,7 +195,8 @@ test('reac_lat', lat_test)
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+   'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
+   'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
@@ -223,9 +235,9 @@ test('reac_vboxgain', vboxgain_test)
 # ordering (probe -> box JOIN -> echoed grant -> box unicast -> both ESTABLISHED
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
 courtship_test = executable('test_reac_courtship',
-  ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_slave.c',
-   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
-   'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
+  ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_slave.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c',
+   'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
@@ -305,8 +317,8 @@ test('reac_headamp_prop', headamp_prop_test)
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
   ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
-   'src/reac_master.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
-   'src/reac_headamp_tx.c'],
+   'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
+   'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_headamp_live', headamp_live_test)
@@ -335,8 +347,8 @@ test('reac_grant', grant_test)
 # M-300 goldens (reac_m200_golden.inc, reac_grant_golden.inc) regardless of
 # profile. Pure — no socket.
 conformance_test = executable('test_reac_conformance',
-  ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
+  ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_conformance', conformance_test)
