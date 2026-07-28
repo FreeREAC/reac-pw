@@ -34,6 +34,7 @@
 #include "reac_master.h"
 #include "reac_disco.h"
 #include "reac_headamp_tx.h"
+#include "reac_clock.h"
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
 
@@ -121,6 +122,10 @@ enum reac_pacer_evkind {
 	REAC_PEV_WATCHDOG,       /* still PROBING after 10 s: a=box_seen           */
 	REAC_PEV_RECOGNIZED,     /* box model recognized: a=in_ch (matrix lookup)  */
 	REAC_PEV_SIGHTING,       /* passive discovery: a=role, b=model idx+1 (0=?) */
+	REAC_PEV_CLOCK,          /* clock discipline changed (#75): a=reac_clock_source,
+	                          * b=reac_clock_state, blk[0..3]=applied ppm*1000 LE
+	                          * int32. ONLY ever pushed when following is ENABLED —
+	                          * with the knob unset the transcript is unchanged.   */
 };
 
 /* Cause codes for REAC_PEV_STATE blk[0]: 0..3 = the reac_master_rx_event that
@@ -164,7 +169,48 @@ struct reac_pacer_cfg {
 	 * the head-amp overlay is entirely off and the downstream is unchanged. */
 	const struct reac_headamp_setting *headamps;
 	int n_headamps;
+	/* Clock discipline (#75). 0 (the default) = the pacer advances its deadline by
+	 * the fixed nominal period exactly as it always has — no discipline object is
+	 * consulted, no reference is read, and the emission is byte- and
+	 * timing-identical. 1 = follow the best available reference. Set from
+	 * REACPW_CLOCK_FOLLOW; see docs/ENV-KNOBS.md. */
+	int clock_follow;
 };
+
+/* Re-evaluate the clock discipline every this many slots (~8 Hz at 8000 fps).
+ * reac_rx recomputes its slope ~4x/s, so anything faster only re-reads the same
+ * estimate; anything slower makes a vanished reference take too long to notice. */
+#define REAC_CLOCK_TICK_SLOTS   1024u
+
+/* A reference whose publisher has been silent this long has VANISHED, whatever
+ * its presence bit still says — a publisher that dies must not leave us claiming
+ * lock to a corpse. */
+#define REAC_CLOCK_STALE_NS     2000000000ull
+
+/* An operator needs to see WHICH device is being followed, not just which tier:
+ * "locked to graph clock (RME Babyface Pro)" and "locked to box counter slope
+ * (S-1608)" are actionable, "locked to graph clock" is not. Each reference
+ * therefore carries a publisher-owned label. 28 bytes so it rides in the event
+ * ring's existing 32-byte block alongside the applied ppm; longer names truncate.
+ *
+ * The label is written rarely (only when it CHANGES) from the publisher's thread
+ * — which for the graph reference is the RT graph thread — and read by the pacer
+ * thread at the tick rate. A two-phase sequence makes a torn copy DETECTABLE:
+ * an odd seq, or a seq that moved across the copy, means "retry", never "print
+ * half a name". No lock, no allocation, RT-safe. */
+#define REAC_CLOCK_LABEL_MAX 28
+
+struct reac_clock_label {
+	_Atomic uint32_t seq;              /* odd = a write is in progress */
+	char name[REAC_CLOCK_LABEL_MAX];
+};
+
+/* Single-publisher per label. Returns 1 if the label actually changed (so a
+ * per-quantum caller costs one strncmp and nothing else). */
+int reac_clock_label_set(struct reac_clock_label *l, const char *name);
+/* Copy the label out. Returns 1 on a clean read, 0 if it was mid-write (the
+ * caller prints nothing rather than a torn name). */
+int reac_clock_label_get(const struct reac_clock_label *l, char *out, size_t cap);
 
 struct reac_pacer {
 	struct reac_frame_ring ring;     /* graph -> pacer */
@@ -238,7 +284,29 @@ struct reac_pacer {
 	_Atomic uint64_t ha_cmd_drops;              /* commands dropped (ring full) */
 	_Atomic uint64_t ha_cmd_applied;            /* commands drained + applied (diag) */
 
+	/* ---- clock discipline (#75) ------------------------------------------- *
+	 * INERT unless clock_follow is set. Publishers (any thread) drop a ppm sample
+	 * into their OWN slot — one slot per source, so two references can never race
+	 * over a single word — and set/clear their presence bit. The pacer thread owns
+	 * `clock` and is the only reader; it selects the best available reference,
+	 * feeds the DLL, and takes the steered period from it.
+	 *
+	 * The pacer is the MASTER path by definition (the slave path runs no pacer at
+	 * all — frame arrival is its slot clock), so the discipline is initialised with
+	 * the master hierarchy: PHC > hardware-driven graph clock > box counter slope >
+	 * free-run. Generating the pace does not make us the clock master. */
+	int clock_follow;                                  /* the knob, read-only after open */
+	_Atomic uint32_t clock_present;                    /* availability bitmap  */
+	_Atomic int      clock_ppm_milli[REAC_CLOCK_SRC_COUNT];  /* ppm * 1000     */
+	_Atomic uint64_t clock_stamp_ns[REAC_CLOCK_SRC_COUNT];   /* last publish   */
+	struct reac_clock_label clock_label[REAC_CLOCK_SRC_COUNT];  /* which device */
+
 	/* pacer-thread-local bookkeeping (single-writer, no atomics needed) */
+	struct reac_clock_disc clock;    /* PACER THREAD ONLY */
+	long     slot_period_ns;         /* the steered period actually slept to */
+	uint32_t clock_slots;            /* slots since the last re-evaluation */
+	uint32_t clock_gen_seen;         /* last reported discipline generation */
+	uint64_t clock_stamp_seen[REAC_CLOCK_SRC_COUNT];  /* freshness per source */
 	int      fps;                    /* slot cadence (for the 10 s watchdog) */
 	enum reac_master_state prev_state;  /* to detect next()-driven transitions */
 	int      presence_seen;          /* last logged m.box_seen edge */
@@ -303,6 +371,35 @@ int  reac_pacer_headamp_drain(struct reac_pacer *p);
 /* CLOCK_MONOTONIC in ns — the one clock every reac.discovery.* timestamp is measured
  * against (sighting, staleness aging, and the published age_ms). */
 uint64_t reac_pacer_mono_ns(void);
+
+/* ---- clock discipline (#75) ---------------------------------------------- */
+
+/* PUBLISH one clock-reference sample. Callable from ANY thread (the graph's RT
+ * process(), the RX feeder, a main-loop poll): each source owns its own slot, so
+ * publishers never race each other, and a store is three relaxed atomics — no
+ * lock, no syscall, RT-safe. `present` clears the source's availability bit when
+ * 0, which is how a publisher says its reference went away; a publisher that
+ * simply stops is also caught, by REAC_CLOCK_STALE_NS.
+ *
+ * `label` names the actual device behind this reference (the graph driver's clock
+ * name, the recognized box, ...) so the transcript is actionable; NULL leaves the
+ * current label alone.
+ *
+ * Publishing while clock following is DISABLED is harmless and changes nothing —
+ * the pacer never reads these slots. */
+void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
+                              int present, int ppm_milli, const char *label,
+                              uint64_t now_ns);
+
+/* PACER THREAD ONLY. Re-evaluate the discipline (rate-limited internally to one
+ * evaluation per REAC_CLOCK_TICK_SLOTS) and return the period this slot should
+ * advance the deadline by.
+ *
+ * INERT: with clock_follow == 0 this returns p->period_ns — the same constant the
+ * pacer has always used — and touches nothing else at all. Exposed so the offline
+ * test can drive the whole path (including proving inertness) without the RT
+ * thread or a socket. */
+long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns);
 
 void reac_pacer_stop(struct reac_pacer *p);
 void reac_pacer_close(struct reac_pacer *p);

@@ -33,6 +33,7 @@
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
 #include "reac_mac.h"
+#include "reac_rx.h"      /* the BOX clock reference measurement source (#75) */
 
 #include <reac/reac.h>
 #include <pipewire/pipewire.h>
@@ -126,6 +127,13 @@ struct reac_sink_node {
 	 * box-width change is followed automatically. NULL when no peer was wired. */
 	struct reac_source_node **peer_src;
 
+	/* The RX feeder, borrowed from main, as the BOX clock reference's measurement
+	 * source (#75). NULL when the caller wired none — the box tier is then simply
+	 * never available. box_ppm_seq is the last estimate we forwarded, so a stalled
+	 * feeder stops publishing instead of re-vouching for its last number. */
+	struct reac_rx *rate_src;
+	uint32_t box_ppm_seq;
+
 	/* reac.discovery.* (task #178): MAIN-LOOP-only shadow of the seq last stamped into
 	 * the filter's node properties, so on_log_timer re-publishes only when the discovery
 	 * table actually changed — the reac.link-state pattern above, keyed on seq.
@@ -158,6 +166,34 @@ static void on_process(void *data, struct spa_io_position *position)
 	 * ACTUAL producer burst (up to one quantum of frames pushed per callback), not
 	 * a guessed steady state. A single relaxed atomic store; RT-safe. */
 	atomic_store_explicit(&n->pacer.graph_quantum, nframes, memory_order_relaxed);
+
+	/* GRAPH CLOCK REFERENCE (#75). This callback is the one place that sees the
+	 * elected driver's spa_io_clock, and on this rig that driver is the RME the
+	 * operator bought for its PLL — the expected configuration, not a fallback.
+	 * PipeWire has already done the measurement for us: rate_diff is the driver
+	 * clock's speed as a ratio of CLOCK_MONOTONIC, filtered by its own DLL, so we
+	 * publish it rather than build a second estimator.
+	 *
+	 * ADMITTED ONLY WHEN IT IS A REAL, INDEPENDENT CLOCK. A freewheeling graph is
+	 * not a clock at all, and a `clock.system.*` driver (PipeWire's dummy timer,
+	 * elected when no hardware is in the graph) is timed by CLOCK_MONOTONIC itself
+	 * — following it would be following our own free-run through a longer pipe and
+	 * would let us report lock while nothing external disciplines anything. Both
+	 * are rejected here, which makes the pacer fall back to the box counter slope
+	 * or to an honest free-run.
+	 *
+	 * Guarded by the knob so the default path costs one predictable branch and not
+	 * a single store. RT-safe when it does run: a strncmp against a 64-byte name
+	 * plus three relaxed atomics, no allocation and no syscall. */
+	if (n->pacer.clock_follow) {
+		const struct spa_io_clock *c = &position->clock;
+		int usable = !(c->flags & SPA_IO_CLOCK_FLAG_FREEWHEEL) &&
+		             reac_clock_name_is_hardware(c->name);
+		reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_GRAPH, usable,
+		                         (int)(reac_clock_ppm_from_rate_diff(c->rate_diff)
+		                               * 1000.0),
+		                         c->name, c->nsec);
+	}
 
 	const float *in[REAC_MAX_CHANNELS];
 	int have = 0;
@@ -537,10 +573,58 @@ static void sink_publish_latency(struct reac_sink_node *n)
  * logs into a lock-free ring and this 200 ms timer formats it — so a live
  * power-cycle prints the complete establishment transcript (presence edges,
  * JOIN hex dumps, transitions) AND keeps reac.link-state live. */
+/* BOX CLOCK REFERENCE (#75). MAIN LOOP only — no RT path touched.
+ *
+ * The measurement already exists: reac_rx is the rate authority and tracks the
+ * box's byte-14/15 counter slope against CLOCK_MONOTONIC, publishing a filtered
+ * ppm error. We publish that as a candidate reference rather than adding a second
+ * estimator.
+ *
+ * This is the case the issue exists to encode: reac-pw is the REAC MASTER — it
+ * grants, it drives the segment — while being a clock FOLLOWER, because the
+ * stagebox is fed from a house word clock and is the rig's clock master. REAC
+ * master and clock master are different roles.
+ *
+ * It is also safe in the ordinary case where the box is slaved to US. Such a box
+ * recovers its word clock from our cadence, so its counter slope measured against
+ * the host clock is exactly our own applied correction handed back: the loop's
+ * residual is identically zero, it parks where it is, and the cadence cannot run
+ * away (pinned in test_reac_pacer_clock).
+ *
+ * Present only once the master is ESTABLISHED with a box AND reac_rx has actually
+ * closed a slope window — ppm_error_milli reads 0 both before the first estimate
+ * and when the slope is genuinely zero, and steering off the former would be
+ * mistaking "no information" for "the reference agrees with us". */
+static void sink_publish_box_clock(struct reac_sink_node *n)
+{
+	if (!n->pacer.clock_follow || !n->rate_src)
+		return;
+	uint32_t seq = atomic_load_explicit(&n->rate_src->ppm_seq, memory_order_acquire);
+	int established = atomic_load_explicit(&n->pacer.fsm_state,
+	                                       memory_order_relaxed) == REAC_M_ESTABLISHED;
+	if (!established || seq == 0 || seq == n->box_ppm_seq) {
+		/* Not established, no estimate yet, or no NEW estimate since the last
+		 * poll. Withdraw rather than re-vouch for a stale number; the pacer's
+		 * staleness ageing would catch a silent publisher anyway, this is just the
+		 * earlier and more explicit half of the same honesty. */
+		if (!established || seq == 0)
+			reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_BOX, 0, 0, NULL, 0);
+		return;
+	}
+	n->box_ppm_seq = seq;
+	const struct reac_box_model *bm =
+		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_BOX, 1,
+	                         atomic_load_explicit(&n->rate_src->ppm_error_milli,
+	                                              memory_order_relaxed),
+	                         bm ? bm->display : "box", reac_pacer_mono_ns());
+}
+
 static void on_log_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct reac_sink_node *n = data;
+	sink_publish_box_clock(n);     /* before the drain, so a change prints now */
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
 	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
@@ -735,6 +819,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.console.console_field = cfg->console_field;
 	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */
 	pcfg.n_headamps = cfg->n_headamps;
+	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
 		pw_log_warn("reac:playback — cannot open AF_PACKET TX on '%s' "
 		            "(needs CAP_NET_RAW + a valid interface); sink not created",
@@ -823,6 +908,12 @@ void reac_sink_node_set_peer_source(struct reac_sink_node *n,
 {
 	if (n)
 		n->peer_src = src_slot;
+}
+
+void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx)
+{
+	if (n)
+		n->rate_src = rx;
 }
 
 void reac_sink_node_destroy(struct reac_sink_node *n)
