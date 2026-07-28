@@ -408,19 +408,23 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `src/reac_rx.{h,c}` | non-RT feeder: wire source (live/pcap) → libreac validate → role-gated decode (downstream 40-ch / upstream box return) → f32 → ring; counter-slope ppm estimator |
 | `src/reac_source_node.{h,c}` | `reac:capture` pw_filter: 40 F32 ports, RT process(), follower/driver clock (RX for BOTH roles) |
 | `src/reac_tx.{h,c}` | downstream-frame encoder (`reac_tx_build`, inverse of the decode core) + raw-socket emitter |
-| `src/reac_upstream.{h,c}` | UPSTREAM (box return) audio decode: box-width braided frame → planar s24 (task #108) |
 | `src/reac_master.{h,c}` | **master-role** JOIN/HOLD: the cdea/cfea establishment FSM + captured control-block templates (S2) |
 | `src/reac_pacer.{h,c}` | **master-role** SCHED_FIFO cadence pacer + TX frame ring; stamps the master block on egress (S6) |
 | `src/reac_sink_node.{h,c}` | `reac:playback` Audio/Sink: process() encodes + submits to the pacer (the master TX) |
 | `src/reac_ctrl.{h,c}`, `src/reac_fsm.{h,c}` | the slave control plane: virtual-stagebox builders/parser/checksum + the pure JOIN/HOLD FSM |
 | `src/reac_slave.{h,c}` | **slave-role** engine: drives `reac_fsm` from RX events, locks to the master cadence, returns our inputs upstream (S7) |
-| `tests/test_reac_ring.c` | SPSC ring unit test (round-trip, underrun, overrun) |
-| `tests/test_reac_tx.c` | TX encoder ↔ decode-core round-trip (24-bit ULP, no channel cross-wire) |
-| `tests/test_reac_master.c` | master cdea/cfea blocks byte-match the captures + checksum + chanmap walk + FSM sequence |
-| `tests/test_reac_pacer.c` | pacer slot period (125/250/272 µs) + SPSC frame ring + live ~8000 fps emit (needs CAP_NET_RAW) |
-| `tests/test_reac_slave.c` | slave establishment §13d (flood→probe→grant→mute→established upstream + heartbeat) + HOLD, from the captured master control kinds |
-| `tests/test_reac_upstream.c` | upstream decode vs REAL sanitized captured frames (628 B/16 ch + 340 B/8 ch, full PCM tables) |
-| `tests/test_reac_rx_gate.c` | RX stream gate: role picks downstream vs upstream; first-box src-MAC lock; ring contents end-to-end |
-| `tests/test_reac_role.c` | `--role` parse + validation contract (master default; slave requires `--tx`) |
+| `src/reac_master_fsm.{h,c}` | the master establishment decisions as a PURE `(state, event) → (state, entry action, drop)` table — the shape `reac_fsm.h` gave the slave side (#61); spec = [docs/MASTER-FSM.md](docs/MASTER-FSM.md) |
+| `src/reac_slots.h` | the TWO slot spaces, named once with their capture evidence: AUDIO fabric 40 vs HEAD-AMP/chanmap 48 (`0x00..0x2f`). Never one for the other (#69) |
+| `src/reac_boxreg.{h,c}` | the multi-box registry: box MAC → (base, nch, name) over the 40-slot AUDIO fabric, allocated by first-JOIN order or pre-declared |
+| `src/reac_grant.{h,c}` | the master's per-channel ENROLLMENT SWEEP (the `cdea 04 03` grant): group A head-amp records + group B, over the HEAD-AMP space |
+| `src/reac_headamp_tx.{h,c}` | **master-role** head-amp SEND model: the declarative/DMX table the master re-asserts (full table on a slow period + an edge record on change) |
+| `src/reac_headamp_prop.{h,c}` | parse live head-amp changes out of `SPA_PARAM_Props` (`reac.headamp.<ch>.<phantom\|pad\|sens>` over `SPA_PROP_params`) |
+| `src/reac_clock.{h,c}` | the clock-discipline core: role-dependent reference hierarchy, quality grading, and a bounded period DLL. INERT unless `REACPW_CLOCK_FOLLOW` (#75/#77) |
+| `src/reac_gain.{h,c}` | pure RT-safe output-gain staging for `reac:playback` (linear `SPA_PROP` volume/mute, ramped) |
+| `src/reac_lat.{h,c}` | `ProcessLatency` smoothing for the sink: the pacer ring depth sawtooths, the advertised contract must not (#152) |
+| `src/reac_link_state.{h,c}` | pure mapping from the master FSM state onto the node-property badge a consumer (openmixer's stagebox card) reads |
+| `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
+| `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
+| `tests/` | 29 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |
 | `meson.build`, `meson_options.txt` | build: pipewire/spa + libreac via pkg-config, libreac subproject fallback; no build options |
 | `subprojects/libreac.wrap` + `packagefiles/libreac/meson.build` | libreac as a meson subproject |
