@@ -35,12 +35,16 @@ m_dep        = cc.find_library('m', required : false)
 # Prefer the system libreac (Fedora libreac-devel -> found via pkg-config and
 # linked dynamically). Fall back to the bundled subproject where there is no
 # system lib (OpenWrt SDK / a plain dev checkout).
-libreac_dep = dependency('libreac',
+# >=0.3.0: the braid/sample layout oracles + the upstream decode + the OHRCA
+# clean-len rule live there now (the single layout oracle — never fork a copy).
+libreac_dep = dependency('libreac', version : '>=0.3.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
-# The REAC decode / capture / pcap core now comes from libreac (libreac_dep,
-# >=0.2.0) via <reac/reac_decode.h> etc. — no sibling reac-aes67 checkout needed.
+# The REAC decode / capture / pcap core comes from libreac via
+# <reac/reac_decode.h> etc., and since 0.3.0 so do the braid codec
+# (<reac/reac_braid.h>), the f32<->s24 pair (<reac/reac_sample.h>) and the
+# box-upstream decode (<reac/reac_upstream.h>) — no local copies.
 
 # --- the reac-pw client -----------------------------------------------------
 reac_pw_src = [
