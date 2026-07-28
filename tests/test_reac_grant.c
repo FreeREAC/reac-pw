@@ -55,9 +55,10 @@ int main(void)
 	CHK(reac_grant_allocate(&a, 32) == 0);
 	CHK(a.base == 0x00 && a.width == 32);   /* S-4000S — 0x20 would overrun */
 
-	/* 1b. The 0x2f FABRIC CEILING. This is the rule that FORCES a 32-wide box to
-	 * base at 0x00: at 0x20 it would run to 0x3f, past the ceiling. A per-width
-	 * base constant would have happily allocated it there. */
+	/* 1b. The 0x2f HEAD-AMP CEILING (REAC_HEADAMP_CEILING, reac_slots.h — NOT the
+	 * 40-slot audio fabric). This is the rule that FORCES a 32-wide box to base at
+	 * 0x00: at 0x20 it would run to 0x3f, past the ceiling. A per-width base
+	 * constant would have happily allocated it there. */
 	CHK(reac_grant_alloc_fits(0x20, 16) == 1);   /* 0x20..0x2f — exactly to the ceiling */
 	CHK(reac_grant_alloc_fits(0x20, 32) == 0);   /* 0x20..0x3f — REJECTED */
 	CHK(reac_grant_alloc_fits(0x00, 32) == 1);   /* 0x00..0x1f */
@@ -91,7 +92,7 @@ int main(void)
 	/* 2a. Group A: width x 3 records, params 0/1/2 per channel, channels
 	 * CONTIGUOUS from the allocated base and never past it. */
 	int ga = 0, gb = 0;
-	int param_seen[REAC_GRANT_FABRIC_SLOTS][REAC_HEADAMP_NPARAMS];
+	int param_seen[REAC_HEADAMP_SLOTS][REAC_HEADAMP_NPARAMS];
 	memset(param_seen, 0, sizeof param_seen);
 	for (int i = 0; i < n; i++) {
 		if (row_is_groupa(sweep[i])) {
@@ -106,7 +107,7 @@ int main(void)
 	}
 	CHK(ga == 16 * 3);
 	CHK(gb == 6);
-	for (int c = 0; c < REAC_GRANT_FABRIC_SLOTS; c++) {
+	for (int c = 0; c < REAC_HEADAMP_SLOTS; c++) {
 		int in_box = (c >= s1608.base && c < s1608.base + s1608.width);
 		for (int p = 0; p < REAC_HEADAMP_NPARAMS; p++)
 			CHK(param_seen[c][p] == (in_box ? 1 : 0));   /* exactly [0,1,2], once each */
