@@ -618,39 +618,68 @@ enum ctrl_frame_id {
 	CTRL_FRAME_COUNT,
 };
 
+/* Rows CTRL_CONFIG_ANNOUNCE..CTRL_EXTRA_FRAME are the RECONSTRUCTED JOIN frames
+ * (experimental, not byte-verified as a SEQUENCE): each block is byte-matched to
+ * a real capture, but the order and timing a box emits them in is reconstructed
+ * from REAC-CONNECTION-FSM.md, not observed end to end. */
 static const struct ctrl_frame CTRL_FRAMES[CTRL_FRAME_COUNT] = {
-	/* The box keep-alive, in a box-width audio slot. */
+	/* The box keep-alive, in a box-width audio slot. Checksum byte 0x7a on the
+	 * wire (reac-captures/wired-reac-a-bothdirs) — the test cross-checks it. */
 	[CTRL_BOX_HB] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_TMPL, .tmpl = TMPL_BOX_HB,
 		.cksum = CKSUM_BLOCK, .len = LEN_ARG_WIDTH },
-	/* The established unicast upstream: the 00 7a per-slot descriptor over live
-	 * braided audio. FILLER (type 00 00) is checksum-exempt. */
+	/* The established unicast upstream: the 32-byte descriptor [18:50] = 00 7a per
+	 * slot (16 slots), as the real box, over audio in the BRAIDED layout (resolved
+	 * 2026-07-10, task #108). FILLER (type 00 00) is checksum-exempt. */
 	[CTRL_UPSTREAM_FILLER] = {
 		.type0 = 0x00, .type1 = 0x00, .block = BLOCK_DESC,
 		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
-	/* The cold-boot presence-flood: broadcast, ZERO control block (no 0x7a
-	 * descriptor) but LIVE audio — verified on the wire
-	 * (m200-s1608-realbox-establish-2026-07-11), it is NOT an all-zero payload.
-	 * The descriptor is what distinguishes the established upstream from this. */
+	/* The presence-flood FILLER (broadcast, unlinked): counter + type 00 00 + a
+	 * ZERO control block [18:50] (no 0x7a per-slot descriptor) + LIVE audio
+	 * [50:626] + end marker. Verified on the wire
+	 * (m200-s1608-realbox-establish-2026-07-11.pcap): a real S-1608's cold-boot
+	 * flood carries a zero control block but a LIVE audio region (it varies every
+	 * frame) — it is NOT an all-zero payload. The 0x7a descriptor is what
+	 * distinguishes the ESTABLISHED unicast upstream from this broadcast announce;
+	 * the audio itself is present in both. */
 	[CTRL_FLOOD_FILLER] = {
 		.type0 = 0x00, .type1 = 0x00, .block = BLOCK_ZERO,
 		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
-	/* The SETUP DECLARATION the master enrols the box from. The verified blocks
-	 * already sum to 0, so the outer stamp is a no-op that keeps the invariant. */
+	/* The config-announce (cdea 01 03 0010) — the SETUP DECLARATION the master
+	 * enrols the box from; the selector byte sets the displayed model family. The
+	 * verified blocks already sum to 0, so the outer stamp is a no-op that keeps
+	 * the invariant rather than a correction. */
 	[CTRL_CONFIG_ANNOUNCE] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CONFIG,
 		.cksum = CKSUM_BLOCK, .len = LEN_MODEL_WIDTH },
-	/* The ASCII model name — 0x84 family only (0x82 is named by its selector). */
+	/* The ASCII model-name frame (cdea 04 01 001b) — required for the 0x84 family
+	 * so the desk shows the exact model ("S-0808") instead of the generic family
+	 * name. The 0x82 / S-1608 family is named by its selector alone and emits
+	 * nothing here. */
 	[CTRL_NAME_FRAME] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_NAME,
 		.cksum = CKSUM_NONE, .len = LEN_MODEL_WIDTH, .gate = GATE_HAS_NAME },
 	/* The cold-connect escalation a real S-1608 sends: 0014 -> 0013 -> 0016 ->
-	 * 001a, each the 32-byte control block over LIVE audio (the [38:66] region is
-	 * per-frame audio, NOT device inventory — verified 2026-07-11). The master
-	 * learns the box from the L2 source and echoes the block back as its grant.
-	 * Only the 0014 block is sum-to-0; the rest are emitted raw as captured
-	 * (0013 sums to 0xfe), which is itself the evidence that the cold-connect is
-	 * not checksum-validated the way 0014 happens to be. */
+	 * 001a, each the model's 32-byte control block over LIVE audio. The block's
+	 * [38:66] region is frame[52:80] and is AUDIO, not device inventory — on a
+	 * real box it varies every frame (verified 2026-07-11,
+	 * m200-s1608-realbox-establish). The master needs no inventory tail: it learns
+	 * the box from the L2 source and echoes THIS block back verbatim as its grant,
+	 * so a cold-connect is the control block over live audio, exactly like the
+	 * unicast upstream but with cdea 04 03 replacing the 0x7a descriptor.
+	 *
+	 * 0014: the 0x41 at block[10] is descriptor DATA, not a MAC tail — the block
+	 * is MAC-independent. Sum(block) mod 256 == 0 holds as captured, so the outer
+	 * stamp is a no-op that keeps the invariant.
+	 * 0013: the variant a real box INTERLEAVES with the 0014 (S-1608 cold boot,
+	 * m200-s1608-BIDIR-reboot-2026-07-11); block[31]=0x02 trailer, and the
+	 * captured block sums to 0xfe mod 256 — NOT sum-to-0, which is the evidence
+	 * that the cold-connect is not checksum-validated the way 0014 happens to be.
+	 * It is therefore emitted RAW, as are 0016 and 001a.
+	 * 0016: a MODEL-specific inventory block the mixer uses to identify the box.
+	 * 001a: the fullest MODEL-specific box inventory.
+	 * All four byte-matched per model (matrix-m200-s1608 / -s0808, 2026-07-11;
+	 * S-4000S from s4000s-coldboot-m5000-2026-07-12). */
 	[CTRL_COLDCONNECT] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CC0014,
 		.cksum = CKSUM_BLOCK, .len = LEN_ARG_WIDTH, .audio = 1 },
@@ -663,7 +692,9 @@ static const struct ctrl_frame CTRL_FRAMES[CTRL_FRAME_COUNT] = {
 	[CTRL_COLDCONNECT_001A] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CC001A,
 		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
-	/* The extra inventory frame some models send (S-0808). */
+	/* The cdea 04 02 000d frame some models (S-0808) send during cold-connect —
+	 * part of the inventory the mixer reads to name the exact model. Emitted raw
+	 * (byte-verified, matrix-m200-s0808); models without it emit nothing. */
 	[CTRL_EXTRA_FRAME] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_EXTRA,
 		.cksum = CKSUM_NONE, .len = LEN_MODEL_WIDTH, .gate = GATE_HAS_EXTRA },
