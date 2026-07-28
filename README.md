@@ -8,10 +8,12 @@ no new code per destination.
 
 ## What it is
 
-The **RX source node** is a 40-channel `reac:capture` Audio/Source fed from a live
-REAC wire (AF_PACKET, EtherType `0x8819`) or a pcap replay, decoded with the
-proven plain-LE core and handed to PipeWire's adapter for channel-map,
-format-convert and adaptive resample. The **TX sink node** (`reac:playback`) is a
+The **RX source node** is a `reac:capture` Audio/Source fed from a live REAC wire
+(AF_PACKET, EtherType `0x8819`) or a pcap replay and handed to PipeWire's adapter
+for channel-map, format-convert and adaptive resample. Box returns (the master's
+RX) are decoded with libreac's braid oracle and are rig-proven on real microphones;
+the downstream path still runs libreac's legacy plain-LE decode, which the
+zoneA/zoneB goldens refute — see issue #80. The **TX sink node** (`reac:playback`) is a
 working REAC **master**: it encodes the graph's PCM into the downstream broadcast,
 clocks the wire from a SCHED_FIFO cadence pacer at a steady pps, and drives the
 cdea/cfea JOIN/HOLD handshake so a real Roland stagebox slaves to it (see Status).
@@ -27,8 +29,11 @@ Everything REAC-specific is reused, not reinvented:
   path), `reac_capture.c` (live AF_PACKET) and `pcap_source.c` (classic pcap
   reader). System `libreac-devel` via pkg-config, or the meson wrap fallback.
 
-reac-pw itself is only the lock-free ring, the RX feeder, the control plane
-(cdea/cfea builders + checksums) and the PipeWire nodes.
+reac-pw itself is the lock-free ring, the RX feeder, the control plane (cdea/cfea
+and DT1 record builders + the two checksums), the master and slave establishment
+FSMs, the grant/ENROLL sweep, the head-amp send model, the cadence pacer and its
+clock discipline, the multi-box registry, and the PipeWire nodes. See DESIGN.md's
+Files table.
 
 ## Build and run
 
@@ -68,8 +73,9 @@ slave's own width is `--box-channels`.)
 The REAC broadcast is always 40 ch × 12 samples × 3 B; the sample rate lives in
 the packet rate (pps = rate/12), never on the wire.
 
-- **`reac:capture` (source).** A `pw_filter` with 40 mono-F32 DSP output ports —
-  exactly the ring's planar layout. A non-realtime feeder thread reads frames,
+- **`reac:capture` (source).** A `pw_filter` with mono-F32 DSP output ports —
+  exactly the ring's planar layout, 40 wide by default and narrowed to the box's
+  real input width when `--box` declares one. A non-realtime feeder thread reads frames,
   validates, counter-stamps and decodes with libreac,
   and writes whole REAC frames into a lock-free SPSC ring. The only realtime code
   is `on_process()`: it dequeues one PipeWire quantum per channel and returns —
