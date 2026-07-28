@@ -7,7 +7,7 @@ Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
-URL:            https://github.com/FreeREAC/reac-aes67
+URL:            https://github.com/FreeREAC/reac-pw
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  meson >= 0.60
