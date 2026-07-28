@@ -333,29 +333,26 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/* SAMPLE RATE — what we actually know, and what we do not.
+	/* SAMPLE RATE — the master chooses it; the box follows.
 	 *
-	 * A previous revision of this comment asserted that the box infers its rate
-	 * from the DESK IDENTITY (cfea/ENROLL console byte: 01 = OHRCA/M-5000 =>
-	 * 96 kHz, 00 = V-Mixer => 48 kHz only), and clamped --rate accordingly.
-	 * That was an INFERENCE, never demonstrated, and the operator reports the
-	 * opposite from the hardware: a stagebox ADAPTS to the rate it is driven at,
-	 * independently of which console family the master claims to be. The clamp
-	 * built on that inference has been removed — it refused a legitimate request
-	 * on the strength of a guess.
+	 * On a real Roland desk the operator selects the REAC rate from a menu. The
+	 * desk drives the segment at that rate and every stagebox locks to it — a box
+	 * has no rate setting of its own. reac-pw is the master here, so `--rate` is
+	 * the same choice, and it is honoured as given.
 	 *
-	 * The console byte plainly signals SOMETHING (it is byte-verified in both the
-	 * cfea announce and the ENROLL), but "which desk family" is not the same
-	 * claim as "which sample rate", and we have no capture that separates them.
+	 * A previous revision of this comment claimed the box infers its rate from the
+	 * DESK IDENTITY (console byte 01 = OHRCA => 96 kHz, 00 = V-Mixer => 48 kHz
+	 * only) and clamped --rate to match. That was an inference, never
+	 * demonstrated, and it is wrong: the identity byte says which desk we
+	 * impersonate, not which rate the operator picked.
 	 *
-	 * Beware this paragraph's history: the same block also claimed the upstream
-	 * "+2 bytes" were the Ethernet FCS. That was FALSIFIED 2026-07-25 — on the
-	 * S-4000S they are a real OHRCA CRC-16 (docs/OHRCA-UPSTREAM-DUPLICATE-FRAMES.md,
-	 * fixtures UP32A/UP32B). Two wrong claims from one paragraph: state what is
-	 * measured, mark the rest as open. See issue #73.
+	 * Beware this paragraph's history — the same block also asserted the upstream
+	 * "+2 bytes" were the Ethernet FCS, falsified 2026-07-25 (a real OHRCA CRC-16;
+	 * docs/OHRCA-UPSTREAM-DUPLICATE-FRAMES.md, fixtures UP32A/UP32B). Two wrong
+	 * claims from one comment: state what is measured, mark the rest open (#73).
 	 *
-	 * So: --rate is honoured as given. The pacer cadence is fps = rate/12 at every
-	 * rate (12 samples per frame is invariant across every captured rate). */
+	 * Cadence is fps = rate/12 at every rate — 12 samples per frame is invariant,
+	 * so a higher rate sends the same frames more often, nothing else changes. */
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
