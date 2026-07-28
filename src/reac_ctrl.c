@@ -455,6 +455,22 @@ static const uint8_t TMPL_BOX_HB[REAC_CTRL_BLOCK_LEN] = {
 	0x01, 0x03, 0x00, 0x01, 0x81,
 };
 
+/* The head-amp record container, byte-truthed against a live M-200
+ * (m200-headamp-re/ctl2.pcap): cdea 04 03, BE len 0x0013, the f0 41 0a Roland
+ * DT1 preamble (block[8] is the preamble length echo, oplen - 5), the 12 12
+ * record marker and TAG 01 01 = head-amp. The three zero bytes at block[18:21]
+ * are the CH PARAM VALUE window the caller fills; block[21] is the record's
+ * INNER checksum, stamped by the scaffold; block[22] is the f7 terminator. */
+static const uint8_t TMPL_HEADAMP[REAC_CTRL_BLOCK_LEN] = {
+	0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
+	0x13 - 5, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+	0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0xf7,
+};
+#define HEADAMP_ARG_OFF 18   /* CH PARAM VALUE, block-relative (frame [36:39]) */
+#define HEADAMP_ARG_LEN  3
+#define HEADAMP_REC_OFF 16   /* TAG..CKSUM,      block-relative (frame [34:40]) */
+#define HEADAMP_REC_LEN  6
+
 static const uint8_t *ctrl_model_block(const struct reac_box_model *m,
                                        enum ctrl_block b)
 {
@@ -572,6 +588,19 @@ static size_t ctrl_emit(uint8_t *out, const struct ctrl_frame *f,
 	return len;
 }
 
+/* Lay a row over an ALREADY-BUILT frame: the type word [16:18] and the control
+ * block [18:50] change, the audio [50:], the counter and the C2 EA tail the
+ * frame already carries are preserved. Shares ctrl_lay_block + ctrl_finish with
+ * ctrl_emit, so an overlaid record gets its two checksums in the same order a
+ * freshly built one does — the stamp path cannot drift from the build path. */
+static void ctrl_stamp(uint8_t *frame, const struct ctrl_frame *f, const uint8_t *args)
+{
+	frame[TYPE_OFF] = f->type0;
+	frame[TYPE_OFF + 1] = f->type1;
+	ctrl_lay_block(frame, f, NULL, args);
+	ctrl_finish(frame, f);
+}
+
 /* The table. One row per control frame; the evidence for each block lives with
  * the bytes (TMPL_* here, or the box-model matrix above). */
 enum ctrl_frame_id {
@@ -585,6 +614,7 @@ enum ctrl_frame_id {
 	CTRL_COLDCONNECT_0016,
 	CTRL_COLDCONNECT_001A,
 	CTRL_EXTRA_FRAME,
+	CTRL_HEADAMP,
 	CTRL_FRAME_COUNT,
 };
 
@@ -637,6 +667,15 @@ static const struct ctrl_frame CTRL_FRAMES[CTRL_FRAME_COUNT] = {
 	[CTRL_EXTRA_FRAME] = {
 		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_EXTRA,
 		.cksum = CKSUM_NONE, .len = LEN_MODEL_WIDTH, .gate = GATE_HAS_EXTRA },
+	/* The console-side preamp command, master->box at the downstream width. The
+	 * ONLY row that carries a DT1 record — and naming CKSUM_RECORD is all it has
+	 * to do: ctrl_finish() stamps the inner checksum and then the outer one, in
+	 * that order, because that is the only path through its switch. */
+	[CTRL_HEADAMP] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_TMPL, .tmpl = TMPL_HEADAMP,
+		.arg_off = HEADAMP_ARG_OFF, .arg_len = HEADAMP_ARG_LEN,
+		.rec_off = HEADAMP_REC_OFF, .rec_len = HEADAMP_REC_LEN,
+		.cksum = CKSUM_RECORD, .len = LEN_DOWNSTREAM },
 };
 
 size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
@@ -732,48 +771,18 @@ static int headamp_args_ok(uint8_t param, uint8_t value)
 	}
 }
 
-/* Write the head-amp type [16:18] + control block [18:50] into `frame` (a 0013
- * record container: TAG 01 01 + CH PARAM VALUE + the INNER record checksum),
- * then apply the OUTER block checksum at [49]. The control block is zeroed first,
- * so this is safe to STAMP over an existing FILLER frame — the audio region
- * [50:], the counter [14:16] and the ethernet header are untouched. Assumes the
- * args have already passed headamp_args_ok. */
-static void put_headamp_block(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value)
-{
-	frame[16] = 0xcd; frame[17] = 0xea;       /* control-frame type */
-	memset(frame + REAC_CTRL_BLOCK_OFF, 0, 32);/* clear the 32-byte block [18:50] */
-	frame[18] = 0x04; frame[19] = 0x03;       /* the record container */
-	frame[20] = 0x00; frame[21] = 0x13;       /* BE len 0x0013 */
-	frame[22] = 0x00; frame[23] = 0x02;
-	frame[24] = 0x00; frame[25] = 0xfe;
-	frame[26] = 0x13 - 5;                     /* preamble length echo: oplen - 5 */
-	frame[27] = 0xf0; frame[28] = 0x41; frame[29] = 0x0a;   /* f0 41 0a 00 00 */
-	frame[32] = 0x12; frame[33] = 0x12;       /* record marker */
-	frame[34] = 0x01; frame[35] = 0x01;       /* TAG 01 01 = head-amp */
-	frame[36] = ch; frame[37] = param; frame[38] = value;
-	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256 (the general
-	 * record rule — see reac_ctrl_record_cksum_stamp). */
-	reac_ctrl_record_cksum_stamp(frame + 34, 6);
-	frame[40] = 0xf7;                         /* record terminator */
-	reac_ctrl_checksum_apply(frame);          /* OUTER block checksum at [49] */
-}
-
 size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
                                const uint8_t src[6], uint16_t counter,
                                uint8_t ch, uint8_t param, uint8_t value)
 {
-	/* The console-side preamp command, byte-truthed against a live M-200
-	 * (m200-headamp-re/ctl2.pcap): a 0013 record container whose record is
-	 * TAG 01 01 + CH PARAM VALUE + the INNER record checksum, over a zero
-	 * audio region at the downstream (master) width. */
+	/* A real console BROADCASTS these interleaved in its stream, so the caller
+	 * passes the broadcast MAC like every builder's first MAC arg. */
+	const uint8_t args[HEADAMP_ARG_LEN] = { ch, param, value };
+
 	if (!headamp_args_ok(param, value))
 		return 0;
-	size_t len = REAC_FRAME_BYTES;        /* master frames are downstream width */
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	put_headamp_block(out, ch, param, value);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_HEADAMP], master, src, counter,
+	                 0, args, NULL, 0);
 }
 
 int reac_ctrl_stamp_headamp(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value)
@@ -781,10 +790,13 @@ int reac_ctrl_stamp_headamp(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t v
 	/* Overlay a head-amp record onto an already-built downstream frame (the
 	 * MASTER-role emit path stamps it over a FILLER slot — see reac_headamp_tx).
 	 * Only the type [16:18] + control block [18:50] change; the audio, counter and
-	 * C2/EA tail the frame already carries are preserved. */
+	 * C2/EA tail the frame already carries are preserved. Returns -1 on a bad
+	 * param/value, leaving the frame untouched. */
+	const uint8_t args[HEADAMP_ARG_LEN] = { ch, param, value };
+
 	if (!headamp_args_ok(param, value))
 		return -1;
-	put_headamp_block(frame, ch, param, value);
+	ctrl_stamp(frame, &CTRL_FRAMES[CTRL_HEADAMP], args);
 	return 0;
 }
 
