@@ -108,22 +108,30 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   tracking; offline-testable.
 - **Lock-free ring** — implemented, unit-tested (round-trip, underrun, overrun);
   the test needs no PipeWire so CI can run it anywhere.
-- **TX sink node (REAC master)** — implemented: `reac_tx` encoder (round-trips
-  through the decode core to 24-bit ULP), the `reac_master` cdea/cfea JOIN/HOLD
-  handshake (control blocks byte-match the captured M-5000 + checksum), and the
-  `reac_pacer` SCHED_FIFO cadence pacer (8000 fps / 125 µs measured on the wire).
-  Loopback PCM→REAC→PCM verified (a tone played into `reac:playback` reaches the
-  wire FILLER audio). **Not yet verified: a real Roland desk linking** — no desk
-  on the bench; built correct-by-construction against the captures. The
-  hardware-verify gate (does `RCQ` go `establishing`→`established`, does audio
-  reach the box) is in [DESIGN.md](DESIGN.md).
+- **TX sink node (REAC master)** — implemented and **rig-verified**: `reac_tx`
+  encoder (round-trips through the decode core to 24-bit ULP), the `reac_master`
+  cdea/cfea JOIN/HOLD handshake (control blocks byte-match the captured M-200 /
+  M-300 / M-5000 + checksum), and the `reac_pacer` SCHED_FIFO cadence pacer
+  (125 µs @ 96 k / 250 µs @ 48 k measured on the wire). A real **S-0808** and a
+  real **S-1608** cold-connect, are granted, reach ESTABLISHED and hold a 1/s
+  heartbeat with zero drops; the box's mic channels reach `reac:capture` and run
+  end-to-end through openmixer. See
+  [docs/REAC-MIXER-PROTOCOL.md](docs/REAC-MIXER-PROTOCOL.md) (the five fixes that
+  made the box lock SOLID) and
+  [docs/MASTER-HARDWARE-VERIFY.md](docs/MASTER-HARDWARE-VERIFY.md) (the run, the
+  observability, the remaining gaps). Still unverified on hardware: the 96 kHz
+  OHRCA emit path, whose gate is in that same file.
 - **SLAVE role** (`--role slave`, `reac_slave` over `reac_ctrl`/`reac_fsm`) —
   implemented: we respond to an external master, lock to its cadence (the master
   owns the clock — no own pacer), RX its audio via `reac:capture`, and return our
   input channels upstream at the box's slots. The establishment + HOLD FSM is
-  offline-tested from the captured master control kinds (`test_reac_slave`); the
-  JOIN cold-connect bytes + a real link both ways are behind the slave hardware-
-  verify gate in [DESIGN.md](DESIGN.md).
+  offline-tested from the captured master control kinds (`test_reac_slave`), and a
+  real, cold-booted **M-200** enrolled reac-pw as a 16-ch stagebox in its REAC
+  menu and held the link across a 300 s run (2026-07-11). The **M-5000 (OHRCA)**
+  still re-hunts after granting us — the open gap is the OHRCA established-state
+  shape, not a clock wall. See
+  [docs/REAC-BOX-STATE-DIAGRAM.md](docs/REAC-BOX-STATE-DIAGRAM.md) and
+  [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md).
 - **Role selection** (`--role master|slave`, `reac_role.h`) — default master
   preserves the original behaviour; parse + validation unit-tested.
 
