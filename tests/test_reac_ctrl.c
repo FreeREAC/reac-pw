@@ -18,6 +18,73 @@ static const uint8_t SRC[6]    = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 }; /* our 
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
+/* THE TWO CHECKSUMS, IN THE RIGHT ORDER.
+ *
+ * An op-0403 record carries a Roland DT1 checksum (INNER, sum-to-0x80) at a byte
+ * that the REAC control-block checksum (OUTER, sum-to-0) also covers, so the
+ * inner one MUST be stamped first. A record finished outer-first — or finished
+ * with the block helper alone — looks perfect on the wire and the box rejects
+ * it. This has cost real rig time, so it is pinned here rather than left to a
+ * comment in the builder.
+ *
+ * Asserting only that both checksums verify could pass by luck, so every case
+ * also BUILDS the frame an outer-first implementation would emit (clear the
+ * inner byte, stamp the outer checksum, then stamp the inner one) and requires
+ * that frame to be detectably broken. Reverse the builder's order and the
+ * positive half fails; drop the inner stamp and the record half fails. */
+static int check_record_cksum_order(void)
+{
+	static const struct { uint8_t ch, param, value; } RECS[] = {
+		{ 0x00, REAC_HEADAMP_PHANTOM, 0x00 },
+		{ 0x00, REAC_HEADAMP_PHANTOM, 0x01 },
+		{ 0x07, REAC_HEADAMP_PAD,     0x00 },
+		{ 0x07, REAC_HEADAMP_PAD,     0x01 },
+		{ 0x20, REAC_HEADAMP_SENS,    0x00 },   /* S-1608 base: input 1  */
+		{ 0x2f, REAC_HEADAMP_SENS,    0x1a },   /* S-1608 base: input 16 */
+		{ 0x10, REAC_HEADAMP_SENS,    REAC_HEADAMP_SENS_MAX },
+	};
+	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	uint8_t f[1536], wrong[1536];
+	int traps = 0;
+
+	for (size_t i = 0; i < sizeof(RECS) / sizeof(RECS[0]); i++) {
+		/* (a) as the builder emits it: BOTH checksums hold at once, which is
+		 * only satisfiable by stamping the inner one before the outer one. */
+		size_t n = reac_ctrl_build_headamp(f, BCAST, SRC, 0x77,
+		                                   RECS[i].ch, RECS[i].param, RECS[i].value);
+		CHK(n == REAC_FRAME_BYTES);
+		CHK(f[36] == RECS[i].ch && f[37] == RECS[i].param && f[38] == RECS[i].value);
+		CHK(reac_ctrl_headamp_record_verify(f) == 0);   /* INNER: sum-to-0x80 */
+		CHK(reac_ctrl_checksum_verify(f) == 0);         /* OUTER: sum-to-0    */
+
+		/* (b) the same record finished OUTER-FIRST: the inner stamp lands on a
+		 * byte the outer sum has already counted, so the block no longer sums
+		 * to 0 — the frame the box would reject. */
+		memcpy(wrong, f, n);
+		wrong[39] = 0x00;                            /* un-stamp the inner byte  */
+		reac_ctrl_checksum_apply(wrong);             /* OUTER first (the bug)    */
+		reac_ctrl_record_cksum_stamp(wrong + 34, 6); /* INNER after it           */
+		CHK(reac_ctrl_headamp_record_verify(wrong) == 0);    /* record looks fine */
+		if (wrong[39] != 0x00) {          /* a zero inner byte clobbers nothing */
+			CHK(reac_ctrl_checksum_verify(wrong) != 0);  /* ...the block does not */
+			CHK(memcmp(wrong, f, n) != 0);
+			traps++;
+		}
+
+		/* (c) the in-place stamp path finishes in the same order — it overlays
+		 * the record on a built FILLER and must leave both checksums valid. */
+		size_t m = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x88, 16, NULL, 12);
+		CHK(m == 628);
+		CHK(reac_ctrl_stamp_headamp(f, RECS[i].ch, RECS[i].param, RECS[i].value) == 0);
+		CHK(reac_ctrl_headamp_record_verify(f) == 0);
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+		CHK(f[626] == 0xc2 && f[627] == 0xea);   /* the tail survives the stamp */
+	}
+	/* the negative half must actually have fired, or (b) proves nothing */
+	CHK(traps > 0);
+	return 0;
+}
+
 int main(void)
 {
 	uint8_t f[1536];
@@ -187,7 +254,12 @@ int main(void)
 	f[REAC_CTRL_BLOCK_OFF + 8] ^= 0xff;   /* corrupt a descriptor byte */
 	CHK(reac_ctrl_identify_box(f, n) == NULL);
 
+	/* 8. the record/block checksum ORDER the builder scaffold makes structural */
+	if (check_record_cksum_order())
+		return 1;
+
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
-	       "parser + descriptor + audio round-trip + box-frame classifier clean\n");
+	       "parser + descriptor + audio round-trip + box-frame classifier clean, "
+	       "DT1 record checksum stamped before the block checksum\n");
 	return 0;
 }
