@@ -120,11 +120,27 @@ directions, CHANMAP + heartbeat ~0.5/s. No re-hunt, no drop.
 
 This closes W5 **for V-Mixer desks (M-200/M-300/M-200i)** and **falsifies the
 "clock-domain wall" reasoning below**: reac-pw paces off `CLOCK_MONOTONIC`, yet a
-real desk accepts it as a settled box. The M-5000 (OHRCA) is still open, but the
-cause is now understood to be the **OHRCA established-state shape** (1494 B frame +
-per-frame CRC-16 trailer, 96 kHz upstream — see W4) that reac-pw does not yet
-emit, NOT a hardware crystal requirement. Remaining slave work for full M-5000
-support: emit the OHRCA-width upstream + CRC-16 trailer, then re-test.
+real desk accepts it as a settled box. The M-5000 (OHRCA) is still open, and the
+cause is the **OHRCA established-state shape** that reac-pw does not yet emit, NOT
+a hardware crystal requirement.
+
+⚠ **This paragraph originally named that shape as "1494 B frame + per-frame CRC-16
+trailer, 96 kHz upstream" and set the remaining work as "emit the OHRCA-width
+upstream + CRC-16 trailer". Both halves of that are dead:**
+
+- The **1494 B downstream frame is a mirror/SPAN artifact** — 2 bytes of the
+  Ethernet FCS — falsified the very next day and reproduced independently for the
+  master direction (W4(a) below; `docs/MASTER-HARDWARE-VERIFY.md`, "The 1494-byte
+  frame is a capture artifact"). There is nothing to emit, and emitting it would
+  put 2 garbage bytes ahead of the NIC's own real FCS.
+- The box **upstream** `+2` IS real (a genuine OHRCA CRC-16 trailer on the S-4000's
+  1206 B returns), but it is an **RX-strip** concern, not something a slave emits —
+  see [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
+  and the `UP32A`/`UP32B` fixtures in `tests/upstream_fixtures.inc`.
+
+The leading remaining suspect for the M-5000 gap is the per-generation downstream
+audio layout (W4(b)/#135), the 96 kHz upstream cadence, or both. Do not budget work
+for a downstream trailer.
 
 ## W5 live result (2026-07-11): GRANTED — the missing frame was the config-announce
 
