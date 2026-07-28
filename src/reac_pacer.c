@@ -430,7 +430,7 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			 * free-run is printed as free-run — we never dress it up as lock.
 			 * The pacer is the master path by construction; the slave path runs no
 			 * pacer, so no slave line can ever come out of here. */
-			char line[160];
+			char line[224];
 			int32_t applied = (int32_t)((uint32_t)e.blk[0] |
 			                            ((uint32_t)e.blk[1] << 8) |
 			                            ((uint32_t)e.blk[2] << 16) |
@@ -438,18 +438,19 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			char label[REAC_CLOCK_LABEL_MAX];
 			memcpy(label, e.blk + 4, REAC_CLOCK_LABEL_MAX);
 			label[REAC_CLOCK_LABEL_MAX - 1] = '\0';
-			reac_clock_describe(REAC_ROLE_MASTER,
-			                    (enum reac_clock_source)e.a,
-			                    (enum reac_clock_state)e.b, line, sizeof line);
+			/* State and quality were packed into one byte at the RT end (#77). */
+			reac_clock_describe_full(REAC_ROLE_MASTER,
+			                         (enum reac_clock_source)e.a,
+			                         (enum reac_clock_state)(e.b & 0x0f),
+			                         (enum reac_clock_quality)(e.b >> 4),
+			                         label, line, sizeof line);
 			/* Derived, not read across the thread boundary: the applied ppm in the
 			 * event and the immutable nominal period give the steered period
 			 * exactly (reac_dll_period_ns' formula). */
 			double ppm = (double)applied / 1000.0;
 			long steered = (long)((double)p->period_ns / (1.0 + ppm / 1e6) + 0.5);
-			fprintf(out, "reac-clock: [%.6f] %s%s%s%s (applied %+.3f ppm, "
+			fprintf(out, "reac-clock: [%.6f] %s (applied %+.3f ppm, "
 			        "period %ld ns vs nominal %ld ns)\n", ts, line,
-			        label[0] ? " (" : "", label[0] ? label : "",
-			        label[0] ? ")" : "",
 			        ppm, steered, p->period_ns);
 			break;
 		}
@@ -634,12 +635,14 @@ int reac_clock_label_get(const struct reac_clock_label *l, char *out, size_t cap
 
 void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
                               int present, int ppm_milli, const char *label,
-                              uint64_t now_ns)
+                              enum reac_clock_quality quality, uint64_t now_ns)
 {
 	if ((unsigned)src >= REAC_CLOCK_SRC_COUNT || src == REAC_CLOCK_SRC_FREERUN)
 		return;   /* free-run is not published; it is what "nothing" means */
 	if (present) {
 		reac_clock_label_set(&p->clock_label[src], label);
+		atomic_store_explicit(&p->clock_quality[src], (int)quality,
+		                      memory_order_relaxed);
 		atomic_store_explicit(&p->clock_ppm_milli[src], ppm_milli,
 		                      memory_order_relaxed);
 		/* Release: the stamp is what the consumer keys freshness off, so it must
@@ -676,12 +679,23 @@ long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns)
 		                                      memory_order_acquire);
 		if (stamp && now_ns - stamp < REAC_CLOCK_STALE_NS)
 			avail |= 1u << s;
+		/* Hand the publisher's inferred grade to the discipline (#77) before it
+		 * selects, so a structurally disqualified reference is skipped in the same
+		 * walk that skips an absent one. */
+		reac_clock_disc_set_quality(&p->clock, (enum reac_clock_source)s,
+		                            (enum reac_clock_quality)
+		                            atomic_load_explicit(&p->clock_quality[s],
+		                                                 memory_order_relaxed));
 	}
 
 	/* Only a NEW sample steers the loop: re-feeding the same estimate every tick
 	 * would inflate the update count and let a stalled publisher's last value look
 	 * like continuous evidence of lock. */
-	enum reac_clock_source sel = reac_clock_select(p->clock.role, avail);
+	/* The SAME selection the discipline is about to make — graded, so the source
+	 * we test for a fresh sample can never be one the discipline then refuses. */
+	enum reac_clock_source sel = reac_clock_select_graded(p->clock.role, avail,
+	                                                      p->clock.quality,
+	                                                      p->clock.min_quality);
 	double ppm = 0.0;
 	int have = 0;
 	if (sel != REAC_CLOCK_SRC_FREERUN) {
@@ -711,8 +725,11 @@ long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns)
 		if (p->clock.src != REAC_CLOCK_SRC_FREERUN)
 			reac_clock_label_get(&p->clock_label[p->clock.src],
 			                     (char *)blk + 4, REAC_CLOCK_LABEL_MAX);
-		pev_push(p, REAC_PEV_CLOCK, (uint8_t)p->clock.src,
-		         (uint8_t)p->clock.state, NULL, blk);
+		/* State and quality share `b`: blk is full (4 bytes of ppm + the 28-byte
+		 * label) and both enums are well under 16 values. Unpacked in the drain. */
+		uint8_t b = (uint8_t)(p->clock.state |
+		                      (reac_clock_disc_quality(&p->clock) << 4));
+		pev_push(p, REAC_PEV_CLOCK, (uint8_t)p->clock.src, b, NULL, blk);
 	}
 
 	p->slot_period_ns = reac_clock_disc_period_ns(&p->clock);

@@ -148,7 +148,13 @@ static void usage(const char *p)
 	  "                continuously and bounded; the phase is never stepped. The\n"
 	  "                reference in use is printed on every change, and with none\n"
 	  "                available we free-run and SAY so. Unset = today's behaviour,\n"
-	  "                byte- and timing-identical. RIG-GATED.\n", p);
+	  "                byte- and timing-identical. RIG-GATED.\n"
+	  "  REACPW_CLOCK_REF=<substring>  designate WHICH device is the clock reference\n"
+	  "                (case-insensitive substring of the device name, e.g. 'Babyface').\n"
+	  "                A designated device outranks the name heuristic; it does NOT\n"
+	  "                rescue a structurally unusable one (HDMI/DisplayPort sinks,\n"
+	  "                software timers) and it does NOT outrank measured instability.\n"
+	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n", p);
 }
 
 /* MASTER autodetect (no --box): a main-loop watcher that polls the box the pacer
@@ -428,7 +434,10 @@ int main(int argc, char **argv)
 		                              .n_headamps = n_headamps,
 		                              /* #75: default OFF -> the pacer free-runs on
 		                               * CLOCK_MONOTONIC exactly as it always has. */
-		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL };
+		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
+		                              /* #77: unset -> nothing is designated and the
+		                               * name heuristic alone grades the reference. */
+		                              .clock_ref = getenv("REACPW_CLOCK_REF") };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
