@@ -24,10 +24,11 @@
  *       channel pair as big-endian s24 and swapping bytes per 16-bit word —
  *       reacdriver's to-device conversion ("LE bytes swapped");
  *   (c) NEGATIVE CONTROL — the "right level, garbage content" complaint: the
- *       plain-LE diagnostic layout (REAC_TXL_PLAIN), de-braided as a real box
- *       does, plays the fed channel as a hash capped ~48 dB down (every
- *       output's MID byte lands in its HIGH lane) that does NOT track the
- *       sine. This is the pre-braid complaint AND the 2026-07-13 regression;
+ *       debunked plain-LE layout ((s*40+ch)*3, the reac-aes67 reac_decode
+ *       order), de-braided as a real box does, plays the fed channel as a
+ *       hash capped ~48 dB down (every output's MID byte lands in its HIGH
+ *       lane) that does NOT track the sine. This is the pre-braid complaint
+ *       AND the 2026-07-13 regression;
  *   (d) both layouts are bijections over all 1440 audio bytes (no lane loss,
  *       no double-writes), and a distinct DC per channel round-trips through
  *       the braid within one 24-bit ULP (catches pair/stride swaps).
@@ -73,12 +74,27 @@ static void unbraid_ch(const uint8_t *audio, int ch, float out[REAC_SAMPLES_PER_
 
 static float dbfs(float x) { return x > 0 ? 20.0f * log10f(x) : -999.0f; }
 
+/* Test-local layout oracles — independent restatements of the two byte orders
+ * (the encoder no longer exposes them; the debunked plain layout survives only
+ * here, as the negative control's reference). */
+static void braid_pos_ref(int s, int ch, size_t pos[3])
+{
+	size_t g = (size_t)(s * REAC_MAX_CHANNELS + (ch & ~1)) * REAC_RESOLUTION;
+	if ((ch & 1) == 0) {
+		pos[0] = g + 3; pos[1] = g + 0; pos[2] = g + 1;
+	} else {
+		pos[0] = g + 4; pos[1] = g + 5; pos[2] = g + 2;
+	}
+}
+
+static void plain_pos_ref(int s, int ch, size_t pos[3])
+{
+	size_t o = (size_t)(s * REAC_MAX_CHANNELS + ch) * REAC_RESOLUTION;
+	pos[0] = o; pos[1] = o + 1; pos[2] = o + 2;
+}
+
 int main(void)
 {
-	/* hermetic: this test asserts the DEFAULT (braid) contract; a leaked
-	 * REAC_TX_LAYOUT diagnostic override must not turn it into a false failure. */
-	unsetenv("REAC_TX_LAYOUT");
-
 	static const uint8_t src[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 };
 	const int SINE_CH = 7;         /* box output 8 (1-based), an ODD channel */
 	const double AMP = 0.1;        /* -20 dBFS */
@@ -168,7 +184,7 @@ int main(void)
 					if (x < -8388608.0f) x = -8388608.0f;
 					int32_t sv = (int32_t)lrintf(x);
 					size_t pos[3];
-					reac_tx_layout_pos(REAC_TXL_PLAIN, s, ch, pos);
+					plain_pos_ref(s, ch, pos);
 					plain_audio[pos[0]] = (uint8_t)(sv & 0xFF);
 					plain_audio[pos[1]] = (uint8_t)((sv >> 8) & 0xFF);
 					plain_audio[pos[2]] = (uint8_t)((sv >> 16) & 0xFF);
@@ -199,13 +215,15 @@ int main(void)
 	CHK(plain_view_peak > 1e-4f);
 	CHK(plain_view_dev > 0.05f);
 
-	/* (d) bijection over all 1440 audio bytes, both layouts */
-	for (int l = REAC_TXL_BRAID; l <= REAC_TXL_PLAIN; l++) {
+	/* (d) the braid is a bijection over all 1440 audio bytes (no lane loss, no
+	 * double-writes) — checked on the reference oracle, whose byte placement is
+	 * pinned to the encoder's by the structural check (b) above */
+	{
 		uint8_t seen[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION] = { 0 };
 		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
 				size_t pos[3];
-				reac_tx_layout_pos(l, s, ch, pos);
+				braid_pos_ref(s, ch, pos);
 				for (int j = 0; j < 3; j++) {
 					CHK(pos[j] < sizeof seen);
 					CHK(seen[pos[j]] == 0);
@@ -213,10 +231,6 @@ int main(void)
 				}
 			}
 	}
-	CHK(reac_tx_layout_parse(NULL) == REAC_TXL_BRAID);
-	CHK(reac_tx_layout_parse("braid") == REAC_TXL_BRAID);
-	CHK(reac_tx_layout_parse("plain") == REAC_TXL_PLAIN);
-	CHK(reac_tx_layout_parse("bogus") == -1);
 
 	/* distinct DC per channel, braid round-trip within one ULP */
 	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++)
