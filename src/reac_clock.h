@@ -220,6 +220,12 @@ long reac_clock_disc_period_ns(const struct reac_clock_disc *c);
  * callable from a log drain. */
 char *reac_clock_disc_describe(const struct reac_clock_disc *c, char *out, size_t cap);
 
+/* The same line from the three fields alone, for a consumer that carries them
+ * across a thread boundary (the pacer's RT event ring) rather than holding the
+ * discipline itself. */
+char *reac_clock_describe(enum reac_role role, enum reac_clock_source src,
+                          enum reac_clock_state state, char *out, size_t cap);
+
 /* ---- reference helpers (pure, so the live wiring stays a one-liner) ------ */
 
 /* PipeWire publishes spa_io_clock.rate_diff: the driver clock's speed as a ratio of

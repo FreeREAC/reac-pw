@@ -195,20 +195,25 @@ long reac_clock_disc_period_ns(const struct reac_clock_disc *c)
 
 char *reac_clock_disc_describe(const struct reac_clock_disc *c, char *out, size_t cap)
 {
+	return reac_clock_describe(c->role, c->src, c->state, out, cap);
+}
+
+char *reac_clock_describe(enum reac_role r, enum reac_clock_source src,
+                          enum reac_clock_state state, char *out, size_t cap)
+{
 	/* Role AND pace AND reference, always together. A reference name on its own
 	 * would leave the reader guessing whether we generate the cadence or follow
 	 * it — the exact ambiguity this module exists to remove. */
-	const char *role = reac_role_name(c->role);
-	const char *pace = c->role == REAC_ROLE_SLAVE ? "from the master"
-	                                              : "generated here";
-	switch (c->state) {
+	const char *role = reac_role_name(r);
+	const char *pace = r == REAC_ROLE_SLAVE ? "from the master" : "generated here";
+	switch (state) {
 	case REAC_CLOCK_LOCKED:
 		snprintf(out, cap, "%s (pace: %s) — locked to %s", role, pace,
-		         reac_clock_source_name(c->src));
+		         reac_clock_source_name(src));
 		break;
 	case REAC_CLOCK_LOCKING:
 		snprintf(out, cap, "%s (pace: %s) — acquiring %s", role, pace,
-		         reac_clock_source_name(c->src));
+		         reac_clock_source_name(src));
 		break;
 	case REAC_CLOCK_HOLDOVER:
 		snprintf(out, cap, "%s (pace: %s) — holdover: reference lost, holding "
