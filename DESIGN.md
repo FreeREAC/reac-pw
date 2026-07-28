@@ -18,7 +18,7 @@ REAC has no fixed master — any box can be the master and the rest slave to it
 (REAC-PROTOCOL-AND-TESTS.md §2/§4). openmixer must fit either role, selected at
 launch with `--role master|slave` (default **master**, which preserves the
 original behaviour). Both roles share the same encoder/decoder (`reac_tx_build` /
-the reac-aes67 decode core) and the same PipeWire nodes (`reac:capture` for RX,
+libreac's decode core) and the same PipeWire nodes (`reac:capture` for RX,
 the sink for the graph's PCM). **They differ only in WHO drives the handshake +
 the clock, and in the TX direction:**
 
@@ -34,18 +34,23 @@ downstream sink, or the slave's upstream-return + handshake socket. The slave
 role REQUIRES `--tx` (it must have a NIC to answer on); the master role can run
 RX-only (a pure monitor) or with `--tx` for the downstream sink.
 
-Reuses, does not reinvent:
+Reuses, does not reinvent — **libreac >= 0.3.0** (`FreeREAC/libreac`,
+`<reac/*.h>`) is the single REAC byte-layout oracle and the only REAC dependency:
+frame validate, the byte-14/15 counter, gap math, `reac_detect_rate_fd` /
+`reac_rate_snap`, the braid codec (`<reac/reac_braid.h>`), the f32↔s24 sample pair,
+the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 trailer rule
+(`reac_frame_clean_len`), plus `reac_decode.c` (the legacy plain-LE downstream
+path), `reac_capture.c` (AF_PACKET 0x8819) and `pcap_source.c` (classic pcap
+reader). There is **no reac-aes67 sibling checkout any more** — the three
+compiled-straight-in files and reac-pw's own copies of the braid, the s24
+conversion and the upstream decode were all folded into libreac 0.3.0 on
+2026-07-28 (`be52b83`, `87297ca`, `e6f1ca7`, `2abeed4`). Never fork a second
+decoder.
 
-- **libreac** (`FreeREAC/libreac`, `<reac/reac.h>`) — RX validate, the byte-14/15
-  counter, gap math, `reac_detect_rate_fd` / `reac_rate_snap`. Pulled as a meson
-  subproject.
-- **reac-aes67 core** (`FreeREAC/reac-aes67`, `src/`) — `reac_decode.c` (plain-LE
-  sample-major `(s*40+ch)*3`, on-rig coherence 0.999), `reac_capture.c`
-  (AF_PACKET 0x8819), `pcap_source.c` (classic pcap reader). Compiled straight in
-  from a sibling checkout.
-
-Everything REAC-specific is borrowed. reac-pw itself is only: the lock-free ring,
-the RX feeder, and the two PipeWire nodes.
+reac-pw itself is the lock-free ring, the RX feeder, the control plane
+(cdea/cfea/DT1 builders + the two checksums), the establishment FSMs, the pacer
+and clock discipline, the head-amp send model, the box registry and the PipeWire
+nodes — see the Files table at the end.
 
 ## Data path (RX, Phase 1)
 
@@ -53,7 +58,7 @@ the RX feeder, and the two PipeWire nodes.
 REAC NIC (AF_PACKET 0x8819)  ─┐
                               ├─► reac_rx feeder thread (SCHED_OTHER, producer)
 pcap replay (offline test)  ─┘     reac_frame_is_reac / reac_frame_counter   [libreac]
-                                   reac_decode → planar s24 → f32             [reac-aes67 core]
+                                   reac_decode → planar s24 → f32             [libreac]
                                    reac_ring_write
                                         │  (lock-free SPSC ring, planar f32)
                                         ▼
@@ -92,8 +97,8 @@ snapped from cadence by libreac). The downstream broadcast is always 40 ch × 12
 samp; the rate lives in packet cadence (pps = rate/12), never on the wire.
 
 **RX hot-path → process() via the ring.** The feeder (`reac_rx.c`, a plain
-pthread, NOT SCHED_FIFO — it's the producer) reads frames, decodes with the
-reac-aes67 core into planar f32, and `reac_ring_write`s whole REAC frames (40 ×
+pthread, NOT SCHED_FIFO — it's the producer) reads frames, decodes with
+libreac into planar f32, and `reac_ring_write`s whole REAC frames (40 ×
 12). `on_process` `reac_ring_read_planar`s one PipeWire quantum. The ring is a
 single-producer/single-consumer lock-free SPSC (`reac_ring.c`): two atomics,
 no locks, no allocation on the hot path. Underrun → process() zero-fills and
@@ -131,32 +136,29 @@ the separate `reac_ctrl`/`reac_fsm` slave half.)
 
 `meson.build` + `meson_options.txt`. External deps via pkg-config: only
 `libpipewire-0.3` and `libspa-0.2` (Fedora `pipewire-devel`) plus `threads` and
-optional `m`. No libpcap (the pcap reader is the dependency-free reac-aes67 one;
-live capture is raw AF_PACKET).
+optional `m`, plus libreac. No libpcap (the pcap reader is libreac's
+dependency-free `pcap_source.c`; live capture is raw AF_PACKET).
 
-- **libreac** is a **meson subproject** (`subprojects/libreac.wrap`, a `wrap-git`
-  on `FreeREAC/libreac`). Upstream libreac ships only a hand Makefile, so the
-  wrap drops a tiny `meson.build` into the checkout via `patch_directory`
-  (`subprojects/packagefiles/libreac/meson.build`) that builds `src/reac.c` into
-  a static lib and exposes `libreac_dep` with `<reac/reac.h>`. No upstream source
-  is touched.
-- **reac-aes67 decode/capture/pcap core** is compiled **straight in** from a
-  sibling checkout (`-Dreac_aes67=../reac-aes67`, default `../reac-aes67`),
-  exactly as reac-aes67's own Makefile compiles libreac's `reac.c` in. The three
-  files are dependency-free and already on-rig-proven; forking them would violate
-  "reuse, do not reinvent". meson errors with a clear message if the checkout is
-  missing.
+**libreac >= 0.3.0** resolves to the system `libreac-devel` (pkg-config) when new
+enough, else the **meson subproject** fallback (`subprojects/libreac.wrap`, a
+`wrap-git` on `FreeREAC/libreac`) takes over. Upstream libreac ships only a hand
+Makefile, so the wrap drops a small `meson.build` into the checkout via
+`patch_directory` (`subprojects/packagefiles/libreac/meson.build`) that builds it
+into a static lib and exposes `libreac_dep`. No upstream source is touched.
+`meson_options.txt` carries **no options** — the old `-Dreac_aes67=<path>` sibling
+checkout is gone (see "Reuses, does not reinvent" above).
 
 ```
-meson setup build -Dreac_aes67=../reac-aes67-pub
+meson setup   build
 meson compile -C build
-meson test    -C build            # runs test_reac_ring (no PipeWire needed)
+meson test    -C build            # 29 tests, no PipeWire and no hardware needed
 ./build/reac-pw --pcap capture.pcap --rate 48000
 sudo ./build/reac-pw --live reac0           # needs CAP_NET_RAW
 ```
 
-`test_reac_ring` is self-contained (ring only — no PipeWire, no libreac), so CI
-can run it anywhere. The node code needs `pipewire-devel` installed to compile.
+Everything but `test_reac_pacer`'s live-cadence case runs anywhere; that one SKIPs
+(exit 77) without `CAP_NET_RAW`. The node code needs `pipewire-devel` installed to
+compile.
 
 ## TX path (built) — `reac:playback` is a working REAC MASTER
 
@@ -420,5 +422,5 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `tests/test_reac_upstream.c` | upstream decode vs REAL sanitized captured frames (628 B/16 ch + 340 B/8 ch, full PCM tables) |
 | `tests/test_reac_rx_gate.c` | RX stream gate: role picks downstream vs upstream; first-box src-MAC lock; ring contents end-to-end |
 | `tests/test_reac_role.c` | `--role` parse + validation contract (master default; slave requires `--tx`) |
-| `meson.build`, `meson_options.txt` | build: pipewire/spa via pkg-config, libreac subproject, reac-aes67 core sibling |
+| `meson.build`, `meson_options.txt` | build: pipewire/spa + libreac via pkg-config, libreac subproject fallback; no build options |
 | `subprojects/libreac.wrap` + `packagefiles/libreac/meson.build` | libreac as a meson subproject |
