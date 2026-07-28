@@ -62,6 +62,13 @@ struct reac_rx {
 	/* rate-slope estimator (counter-vs-monotonic), filtered ppm error vs the
 	 * nominal recovered rate; the source node reads this for io_rate_match. */
 	_Atomic int ppm_error_milli;  /* ppm * 1000, signed; 0 until enough samples */
+	/* How many estimates have been PUBLISHED. ppm_error_milli is 0 both before the
+	 * first window closes and when the slope is genuinely zero, so a consumer that
+	 * steers anything off it needs to tell those apart — 0 with no estimate yet is
+	 * "no information", not "the reference agrees with us". It also gives freshness
+	 * for free: a counter that stops advancing is a reference that stopped
+	 * producing (the clock-discipline BOX source, #75). */
+	_Atomic uint32_t ppm_seq;
 
 	/* update_ppm() window state — instance-owned (was function-static, which
 	 * survived a pcap-loop restart and made RX a non-reentrant singleton). Reset

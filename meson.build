@@ -69,6 +69,7 @@ reac_pw_src = [
   'src/reac_boxreg.c',
   'src/reac_link_state.c',
   'src/reac_disco.c',
+  'src/reac_clock.c',
 ]
 
 executable('reac-pw',
@@ -196,10 +197,40 @@ test('reac_lat', lat_test)
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
-   'src/reac_headamp_tx.c'],
+   'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
+
+# --- unit test: the clock-discipline core — hierarchy + the period DLL (#75) ---
+# Pure: ppm in, period out. No socket, no PipeWire, no clock read. Pins the
+# ROLE-DEPENDENT lock hierarchy (master: phc > graph > freerun, with a slaved box
+# deliberately absent; slave: the wire and nothing else), the DLL's convergence /
+# absence of overshoot / slew + clamp bounds / rejection of insane samples, honest
+# degradation (free-run is never called locked; a vanished reference HOLDS the last
+# good rate), and a replay of a noisy counter series that must not be chased.
+clock_test = executable('test_reac_clock',
+  ['tests/test_reac_clock.c', 'src/reac_clock.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [m_dep])
+test('reac_clock', clock_test)
+
+# --- unit test: the pacer's clock-discipline WIRING (#75) ---------------------
+# No socket, no RT privilege: drives reac_pacer_clock_publish / _clock_tick the way
+# the publishers and the RT thread do. Proves INERTNESS first (knob unset -> every
+# tick returns the nominal period, the discipline is never advanced, the transcript
+# is unchanged), then the two references the rig actually uses to the same standard:
+# the elected PipeWire driver (graph) and a stagebox that is itself the clock master
+# (box) — including the closed-loop case of a box slaved to US, where the cadence
+# must park rather than run away. Also the label seqlock and the reference hierarchy
+# end to end.
+pacer_clock_test = executable('test_reac_pacer_clock',
+  ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_clock.c',
+   'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_pacer_clock', pacer_clock_test)
 
 # --- unit test: the SLAVE-role establishment decision core (pure, no socket) ----
 # Drives the slave decision core (reac_slave_step_* over the reac_fsm brain) through
@@ -318,7 +349,7 @@ test('reac_headamp_prop', headamp_prop_test)
 headamp_live_test = executable('test_reac_headamp_live',
   ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
    'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+   'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_headamp_live', headamp_live_test)
