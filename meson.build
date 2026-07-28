@@ -105,6 +105,18 @@ rx_gate_test = executable('test_reac_rx_gate',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
 
+# --- unit test: the OHRCA duplicate-frame guard (frames_dup) ------------------
+# Runs the real feeder thread over a temp pcap of DOUBLED byte-identical
+# delivery (the mirrored-RX-path / doubled-cadence granulated-audio bug):
+# exactly one twin dropped per frame, single-cadence ring, and a negative —
+# distinct frames at doubled cadence pass untouched (dup == 0).
+rx_dup_test = executable('test_reac_rx_dup',
+  ['tests/test_reac_rx_dup.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_upstream.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_rx_dup', rx_dup_test)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_upstream.c'],
