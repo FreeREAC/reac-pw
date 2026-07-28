@@ -334,49 +334,54 @@ JOIN builders it uses (`reac_ctrl_build_coldconnect` / `_config_announce`) are t
 RECONSTRUCTED, experimental ones: a real link completes only when the master's
 `cdea 04 03` grant is RX'd, which is the slave-side hardware-verify gate.
 
-### Hardware-verify gate — BOTH roles (no desk on the bench)
+### Hardware-verify gate — BOTH roles (PASSED on the rig, July 2026)
 
-Both roles are built **correct-by-construction** against the design + captures; a
-real link cannot be verified here (no desk). The control-plane bytes, the FSM
-sequences, and the role wiring are all unit-tested off-hardware. What remains is to
-confirm a real link establishes + audio flows. Capture `ether proto 0x8819` both
-directions, ≥120 s, and confirm per role:
+Both roles were built **correct-by-construction** against the design + captures,
+then taken to real hardware. The gate below is the criterion each was judged on;
+the verdicts are recorded, with their captures, in the documents named.
 
 **MASTER role** (a real Roland stagebox slaves to *us*; reac-pw is the only master
-on the segment):
+on the segment) — **PASSED 2026-07-12** on a real S-0808 and a real S-1608:
 
-1. **The desk's link state goes `establishing` → `established`** (the mixer UI / the
-   box's green light) — captured at the master side.
-2. **The desk stops its presence-flood and switches to linked unicast** the instant
-   our `cdea 04 03` grant lands (§13d step 4) — the grant bytes are accepted, not
-   just well-formed.
-3. **Audio reaches the box** — a tone played into `reac:playback` comes out the
-   stagebox's analog outs at the mapped channel.
-4. **HOLD** — the link survives ≥5 min with no spurious drop (our heartbeat +
-   channel-map cadence keeps the desk's 600-frame loop-check fed).
+1. **The box's link state goes `establishing` → `established`** — LED SOLID,
+   1/s heartbeat, zero drops. The five master-side fixes that got it there (cfea
+   box-count, the missing ENROLL, the byte-exact 32-frame grant sweep, grant
+   self-complete + HOLD, the explicit box heartbeat) are in
+   [docs/REAC-MIXER-PROTOCOL.md](docs/REAC-MIXER-PROTOCOL.md).
+2. **The box stops its presence-flood and switches to linked unicast** once our
+   grant sweep lands — accepted, not merely well-formed.
+3. **Audio flows** — the box's 16 mic channels reach `reac:capture` and run
+   end-to-end into openmixer's console; a tone into `reac:playback` comes out the
+   box's analog out (Stage B, [docs/VALIDATION-PLAN.md](docs/VALIDATION-PLAN.md),
+   listen-confirmed on the braid encode).
+4. **HOLD** — held across long runs with no spurious drop.
 
-**SLAVE role** (*we* slave to an external master — a desk or a box-as-master):
+Still ungated on the master side: the **96 kHz OHRCA emit** path (protocol-sound,
+never run against a real M-5000) — the procedure is in
+[docs/MASTER-HARDWARE-VERIFY.md](docs/MASTER-HARDWARE-VERIFY.md).
 
-1. **We go `establishing` → `established`** — our `reac_slave` FSM reaches
-   `FSM_ESTABLISHED` when the master's `cdea 04 03` grant is RX'd, and we stop
-   broadcasting (TX-mute) then switch to unicast upstream. The desk shows our box
-   linked.
-2. **Audio flows BOTH ways** — the master's downstream comes out our `reac:capture`
-   ports (RX, already proven offline against the captures), AND a tone fed into our
-   upstream-return sink reaches the master's inputs at our box's mapped channels
-   (TX upstream — the new direction).
-3. **We lock to the master's clock** — our emit cadence matches the master's frame
-   inter-arrival (one upstream frame per master frame), with no rate drift; the
-   master never reports us as jittering/lost.
-4. **HOLD** — the link survives ≥5 min; a real master heartbeat re-arms our
-   loop-check, and a genuine master drop (PHY/peer-gone) tears us down cleanly.
+**SLAVE role** (*we* slave to an external master) — **PASSED on a V-Mixer desk
+2026-07-11, OPEN on OHRCA**:
 
-That capture also converts the rig-grade items to captured for both roles: the
-exact `cdea 04 03` grant-burst bytes (master: ours accepted; slave: the master's we
-key on), the per-rate cadence, the TX-mute dwell, channel `0x13`'s map frame, and
-the slave's upstream-return placement on a real desk (the byte layout itself is
-resolved offline, task #108). **Commit it to `reac-captures`, do not
-leave it in `/tmp`.**
+1. **We go `establishing` → `established`** — a real, cold-booted **M-200**
+   granted our cold-connect and showed reac-pw as a connected stagebox in its REAC
+   menu; PROBE dropped to 0/s and the link held 300 s. The frame that unlocked it
+   was the config-announce (`cdea 01 03 0010`), which we were not sending at all.
+   Census + method lesson: [docs/REAC-BOX-STATE-DIAGRAM.md](docs/REAC-BOX-STATE-DIAGRAM.md).
+2. **Audio flows BOTH ways** — RX proven; the upstream-return **sink** is still
+   missing (W1 in [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md)),
+   so nothing fills `tx_ring` in the slave role yet.
+3. **We lock to the master's clock** — one upstream frame per master frame, from
+   `CLOCK_MONOTONIC` pacing, and a real M-200 accepts it. This **falsified** the
+   earlier "clock-domain wall" conclusion.
+4. **M-5000 (OHRCA) still open** — it grants us, then reverts to hunting
+   (~680 probes/s). The suspect is the OHRCA established-state shape, NOT a clock
+   and NOT a downstream CRC trailer (see the falsification in
+   [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md) W4a).
+
+Every capture behind those verdicts is committed to `reac-captures` — **do not
+leave one in `/tmp`**, which is how the original `/tmp/hs1.pcap` grant-burst
+evidence was lost.
 
 **RESOLVED (task #108, 2026-07-10):** the box's upstream return-audio layout — the
 ex-"FPGA scramble" of task #61 — is the obs-h8819 even/odd channel-pair byte BRAID
