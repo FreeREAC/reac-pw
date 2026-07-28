@@ -6,7 +6,7 @@
  * FUNCTIONAL:
  *   - pw_filter registered Audio/Sink with N INPUT mono ports (the channel count)
  *   - realtime process() de-stages each quantum into 12-sample REAC frames,
- *     encodes them with reac_tx_build, and SUBMITS them to the SCHED_FIFO cadence
+ *     encodes them with reac_downstream_build (libreac), and SUBMITS them to the SCHED_FIFO cadence
  *     pacer (reac_pacer) — NO syscall on the RT graph thread.
  *   - the pacer thread clocks the wire at a fixed pps and stamps the master
  *     JOIN/HOLD handshake (reac_master: probe -> cdea 04 03 grant -> established

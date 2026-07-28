@@ -30,6 +30,7 @@
 #include "reac_tx.h"
 #include <reac/reac_decode.h>
 #include <reac/reac.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -80,7 +81,7 @@ static void build_and_stamp(const struct reac_master *m, uint8_t *out,
                             enum reac_master_emit emit, int idx,
                             float *const *planar)
 {
-	reac_tx_build(out, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT, 0x1234, SRC);
+	reac_downstream_build(out, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT, 0x1234, SRC);
 	reac_master_stamp(m, out, emit, idx);
 }
 
@@ -613,12 +614,12 @@ int main(void)
 		CHK(fps_m200_48k == 4000);
 		CHK(fps_m5000_96k == 8000);
 
-		/* frame SHAPE is identical for both: reac_tx_build takes no mixer/rate
+		/* frame SHAPE is identical for both: reac_downstream_build takes no mixer/rate
 		 * input at all, so the emitted frame is REAC_FRAME_BYTES regardless. */
 		static const uint8_t src[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 		uint8_t frame[REAC_FRAME_BYTES];
 		float *planar[REAC_MAX_CHANNELS] = { 0 };
-		CHK(reac_tx_build(frame, planar, 0, REAC_SAMPLES_PER_PKT, 0, src) == REAC_FRAME_BYTES);
+		CHK(reac_downstream_build(frame, planar, 0, REAC_SAMPLES_PER_PKT, 0, src) == REAC_FRAME_BYTES);
 
 		/* the master FSM itself scales purely off fps for both profiles (no 48k
 		 * assumption baked into reac_master_init: cycle_len/chanmap_off/etc are

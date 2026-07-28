@@ -35,16 +35,24 @@ m_dep        = cc.find_library('m', required : false)
 # Prefer the system libreac (Fedora libreac-devel -> found via pkg-config and
 # linked dynamically). Fall back to the bundled subproject where there is no
 # system lib (OpenWrt SDK / a plain dev checkout).
-# >=0.3.0: the braid/sample layout oracles + the upstream decode + the OHRCA
-# clean-len rule live there now (the single layout oracle — never fork a copy).
-libreac_dep = dependency('libreac', version : '>=0.3.0',
+# >=0.4.0: the braid/sample layout oracles, the upstream decode, the OHRCA
+# clean-len rule AND (since 0.4.0) the ENCODE side — reac_braid_encode +
+# reac_downstream_build — live there now. This version floor is load-bearing:
+# reac-pw no longer carries its own encoder, so a 0.3.x libreac must fail at
+# configure time, not at link time.
+libreac_dep = dependency('libreac', version : '>=0.4.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
 # The REAC decode / capture / pcap core comes from libreac via
 # <reac/reac_decode.h> etc., and since 0.3.0 so do the braid codec
 # (<reac/reac_braid.h>), the f32<->s24 pair (<reac/reac_sample.h>) and the
-# box-upstream decode (<reac/reac_upstream.h>) — no local copies.
+# box-upstream decode (<reac/reac_upstream.h>). Since 0.4.0 the ENCODE side is
+# there too (<reac/reac_encode.h>): reac_downstream_build builds the 1492 B
+# master broadcast and reac_braid_encode lays the braided audio region of the
+# box->master frames reac_ctrl builds. reac-pw keeps only what libreac will not
+# do — AF_PACKET emission (reac_tx.c), the SCHED_FIFO pacer, and the
+# control-block/checksum handshake. No local copies of any layout.
 
 # --- the reac-pw client -----------------------------------------------------
 reac_pw_src = [
@@ -84,8 +92,9 @@ ring_test = executable('test_reac_ring',
 test('reac_ring', ring_test)
 
 # --- unit test: TX encoder round-trips through the libreac decode core ---------
-# No PipeWire, no socket — pure encode->decode bit-compare. reac_decode comes from
-# libreac_dep (<reac/reac_decode.h>).
+# No PipeWire, no socket — pure encode->decode bit-compare. The encoder itself is
+# libreac's reac_downstream_build now; src/reac_tx.c is still linked for
+# reac_eth_crc32 (the OHRCA-trailer RE verifier, not part of any encode path).
 tx_test = executable('test_reac_tx',
   ['tests/test_reac_tx.c', 'src/reac_tx.c'],
   include_directories : [include_directories('src')],
@@ -268,7 +277,7 @@ test('reac_vboxgain', vboxgain_test)
 # --- unit test: the full offline COURTSHIP (our master <-> our slave) ----------
 # Both establishment cores are pure, so the whole M-5000 <-> S-1608 sequence runs
 # as a frame-by-frame simulation with no socket: master emissions (next+stamp on
-# reac_tx_build FILLERs) feed reac_slave_step_rx; slave emissions (the reac_ctrl
+# reac_downstream_build FILLERs) feed reac_slave_step_rx; slave emissions (the reac_ctrl
 # builders) feed reac_ctrl_classify_box_frame + reac_master_rx. Pins the golden
 # ordering (probe -> box JOIN -> echoed grant -> box unicast -> both ESTABLISHED
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.

@@ -8,7 +8,7 @@
  * stagebox slaves to us. It drives the master's establishment state machine —
  * probe -> grant -> established + the periodic channel-map/announce — by writing
  * the real cdea/cfea control block into the 32-byte block [18:50] of the
- * downstream broadcast frame that reac_tx_build emits.
+ * downstream broadcast frame that libreac's reac_downstream_build builds.
  *
  * EVENT-DRIVEN (task #130): a real M-5000 never advances the establishment on a
  * timer — it PROBES until the box's cold-connect (cdea 04 03) arrives, ECHOES
@@ -371,7 +371,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
                                        int *tmpl_idx);
 
 /* Stamp the control block for `emit` into a downstream frame already built by
- * reac_tx_build (1492 B: hdr + audio + C2 EA tail). For FILLER this is a no-op.
+ * reac_downstream_build (1492 B: hdr + audio + C2 EA tail). For FILLER this is a no-op.
  * For the cdea/cfea kinds it overwrites type [16:18] + control block [18:50]
  * and applies the checksum, leaving audio + counter + tail intact. GRANT echoes
  * m->join_blk verbatim; CHANMAP/ANNOUNCE use the generated m->chanmap[idx] /
