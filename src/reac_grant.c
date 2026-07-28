@@ -10,30 +10,51 @@
 
 /* ---- The allocator ------------------------------------------------------- *
  *
- * EVIDENCE (GRANT-SWEEP.md + the goldens in reac-captures/captures/, all decoded
- * byte-for-byte):
+ * EVIDENCE — the WHOLE capture corpus, not three goldens. docs/PLACEMENT-EVIDENCE.md
+ * (#210) streams all 82 captures in reac-captures (~19 GB); 42 of them carry a grant
+ * sweep, and those 42 collapse to exactly three observed placements:
  *
- *   box      inputs  observed base  group-A slots  golden
- *   S-0808     8        0x00          0x00..0x07   matrix-m200-s0808-2026-07-11
- *   S-1608    16        0x20          0x20..0x2f   matrix-m200-s1608-2026-07-11
- *   S-4000S   32        0x00          0x00..0x1f   matrix-m5000-s4000-unit{1,2}
+ *   box      inputs  observed base  group-A slots  sweeps  desks that agree
+ *   S-0808     8        0x00          0x00..0x07     11    M-200i, M-300, M-5000
+ *   S-1608    16        0x20          0x20..0x2f     21    M-200i, M-300, M-5000
+ *   S-4000S   32        0x00          0x00..0x1f      5    M-200i, M-5000
  *
- * WHAT THE EVIDENCE DOES AND DOES NOT SETTLE. It settles that base+width are the
- * MASTER's decision and travel to the box in the grant (so the box has no hardwired
- * base to match), and that the 0x2f ceiling is real (a 32-wide box CANNOT base at
- * 0x20 — it would run to 0x3f). It does NOT settle a derivable placement LAW: three
- * points across two different desk models admit no unique rule (lowest-fit predicts
- * 0x00 for the S-1608 and is wrong; top-aligned predicts 0x28 for the S-0808 and is
- * wrong). GRANT-SWEEP.md's "width-many contiguous slots wherever they fit" is a
- * description of the freedom, not of the choice.
+ * Every sweep is contiguous; no two sweeps of the same box ever disagree.
  *
- * SO: we pin the OBSERVED base per width rather than invent a law. Reasons, in
- * order: (a) it is the only placement each real box is known to have accepted;
+ * WHAT THE CORPUS SETTLES. The base is a deterministic function of WHAT THE BOX
+ * DECLARES AT COLD-CONNECT, and of nothing else we can name. Dead, each by capture:
+ *   - lowest-fit (predicts 0x00 for a 16-wide box) and top-aligned-to-0x2f (predicts
+ *     0x28 for an S-0808, 0x10 for an S-4000S) — both contradicted outright;
+ *   - f(desk): three desk models grant the SAME box the SAME base, and ONE M-200i
+ *     grants 0x00 and 0x20 to two boxes in one session (ctl2.pcap);
+ *   - f(enrolment order) / next-free: 22 consecutive re-joins in one capture, zero
+ *     drift (s0808-reboot-enrollfix);
+ *   - f(box MAC / unit identity): reac-pw's slave on a DIFFERENT MAC that merely
+ *     DECLARES the S-1608's blocks is granted 0x20 by a real M-200 (9 sweeps);
+ *   - f(ENROLL group map 0103 000d): the map is a pure width function, front-packed
+ *     from group 0 — and 17 of 18 real-S-1608 captures never receive one at all;
+ *   - f(CHANMAP 0103 0019): byte-identical full 49-position ring for every box.
+ *
+ * WHAT IT STILL DOES NOT SETTLE. Three carriers stay perfectly collinear across all
+ * 42 rows, because we own only three declaration variants: the declared WIDTH (this
+ * table), the config-announce selector byte (0x82 vs 0x84), and config-announce byte
+ * [9] (0x02 vs 0x00, for which base == byte[9] * 0x10 holds on every row). Naming any
+ * one of them "the law" would be picking one of three indistinguishable hypotheses.
+ * PLACEMENT-EVIDENCE.md ends with the 5-run rig experiment that separates them — a
+ * one-byte patch to our own slave declaration, no new hardware.
+ *
+ * SO: we keep pinning the OBSERVED base per width. Reasons, in order: (a) it predicts
+ * all 42 rows and is the only placement each real box is known to have accepted;
  * (b) the S-1608's 0x20 origin is already baked into the rest of the stack as that
  * model's head-amp CH base (reac_ctrl.h's head-amp block comment, openmixer's
  * channel mapping), so choosing differently here would silently desync them;
  * (c) a wrong-but-self-consistent allocation is exactly the failure we are fixing —
  * being consistent with the REST OF THE WORLD is the whole point.
+ *
+ * NOTE ON THE CEILING. REAC_GRANT_FABRIC_CEILING = 0x2f is the HEAD-AMP / chanmap
+ * channel space (48 slots), NOT the audio fabric: cfea advertises 40 audio slots and
+ * the ENROLL map spans exactly those 40. The S-1608 runs to 0x2f = 47, past 40 — so
+ * group-A CH is not an audio-fabric index. Keep the two spaces apart (see #129).
  *
  * This is a POLICY table, deliberately separated from the mechanism below it, so
  * multi-box allocation (#129 — several boxes sharing one fabric) can replace the
