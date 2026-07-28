@@ -184,14 +184,29 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
 {
-	int native = (mixer && mixer->console_field != 0) ? 96000 : 48000;
+	/* THE RATE IS A CHOICE MADE AT THE MASTER — not a property of the desk model.
+	 *
+	 * On a real Roland desk the operator picks the REAC sample rate from a menu;
+	 * the desk then drives the segment at it and every stagebox follows. The box
+	 * has no rate setting of its own and no say in the matter — it adapts to the
+	 * cadence it is given. reac-pw IS the master, so `--rate` is our equivalent of
+	 * that menu, and there is nothing to clamp it against.
+	 *
+	 * This function used to force a V-Mixer-identified master to 48 kHz and report
+	 * `--rate 96000` as clamped, on the theory that the console identity byte
+	 * selects the rate (00 = V-Mixer => 48k only, 01 = OHRCA => 96k). That was an
+	 * inference, never demonstrated, and it is wrong: the identity byte says which
+	 * desk we are impersonating, not which rate the operator chose. Likewise the
+	 * old "OHRCA is natively 96 kHz" default — an M-5000 runs at whatever its REAC
+	 * menu is set to, so a profile-dependent default was equally unfounded.
+	 *
+	 * So: honour the request, and default to 48 kHz (the working standard for live
+	 * work) for every profile. Kept as a function rather than deleted so that a
+	 * real, demonstrated rule would have one obvious home. See issue #73. */
+	(void)mixer;
 	if (clamped)
 		*clamped = 0;
-	if (mixer && mixer->console_field != 0)
-		return requested ? requested : native;   /* OHRCA: honor --rate, default 96k */
-	if (requested && requested != native && clamped)
-		*clamped = 1;                            /* V-Mixer: 48k always, report the override */
-	return native;
+	return requested ? requested : 48000;
 }
 
 /* Build the probe for the CURRENT burst position + link state, publish its
