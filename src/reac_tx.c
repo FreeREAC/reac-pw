@@ -7,6 +7,8 @@
 #include "reac_tx.h"
 
 #include <reac/reac.h>      /* REAC_FRAME_BYTES, _AUDIO_OFFSET, _HDR_COUNTER_OFF, ... */
+#include <reac/reac_braid.h>   /* reac_braid_pos — the layout oracle */
+#include <reac/reac_sample.h>  /* reac_f32_to_s24le */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,63 +23,15 @@
 #include <net/ethernet.h>
 #include <arpa/inet.h>     /* htons */
 
-/* The downstream audio byte layout is the BRAID — the REAC wire format,
- * confirmed by three independent sources plus our own goldens:
- *   - reacdriver (per-gron, the macOS REAC driver): its to-device conversion
- *     is a 16-bit word byte-swap of big-endian s24 host PCM — out = in[1],
- *     in[0],in[3],in[2],in[5],in[4] per channel pair (MbufUtils.cpp), which is
- *     byte-identical to this braid ("LE bytes swapped");
- *   - obs-h8819 (norihiro): convert_to_pcm24lep, developed and LISTENING-
- *     validated against a real Roland M-200i downstream at 48 kHz — our exact
- *     console generation;
- *   - our own rig: the S-1608/S-0808 upstream return is this same braid,
- *     validated with real microphones (#108);
- *   - goldens: zoneA/zoneB (a real M-5000's two REAC ports, program audio)
- *     decode at coherence 0.99 / spectral flatness 0.002 under the braid at
- *     audio offset exactly 50, and as noise under every other layout x offset
- *     (docs/VALIDATION-PLAN.md Stage B coherence table).
- *
- * The historical "plain" alternative (the reac-aes67 reac_decode layout,
- * e2e82ac's M-5000-generation claim) was DEBUNKED: the zoneA/zoneB goldens —
- * the same M-5000's two REAC ports — decode braided, and the plain
- * "coherence 0.999" was a mid-byte lane shift amplifying quiet braided audio
- * 256x into a coherent-looking image. On a de-braiding box, plain encode
- * plays every output as a ~-42 dBFS hash of its own mid/hi bytes — the exact
- * "right level, garbage content" complaint (reproduced as the negative
- * control in tests/test_reac_tx.c). The REAC_TX_LAYOUT A/B env override that
- * kept it selectable was removed once the Stage B listen test confirmed the
- * braid (docs/VALIDATION-PLAN.md). */
-
-/* Byte positions (lo,mid,hi) of sample s / channel ch in the 1440 B audio
- * region: each channel PAIR (2k, 2k+1) shares a 6-byte group at (s*40 + 2k)*3;
- * even s24-LE (lo,mid,hi) -> g[3],g[0],g[1]; odd -> g[4],g[5],g[2].
- * Equivalently: 16-bit-word byte-swap of the pair packed as big-endian s24
- * (reacdriver's to-device conversion). Bijective over all 1440 bytes
- * (asserted by tests/test_reac_tx.c). */
-static void braid_pos(int s, int ch, size_t pos[3])
-{
-	size_t g = (size_t)(s * REAC_MAX_CHANNELS + (ch & ~1)) * REAC_RESOLUTION;
-	if ((ch & 1) == 0) {
-		pos[0] = g + 3; pos[1] = g + 0; pos[2] = g + 1;
-	} else {
-		pos[0] = g + 4; pos[1] = g + 5; pos[2] = g + 2;
-	}
-}
-
-/* normalized float [-1,1) -> 24-bit signed LE (lo,mid,hi at p[0],p[1],p[2]), the
- * exact inverse of reac_rx.c's s24le_to_f32 (which divides by 2^23), so an
- * encode->decode round-trip is the identity up to one ULP of 24-bit
- * quantization. */
-static inline void f32_to_s24le(float v, uint8_t *p)
-{
-	float x = v * 8388608.0f;            /* 2^23 */
-	if (x > 8388607.0f) x = 8388607.0f;  /* clamp to the 24-bit signed range */
-	if (x < -8388608.0f) x = -8388608.0f;
-	int32_t s = (int32_t)lrintf(x);
-	p[0] = (uint8_t)(s & 0xFF);          /* lo  */
-	p[1] = (uint8_t)((s >> 8) & 0xFF);   /* mid */
-	p[2] = (uint8_t)((s >> 16) & 0xFF);  /* hi  */
-}
+/* The downstream audio byte layout is the BRAID — the REAC wire format. The
+ * byte map and its full evidence trail (reacdriver / obs-h8819 / rig #108 /
+ * zoneA-zoneB M-5000 goldens, plus the debunking of the historical "plain"
+ * alternative — the -42 dBFS mid-byte hash reproduced as the negative control
+ * in tests/test_reac_tx.c) live with the oracle: <reac/reac_braid.h>. The
+ * REAC_TX_LAYOUT A/B env override that kept plain selectable was removed once
+ * the Stage B listen test confirmed the braid (docs/VALIDATION-PLAN.md). This
+ * encoder takes byte positions from reac_braid_pos() and the s24 conversion
+ * from <reac/reac_sample.h> — no local copy of either. */
 
 /* Standard Ethernet CRC-32 (IEEE 802.3), bit-reflected table-free form — see the
  * doc comment on the declaration in reac_tx.h for why this exists and why it is
@@ -129,8 +83,8 @@ int reac_tx_build(uint8_t *out, float *const *planar, int nch, int ns,
 			float v = (ch < nch && planar[ch]) ? planar[ch][s] : 0.0f;
 			uint8_t b[3];
 			size_t pos[3];
-			f32_to_s24le(v, b);
-			braid_pos(s, ch, pos);
+			reac_f32_to_s24le(v, b);
+			reac_braid_pos(s, ch, N, pos);
 			audio[pos[0]] = b[0];
 			audio[pos[1]] = b[1];
 			audio[pos[2]] = b[2];
