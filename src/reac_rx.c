@@ -46,16 +46,13 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		ns = nch > 0 ? reac_upstream_decode(frame, len, s24) : -1;
 	} else {
 		nch = mode->n_channels;
-		/* Decode the standard 1492 B frame. A 1494 B OHRCA frame is that same
-		 * frame with 2 further bytes after C2 EA: decode the embedded
-		 * REAC_FRAME_BYTES and ignore them either way. reac_frame_inspect
-		 * requires exactly REAC_FRAME_BYTES, so never hand it the 1494 length.
-		 * What those 2 bytes ARE is an open question and this code deliberately
-		 * does not depend on the answer — libreac's <reac/reac.h> records them
-		 * as a real per-frame OHRCA trailer, while W4(a) of
-		 * docs/SLAVE-EMULATION-SCOPE.md and docs/MASTER-HARDWARE-VERIFY.md read
-		 * the DOWNSTREAM pair as Ethernet FCS bytes leaked in by a mirror/SPAN
-		 * tap. Under investigation against the captures; see #80. */
+		/* Decode the standard 1492 B frame. A 1494 B frame is that same frame
+		 * plus 2 bytes after C2 EA: decode the embedded REAC_FRAME_BYTES and
+		 * ignore them. reac_frame_inspect requires exactly REAC_FRAME_BYTES, so
+		 * never hand it the 1494 length. Those 2 bytes are the low 16 bits of
+		 * the frame's own Ethernet FCS left behind by the capture path — not a
+		 * protocol field, in either direction (#82, and libreac's <reac/reac.h>
+		 * since 0.5.0). Never emit them. */
 		ns = reac_decode(frame, REAC_FRAME_BYTES, mode, s24); /* out[(ch*ns+s)*3] */
 	}
 	if (ns < 0) {
@@ -87,9 +84,10 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 static int gate_accepts(struct reac_rx *rx, const uint8_t *frame, size_t len)
 {
 	if (rx->cfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
-		/* 1492 = V-Mixer; 1494 = OHRCA (M-5000/M-480) = the same frame plus 2
-		 * bytes after the C2 EA end marker (their nature is open — see the
-		 * note in feed_frame and #80). Accept both; the decode ignores them. */
+		/* 1492 = the frame; 1494 = the same frame with 2 bytes of Ethernet FCS
+		 * residue kept after the C2 EA end marker by the capture path (see the
+		 * note in feed_frame and #82). Accept both — the mirror twin arrives as
+		 * one of each and the dup guard below collapses the pair. */
 		return len == (size_t)REAC_FRAME_BYTES ||
 		       len == (size_t)REAC_FRAME_BYTES_OHRCA;
 	if (reac_upstream_channels(len) < 0)
@@ -202,21 +200,24 @@ static void *rx_loop(void *arg)
 			continue;
 		}
 
-		/* OHRCA duplicate-frame guard (see reac_rx.h): drop a frame byte-identical
-		 * to the one before it. A 48 kHz box over-clocked to the 96 kHz doubled
-		 * cadence re-sends each frame verbatim; feeding both doubles every 12-sample
-		 * block into a granular stutter and doubles the effective rate. Genuine
-		 * distinct frames are never byte-identical, so this is a no-op for a true
-		 * 48 kHz box or a real 96 kHz source. Runs before the counter/ppm/decode so
-		 * the rate estimator and the ring see the real (deduplicated) cadence. */
-		if (rx->have_prev_frame && (size_t)n == rx->prev_frame_len &&
-		    memcmp(frame, rx->prev_frame, (size_t)n) == 0) {
+		/* Duplicate-frame guard (see reac_rx.h): drop a frame whose CLEAN prefix
+		 * is byte-identical to the one before it. Comparing on the clean length
+		 * rather than the wire length is what makes it catch the mirror twin,
+		 * whose two copies differ only in that one of them kept 2 bytes of FCS
+		 * (1492 vs 1494) — a raw length compare never fires on that pair. The
+		 * over-clock repeat (equal lengths, so equal clean lengths) is subsumed.
+		 * Feeding both copies doubles every 12-sample block into a granular
+		 * stutter and doubles the effective rate. Runs before the counter/ppm/
+		 * decode so the rate estimator and the ring see the real cadence. */
+		size_t clean = reac_frame_clean_len((size_t)n);
+		if (rx->have_prev_frame && clean == rx->prev_clean_len &&
+		    memcmp(frame, rx->prev_frame, clean) == 0) {
 			atomic_fetch_add_explicit(&rx->frames_dup, 1, memory_order_relaxed);
 			continue;
 		}
-		if ((size_t)n <= sizeof rx->prev_frame) {
-			memcpy(rx->prev_frame, frame, (size_t)n);
-			rx->prev_frame_len = (size_t)n;
+		if (clean <= sizeof rx->prev_frame) {
+			memcpy(rx->prev_frame, frame, clean);
+			rx->prev_clean_len = clean;
 			rx->have_prev_frame = 1;
 		}
 
