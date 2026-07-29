@@ -1,14 +1,23 @@
 # reac-pw ↔ openmixer — validation plan + roadmap
 
-Ordered plan to validate and merge **reac-pw PR #8** (per-VLAN multi-box, box-width
-named nodes, rate=model) and **openmixer PR #156** (per-box stagebox UI + re-link).
-Each step gates the next; merge a PR only after the step that validates it passes.
+Ordered plan that validated and merged **reac-pw PR #8** (per-VLAN multi-box,
+box-width named nodes) and **openmixer PR #156** (per-box stagebox UI + re-link).
+Each step gated the next; a PR merged only after the step that validated it passed.
+**Both are merged** — Part 1 is kept as the procedure (it is the re-test protocol,
+and Stage B carries a two-day mis-diagnosis written up so it is never repeated),
+Part 2 is the live roadmap.
+
+One claim from PR #8's title did not survive: "rate = model". The console identity
+byte says which desk we impersonate, not which rate the operator chose — see #73
+and `MASTER-HARDWARE-VERIFY.md`'s superseded-rate note.
 
 ## Part 1 — Validation (in order)
 
 ### Stage A — reac-pw single box (validates PR #8 core)
-1. **Unit tests** — `cd ~/Devel/audio/reacpw-wt-130 && ninja -C build && meson test -C build`.
-   Gate: **12 OK, 1 SKIP** (pacer skips off-rig).
+1. **Unit tests** — `ninja -C build && meson test -C build`.
+   Gate: **all green, one SKIP** — `reac_pacer`'s live-cadence case, which needs
+   `CAP_NET_RAW` and so skips off-rig. (Do not gate on a count: it was 12 tests when
+   this plan was written and is 29 now. `meson test` reports the total itself.)
 2. **setcap + establishment** — `sudo setcap cap_net_raw,cap_sys_nice+ep build/reac-pw`
    then `./build/reac-pw --live enp131s0 --role master --mixer m200 --tx enp131s0 --box s1608:S-1608`.
    Pass: log reaches `ESTABLISHED` + steady heartbeat; `tx/s ≈ 4000`.
