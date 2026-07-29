@@ -29,9 +29,36 @@ in this repo.
 >   box was not yet establishing via `enp131s0` (our broadcast is on that wire,
 >   the box's probe frames appear, but no JOIN completes) — re-check cabling.
 > - The +2 CRC-trailer finding is about frame CONTENT and stands unaffected.
+>   **Superseded 2026-07-29 — see the second correction below.**
+
+> **CORRECTION 2 (2026-07-29, #82):** the +2 is **not** a trailer and not OHRCA's.
+> It is the low 16 bits of the frame's own **Ethernet FCS** (CRC-32 over the
+> preceding bytes, little-endian) left behind by the capture path. Swept over the
+> whole private corpus (83 pcaps): the identity holds for **217,558 / 217,558**
+> trailered frames — 100 %, both directions, every generation. A genuine protocol
+> field cannot equal the frame's own FCS 200,000 consecutive times. It is also not
+> generation-linked: **61 of 83** captures carry the twin and **22 carry none**,
+> including OHRCA rigs; the variable is the capture rig, not the gear.
+>
+> The +2 copy and the clean copy are the **same frame seen twice** by a
+> both-directions port mirror — which makes the residue the dedup guard's problem,
+> not just the decoder's:
+>
+> - The guard now compares `reac_frame_clean_len()` bytes. The old
+>   `n == prev_frame_len` test could never fire on a 1492/1494 (or 628/630) pair,
+>   so on a mirrored capture reac-pw still ingested both copies — the exact
+>   doubling the guard exists to stop. The over-clock case (equal lengths) is
+>   subsumed unchanged.
+> - Measured on the mirrored S-1608 cold-connect capture: the master's stream is
+>   **166,666 → 83,333** frames (exactly 2 per counter → 1) while the box's is
+>   **83,334 → 83,334** (untouched — the box's return was not duplicated in that
+>   capture, though on the M-200/S-4000 matrix capture it is).
+> - Some mirrored captures carry twins with **no** residue at all (both copies
+>   1492 B). Duplication is the phenomenon; the residue is a side effect of how the
+>   two mirror directions treat the FCS.
 
 The original analysis follows, kept for the measurements; read its box-behaviour
-claims through the correction above.
+claims through the corrections above.
 
 ---
 
@@ -88,23 +115,33 @@ so no end-marker/CRC leaks into the audio.
 
 ## Fix
 
-`src/reac_rx.c` (RX ingest, before counter/ppm/decode): **drop a frame byte-identical
-to the one immediately before it.** Safe and self-adapting:
+`src/reac_rx.c` (RX ingest, before counter/ppm/decode): **drop a frame whose
+`reac_frame_clean_len()` prefix is byte-identical to the one immediately before
+it.** Safe and self-adapting:
 
 - Identical frames carry no new audio, so dropping the repeat is lossless.
-- Genuine distinct frames (32 ch × 12 samp × 24-bit) are never byte-identical, so a
-  true 48 kHz box (no duplication) and a real distinct-frame 96 kHz source are both
-  unaffected.
+- Comparing the CLEAN prefix rather than the wire length is what catches the mirror
+  twin, whose two copies differ only in the 2 bytes of FCS residue one of them kept
+  (#82). Equal-length repeats compare identically, so the over-clock case is
+  subsumed.
+- Genuine distinct frames (32 ch × 12 samp × 24-bit) are never byte-identical — the
+  16-bit counter is inside the compared bytes — so a true 48 kHz box (no
+  duplication) and a real distinct-frame 96 kHz source are both unaffected. The
+  corpus sweep found **0** adjacent same-counter pairs that differ in any byte, and
+  **0** byte-identical pairs with different counters: a same-counter pair is always
+  a copy, never new audio.
 - Restores the true 48 kHz cadence into `reac-capture`, so the rate estimator and
   ring see the real rate.
 
 libreac's upstream decode (`<reac/reac_upstream.h>`, was `src/reac_upstream.c` here
-until 2026-07-28): strip the OHRCA **+2 CRC-16 trailer** (`1206 → 1204`,
-`52 + 32·36 + 2`). Required — without it the S-4000 frames fail the `%36` width
-check and `reac-capture` is silent. Confirmed a real box field, not the Ethernet
-FCS: in one capture reac-pw's own downstream frames are all 1492 B (no +2) while the
-box's upstream are all 1206 B (+2). The box mixes ~1/8 frames at 1204 (no +2); both
-resolve to 32 ch.
+until 2026-07-28): normalize the length with `reac_frame_clean_len()`
+(`1206 → 1204`, `52 + 32·36 + 2`). Required — without it the S-4000 frames fail the
+`%36` width check and `reac-capture` is silent. The two bytes are **FCS residue from
+the capture path**, not a box field (correction 2 above): the earlier reading — "in
+one capture reac-pw's own downstream frames are all 1492 B while the box's upstream
+are all 1206 B, and the box mixes ~1/8 frames at 1204" — was reading the mirror. The
+1204/1206 mix is the twin ratio of that capture, not a box behaviour; on a
+non-mirrored capture the box emits one length.
 
 ### Verification
 

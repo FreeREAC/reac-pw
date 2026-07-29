@@ -69,10 +69,10 @@ Model rows are the law here, not a knob — see the fixed model matrix in
 [`REAC-BOX-STATE-DIAGRAM.md`](REAC-BOX-STATE-DIAGRAM.md), all three rows
 live-verified on a real M-200 (2026-07-12). There is no "S-1608 with 8 channels".
 
-### W4 — Downstream decode: OHRCA frame length + audio layout  ·  **(b) CLOSED, (a) OPEN**
-Two distinct issues found in `src/reac_rx.c`. The layout half (b) is closed —
-one braid, every generation. The frame-length half (a) is still open, but nothing
-in the code turns on it.
+### W4 — Downstream decode: OHRCA frame length + audio layout  ·  **CLOSED**
+Two distinct issues found in `src/reac_rx.c`, both now closed: the layout half (b)
+is one braid, every generation, and the frame-length half (a) is Ethernet FCS
+residue from the capture path, in both directions.
 
 **(a) ⚠ FALSIFIED (2026-07-12): the "+2 CRC-16 trailer" was the ETHERNET FCS.**
 The earlier claim — that the M-5000 (OHRCA) frame is 1494 B = a 1492 B REAC frame
@@ -89,22 +89,23 @@ Consequence: there is **nothing to crack and nothing to emit** — the Ethernet 
 is computed by the NIC hardware, so reac-pw's frames already carry a valid one.
 Do NOT reintroduce a "per-frame CRC-16 trailer" gate or emitter.
 
-⚠ **NOT SETTLED — read the paragraph above as one side of an open question
-(2026-07-29).** Two records in the tree disagree about the DOWNSTREAM `+2` and
-neither has been retired. libreac's `<reac/reac.h>` documents
-`REAC_FRAME_BYTES_OHRCA` as a REAL 2-byte per-frame OHRCA trailer in **both**
-directions, citing live M-5000 downstream captures from 2026-07-11 — the day
-before the falsification above. This section and
-[`MASTER-HARDWARE-VERIFY.md`](MASTER-HARDWARE-VERIFY.md) read the same downstream
-pair as Ethernet FCS bytes leaked in by a mirror/SPAN tap. The **upstream** half
-is no longer in dispute and cuts against the paragraph above as written: the
-S-4000's 1206 B returns were confirmed on 2026-07-25 to carry a real trailer
-(interleaved with ~1/8 trailerless 1204 B frames, which an FCS cannot produce) —
-see [`REAC-BOX-STATE-DIAGRAM.md`](REAC-BOX-STATE-DIAGRAM.md), which already
-corrects the "box upstream 1206 B = 1204 + 2 is WRONG" clause. The downstream
-reading is being re-checked against the captures; nothing in the code depends on
-the answer (the decode ignores the 2 bytes either way), so do not act on either
-side until it lands. Tracked on #80.
+✅ **SETTLED 2026-07-29 in favour of the paragraph above (#82).** The competing
+record — libreac's `<reac/reac.h>` reading `REAC_FRAME_BYTES_OHRCA` as a real
+per-frame OHRCA trailer — was retired by FreeREAC/libreac#15 and the corpus sweep
+behind it. Numbers, over the whole private capture corpus (83 pcaps):
+
+- trailing 2 bytes == `low16(crc32(preceding))` little-endian on **217,558 of
+  217,558** trailered frames, both directions, every generation;
+- **61 of 83** captures carry the artefact and **22 carry none** — including OHRCA
+  rigs, so generation is not the variable; the capture rig is;
+- the "~1/8 trailerless 1204 B frames, which an FCS cannot produce" argument that
+  kept the upstream half alive is inverted: on
+  `matrix-m200-s4000-2026-07-24.pcap` **all 2,224** `1204 B` frames are the clean
+  copy of a byte-identical `1206 B` twin (0 lone `1204`s).
+
+So `+2` = Ethernet FCS residue, upstream and downstream alike, and it is a
+DUPLICATE-frame signal as much as a length one: `src/reac_rx.c` dedups on
+`reac_frame_clean_len()` because the mirror twin's two copies differ only by it.
 
 **Why it masqueraded as a counter-seeded CRC-16.** The Ethernet FCS is a CRC-32
 over the whole frame *including the counter field*, so 2 of its bytes are a linear
