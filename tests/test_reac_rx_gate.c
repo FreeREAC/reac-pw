@@ -85,15 +85,19 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	out[REAC_FRAME_BYTES - 1] = REAC_END_MARKER_1;
 }
 
-/* An OHRCA (M-5000/M-480) downstream frame: the standard 1492 B frame plus a
- * 2-byte per-frame CRC-16 trailer AFTER the C2 EA end marker (total 1494 B).
- * The gate must accept it and the decoder must read the embedded 1492 B frame,
- * ignoring the trailer. `out` must have room for REAC_FRAME_BYTES_OHRCA. */
+/* An OHRCA (M-5000/M-480) downstream frame: the standard 1492 B frame plus 2
+ * further bytes AFTER the C2 EA end marker (total 1494 B). What those bytes are
+ * is open — a real per-frame trailer per libreac's <reac/reac.h>, or Ethernet
+ * FCS bytes leaked in by a mirror/SPAN tap per docs/SLAVE-EMULATION-SCOPE.md
+ * W4(a); see #80. This test does not care, and neither does the code under it:
+ * the gate must accept the 1494 B length and the decoder must read the embedded
+ * 1492 B frame, ignoring whatever follows. `out` must have room for
+ * REAC_FRAME_BYTES_OHRCA. */
 static void mk_downstream_ohrca(uint8_t *out, uint16_t counter)
 {
 	mk_downstream(out, counter);                 /* fills [0 : REAC_FRAME_BYTES) */
-	out[REAC_FRAME_BYTES + 0] = 0xB1;            /* trailer stand-in (a real box */
-	out[REAC_FRAME_BYTES + 1] = 0x06;            /* emits a per-frame CRC-16 here) */
+	out[REAC_FRAME_BYTES + 0] = 0xB1;            /* two arbitrary post-marker */
+	out[REAC_FRAME_BYTES + 1] = 0x06;            /* bytes — never decoded */
 }
 
 /* run the feeder over the fixture until it has accepted n frames (or timeout) */

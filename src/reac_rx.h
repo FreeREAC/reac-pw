@@ -4,9 +4,9 @@
 /* reac_rx — the non-realtime RX feeder.
  *
  * Owns the wire source (live AF_PACKET via reac_capture, or pcap replay via
- * pcap_source), validates + decodes each 0x8819 frame with the reac-aes67
- * plain-LE core, converts the planar s24 output to float, and pushes it into
- * the shared ring for the PipeWire process() callback.
+ * pcap_source), validates + decodes each 0x8819 frame with libreac's braid
+ * core, converts the planar s24 output to float, and pushes it into the shared
+ * ring for the PipeWire process() callback.
  *
  * It is ALSO the rate authority: it tracks the byte-14/15 free-running counter
  * slope against CLOCK_MONOTONIC (or a NIC PHC), which gives both the recovered
@@ -22,9 +22,10 @@
 #include <stdint.h>
 #include <pthread.h>
 #include "reac_ring.h"
-/* REAC_FRAME_BYTES_OHRCA + reac_frame_clean_len(): the OHRCA +2 CRC trailer
- * rule moved to its one home in libreac (>= 0.3.0) — it applies to both
- * directions, not just this RX gate. */
+/* REAC_FRAME_BYTES_OHRCA + reac_frame_clean_len(): the OHRCA +2 length rule
+ * moved to its one home in libreac (>= 0.3.0) — it applies to both directions,
+ * not just this RX gate. What the 2 bytes are is still open (#80); the rule is
+ * about length normalization and holds either way. */
 #include <reac/reac.h>
 
 enum reac_rx_kind {

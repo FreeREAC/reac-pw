@@ -13,7 +13,7 @@
 #include <sys/time.h>
 
 #include <reac/reac.h>
-/* the reac-aes67 plain-LE decode core + the two wire sources, reused as-is */
+/* the downstream (40-ch braided) decode + the two wire sources, reused as-is */
 #include <reac/reac_decode.h>
 #include <reac/reac_capture.h>
 #include <reac/pcap_source.h>
@@ -30,10 +30,12 @@ static uint64_t mono_ns(void)
 }
 
 /* Decode one gate-accepted frame into the ring (planar float, ring-width x 12
- * samples). DOWNSTREAM = the 40-ch plain-LE broadcast (reac_decode); UPSTREAM
- * = the box-width braided return (reac_upstream_decode), placed positionally
- * at ring channels 0..nch-1 with the remaining slots silent (the input->slot
- * allocation is a separate lane). */
+ * samples). Both directions are the SAME channel-pair braid, read through
+ * libreac's one oracle: DOWNSTREAM = the 40-ch broadcast (reac_decode, braided
+ * since libreac 0.5.0 — before that it read plain LE while our encoder wrote
+ * the braid, #80); UPSTREAM = the box-width return (reac_upstream_decode),
+ * placed positionally at ring channels 0..nch-1 with the remaining slots silent
+ * (the input->slot allocation is a separate lane). */
 static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
                        const uint8_t *frame, size_t len)
 {
@@ -44,10 +46,16 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		ns = nch > 0 ? reac_upstream_decode(frame, len, s24) : -1;
 	} else {
 		nch = mode->n_channels;
-		/* Decode the standard 1492 B frame; an OHRCA 1494 B frame is the same
-		 * frame plus a 2-byte CRC-16 trailer after C2 EA — decode the embedded
-		 * REAC_FRAME_BYTES and ignore the trailer. reac_frame_inspect requires
-		 * exactly REAC_FRAME_BYTES, so never hand it the 1494 length. */
+		/* Decode the standard 1492 B frame. A 1494 B OHRCA frame is that same
+		 * frame with 2 further bytes after C2 EA: decode the embedded
+		 * REAC_FRAME_BYTES and ignore them either way. reac_frame_inspect
+		 * requires exactly REAC_FRAME_BYTES, so never hand it the 1494 length.
+		 * What those 2 bytes ARE is an open question and this code deliberately
+		 * does not depend on the answer — libreac's <reac/reac.h> records them
+		 * as a real per-frame OHRCA trailer, while W4(a) of
+		 * docs/SLAVE-EMULATION-SCOPE.md and docs/MASTER-HARDWARE-VERIFY.md read
+		 * the DOWNSTREAM pair as Ethernet FCS bytes leaked in by a mirror/SPAN
+		 * tap. Under investigation against the captures; see #80. */
 		ns = reac_decode(frame, REAC_FRAME_BYTES, mode, s24); /* out[(ch*ns+s)*3] */
 	}
 	if (ns < 0) {
@@ -79,8 +87,9 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 static int gate_accepts(struct reac_rx *rx, const uint8_t *frame, size_t len)
 {
 	if (rx->cfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
-		/* 1492 = V-Mixer; 1494 = OHRCA (M-5000/M-480) = the same frame plus a
-		 * 2-byte per-frame CRC-16 trailer after the C2 EA end marker. */
+		/* 1492 = V-Mixer; 1494 = OHRCA (M-5000/M-480) = the same frame plus 2
+		 * bytes after the C2 EA end marker (their nature is open — see the
+		 * note in feed_frame and #80). Accept both; the decode ignores them. */
 		return len == (size_t)REAC_FRAME_BYTES ||
 		       len == (size_t)REAC_FRAME_BYTES_OHRCA;
 	if (reac_upstream_channels(len) < 0)
