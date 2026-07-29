@@ -9,7 +9,9 @@
  * plus a second box's return, then runs the actual reac_rx feeder thread
  * over it in both accept modes and checks:
  *
- *   DOWNSTREAM: only the 1492 B frames feed the ring (upstream -> frames_other)
+ *   DOWNSTREAM: only the 1492 B frames feed the ring (upstream -> frames_other),
+ *               with their BRAIDED audio decoded onto the channel that wrote it
+ *               and its pair partner left silent
  *   UPSTREAM:   only the FIRST box's return feeds the ring (downstream + the
  *               second box -> frames_other), with its braided audio decoded
  *               into ring channels 0..15 and 16..39 silent.
@@ -30,6 +32,7 @@
 #include <reac/reac.h>
 #include "reac_ring.h"
 #include "reac_rx.h"
+#include <reac/reac_braid.h>
 #include <reac/reac_upstream.h>
 
 #include "upstream_fixtures.inc"
@@ -63,24 +66,38 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	memcpy(out + 6, master, 6);
 	out[12] = 0x88; out[13] = 0x19;
 	out[14] = (uint8_t)(counter & 0xff); out[15] = (uint8_t)(counter >> 8);
-	/* audio region: a marker value on channel 0, plain LE sample-major */
+	/* Audio region: a marker value on channel 0 and silence everywhere else,
+	 * laid down through the braid oracle — the wire layout the master really
+	 * emits and, since libreac 0.5.0, the one reac_decode() reads back. This
+	 * fixture used to write the marker at the plain-LE sample-major offset
+	 * (s*40+ch)*3, which pinned the pre-0.5.0 decode: under the braid those
+	 * same bytes land on channel 1's high lane, so the frame no longer says
+	 * what it claims to (#80). */
 	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-		uint8_t *p = out + REAC_L2_HEADER_LEN + (size_t)(s * 40) * 3;
-		p[0] = 0x00; p[1] = 0x00; p[2] = 0x40; /* s24 0x400000 = +0.5 */
+		size_t pos[3];
+		reac_braid_pos(s, 0, 40, pos);
+		uint8_t *audio = out + REAC_L2_HEADER_LEN;
+		audio[pos[0]] = 0x00;                  /* s24 0x400000 = +0.5 */
+		audio[pos[1]] = 0x00;
+		audio[pos[2]] = 0x40;
 	}
 	out[REAC_FRAME_BYTES - 2] = REAC_END_MARKER_0;
 	out[REAC_FRAME_BYTES - 1] = REAC_END_MARKER_1;
 }
 
-/* An OHRCA (M-5000/M-480) downstream frame: the standard 1492 B frame plus a
- * 2-byte per-frame CRC-16 trailer AFTER the C2 EA end marker (total 1494 B).
- * The gate must accept it and the decoder must read the embedded 1492 B frame,
- * ignoring the trailer. `out` must have room for REAC_FRAME_BYTES_OHRCA. */
+/* An OHRCA (M-5000/M-480) downstream frame: the standard 1492 B frame plus 2
+ * further bytes AFTER the C2 EA end marker (total 1494 B). What those bytes are
+ * is open — a real per-frame trailer per libreac's <reac/reac.h>, or Ethernet
+ * FCS bytes leaked in by a mirror/SPAN tap per docs/SLAVE-EMULATION-SCOPE.md
+ * W4(a); see #80. This test does not care, and neither does the code under it:
+ * the gate must accept the 1494 B length and the decoder must read the embedded
+ * 1492 B frame, ignoring whatever follows. `out` must have room for
+ * REAC_FRAME_BYTES_OHRCA. */
 static void mk_downstream_ohrca(uint8_t *out, uint16_t counter)
 {
 	mk_downstream(out, counter);                 /* fills [0 : REAC_FRAME_BYTES) */
-	out[REAC_FRAME_BYTES + 0] = 0xB1;            /* trailer stand-in (a real box */
-	out[REAC_FRAME_BYTES + 1] = 0x06;            /* emits a per-frame CRC-16 here) */
+	out[REAC_FRAME_BYTES + 0] = 0xB1;            /* two arbitrary post-marker */
+	out[REAC_FRAME_BYTES + 1] = 0x06;            /* bytes — never decoded */
 }
 
 /* run the feeder over the fixture until it has accepted n frames (or timeout) */
@@ -140,12 +157,16 @@ int main(void)
 		CHK(atomic_load(&rx.frames_other) >= 2 * (ok - 1));
 		CHK(atomic_load(&rx.frames_bad) == 0);
 
-		/* ring channel 0 carries the downstream marker +0.5 */
+		/* ring channel 0 carries the downstream marker +0.5, and its braid
+		 * PARTNER (ch 1, the other half of the pair) is silent — the pair is
+		 * where a plain-LE read of a braided frame goes wrong, so this is the
+		 * layout pin, not just a liveness check */
 		float ch[REAC_MAX_CHANNELS][12];
 		float *dst[REAC_MAX_CHANNELS];
 		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
 		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
 		CHK(fabsf(ch[0][0] - 0.5f) < 1e-6f);
+		CHK(ch[1][0] == 0.0f);
 		reac_rx_close(&rx);
 		reac_ring_free(&ring);
 	}
@@ -219,12 +240,14 @@ int main(void)
 		CHK(atomic_load(&rx.frames_ok) >= 20);   /* 1494 B frames accepted */
 		CHK(atomic_load(&rx.frames_bad) == 0);   /* none rejected as malformed */
 
-		/* the embedded 1492 B frame decoded: channel 0 still carries +0.5 */
+		/* the embedded 1492 B frame decoded: channel 0 still carries +0.5 and
+		 * its braid partner is still silent — the 2 extra bytes reached no lane */
 		float ch[REAC_MAX_CHANNELS][12];
 		float *dst[REAC_MAX_CHANNELS];
 		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
 		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
 		CHK(fabsf(ch[0][0] - 0.5f) < 1e-6f);
+		CHK(ch[1][0] == 0.0f);
 		reac_rx_close(&rx);
 		reac_ring_free(&ring);
 		unlink(opath);

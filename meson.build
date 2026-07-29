@@ -35,14 +35,27 @@ m_dep        = cc.find_library('m', required : false)
 # Prefer the system libreac (Fedora libreac-devel -> found via pkg-config and
 # linked dynamically). Fall back to the bundled subproject where there is no
 # system lib (OpenWrt SDK / a plain dev checkout).
-# >=0.4.0: the braid/sample layout oracles, the upstream decode, the OHRCA
-# clean-len rule AND (since 0.4.0) the ENCODE side — reac_braid_encode +
-# reac_downstream_build — live there now. This version floor is load-bearing:
+# >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
+# clean-len rule, the ENCODE side (since 0.4.0 — reac_braid_encode +
+# reac_downstream_build) AND, since 0.5.0, a reac_decode() that reads the SAME
+# braid its own encoder writes. This version floor is load-bearing twice over:
 # reac-pw no longer carries its own encoder, so a 0.3.x libreac must fail at
-# configure time, not at link time.
-libreac_dep = dependency('libreac', version : '>=0.4.0',
+# configure time rather than at link time; and a 0.4.x libreac would still LINK
+# while decoding the downstream as plain LE, so the RX path would silently
+# disagree with the TX path about the wire layout (#80). Building quietly
+# against an older system libreac is exactly what this floor exists to stop.
+libreac_dep = dependency('libreac', version : '>=0.5.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
+
+# The floor bites on BOTH resolution paths, verified when it was raised:
+#   - system libreac-devel 0.2.0 -> rejected by pkg-config, fallback taken;
+#   - a stale subprojects/libreac left over from a 0.4.0 build -> rejected too,
+#     because the wrap patches the version-carrying shim in at clone time, so an
+#     old checkout reports its own old version. `meson subprojects update`, or
+#     just remove subprojects/libreac and reconfigure.
+# The RPM (--wrap-mode=nofallback) has no fallback to take, so its floor is the
+# spec's BuildRequires: pkgconfig(libreac) >= 0.5.0 — keep the two in step.
 
 # The REAC decode / capture / pcap core comes from libreac via
 # <reac/reac_decode.h> etc., and since 0.3.0 so do the braid codec
@@ -50,7 +63,10 @@ libreac_dep = dependency('libreac', version : '>=0.4.0',
 # box-upstream decode (<reac/reac_upstream.h>). Since 0.4.0 the ENCODE side is
 # there too (<reac/reac_encode.h>): reac_downstream_build builds the 1492 B
 # master broadcast and reac_braid_encode lays the braided audio region of the
-# box->master frames reac_ctrl builds. reac-pw keeps only what libreac will not
+# box->master frames reac_ctrl builds. Since 0.5.0 both RX directions read that
+# one braid — reac_decode for the downstream, reac_upstream_decode for the box
+# return — so the encoder and the decoder in this binary agree by construction.
+# reac-pw keeps only what libreac will not
 # do — AF_PACKET emission (reac_tx.c), the SCHED_FIFO pacer, and the
 # control-block/checksum handshake. No local copies of any layout.
 

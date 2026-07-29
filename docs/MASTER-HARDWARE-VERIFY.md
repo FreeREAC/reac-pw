@@ -144,9 +144,19 @@ the SAME wire frame TWICE — once at 1492 B, once at 1494 B, byte-identical in
 `[0:1492]`, same counter — which proves the extra 2 bytes are a mirror/SPAN capture
 artifact (partial Ethernet FCS passthrough — see the existing rig gotcha above, "The
 USB SPAN mirror adds the 2-byte Ethernet FCS"), not something the desk's REAC logic
-emits. This is the same conclusion already reached and committed for the box-
-UPSTREAM direction (`docs/SLAVE-EMULATION-SCOPE.md` W4(a), 2026-07-12); this is the
-independent reproduction for the master's DOWNSTREAM direction.
+emits. This was framed as the same conclusion already reached and committed for the
+box-UPSTREAM direction (`docs/SLAVE-EMULATION-SCOPE.md` W4(a), 2026-07-12), read as
+the independent reproduction for the master's DOWNSTREAM direction.
+
+⚠ **NOT SETTLED (2026-07-29).** The upstream half of that pairing no longer holds:
+the S-4000's 1206 B returns were confirmed on 2026-07-25 to carry a REAL trailer,
+interleaved with ~1/8 trailerless 1204 B frames — see
+[`REAC-BOX-STATE-DIAGRAM.md`](REAC-BOX-STATE-DIAGRAM.md). And libreac's
+`<reac/reac.h>` documents the OHRCA `+2` as a real per-frame trailer in **both**
+directions. So the downstream reading above stands against a competing record and
+is being re-checked against the captures (#80). Nothing in reac-pw depends on the
+answer — the decode ignores the 2 bytes and the emitter never produces them — so
+do not act on either reading until it lands.
 
 Consequence: there is **nothing to crack and nothing to emit**. A real desk's actual
 wire frame is `REAC_FRAME_BYTES` (1492) plus whatever 4-byte FCS its own NIC hardware

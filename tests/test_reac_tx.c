@@ -24,8 +24,9 @@
  *       channel pair as big-endian s24 and swapping bytes per 16-bit word —
  *       reacdriver's to-device conversion ("LE bytes swapped");
  *   (c) NEGATIVE CONTROL — the "right level, garbage content" complaint: the
- *       debunked plain-LE layout ((s*40+ch)*3, the reac-aes67 reac_decode
- *       order), de-braided as a real box does, plays the fed channel as a
+ *       debunked plain-LE layout ((s*40+ch)*3 — what reac_decode() read before
+ *       libreac 0.5.0, now only reac_decode_plain_le() and only as a
+ *       diagnostic), de-braided as a real box does, plays the fed channel as a
  *       hash capped ~48 dB down (every output's MID byte lands in its HIGH
  *       lane) that does NOT track the sine. This is the pre-braid complaint
  *       AND the 2026-07-13 regression;
