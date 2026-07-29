@@ -17,8 +17,8 @@ PipeWire 1.4.
 REAC has no fixed master — any box can be the master and the rest slave to it
 (REAC-PROTOCOL-AND-TESTS.md §2/§4). openmixer must fit either role, selected at
 launch with `--role master|slave` (default **master**, which preserves the
-original behaviour). Both roles share the same encoder/decoder (`reac_tx_build` /
-libreac's decode core) and the same PipeWire nodes (`reac:capture` for RX,
+original behaviour). Both roles share the same encoder/decoder (libreac's
+`reac_downstream_build` / `reac_braid_encode` and its decode core) and the same PipeWire nodes (`reac:capture` for RX,
 the sink for the graph's PCM). **They differ only in WHO drives the handshake +
 the clock, and in the TX direction:**
 
@@ -125,7 +125,7 @@ flag + clock registration differ.
 ### Sink node `reac:playback` (the REAC master) — `reac_sink_node.c`
 
 **Functional.** An Audio/Sink with N mono DSP input ports; `process()` encodes
-each 12-sample group with `reac_tx_build` and submits it to the SCHED_FIFO
+each 12-sample group with libreac's `reac_downstream_build` and submits it to the SCHED_FIFO
 pacer, which clocks the wire at a fixed pps and drives the master JOIN/HOLD
 handshake so a real Roland stagebox slaves to us. See the TX-path section (S2/S6)
 below. (Despite the name it presents as the *master*, not a stagebox — the
@@ -163,7 +163,7 @@ compile.
 ## TX path (built) — `reac:playback` is a working REAC MASTER
 
 `reac:playback` now emits real REAC downstream and presents as the **master**, so
-a Roland stagebox slaves to it. The path is: graph → `reac_tx_build` (encode) →
+a Roland stagebox slaves to it. The path is: graph → `reac_downstream_build` (encode, libreac) →
 the TX frame ring → the SCHED_FIFO pacer (cadence + master handshake) → the wire.
 
 ### S2. Master-role JOIN/HOLD handshake (`src/reac_master.{h,c}`)
@@ -179,7 +179,7 @@ no desk links to it.
 `reac_master` is a **pure decision core** (no I/O): the pacer thread owns it,
 feeds it classified RX events (`reac_master_rx`) and asks it once per emitted
 frame what to stamp (`reac_master_next` + `reac_master_stamp`, which writes type
-`[16:18]` + control block `[18:50]` over the frame `reac_tx_build` produced,
+`[16:18]` + control block `[18:50]` over the frame `reac_downstream_build` produced,
 re-applying the cdea/cfea checksum and leaving audio + counter + `C2 EA` tail
 intact).
 
@@ -292,7 +292,7 @@ advances by `period_ns` each tick (125.0/250.0/272.1 µs; no drift accumulation,
 snap-forward on a late wake so we never burst-catch-up).
 
 `on_process()` (the RT graph callback) only **encodes + submits**: it builds whole
-1492-B frames with `reac_tx_build` and pushes them into a lock-free SPSC frame
+1492-B frames with `reac_downstream_build` and pushes them into a lock-free SPSC frame
 ring — no syscall, no blocking. The pacer pops exactly one frame per slot; on
 underrun it emits a **silent FILLER** so the cadence, the free-running counter and
 the master heartbeat/channel-map never stall (the box stays locked without
@@ -399,7 +399,8 @@ ex-"FPGA scramble" of task #61 — is the obs-h8819 even/odd channel-pair byte B
 over a downstream-style envelope (50 B header incl. a 16-slot `00 7a` descriptor,
 `len = 52 + nch*36`, C2 EA trailer, 12 samples/frame at every rate), channel order
 plain ascending. Verified against reac-captures (music channel lag1 autocorr +0.998
-under the braid vs garbage under plain LE). `reac_upstream.{h,c}` decodes it; the
+under the braid vs garbage under plain LE). libreac's `<reac/reac_upstream.h>` decodes it (the local copy was deleted in
+`87297ca`); the
 slave's `reac_ctrl_build_upstream_filler` now braid-packs identically, and the RX
 feeder gates by role (slave rx = 1492 B downstream; master rx = box-shaped returns,
 locked to the first box's src MAC).
@@ -416,7 +417,7 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `src/reac_ring.{h,c}` | lock-free SPSC planar-float ring (RX hot-path → process(); also the slave's upstream-input carrier) |
 | `src/reac_rx.{h,c}` | non-RT feeder: wire source (live/pcap) → libreac validate → role-gated decode (downstream 40-ch / upstream box return) → f32 → ring; counter-slope ppm estimator |
 | `src/reac_source_node.{h,c}` | `reac:capture` pw_filter: 40 F32 ports, RT process(), follower/driver clock (RX for BOTH roles) |
-| `src/reac_tx.{h,c}` | downstream-frame encoder (`reac_tx_build`, inverse of the decode core) + raw-socket emitter |
+| `src/reac_tx.{h,c}` | raw-socket AF_PACKET emitter + `reac_eth_crc32` (the OHRCA-trailer RE verifier). The frame encoder moved to libreac 2026-07-29 (`reac_downstream_build`, `<reac/reac_encode.h>`) |
 | `src/reac_master.{h,c}` | **master-role** JOIN/HOLD: the cdea/cfea establishment FSM + captured control-block templates (S2) |
 | `src/reac_pacer.{h,c}` | **master-role** SCHED_FIFO cadence pacer + TX frame ring; stamps the master block on egress (S6) |
 | `src/reac_sink_node.{h,c}` | `reac:playback` Audio/Sink: process() encodes + submits to the pacer (the master TX) |

@@ -3,21 +3,25 @@
 #
 # meson shim for libreac (FreeREAC/libreac ships only a hand Makefile). Dropped
 # into the libreac checkout by reac-pw's subprojects/libreac.wrap patch_directory.
-# Builds the static RX/measure core and exposes libreac_dep with <reac/reac.h>.
+# Builds the static wire-format core and exposes libreac_dep with <reac/reac.h>.
+# reac_encode.c rounds with lrintf, so the dependency carries libm.
 
 project('libreac', 'c',
-  version : '0.3.0',
+  version : '0.4.0',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2'])
 
 libreac_inc = include_directories('include')
+libreac_m = meson.get_compiler('c').find_library('m', required : false)
 
 libreac_lib = static_library('reac',
-  ['src/reac.c', 'src/reac_decode.c', 'src/reac_upstream.c',
+  ['src/reac.c', 'src/reac_decode.c', 'src/reac_upstream.c', 'src/reac_encode.c',
    'src/reac_capture.c', 'src/pcap_source.c'],
   include_directories : libreac_inc,
+  dependencies : [libreac_m],
   install : false)
 
 libreac_dep = declare_dependency(
   link_with : libreac_lib,
+  dependencies : [libreac_m],
   include_directories : libreac_inc)

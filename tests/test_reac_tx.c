@@ -35,6 +35,7 @@
  */
 #include "reac_tx.h"
 #include <reac/reac.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,7 +118,7 @@ int main(void)
 				chbuf[ch][s] = (ch == SINE_CH) ? v : 0.0f;
 		}
 
-		int len = reac_tx_build(frame, planar, REAC_MAX_CHANNELS,
+		int len = reac_downstream_build(frame, planar, REAC_MAX_CHANNELS,
 		                        REAC_SAMPLES_PER_PKT, 0x1234, src);
 		CHK(len == REAC_FRAME_BYTES);
 		if (fr == 0) {
@@ -236,7 +237,7 @@ int main(void)
 	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++)
 		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			chbuf[ch][s] = (float)ch / 64.0f - 0.3f;
-	reac_tx_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT, 0x1234, src);
+	reac_downstream_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT, 0x1234, src);
 	float dc_err = 0.0f;
 	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
 		float got[REAC_SAMPLES_PER_PKT];
@@ -371,7 +372,7 @@ int main(void)
 	}
 	printf("OK: OHRCA \"2-byte trailer\" = the first 2 bytes of the standard "
 	       "Ethernet CRC-32 FCS over frame[0:1492], a mirror/SPAN capture "
-	       "artifact — NOT a REAC field, nothing for reac_tx_build to emit\n");
+	       "artifact — NOT a REAC field, nothing for the encoder to emit\n");
 
 	/* ---- task #156: frame size is rate/profile-INVARIANT --------------------
 	 * Because the trailer above is not a real field, the downstream frame stays
@@ -380,11 +381,11 @@ int main(void)
 	 * through reac_master's console_field) change between a V-Mixer (M-200/
 	 * M-300, 48 kHz) and an OHRCA (M-5000, 96 kHz) emission. Pin that here so a
 	 * future change cannot silently reintroduce a fabricated 1494-byte emit. */
-	CHK(reac_tx_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT,
+	CHK(reac_downstream_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT,
 	                  0x0001, src) == REAC_FRAME_BYTES);   /* stands in for m200 @48k */
-	CHK(reac_tx_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT,
+	CHK(reac_downstream_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT,
 	                  0x0002, src) == REAC_FRAME_BYTES);   /* stands in for m5000 @96k:
-	                                                        * reac_tx_build takes no
+	                                                        * reac_downstream_build takes no
 	                                                        * mixer/profile input at
 	                                                        * all — the frame shape
 	                                                        * genuinely does not vary */

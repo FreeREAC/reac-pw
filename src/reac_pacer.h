@@ -14,7 +14,7 @@
  * advances by period_ns each tick (no drift accumulation).
  *
  * The graph thread produces whole 1492-B downstream frames (audio already encoded
- * by reac_tx_build) into a lock-free SPSC frame ring; the pacer consumes exactly
+ * by libreac's reac_downstream_build) into a lock-free SPSC frame ring; the pacer consumes exactly
  * one per slot. On underrun (the graph fell behind) the pacer emits a silent
  * FILLER so the cadence — and the master heartbeat/channel-map, and the free-
  * running counter — never stall, which is what keeps a slaved box locked without

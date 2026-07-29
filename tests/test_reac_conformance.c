@@ -31,6 +31,7 @@
 #include "reac_headamp_tx.h"
 #include "reac_tx.h"
 #include <reac/reac.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -52,7 +53,7 @@ static void build_and_stamp(const struct reac_master *m, uint8_t *out,
                             enum reac_master_emit emit, int idx)
 {
 	float *planar[REAC_MAX_CHANNELS] = { 0 };   /* NULL per-channel -> silent */
-	reac_tx_build(out, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT, 0x1234, m->src);
+	reac_downstream_build(out, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT, 0x1234, m->src);
 	reac_master_stamp(m, out, emit, idx);
 }
 

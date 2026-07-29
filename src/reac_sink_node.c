@@ -8,7 +8,7 @@
  *   - registers an Audio/Sink with `channels` mono DSP input ports, so apps
  *     (Rhythmbox, pw-play, ...) and the graph can play INTO it;
  *   - process() de-stages each quantum into 12-sample REAC frames, encodes them
- *     with reac_tx_build, and SUBMITS them to the pacer's TX ring (a lock-free
+ *     with libreac's reac_downstream_build, and SUBMITS them to the pacer's TX ring (a lock-free
  *     non-blocking push — NO syscall on the RT graph thread);
  *   - the pacer thread emits frames at a rock-steady pps (8000/4000/3675) and
  *     stamps the master JOIN/HOLD control sequence (probe -> grant -> established
@@ -36,6 +36,7 @@
 #include "reac_rx.h"      /* the BOX clock reference measurement source (#75) */
 
 #include <reac/reac.h>
+#include <reac/reac_encode.h>  /* reac_downstream_build — libreac owns the frame layout */
 #include <pipewire/pipewire.h>
 #include <pipewire/filter.h>
 #include <spa/param/param.h>
@@ -228,7 +229,7 @@ static void on_process(void *data, struct spa_io_position *position)
 	for (int c = 0; c < n->channels; c++)
 		planar[c] = n->stage[c];
 
-	/* MUST be zeroed: reac_tx_build only encodes n->channels of the 40 downstream
+	/* MUST be zeroed: reac_downstream_build only encodes n->channels of the 40 downstream
 	 * slots, so the unused slots would otherwise carry uninitialized stack memory
 	 * onto the wire. A real M-200 sends CLEAN ZEROS in every FILLER's audio region
 	 * while hunting (measured: 100% zero vs our 100% non-zero) — #130. */
@@ -254,7 +255,7 @@ static void on_process(void *data, struct spa_io_position *position)
 			}
 			/* Encode audio + L2 header; counter/control are stamped by the pacer.
 			 * Counter 0 is a placeholder (overwritten on egress). */
-			reac_tx_build(frame, planar, n->channels, REAC_SAMPLES_PER_PKT, 0, n->src);
+			reac_downstream_build(frame, planar, n->channels, REAC_SAMPLES_PER_PKT, 0, n->src);
 			reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES);
 			n->staged = 0;
 		}
