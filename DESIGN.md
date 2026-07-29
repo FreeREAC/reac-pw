@@ -34,14 +34,17 @@ downstream sink, or the slave's upstream-return + handshake socket. The slave
 role REQUIRES `--tx` (it must have a NIC to answer on); the master role can run
 RX-only (a pure monitor) or with `--tx` for the downstream sink.
 
-Reuses, does not reinvent — **libreac >= 0.3.0** (`FreeREAC/libreac`,
+Reuses, does not reinvent — **libreac >= 0.5.0** (`FreeREAC/libreac`,
 `<reac/*.h>`) is the single REAC byte-layout oracle and the only REAC dependency:
 frame validate, the byte-14/15 counter, gap math, `reac_detect_rate_fd` /
 `reac_rate_snap`, the braid codec (`<reac/reac_braid.h>`), the f32↔s24 sample pair,
-the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 trailer rule
-(`reac_frame_clean_len`), plus `reac_decode.c` (the legacy plain-LE downstream
-path), `reac_capture.c` (AF_PACKET 0x8819) and `pcap_source.c` (classic pcap
-reader). There is **no reac-aes67 sibling checkout any more** — the three
+the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 length rule
+(`reac_frame_clean_len`), plus `reac_decode.c` (the downstream decode — braided
+since 0.5.0, the old plain-LE layout surviving only as the named diagnostic
+`reac_decode_plain_le()`, #80), `reac_capture.c` (AF_PACKET 0x8819) and
+`pcap_source.c` (classic pcap reader). The floor is 0.5.0 because a 0.4.x
+libreac links fine and then reads the downstream with a layout our own encoder
+does not write. There is **no reac-aes67 sibling checkout any more** — the three
 compiled-straight-in files and reac-pw's own copies of the braid, the s24
 conversion and the upstream decode were all folded into libreac 0.3.0 on
 2026-07-28 (`be52b83`, `87297ca`, `e6f1ca7`, `2abeed4`). Never fork a second
@@ -386,9 +389,10 @@ never run against a real M-5000) — the procedure is in
    `CLOCK_MONOTONIC` pacing, and a real M-200 accepts it. This **falsified** the
    earlier "clock-domain wall" conclusion.
 4. **M-5000 (OHRCA) still open** — it grants us, then reverts to hunting
-   (~680 probes/s). The suspect is the OHRCA established-state shape, NOT a clock
-   and NOT a downstream CRC trailer (see the falsification in
-   [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md) W4a).
+   (~680 probes/s). The suspect is the OHRCA established-state shape, and not the
+   clock. Whether a downstream trailer is in play depends on the unresolved
+   reading of the downstream `+2` — see
+   [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md) W4(a) and #80.
 
 Every capture behind those verdicts is committed to `reac-captures` — **do not
 leave one in `/tmp`**, which is how the original `/tmp/hs1.pcap` grant-burst

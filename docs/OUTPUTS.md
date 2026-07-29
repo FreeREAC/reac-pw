@@ -15,11 +15,6 @@ patch sees the box rather than the fabric
 recovered REAC rate, de-interleaved by libreac and fed through its
 validate/counter/rate-detect into the lock-free ring.
 
-One caveat that does not change any routing below: the downstream decode
-still uses libreac's legacy plain-LE path while the encoder uses the
-braid — issue #80. Everything in this document is about where the ports
-go, not what is in them.
-
 The point of the node model: **you do not write a new encoder per
 output format — you route**. Every target below is `reac:capture`'s
 ports linked, with `pw-link` / WirePlumber / qpwgraph, to some other

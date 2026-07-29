@@ -5,9 +5,15 @@
 # into the libreac checkout by reac-pw's subprojects/libreac.wrap patch_directory.
 # Builds the static wire-format core and exposes libreac_dep with <reac/reac.h>.
 # reac_encode.c rounds with lrintf, so the dependency carries libm.
+#
+# The version below is what reac-pw's `dependency('libreac', version: ...)`
+# floor is checked against when the fallback is taken, so it has to track the
+# libreac the wrap actually clones (`revision = main`). Keep it in step with
+# packaging/libreac.spec upstream; reac-pw's meson.build additionally probes for
+# a 0.5.0-only symbol so a stale checkout cannot pass on this string alone.
 
 project('libreac', 'c',
-  version : '0.4.0',
+  version : '0.5.0',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2'])
 

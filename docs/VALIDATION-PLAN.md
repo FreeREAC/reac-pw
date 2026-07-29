@@ -99,11 +99,12 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
   program, entropy exactly 4.000/4.000 bits), while the correct braid decode of
   quiet content looks like a noise floor. Wrong-layout decodes can look BETTER
   than the truth on quiet material — always fingerprint with program-level
-  audio and check for the 256×/uniform-byte signatures. #135 should
-  re-validate a real M-5000 with loud program before keying the encode per
-  mixer profile (the `REAC_TX_LAYOUT=plain` A/B override was removed after
-  the braid was confirmed; the plain layout survives as the negative control
-  in `tests/test_reac_tx.c`).
+  audio and check for the 256×/uniform-byte signatures. Settled since: the
+  operator has confirmed one downstream format across all mixer generations, so
+  nothing is keyed per mixer profile and #135 is dropped (the
+  `REAC_TX_LAYOUT=plain` A/B override was removed after the braid was confirmed;
+  the plain layout survives as the negative control in `tests/test_reac_tx.c`
+  and as libreac's `reac_decode_plain_le()` diagnostic).
 
 **Stage B re-test / listen protocol:**
 
@@ -157,18 +158,21 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
 - **#133 frame-locked upstream TX + #131 clock discipline / repacer** — the M-5000 grants our slave but
   never goes fully LINKED; the last gap is the upstream timing/jitter lock. Biggest remaining slave item.
 - **#132** PipeWire `reac:return` sink (inject audio as the box's mic inputs).
-- **#135** per-generation downstream decode. NOTE (2026-07-13, post-Stage-B): the
-  **braid is confirmed for the V-Mixer-generation box pairing** (listen-proven on our
-  S-1608 + obs-h8819's real-M-200i validation + reacdriver's wordswap16(BE) to-device
-  conversion, which is byte-identical to the braid). The "M-5000 = plain-LE" claim
-  (reac-aes67 e2e82ac) is **contested**: the zoneA/zoneB goldens from the M-5000's own
-  REAC ports decode braided, and the plain "coherence 0.999" is explained by the
-  mid→hi lane shift amplifying quiet braided audio 256× into a coherent-looking image
-  (see Stage B). Re-validate a real M-5000 with LOUD program before adding a
-  mixer-profile-keyed encode; until then the braid is the only encode (the
-  `REAC_TX_LAYOUT=plain` runtime override was removed — the plain layout lives on
-  as the `tests/test_reac_tx.c` negative control). This also means
-  reac-aes67's `reac_decode` plain de-interleave likely needs the same braid fix.
+- ~~**#135** per-generation downstream decode~~ — **DROPPED 2026-07-29.** There is
+  no per-generation split to implement. The **braid is confirmed for the
+  V-Mixer-generation box pairing** (listen-proven on our S-1608 + obs-h8819's
+  real-M-200i validation + reacdriver's wordswap16(BE) to-device conversion, which
+  is byte-identical to the braid), the "M-5000 = plain-LE" claim (reac-aes67
+  e2e82ac) is refuted by the zoneA/zoneB goldens from the M-5000's own REAC ports
+  — its "coherence 0.999" is the mid→hi lane shift amplifying quiet braided audio
+  256× into a coherent-looking image (see Stage B) — and the operator has confirmed
+  that every mixer generation puts out the same downstream format. So the braid is
+  the only encode AND, since libreac 0.5.0, the only downstream decode: the plain
+  layout survives as `reac_decode_plain_le()` upstream and as the
+  `tests/test_reac_tx.c` negative control here, nothing else. The
+  `REAC_TX_LAYOUT=plain` runtime override was already removed. The follow-on this
+  note predicted — "reac-aes67's `reac_decode` plain de-interleave likely needs the
+  same braid fix" — is what libreac#13/#14 and reac-pw #80 did.
 
 **openmixer**
 - Stagebox card output control + `assignGroup` wire clamp (#156 left out of scope).
