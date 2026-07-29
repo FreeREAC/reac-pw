@@ -14,21 +14,29 @@
 > most likely the per-generation downstream audio layout (W4/#135) — but there is
 > nothing to crack or emit for a trailer. See the M-200 section below.
 >
-> **UPDATE 2026-07-25 — the FCS finding is DOWNSTREAM-only.** The falsification
-> above stands for the master's DOWNSTREAM frames (1492 → "1494" = 2 bytes of
-> Ethernet FCS from a mirror/SPAN config). The box's UPSTREAM is different: a
-> real S-4000's returns are **1206 B = 1204 + a REAL OHRCA CRC-16 trailer**
-> appended after the `c2 ea` end marker — a genuine box field, proven on
-> non-mirror-artifact captures (in one capture our own downstream frames are
-> all 1492 B with no +2 while the box's upstream are 1206 B; the box also mixes
-> ~1/8 trailerless 1204 B frames, which an FCS could never do). reac-pw strips
-> it on RX — libreac's `<reac/reac_upstream.h>` since 2026-07-28 (`87297ca`), which
-> is where the box-upstream decode now lives. Evidence:
-> [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
+> **~~UPDATE 2026-07-25 — the FCS finding is DOWNSTREAM-only.~~ RETRACTED
+> 2026-07-29 (#82): it is FCS residue in BOTH directions.** The retracted update
+> read the box's UPSTREAM `1206 B` returns as `1204 + a REAL OHRCA CRC-16 trailer`,
+> on the grounds that the box "mixes ~1/8 trailerless 1204 B frames, which an FCS
+> could never do". Measured on the very capture the fixtures come from
+> (`matrix-m200-s4000-2026-07-24.pcap`), that argument inverts the evidence:
+>
+> - **every** one of the 2,224 `1204 B` frames is immediately preceded by a
+>   `1206 B` frame that is byte-identical over the clean 1204 — they are the
+>   clean copy of a mirror twin, not trailerless box output (0 lone `1204`s);
+> - the trailing 2 bytes of all **94,458** `1206 B` upstream frames equal
+>   `low16(crc32(prefix))` little-endian — 100 %, the frame's own FCS, which no
+>   box-generated field could reproduce;
+> - same for the `1494 B` downstream (99,902/99,902) and the `342 B` S-0808-shaped
+>   returns (6/6). Corpus-wide: **217,558/217,558**.
+>
+> So: `+2` = Ethernet FCS residue from a both-directions port mirror, upstream and
+> downstream alike. Do not emit it; normalize the length with
+> `reac_frame_clean_len()` (libreac `<reac/reac_upstream.h>` since 2026-07-28,
+> `87297ca`) and dedup the twin on that clean length (`src/reac_rx.c`, #82).
+> Evidence: [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
 > + the checked-in real 1206 B frames `UP32A`/`UP32B`
-> (`tests/upstream_fixtures.inc`, from `matrix-m200-s4000-2026-07-24.pcap`).
-> So: downstream +2 = FCS artifact (do not emit); upstream +2 = real trailer
-> (strip on RX, `%36` width check after).
+> (`tests/upstream_fixtures.inc`).
 
 Reconstructed from live M-5000 (OHRCA, 96 kHz) captures, 2026-07-11: a real
 S-1608 cold-boot (`real-s1608-coldboot-m5000-2026-07-11.pcap`) and reac-pw's

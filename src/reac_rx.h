@@ -85,19 +85,36 @@ struct reac_rx {
 	uint8_t up_src[6];
 	int     up_src_locked;
 
-	/* OHRCA duplicate-frame guard. A 48 kHz box driven at the 96 kHz doubled
-	 * cadence (the #156 OHRCA path) re-transmits each frame BYTE-IDENTICALLY —
-	 * measured on the S-4000S: 100% of adjacent same-counter pairs are equal,
-	 * ~125 us apart (a real second transmission, not a capture mirror). Feeding
-	 * both copies concatenates every 12-sample block, so each block plays twice
-	 * -> a granular per-frame stutter (the "granulated audio" symptom) and the
-	 * effective rate doubles (96 kHz into a 48 kHz reac-capture -> overrun).
-	 * We drop the exact repeat: it carries no new audio, and genuine distinct
-	 * frames (32 ch x 12 samp x 24-bit) are never byte-identical, so a true
-	 * 48 kHz box (no duplication) and a real 96 kHz box (distinct frames) are
-	 * both unaffected. Dropping the copy restores the true rate into the ring. */
+	/* Duplicate-frame guard. Two different sources put the same frame on the
+	 * wire twice, and both land here:
+	 *
+	 *   1. the OVER-CLOCK repeat — a 48 kHz box driven at the 96 kHz doubled
+	 *      cadence (the #156 OHRCA path) re-transmits each frame verbatim,
+	 *      same length, ~125 us apart (measured on the S-4000S: 100% of
+	 *      adjacent same-counter pairs equal);
+	 *   2. the MIRROR TWIN — a capture rig mirroring BOTH RX and TX of one port
+	 *      sees a transiting frame twice, same src MAC and same counter, with
+	 *      one copy carrying 2 bytes of the frame's own Ethernet FCS after the
+	 *      C2 EA end marker and the other not. Those two copies differ in
+	 *      LENGTH (1492 vs 1494 downstream, 628 vs 630 upstream, ...), which is
+	 *      why the guard compares reac_frame_clean_len() bytes: on the clean
+	 *      prefix the pair is byte-identical, on the wire length it never is.
+	 *      Measured 2026-07-29 over the capture corpus: 61 of 83 captures carry
+	 *      the twin, and on a mirrored S-1608 cold-connect the master's stream
+	 *      is exactly 2 frames per counter (166,666 -> 83,333) while the box's
+	 *      is 1 (83,334 -> 83,334, untouched).
+	 *
+	 * Feeding both copies concatenates every 12-sample block, so each block
+	 * plays twice -> a granular per-frame stutter (the "granulated audio"
+	 * symptom) and the effective rate doubles (96 kHz into a 48 kHz
+	 * reac-capture -> overrun). Dropping the copy restores the true cadence.
+	 *
+	 * It cannot eat a genuine frame: the 16-bit counter is inside the compared
+	 * bytes, so consecutive distinct frames are never byte-identical, and the
+	 * corpus sweep found 0 adjacent same-counter pairs that differ in any byte
+	 * (i.e. a same-counter pair is always a copy, never new audio). */
 	uint8_t prev_frame[1560];   /* >= the rx frame buffer (REAC_FRAME_BYTES + 64) */
-	size_t  prev_frame_len;
+	size_t  prev_clean_len;     /* reac_frame_clean_len() of what prev_frame holds */
 	int     have_prev_frame;
 
 	/* diagnostics */
