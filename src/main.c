@@ -5,7 +5,7 @@
  *
  * A single libpipewire client that registers the 40-channel REAC source node
  * fed by a pcap replay (offline) or a live AF_PACKET 0x8819 socket, decoding
- * with the reac-aes67 plain-LE core and pushing samples through a lock-free
+ * with libreac's braid core and pushing samples through a lock-free
  * ring into the realtime process() callback. The node is a follower; PipeWire's
  * adapter resamples REAC -> graph (Tier-A clock bridge).
  *

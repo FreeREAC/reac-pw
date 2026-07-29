@@ -10,24 +10,29 @@ no new code per destination.
 
 The **RX source node** is a `reac:capture` Audio/Source fed from a live REAC wire
 (AF_PACKET, EtherType `0x8819`) or a pcap replay and handed to PipeWire's adapter
-for channel-map, format-convert and adaptive resample. Box returns (the master's
-RX) are decoded with libreac's braid oracle and are rig-proven on real microphones;
-the downstream path still runs libreac's legacy plain-LE decode, which the
-zoneA/zoneB goldens refute — see issue #80. The **TX sink node** (`reac:playback`) is a
+for channel-map, format-convert and adaptive resample. Both RX directions decode
+libreac's braid oracle — box returns (the master's RX), rig-proven on real
+microphones, and the master's downstream broadcast, which since libreac 0.5.0
+`reac_decode()` un-braids too, so the decoder now agrees with the encoder in the
+same binary (issue #80). The **TX sink node** (`reac:playback`) is a
 working REAC **master**: it encodes the graph's PCM into the downstream broadcast,
 clocks the wire from a SCHED_FIFO cadence pacer at a steady pps, and drives the
 cdea/cfea JOIN/HOLD handshake so a real Roland stagebox slaves to it (see Status).
 
 Everything REAC-specific is reused, not reinvented:
 
-- **libreac >= 0.3.0** (`FreeREAC/libreac`, headers `<reac/*.h>`) — the single
+- **libreac >= 0.5.0** (`FreeREAC/libreac`, headers `<reac/*.h>`) — the single
   REAC byte-layout oracle: frame validate, the byte-14/15 counter, gap math,
   `reac_detect_rate_fd` / `reac_rate_snap`, the braid codec
   (`<reac/reac_braid.h>`), the f32↔s24 sample pair (`<reac/reac_sample.h>`),
-  the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 trailer rule
-  (`reac_frame_clean_len`), plus `reac_decode.c` (the legacy plain-LE downstream
-  path), `reac_capture.c` (live AF_PACKET) and `pcap_source.c` (classic pcap
-  reader). System `libreac-devel` via pkg-config, or the meson wrap fallback.
+  the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 length rule
+  (`reac_frame_clean_len`), plus `reac_decode.c` (the downstream decode —
+  braided since 0.5.0, with the old plain-LE layout kept only as the named
+  diagnostic `reac_decode_plain_le()`), `reac_capture.c` (live AF_PACKET) and
+  `pcap_source.c` (classic pcap reader). System `libreac-devel` via pkg-config,
+  or the meson wrap fallback. The floor is 0.5.0 rather than 0.3.0 because a
+  0.4.x libreac links fine and then decodes the downstream with the layout the
+  encoder does not write (#80).
 
 reac-pw itself is the lock-free ring, the RX feeder, the control plane (cdea/cfea
 and DT1 record builders + the two checksums), the master and slave establishment

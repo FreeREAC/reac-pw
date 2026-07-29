@@ -5,8 +5,8 @@
  *
  * One ring carries the de-interleaved planar audio between the RX feeder
  * thread (producer) and the PipeWire realtime process() callback (consumer).
- * The feeder writes whole REAC frames (40 ch x 12 samples) decoded by the
- * reac-aes67 plain-LE core; process() dequeues one PipeWire quantum worth of
+ * The feeder writes whole REAC frames (40 ch x 12 samples) decoded by
+ * libreac's braid core; process() dequeues one PipeWire quantum worth of
  * samples per channel each cycle.
  *
  * Layout is PLANAR float: a contiguous block of `capacity` frames-per-channel
