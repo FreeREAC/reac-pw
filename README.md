@@ -88,7 +88,8 @@ the packet rate (pps = rate/12), never on the wire.
   master clock and async-resamples the DAC to it. Same node, only the driver flag
   + clock registration differ.
 - **`reac:playback` (sink, the REAC master).** N mono-F32 input ports; the RT
-  `process()` encodes each 12-sample group with `reac_tx_build` and submits it to
+  `process()` encodes each 12-sample group with libreac's `reac_downstream_build`
+  and submits it to
   a lock-free TX frame ring (no syscall on the graph thread). A dedicated
   SCHED_FIFO pacer thread (mlockall, prio ~79, `clock_nanosleep` TIMER_ABSTIME)
   emits one frame per slot at a fixed pps (125 µs @96 k) and stamps the master

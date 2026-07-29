@@ -959,7 +959,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 
 /* Overwrite type [16:18] + control block [18:50] of `frame` with `blk` (a 34-byte
  * [type|block] template), then re-apply the cdea/cfea checksum at [49]. The audio,
- * counter and C2/EA tail that reac_tx_build wrote are untouched. */
+ * counter and C2/EA tail that reac_downstream_build wrote are untouched. */
 #define REAC_TYPE_OFF 16   /* type [16:18], control block [18:50] follows */
 
 static void apply_block(uint8_t *frame, const uint8_t blk[34])
@@ -998,7 +998,7 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
 {
 	switch (emit) {
 	case REAC_M_EMIT_FILLER:
-		/* reac_tx_build (or the pacer's silent-underrun filler) already wrote
+		/* reac_downstream_build (or the pacer's silent-underrun filler) already wrote
 		 * type 00 00 + audio + tail; stamp 16x "00 <current-probe-checksum>",
 		 * which is exactly what a real master repeats there (#130). */
 		stamp_filler_descriptor(frame, m->filler_desc);

@@ -28,9 +28,11 @@ right, and the work below still stands; only its stated reason does not.
 - Establishment FSM (`src/reac_fsm.c`): PHY→FLOOD→COLDCONNECT
   (`0014→0013→0016→001a`)→TX_MUTE→ESTABLISHED→heartbeat/DROP; learns the master
   MAC from the wire. Offline-proven end-to-end by `tests/test_reac_courtship.c`.
-- Braided upstream encoder (`src/reac_ctrl.c: place_braided_audio`,
-  `reac_ctrl_build_upstream_filler`) — planar float → box-width braided upstream
-  frame. Layout verified against rig captures (task #108).
+- Braided upstream encoder (libreac's `reac_braid_encode`, driven by
+  `src/reac_ctrl.c: reac_ctrl_build_upstream_filler`) — planar float → box-width
+  braided upstream frame. Layout verified against rig captures (task #108); the
+  braid loop itself moved to libreac 2026-07-29 (it was the same loop as the
+  downstream encoder's), the frame envelope + control block stayed here.
 - Downstream RX → PipeWire source node (`src/reac_source_node.c`,
   `src/reac_rx.c`) — the master's audio decoded to capture ports.
 
