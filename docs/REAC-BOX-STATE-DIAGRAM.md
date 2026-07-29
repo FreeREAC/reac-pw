@@ -22,7 +22,8 @@
 > non-mirror-artifact captures (in one capture our own downstream frames are
 > all 1492 B with no +2 while the box's upstream are 1206 B; the box also mixes
 > ~1/8 trailerless 1204 B frames, which an FCS could never do). reac-pw strips
-> it on RX (`src/reac_upstream.c`). Evidence:
+> it on RX — libreac's `<reac/reac_upstream.h>` since 2026-07-28 (`87297ca`), which
+> is where the box-upstream decode now lives. Evidence:
 > [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
 > + the checked-in real 1206 B frames `UP32A`/`UP32B`
 > (`tests/upstream_fixtures.inc`, from `matrix-m200-s4000-2026-07-24.pcap`).
