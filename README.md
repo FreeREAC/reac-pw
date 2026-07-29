@@ -8,10 +8,12 @@ no new code per destination.
 
 ## What it is
 
-The **RX source node** is a 40-channel `reac:capture` Audio/Source fed from a live
-REAC wire (AF_PACKET, EtherType `0x8819`) or a pcap replay, decoded with the
-proven plain-LE core and handed to PipeWire's adapter for channel-map,
-format-convert and adaptive resample. The **TX sink node** (`reac:playback`) is a
+The **RX source node** is a `reac:capture` Audio/Source fed from a live REAC wire
+(AF_PACKET, EtherType `0x8819`) or a pcap replay and handed to PipeWire's adapter
+for channel-map, format-convert and adaptive resample. Box returns (the master's
+RX) are decoded with libreac's braid oracle and are rig-proven on real microphones;
+the downstream path still runs libreac's legacy plain-LE decode, which the
+zoneA/zoneB goldens refute — see issue #80. The **TX sink node** (`reac:playback`) is a
 working REAC **master**: it encodes the graph's PCM into the downstream broadcast,
 clocks the wire from a SCHED_FIFO cadence pacer at a steady pps, and drives the
 cdea/cfea JOIN/HOLD handshake so a real Roland stagebox slaves to it (see Status).
@@ -27,8 +29,11 @@ Everything REAC-specific is reused, not reinvented:
   path), `reac_capture.c` (live AF_PACKET) and `pcap_source.c` (classic pcap
   reader). System `libreac-devel` via pkg-config, or the meson wrap fallback.
 
-reac-pw itself is only the lock-free ring, the RX feeder, the control plane
-(cdea/cfea builders + checksums) and the PipeWire nodes.
+reac-pw itself is the lock-free ring, the RX feeder, the control plane (cdea/cfea
+and DT1 record builders + the two checksums), the master and slave establishment
+FSMs, the grant/ENROLL sweep, the head-amp send model, the cadence pacer and its
+clock discipline, the multi-box registry, and the PipeWire nodes. See DESIGN.md's
+Files table.
 
 ## Build and run
 
@@ -68,8 +73,9 @@ slave's own width is `--box-channels`.)
 The REAC broadcast is always 40 ch × 12 samples × 3 B; the sample rate lives in
 the packet rate (pps = rate/12), never on the wire.
 
-- **`reac:capture` (source).** A `pw_filter` with 40 mono-F32 DSP output ports —
-  exactly the ring's planar layout. A non-realtime feeder thread reads frames,
+- **`reac:capture` (source).** A `pw_filter` with mono-F32 DSP output ports —
+  exactly the ring's planar layout, 40 wide by default and narrowed to the box's
+  real input width when `--box` declares one. A non-realtime feeder thread reads frames,
   validates, counter-stamps and decodes with libreac,
   and writes whole REAC frames into a lock-free SPSC ring. The only realtime code
   is `on_process()`: it dequeues one PipeWire quantum per channel and returns —
@@ -108,22 +114,30 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   tracking; offline-testable.
 - **Lock-free ring** — implemented, unit-tested (round-trip, underrun, overrun);
   the test needs no PipeWire so CI can run it anywhere.
-- **TX sink node (REAC master)** — implemented: `reac_tx` encoder (round-trips
-  through the decode core to 24-bit ULP), the `reac_master` cdea/cfea JOIN/HOLD
-  handshake (control blocks byte-match the captured M-5000 + checksum), and the
-  `reac_pacer` SCHED_FIFO cadence pacer (8000 fps / 125 µs measured on the wire).
-  Loopback PCM→REAC→PCM verified (a tone played into `reac:playback` reaches the
-  wire FILLER audio). **Not yet verified: a real Roland desk linking** — no desk
-  on the bench; built correct-by-construction against the captures. The
-  hardware-verify gate (does `RCQ` go `establishing`→`established`, does audio
-  reach the box) is in [DESIGN.md](DESIGN.md).
+- **TX sink node (REAC master)** — implemented and **rig-verified**: `reac_tx`
+  encoder (round-trips through the decode core to 24-bit ULP), the `reac_master`
+  cdea/cfea JOIN/HOLD handshake (control blocks byte-match the captured M-200 /
+  M-300 / M-5000 + checksum), and the `reac_pacer` SCHED_FIFO cadence pacer
+  (125 µs @ 96 k / 250 µs @ 48 k measured on the wire). A real **S-0808** and a
+  real **S-1608** cold-connect, are granted, reach ESTABLISHED and hold a 1/s
+  heartbeat with zero drops; the box's mic channels reach `reac:capture` and run
+  end-to-end through openmixer. See
+  [docs/REAC-MIXER-PROTOCOL.md](docs/REAC-MIXER-PROTOCOL.md) (the five fixes that
+  made the box lock SOLID) and
+  [docs/MASTER-HARDWARE-VERIFY.md](docs/MASTER-HARDWARE-VERIFY.md) (the run, the
+  observability, the remaining gaps). Still unverified on hardware: the 96 kHz
+  OHRCA emit path, whose gate is in that same file.
 - **SLAVE role** (`--role slave`, `reac_slave` over `reac_ctrl`/`reac_fsm`) —
   implemented: we respond to an external master, lock to its cadence (the master
   owns the clock — no own pacer), RX its audio via `reac:capture`, and return our
   input channels upstream at the box's slots. The establishment + HOLD FSM is
-  offline-tested from the captured master control kinds (`test_reac_slave`); the
-  JOIN cold-connect bytes + a real link both ways are behind the slave hardware-
-  verify gate in [DESIGN.md](DESIGN.md).
+  offline-tested from the captured master control kinds (`test_reac_slave`), and a
+  real, cold-booted **M-200** enrolled reac-pw as a 16-ch stagebox in its REAC
+  menu and held the link across a 300 s run (2026-07-11). The **M-5000 (OHRCA)**
+  still re-hunts after granting us — the open gap is the OHRCA established-state
+  shape, not a clock wall. See
+  [docs/REAC-BOX-STATE-DIAGRAM.md](docs/REAC-BOX-STATE-DIAGRAM.md) and
+  [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md).
 - **Role selection** (`--role master|slave`, `reac_role.h`) — default master
   preserves the original behaviour; parse + validation unit-tested.
 

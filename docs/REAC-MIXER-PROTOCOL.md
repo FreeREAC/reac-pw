@@ -116,11 +116,28 @@ head-amps only (byte-identical first grants for S-0808 vs S-1608 on the goldens)
   (box-count + ENROLL + hold), not the clock. #131 stays open only as a fidelity item.
 
 ## Next
-1. Whole-protocol integration test: replay a real M-200 capture into our SLAVE and
-   assert it reaches ESTABLISHED + heartbeats (the courtship is our-code-vs-our-code,
-   so a shared wrong assumption passes it — replay-vs-real-capture would not).
-2. Generalise grant burst + ENROLL + box-count width to S-1608 / S-4000S and to
-   M-300 / M-5000 (from their `matrix-*.pcap`).
-3. Real-MAC identity (NIC's own / set NIC to a Roland MAC) to drop promiscuous RX.
-4. Drive the patches: route the box's upstream audio into PipeWire; feed the
-   downstream from the graph.
+
+1. **Still open.** Whole-protocol integration test: replay a real M-200 capture into
+   our SLAVE and assert it reaches ESTABLISHED + heartbeats. `test_reac_courtship.c`
+   is our-code-vs-our-code, so a shared wrong assumption passes it; replay-vs-real
+   would not. Partly mitigated since: every emitted template is now diffed against
+   captured goldens (`tests/reac_m200_golden.inc`, `reac_grant_golden.inc`,
+   `reac_conformance_golden.inc`), which catches a template that drifts but not a
+   sequencing assumption both halves share.
+2. **DONE.** Grant burst + ENROLL + box-count width are generalised across boxes and
+   consoles. `src/reac_grant.c` generates the sweep over the slots actually allocated
+   to the box (the S-1608-at-0x20 bug that left 48V unlit is pinned by
+   `tests/test_reac_grant.c`); ENROLL's group map is derived from the recognized width
+   (`set_enroll_width`, see "The ENROLL group map" above);
+   `tests/test_reac_conformance.c` proves M-200 / M-300 / M-5000 differ on the wire in
+   exactly two bytes — the source MAC and the console byte — and share one generator
+   for everything else.
+3. **Partly done.** `src/reac_mac.c` builds our source MAC as the Roland OUI plus this
+   NIC's own host part, so it can never collide with a real box. Promiscuous RX is
+   still required in the master role, which impersonates the desk's captured MAC (the
+   box unicasts to that address, not to our hardware one) — see the gotcha in
+   `MASTER-HARDWARE-VERIFY.md`.
+4. **DONE.** Both patch directions run: the box's 16 mic channels reach `reac:capture`
+   and go end-to-end through openmixer's console
+   (`MASTER-HARDWARE-VERIFY.md`), and a tone from the graph reaches the box's analog
+   out (`VALIDATION-PLAN.md` Stage B, listen-confirmed on the braid encode).
