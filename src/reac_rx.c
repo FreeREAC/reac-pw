@@ -13,21 +13,14 @@
 #include <sys/time.h>
 
 #include <reac/reac.h>
-/* the reac-aes67 plain-LE decode core + the two wire sources, reused as-is */
+/* the downstream (40-ch braided) decode + the two wire sources, reused as-is */
 #include <reac/reac_decode.h>
 #include <reac/reac_capture.h>
 #include <reac/pcap_source.h>
 /* the box-return (braided, box-width) decode — the master-role RX path */
-#include "reac_upstream.h"
-
-/* s24 LE (3 bytes) -> normalized float in [-1, 1) */
-static inline float s24le_to_f32(const uint8_t *p)
-{
-	int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16));
-	if (v & 0x00800000)
-		v |= ~0x00FFFFFF; /* sign-extend bit 23 */
-	return (float)v / 8388608.0f; /* 2^23 */
-}
+#include <reac/reac_upstream.h>
+/* reac_s24le_to_f32 — the one conversion pair (exact inverse of the TX side) */
+#include <reac/reac_sample.h>
 
 static uint64_t mono_ns(void)
 {
@@ -37,10 +30,12 @@ static uint64_t mono_ns(void)
 }
 
 /* Decode one gate-accepted frame into the ring (planar float, ring-width x 12
- * samples). DOWNSTREAM = the 40-ch plain-LE broadcast (reac_decode); UPSTREAM
- * = the box-width braided return (reac_upstream_decode), placed positionally
- * at ring channels 0..nch-1 with the remaining slots silent (the input->slot
- * allocation is a separate lane). */
+ * samples). Both directions are the SAME channel-pair braid, read through
+ * libreac's one oracle: DOWNSTREAM = the 40-ch broadcast (reac_decode, braided
+ * since libreac 0.5.0 — before that it read plain LE while our encoder wrote
+ * the braid, #80); UPSTREAM = the box-width return (reac_upstream_decode),
+ * placed positionally at ring channels 0..nch-1 with the remaining slots silent
+ * (the input->slot allocation is a separate lane). */
 static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
                        const uint8_t *frame, size_t len)
 {
@@ -51,10 +46,13 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		ns = nch > 0 ? reac_upstream_decode(frame, len, s24) : -1;
 	} else {
 		nch = mode->n_channels;
-		/* Decode the standard 1492 B frame; an OHRCA 1494 B frame is the same
-		 * frame plus a 2-byte CRC-16 trailer after C2 EA — decode the embedded
-		 * REAC_FRAME_BYTES and ignore the trailer. reac_frame_inspect requires
-		 * exactly REAC_FRAME_BYTES, so never hand it the 1494 length. */
+		/* Decode the standard 1492 B frame. A 1494 B frame is that same frame
+		 * plus 2 bytes after C2 EA: decode the embedded REAC_FRAME_BYTES and
+		 * ignore them. reac_frame_inspect requires exactly REAC_FRAME_BYTES, so
+		 * never hand it the 1494 length. Those 2 bytes are the low 16 bits of
+		 * the frame's own Ethernet FCS left behind by the capture path — not a
+		 * protocol field, in either direction (#82, and libreac's <reac/reac.h>
+		 * since 0.5.0). Never emit them. */
 		ns = reac_decode(frame, REAC_FRAME_BYTES, mode, s24); /* out[(ch*ns+s)*3] */
 	}
 	if (ns < 0) {
@@ -73,7 +71,7 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT] = { 0 };
 	for (int ch = 0; ch < nch; ch++)
 		for (int s = 0; s < ns; s++)
-			planar[ch * ns + s] = s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
+			planar[ch * ns + s] = reac_s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
 	reac_ring_write(rx->ring, planar, (uint32_t)ns);
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
 }
@@ -86,8 +84,10 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 static int gate_accepts(struct reac_rx *rx, const uint8_t *frame, size_t len)
 {
 	if (rx->cfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
-		/* 1492 = V-Mixer; 1494 = OHRCA (M-5000/M-480) = the same frame plus a
-		 * 2-byte per-frame CRC-16 trailer after the C2 EA end marker. */
+		/* 1492 = the frame; 1494 = the same frame with 2 bytes of Ethernet FCS
+		 * residue kept after the C2 EA end marker by the capture path (see the
+		 * note in feed_frame and #82). Accept both — the mirror twin arrives as
+		 * one of each and the dup guard below collapses the pair. */
 		return len == (size_t)REAC_FRAME_BYTES ||
 		       len == (size_t)REAC_FRAME_BYTES_OHRCA;
 	if (reac_upstream_channels(len) < 0)
@@ -121,6 +121,9 @@ static void update_ppm(struct reac_rx *rx, uint16_t counter, uint64_t now_ns)
 		double nom_pps = (double)rx->sample_rate / REAC_SAMPLES_PER_PKT;
 		double ppm = (obs_pps - nom_pps) / nom_pps * 1e6;
 		atomic_store_explicit(&rx->ppm_error_milli, (int)(ppm * 1000.0), memory_order_relaxed);
+		/* Release, after the value: a consumer that keys off the seq must never see
+		 * a bumped counter vouching for a stale estimate. */
+		atomic_fetch_add_explicit(&rx->ppm_seq, 1, memory_order_release);
 		rx->ppm_win_start_ns = now_ns;
 		rx->ppm_win_frames = 0;
 	}
@@ -180,6 +183,7 @@ static void *rx_loop(void *arg)
 			               * land in the past), flooding the ring. */
 				pcap_source_close(&ps); pcap_source_open(&ps, rx->cfg.source);
 				have_counter = 0; wall_first_ns = 0;
+				rx->have_prev_frame = 0; /* no cross-loop-seam duplicate match */
 				rx->ppm_have_last = 0; rx->ppm_win_frames = 0; /* drop the stale ppm
 				               * window so the next loop doesn't spike one bogus ppm
 				               * off a counter discontinuity across the seam */
@@ -194,6 +198,27 @@ static void *rx_loop(void *arg)
 			/* the other direction's stream (or another box): not ours */
 			atomic_fetch_add_explicit(&rx->frames_other, 1, memory_order_relaxed);
 			continue;
+		}
+
+		/* Duplicate-frame guard (see reac_rx.h): drop a frame whose CLEAN prefix
+		 * is byte-identical to the one before it. Comparing on the clean length
+		 * rather than the wire length is what makes it catch the mirror twin,
+		 * whose two copies differ only in that one of them kept 2 bytes of FCS
+		 * (1492 vs 1494) — a raw length compare never fires on that pair. The
+		 * over-clock repeat (equal lengths, so equal clean lengths) is subsumed.
+		 * Feeding both copies doubles every 12-sample block into a granular
+		 * stutter and doubles the effective rate. Runs before the counter/ppm/
+		 * decode so the rate estimator and the ring see the real cadence. */
+		size_t clean = reac_frame_clean_len((size_t)n);
+		if (rx->have_prev_frame && clean == rx->prev_clean_len &&
+		    memcmp(frame, rx->prev_frame, clean) == 0) {
+			atomic_fetch_add_explicit(&rx->frames_dup, 1, memory_order_relaxed);
+			continue;
+		}
+		if (clean <= sizeof rx->prev_frame) {
+			memcpy(rx->prev_frame, frame, clean);
+			rx->prev_clean_len = clean;
+			rx->have_prev_frame = 1;
 		}
 
 		/* optional: pace pcap replay by capture timestamps so the rate loop
@@ -226,10 +251,11 @@ static void *rx_loop(void *arg)
 			dbg = getenv("REAC_DEBUG") != NULL;
 		if (dbg && now - last_stat_ns >= 2000000000ull) {
 			last_stat_ns = now;
-			fprintf(stderr, "reac_rx: ok=%llu other=%llu bad=%llu gaps=%llu"
+			fprintf(stderr, "reac_rx: ok=%llu dup=%llu other=%llu bad=%llu gaps=%llu"
 			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s | out: active_ch=%d"
 			        " peak=%.6f fill=%d\n",
 			        (unsigned long long)atomic_load(&rx->frames_ok),
+			        (unsigned long long)atomic_load(&rx->frames_dup),
 			        (unsigned long long)atomic_load(&rx->frames_other),
 			        (unsigned long long)atomic_load(&rx->frames_bad),
 			        (unsigned long long)atomic_load(&rx->counter_gaps),

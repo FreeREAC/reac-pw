@@ -5,7 +5,7 @@
  *
  * A single libpipewire client that registers the 40-channel REAC source node
  * fed by a pcap replay (offline) or a live AF_PACKET 0x8819 socket, decoding
- * with the reac-aes67 plain-LE core and pushing samples through a lock-free
+ * with libreac's braid core and pushing samples through a lock-free
  * ring into the realtime process() callback. The node is a follower; PipeWire's
  * adapter resamples REAC -> graph (Tier-A clock bridge).
  *
@@ -134,7 +134,27 @@ static void usage(const char *p)
 	  "                address, so it stays Roland-OUI-compatible yet can never collide\n"
 	  "                with a real box (e.g. an S-1608 at 00:40:ab:c4:80:41).\n"
 	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
-	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n", p);
+	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n"
+	  "environment (see docs/ENV-KNOBS.md; unset = default behavior, byte-identical):\n"
+	  "  REACPW_GRANT_DWELL_S=N  master role: hold the recognized-but-ungranted dwell\n"
+	  "                for N whole seconds before the grant burst (default: the built-in\n"
+	  "                ~1.6 s dwell; a real M-200 holds a cold box ~27 s)\n"
+	  "  REAC_DEBUG=1  opt-in RX/source telemetry on stderr (~every 2 s: frame/dup/gap\n"
+	  "                counters, ring fill, active channels)\n"
+	  "  REACPW_CLOCK_FOLLOW=1  master role: DISCIPLINE the TX cadence to the best\n"
+	  "                available clock reference (NIC/external PHC > a hardware-driven\n"
+	  "                PipeWire graph clock > the box's counter slope) instead of\n"
+	  "                free-running on CLOCK_MONOTONIC. The period is steered\n"
+	  "                continuously and bounded; the phase is never stepped. The\n"
+	  "                reference in use is printed on every change, and with none\n"
+	  "                available we free-run and SAY so. Unset = today's behaviour,\n"
+	  "                byte- and timing-identical. RIG-GATED.\n"
+	  "  REACPW_CLOCK_REF=<substring>  designate WHICH device is the clock reference\n"
+	  "                (case-insensitive substring of the device name, e.g. 'Babyface').\n"
+	  "                A designated device outranks the name heuristic; it does NOT\n"
+	  "                rescue a structurally unusable one (HDMI/DisplayPort sinks,\n"
+	  "                software timers) and it does NOT outrank measured instability.\n"
+	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n", p);
 }
 
 /* MASTER autodetect (no --box): a main-loop watcher that polls the box the pacer
@@ -327,33 +347,26 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/* The box infers its sample rate from the DESK MODEL we impersonate, NOT the
-	 * packet cadence: rig-diffed (2026-07-13) an M-5000 vs an M-300 downstream —
-	 * the rate signal is the desk IDENTITY (cfea console byte + ENROLL console
-	 * byte: `01` = OHRCA/M-5000 => 96 kHz native, `00` = V-Mixer/M-200,M-300 =>
-	 * 48 kHz only). There is no explicit 48000/96000 field. The downstream FRAME
-	 * SHAPE itself does NOT vary by model (task #156 RE: the "1494-byte OHRCA
-	 * frame" some captures show is a mirror/SPAN capture artifact — the 2 extra
-	 * bytes are the standard Ethernet FCS, not a REAC field; see reac_tx.h /
-	 * tests/test_reac_tx.c), so the only thing that changes for 96 kHz is the
-	 * pacer's cadence (fps = rate/12, already rate-driven) and the console-
-	 * identity bytes (already wired through --mixer's console_field).
+	/* SAMPLE RATE — the master chooses it; the box follows.
 	 *
-	 * A V-Mixer desk has no wire rate field at all, so it is ALWAYS 48 kHz
-	 * regardless of `--rate` (reac_mixer_resolve_rate) — that part of the
-	 * original clamp is preserved. An OHRCA desk (M-5000) is native 96 kHz and
-	 * honors `--rate`; see docs/MASTER-HARDWARE-VERIFY.md. */
-	if (role == REAC_ROLE_MASTER) {
-		int clamped = 0;
-		int resolved = reac_mixer_resolve_rate(mixer, rxcfg.forced_rate, &clamped);
-		if (clamped)
-			fprintf(stderr, "reac-pw: master impersonating %s emits %d Hz "
-			        "V-Mixer downstream only; --rate %d ignored (the box takes "
-			        "its rate from the impersonated desk MODEL, not the "
-			        "cadence) — use --mixer m5000 for 96 kHz.\n",
-			        mixer->display, resolved, rxcfg.forced_rate);
-		rxcfg.forced_rate = resolved;
-	}
+	 * On a real Roland desk the operator selects the REAC rate from a menu. The
+	 * desk drives the segment at that rate and every stagebox locks to it — a box
+	 * has no rate setting of its own. reac-pw is the master here, so `--rate` is
+	 * the same choice, and it is honoured as given.
+	 *
+	 * A previous revision of this comment claimed the box infers its rate from the
+	 * DESK IDENTITY (console byte 01 = OHRCA => 96 kHz, 00 = V-Mixer => 48 kHz
+	 * only) and clamped --rate to match. That was an inference, never
+	 * demonstrated, and it is wrong: the identity byte says which desk we
+	 * impersonate, not which rate the operator picked.
+	 *
+	 * Beware this paragraph's history — the same block also asserted the upstream
+	 * "+2 bytes" were the Ethernet FCS, falsified 2026-07-25 (a real OHRCA CRC-16;
+	 * docs/OHRCA-UPSTREAM-DUPLICATE-FRAMES.md, fixtures UP32A/UP32B). Two wrong
+	 * claims from one comment: state what is measured, mark the rest open (#73).
+	 *
+	 * Cadence is fps = rate/12 at every rate — 12 samples per frame is invariant,
+	 * so a higher rate sends the same frames more often, nothing else changes. */
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
@@ -418,7 +431,13 @@ int main(int argc, char **argv)
 		                              .console_field = mixer->console_field,
 		                              .inst = inst_name, .label = box_label,
 		                              .headamps = n_headamps ? headamps : NULL,
-		                              .n_headamps = n_headamps };
+		                              .n_headamps = n_headamps,
+		                              /* #75: default OFF -> the pacer free-runs on
+		                               * CLOCK_MONOTONIC exactly as it always has. */
+		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
+		                              /* #77: unset -> nothing is designated and the
+		                               * name heuristic alone grades the reference. */
+		                              .clock_ref = getenv("REACPW_CLOCK_REF") };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
@@ -481,6 +500,12 @@ int main(int argc, char **argv)
 	 * DEFER the box nodes to autodetect or expose the source at its startup width. */
 	struct autodetect_ctx adc = {0};
 	struct spa_source *ad_timer = NULL;
+	/* #75: the RX feeder is the BOX clock reference's measurement source — it already
+	 * tracks the box's counter slope and publishes a filtered ppm error. The sink's
+	 * existing 200 ms timer forwards it to the pacer's discipline. Wired
+	 * unconditionally; it is only ever read when clock following is enabled. */
+	if (sink)
+		reac_sink_node_set_rate_source(sink, &rx);
 	if (role == REAC_ROLE_MASTER && sink) {
 		/* Pure autodetect: the pacer recognizes the box on the wire; a 200 ms main-
 		 * loop watcher then (re)sizes reac-capture / reac-playback to its widths. No
@@ -488,6 +513,10 @@ int main(int argc, char **argv)
 		adc.src = &src;
 		adc.sink = sink;
 		adc.scfg = src_cfg;
+		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
+		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
+		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
+		reac_sink_node_set_peer_source(sink, &src);
 		ad_timer = pw_loop_add_timer(loop, on_autodetect_timer, &adc);
 		if (ad_timer) {
 			struct timespec first = { 0, 200 * 1000000L };

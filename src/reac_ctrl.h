@@ -21,11 +21,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "reac_slots.h"    /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_master.h"   /* enum reac_master_rx_event (the classifier's verdict) */
 
 #define REAC_CTRL_BLOCK_OFF   18   /* control block / checksum region start */
 #define REAC_CTRL_BLOCK_END   50   /* one past end (= audio offset)         */
 #define REAC_CTRL_CKSUM_OFF    49  /* checksum byte (last of the block)     */
+#define REAC_CTRL_BLOCK_LEN   32   /* the checksummed block, [18:50]        */
 
 enum reac_ctrl_kind {
 	REAC_CTRL_NONE = 0,      /* not a 0x8819 frame */
@@ -60,6 +62,23 @@ struct reac_ctrl_parsed {
  * sums to 0 mod 256. Verify returns 0 when Sum(frame[18..49]) mod 256 == 0. */
 void reac_ctrl_checksum_apply(uint8_t *frame);
 int  reac_ctrl_checksum_verify(const uint8_t *frame);
+
+/* The underlying sum-to-ZERO rule, on a bare 32-byte block (no frame offsets):
+ * set block[31] so Sum(block[0..31]) mod 256 == 0. This is THE cdea/cfea
+ * control-block checksum — reac_ctrl_checksum_apply() is this on
+ * frame + REAC_CTRL_BLOCK_OFF, and reac_master's 34-byte control templates
+ * (type word + block) apply it at template + 2. One implementation; the two
+ * offset bases were previously maintained as independent loops. */
+void reac_ctrl_block_cksum_stamp(uint8_t block[REAC_CTRL_BLOCK_LEN]);
+
+/* The INNER record rule, sum-to-0x80: a DT1-style record (TAG.. payload..
+ * CKSUM, e.g. the 6-byte head-amp record at frame[34:40]) carries its last
+ * byte such that the whole record sums to 0x80 mod 256 (byte-verified on the
+ * M-200, m200-headamp-re/DECODE.md). stamp sets rec[n-1]; verify returns 0
+ * when Sum(rec[0..n-1]) mod 256 == 0x80. The rule is the record's, not the
+ * head-amp's — any future TAG reuses these. */
+void reac_ctrl_record_cksum_stamp(uint8_t *rec, size_t n);
+int  reac_ctrl_record_cksum_verify(const uint8_t *rec, size_t n);
 
 /* Classify a raw ethernet frame; fills *out. Returns out->kind. master_mac is
  * the ethernet SOURCE for any master frame — callers learn/pin it from
@@ -208,13 +227,14 @@ enum reac_headamp_param {
  *
  * This is NOT libreac's REAC_MAX_CHANNELS (40). The two are DIFFERENT spaces and
  * conflating them is a bug (fixed 2026-07-17): REAC_MAX_CHANNELS is the count of
- * AUDIO slots carried in a downstream frame, whereas a head-amp record's CH is a
- * fabric wire channel = model_base + (box_input - 1), and the fabric runs to the
- * 0x2f ceiling (the same ceiling reac_master.c's chanmap ring already encodes as
- * REAC_M_FABRIC_RING = 48 channels + the 0xfe marker). A 16-input S-1608 based at
+ * AUDIO slots carried in a downstream frame (REAC_AUDIO_FABRIC_SLOTS), whereas a
+ * head-amp record's CH is a wire channel = model_base + (box_input - 1), running to
+ * the 0x2f ceiling (the same ceiling reac_master.c's chanmap ring already encodes as
+ * REAC_M_CHANMAP_RING = 48 channels + the 0xfe marker). A 16-input S-1608 based at
  * 0x20 occupies 0x20..0x2f = 32..47, so a table bounded by 40 silently REJECTED
- * that box's inputs 9..16 — its top half could never be given phantom/pad/sens. */
-#define REAC_HEADAMP_MAX_CH 0x30
+ * that box's inputs 9..16 — its top half could never be given phantom/pad/sens.
+ * Both spaces are defined once in reac_slots.h (#69); this is the head-amp one. */
+#define REAC_HEADAMP_MAX_CH REAC_HEADAMP_SLOTS
 
 /* Build the head-amp command frame (master->box direction, downstream width:
  * a real console BROADCASTS these interleaved in its stream — pass the

@@ -1,14 +1,23 @@
 # reac-pw ↔ openmixer — validation plan + roadmap
 
-Ordered plan to validate and merge **reac-pw PR #8** (per-VLAN multi-box, box-width
-named nodes, rate=model) and **openmixer PR #156** (per-box stagebox UI + re-link).
-Each step gates the next; merge a PR only after the step that validates it passes.
+Ordered plan that validated and merged **reac-pw PR #8** (per-VLAN multi-box,
+box-width named nodes) and **openmixer PR #156** (per-box stagebox UI + re-link).
+Each step gated the next; a PR merged only after the step that validated it passed.
+**Both are merged** — Part 1 is kept as the procedure (it is the re-test protocol,
+and Stage B carries a two-day mis-diagnosis written up so it is never repeated),
+Part 2 is the live roadmap.
+
+One claim from PR #8's title did not survive: "rate = model". The console identity
+byte says which desk we impersonate, not which rate the operator chose — see #73
+and `MASTER-HARDWARE-VERIFY.md`'s superseded-rate note.
 
 ## Part 1 — Validation (in order)
 
 ### Stage A — reac-pw single box (validates PR #8 core)
-1. **Unit tests** — `cd ~/Devel/audio/reacpw-wt-130 && ninja -C build && meson test -C build`.
-   Gate: **12 OK, 1 SKIP** (pacer skips off-rig).
+1. **Unit tests** — `ninja -C build && meson test -C build`.
+   Gate: **all green, one SKIP** — `reac_pacer`'s live-cadence case, which needs
+   `CAP_NET_RAW` and so skips off-rig. (Do not gate on a count: it was 12 tests when
+   this plan was written and is 29 now. `meson test` reports the total itself.)
 2. **setcap + establishment** — `sudo setcap cap_net_raw,cap_sys_nice+ep build/reac-pw`
    then `./build/reac-pw --live enp131s0 --role master --mixer m200 --tx enp131s0 --box s1608:S-1608`.
    Pass: log reaches `ESTABLISHED` + steady heartbeat; `tx/s ≈ 4000`.
@@ -90,9 +99,12 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
   program, entropy exactly 4.000/4.000 bits), while the correct braid decode of
   quiet content looks like a noise floor. Wrong-layout decodes can look BETTER
   than the truth on quiet material — always fingerprint with program-level
-  audio and check for the 256×/uniform-byte signatures. #135 should
-  re-validate a real M-5000 with loud program before keying the encode per
-  mixer profile (`REAC_TX_LAYOUT=plain` keeps the variant available).
+  audio and check for the 256×/uniform-byte signatures. Settled since: the
+  operator has confirmed one downstream format across all mixer generations, so
+  nothing is keyed per mixer profile and #135 is dropped (the
+  `REAC_TX_LAYOUT=plain` A/B override was removed after the braid was confirmed;
+  the plain layout survives as the negative control in `tests/test_reac_tx.c`
+  and as libreac's `reac_decode_plain_le()` diagnostic).
 
 **Stage B re-test / listen protocol:**
 
@@ -108,8 +120,9 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
    LED steady) beyond protocol ESTABLISHED before judging audio.
 4. Source at −30/−40 dBFS, monitor at minimum, hand on the power switch; expect
    the session soft-volume (~−9 dB observed) in level judgements.
-5. `REAC_TX_LAYOUT=plain` A/B reproduces the historical garbage symptom on
-   demand (diagnostic only).
+5. The historical plain-LE garbage symptom is reproduced offline by the
+   negative control in `tests/test_reac_tx.c` (the runtime `REAC_TX_LAYOUT`
+   A/B override was removed once the braid was confirmed).
 
 ### Stage C — openmixer per-box UI (validates PR #156)
 6. **Build + unit tests** — `cd ~/Devel/audio/openmixer && git checkout feat/reac-per-box-stagebox
@@ -145,17 +158,21 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
 - **#133 frame-locked upstream TX + #131 clock discipline / repacer** — the M-5000 grants our slave but
   never goes fully LINKED; the last gap is the upstream timing/jitter lock. Biggest remaining slave item.
 - **#132** PipeWire `reac:return` sink (inject audio as the box's mic inputs).
-- **#135** per-generation downstream decode. NOTE (2026-07-13, post-Stage-B): the
-  **braid is confirmed for the V-Mixer-generation box pairing** (listen-proven on our
-  S-1608 + obs-h8819's real-M-200i validation + reacdriver's wordswap16(BE) to-device
-  conversion, which is byte-identical to the braid). The "M-5000 = plain-LE" claim
-  (reac-aes67 e2e82ac) is **contested**: the zoneA/zoneB goldens from the M-5000's own
-  REAC ports decode braided, and the plain "coherence 0.999" is explained by the
-  mid→hi lane shift amplifying quiet braided audio 256× into a coherent-looking image
-  (see Stage B). Re-validate a real M-5000 with LOUD program before adding a
-  mixer-profile-keyed encode; until then the braid is the default and
-  `REAC_TX_LAYOUT=plain` keeps the M-5000-gen candidate selectable. This also means
-  reac-aes67's `reac_decode` plain de-interleave likely needs the same braid fix.
+- ~~**#135** per-generation downstream decode~~ — **DROPPED 2026-07-29.** There is
+  no per-generation split to implement. The **braid is confirmed for the
+  V-Mixer-generation box pairing** (listen-proven on our S-1608 + obs-h8819's
+  real-M-200i validation + reacdriver's wordswap16(BE) to-device conversion, which
+  is byte-identical to the braid), the "M-5000 = plain-LE" claim (reac-aes67
+  e2e82ac) is refuted by the zoneA/zoneB goldens from the M-5000's own REAC ports
+  — its "coherence 0.999" is the mid→hi lane shift amplifying quiet braided audio
+  256× into a coherent-looking image (see Stage B) — and the operator has confirmed
+  that every mixer generation puts out the same downstream format. So the braid is
+  the only encode AND, since libreac 0.5.0, the only downstream decode: the plain
+  layout survives as `reac_decode_plain_le()` upstream and as the
+  `tests/test_reac_tx.c` negative control here, nothing else. The
+  `REAC_TX_LAYOUT=plain` runtime override was already removed. The follow-on this
+  note predicted — "reac-aes67's `reac_decode` plain de-interleave likely needs the
+  same braid fix" — is what libreac#13/#14 and reac-pw #80 did.
 
 **openmixer**
 - Stagebox card output control + `assignGroup` wire clamp (#156 left out of scope).

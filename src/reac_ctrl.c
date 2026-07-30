@@ -3,6 +3,7 @@
 
 #include "reac_ctrl.h"
 #include <reac/reac.h>
+#include <reac/reac_encode.h>  /* reac_braid_encode — the layout oracle's encode side */
 #include <string.h>
 #include <math.h>
 
@@ -30,21 +31,33 @@ static inline void put_hdr(uint8_t *f, const uint8_t dst[6], const uint8_t src[6
 	f[TYPE_OFF] = t0; f[TYPE_OFF + 1] = t1;
 }
 
-static inline void f32_to_s24le(float v, uint8_t *p)
+void reac_ctrl_block_cksum_stamp(uint8_t block[REAC_CTRL_BLOCK_LEN])
 {
-	float x = v * 8388608.0f;
-	if (x > 8388607.0f) x = 8388607.0f;
-	if (x < -8388608.0f) x = -8388608.0f;
-	int32_t s = (int32_t)lrintf(x);
-	p[0] = (uint8_t)(s & 0xFF); p[1] = (uint8_t)((s >> 8) & 0xFF); p[2] = (uint8_t)((s >> 16) & 0xFF);
+	unsigned s = 0;
+	for (int i = 0; i < REAC_CTRL_BLOCK_LEN - 1; i++)
+		s += block[i];
+	block[REAC_CTRL_BLOCK_LEN - 1] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+}
+
+void reac_ctrl_record_cksum_stamp(uint8_t *rec, size_t n)
+{
+	unsigned s = 0;
+	for (size_t i = 0; i + 1 < n; i++)
+		s += rec[i];
+	rec[n - 1] = (uint8_t)((0x80 - s) & 0xff);
+}
+
+int reac_ctrl_record_cksum_verify(const uint8_t *rec, size_t n)
+{
+	unsigned s = 0;
+	for (size_t i = 0; i < n; i++)
+		s += rec[i];
+	return ((s & 0xff) == 0x80) ? 0 : -1;
 }
 
 void reac_ctrl_checksum_apply(uint8_t *frame)
 {
-	unsigned s = 0;
-	for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_CKSUM_OFF; i++)
-		s += frame[i];
-	frame[REAC_CTRL_CKSUM_OFF] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+	reac_ctrl_block_cksum_stamp(frame + REAC_CTRL_BLOCK_OFF);
 }
 
 int reac_ctrl_checksum_verify(const uint8_t *frame)
@@ -189,89 +202,23 @@ static size_t box_frame_len(int n_ch)
 	return (size_t)AUDIO_OFF + (size_t)n_ch * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION + 2;
 }
 
-/* Place n_ch planar float channels (ns samples each) into the box's braided audio
- * region at `audio` (frame[50:..]), the exact layout reac_upstream_decode() inverts
- * (task #108, the ex-"FPGA scramble" of task #61): per time sample each channel PAIR
- * shares a 6-byte group; the even channel's s24 LE (lo,mid,hi) bytes sit at
- * group[3],group[0],group[1] and the odd channel's at group[4],group[5],group[2].
- * Slot placement is plain ascending. A real M-5000 expects exactly this from a box's
- * return. Shared by EVERY box->master frame that carries audio — the upstream FILLER,
- * the broadcast presence-flood, AND the cold-connect — because on a real box the audio
- * region varies every frame (it is live input, NOT static inventory). */
-static void place_braided_audio(uint8_t *audio, int n_ch, float *const *planar, int ns)
-{
-	int frames = ns < REAC_SAMPLES_PER_PKT ? ns : REAC_SAMPLES_PER_PKT;
-	for (int s = 0; s < frames; s++)
-		for (int ch = 0; ch < n_ch; ch++) {
-			float v = planar && planar[ch] ? planar[ch][s] : 0.0f;
-			uint8_t s24[3];
-			f32_to_s24le(v, s24);
-			uint8_t *g = audio + (size_t)s * n_ch * REAC_RESOLUTION
-			                   + (size_t)(ch & ~1) * REAC_RESOLUTION;
-			if ((ch & 1) == 0) {
-				g[3] = s24[0]; g[0] = s24[1]; g[1] = s24[2];
-			} else {
-				g[4] = s24[0]; g[5] = s24[1]; g[2] = s24[2];
-			}
-		}
-}
-
-size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
-                              const uint8_t src[6], uint16_t counter, int n_ch)
-{
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;                        /* box widths are even 2..40 (628B@16, 340B@8) */
-	size_t len = box_frame_len(n_ch);    /* the heartbeat occupies a box-width audio slot */
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);   /* unicast cdea */
-	out[18] = 0x01; out[19] = 0x03;       /* cdea 01 03 */
-	out[20] = 0x00; out[21] = 0x01;       /* BE len 0x0001 */
-	out[22] = 0x81;                       /* keep-alive selector (0x00 = disconnect) */
-	reac_ctrl_checksum_apply(out);        /* sets out[49] */
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
-}
-
-size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
-                                       const uint8_t src[6], uint16_t counter,
-                                       int n_ch, float *const *planar, int ns)
-{
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;  /* the braid packs channel PAIRS; odd widths don't exist on-wire */
-	size_t len = box_frame_len(n_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0x00, 0x00);   /* unicast FILLER */
-	/* 32-byte descriptor [18:50] = 00 7a per slot (16 slots), as the real box. */
-	for (int k = 0; k < 16; k++) {
-		out[18 + 2 * k] = DESC_WORD_HI;
-		out[18 + 2 * k + 1] = DESC_WORD_LO;
-	}
-	/* audio [50:..] in the box's BRAIDED layout (resolved 2026-07-10, task #108). */
-	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;                            /* FILLER: no checksum (exempt) */
-}
-
-/* The presence-flood FILLER (broadcast, unlinked): counter + type 00 00 + a ZERO
- * control block [18:50] (no 0x7a per-slot descriptor) + LIVE audio [50:626] + end
- * marker. Verified on the wire (m200-s1608-realbox-establish-2026-07-11.pcap): a
- * real S-1608's cold-boot flood carries a zero control block but a LIVE audio
- * region (it varies every frame) — it is NOT an all-zero payload. The 0x7a
- * descriptor is what distinguishes the ESTABLISHED unicast upstream from this
- * broadcast announce; the audio itself is present in both. */
-size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
-                                    const uint8_t src[6], uint16_t counter,
-                                    int n_ch, float *const *planar, int ns)
-{
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;
-	size_t len = box_frame_len(n_ch);
-	memset(out, 0, len);
-	put_hdr(out, bcast, src, counter, 0x00, 0x00);   /* broadcast FILLER, zero block */
-	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
-}
+/* The braided audio region of every box->master frame that carries audio — the
+ * upstream FILLER, the broadcast presence-flood AND the cold-connect, because on
+ * a real box that region varies every frame (it is live input, NOT static
+ * inventory). Slot placement is plain ascending; a real M-5000 expects exactly
+ * this from a box's return.
+ *
+ * The loop itself moved to libreac on 2026-07-29 as reac_braid_encode()
+ * (<reac/reac_encode.h>): it was byte-for-byte the same loop as the downstream
+ * encoder's, which is the point — the braid is the REAC wire format in BOTH
+ * directions (task #108, the ex-"FPGA scramble" of task #61), and it is the
+ * exact inverse of reac_upstream_decode(). What stayed here is everything the
+ * layout is not: the 32-byte control block, its two nested checksums, the
+ * box-model matrix and the frame envelope, all of which are handshake state
+ * owned by the role FSM. Passing n_ch as both the frame width and the plane
+ * count preserves the pre-move behaviour exactly (this builder is always given
+ * one plane per box input).
+ */
 
 /* ---- FIXED box-model matrix (byte-verified real announce blocks) ----
  * Role decides authority (docs/REAC-BOX-STATE-DIAGRAM.md): as a SLAVE (we ARE a
@@ -430,138 +377,406 @@ const struct reac_box_model *reac_ctrl_identify_box(const uint8_t *frame, size_t
 	return NULL;
 }
 
-/* ---- RECONSTRUCTED JOIN builders (experimental, not byte-verified) ---- */
+/* ---- The control-frame scaffold + descriptor table ------------------------
+ *
+ * Every frame reac-pw emits is the same six-step ritual: zero the frame, stamp
+ * the ethernet + REAC header, lay the 32-byte control block [18:50], optionally
+ * place braided audio at [50:], stamp the checksums, write the C2 EA end marker.
+ * What differs between frames is only WHERE the block comes from, whether audio
+ * rides along, how wide the frame is and which checksums apply — so those four
+ * axes are a TABLE ROW and the ritual is one function. Adding a control frame is
+ * a row in CTRL_FRAMES[], not another copied builder.
+ *
+ * The public builders stay exactly what they were on the wire: this is a pure
+ * refactor, byte-for-byte (the goldens are the oracle). */
+
+/* Where a row's 32-byte control block comes from. The BLOCK_* names that select
+ * a box-model member are resolved by ctrl_model_block(), so a row names the
+ * member and the compiler checks it — no offsets, no casts. */
+enum ctrl_block {
+	BLOCK_ZERO = 0,   /* left zero — the broadcast presence-flood          */
+	BLOCK_DESC,       /* the 00 7a per-slot descriptor — upstream FILLER   */
+	BLOCK_TMPL,       /* the row's own literal template                    */
+	BLOCK_CONFIG,     /* matrix: config-announce   cdea 01 03 0010         */
+	BLOCK_NAME,       /* matrix: ASCII name frame  cdea 04 01 001b         */
+	BLOCK_CC0014,     /* matrix: cold-connect      cdea 04 03 0014         */
+	BLOCK_CC0013,     /* matrix: cold-connect      cdea 04 03 0013         */
+	BLOCK_CC0016,     /* matrix: cold-connect      cdea 04 03 0016         */
+	BLOCK_CC001A,     /* matrix: cold-connect      cdea 04 03 001a         */
+	BLOCK_EXTRA,      /* matrix: extra frame       cdea 04 02 000d         */
+};
+
+/* Frame width. A box->master frame is 50 + 36*width + 2; a master->box frame is
+ * the fixed downstream width. */
+enum ctrl_len {
+	LEN_ARG_WIDTH = 0,   /* the caller's n_ch (validated: even, 2..40)     */
+	LEN_MODEL_WIDTH,     /* the matrix row's input width                   */
+	LEN_DOWNSTREAM,      /* REAC_FRAME_BYTES (master direction)            */
+};
+
+/* Which models emit this frame at all (the 0x84-family name frame, the S-0808
+ * 0402000d): a row names the matrix flag, ctrl_gate_ok() reads it. */
+enum ctrl_gate {
+	GATE_ALWAYS = 0,
+	GATE_HAS_NAME,
+	GATE_HAS_EXTRA,
+};
+
+/* Checksum policy. CKSUM_RECORD means the block carries a Roland DT1 record,
+ * whose INNER (sum-to-0x80) checksum lies INSIDE the OUTER (sum-to-0) block
+ * checksum — see ctrl_finish() for why the order is the row's whole story. */
+enum ctrl_cksum {
+	CKSUM_NONE = 0,   /* emitted raw (byte-verified blocks, FILLER)        */
+	CKSUM_BLOCK,      /* the OUTER block checksum at [49]                  */
+	CKSUM_RECORD,     /* an INNER DT1 record, then the OUTER block         */
+};
+
+struct ctrl_frame {
+	uint8_t type0, type1;      /* the frame type word at [16:18]            */
+	uint8_t block;             /* enum ctrl_block — the block's source      */
+	const uint8_t *tmpl;       /* BLOCK_TMPL: the literal block bytes       */
+	uint8_t arg_off, arg_len;  /* caller-supplied bytes, block-relative     */
+	uint8_t rec_off, rec_len;  /* CKSUM_RECORD: the DT1 record, block-rel.  */
+	uint8_t cksum;             /* enum ctrl_cksum                           */
+	uint8_t len;               /* enum ctrl_len                             */
+	uint8_t gate;              /* enum ctrl_gate                            */
+	uint8_t audio;             /* place braided audio at [50:]              */
+};
+
+/* The box heartbeat's control block: cdea 01 03 0001, selector 0x81 keep-alive
+ * (0x00 is the explicit disconnect). Checksum byte 0x7a on the wire. */
+static const uint8_t TMPL_BOX_HB[REAC_CTRL_BLOCK_LEN] = {
+	0x01, 0x03, 0x00, 0x01, 0x81,
+};
+
+/* The head-amp record container, byte-truthed against a live M-200
+ * (m200-headamp-re/ctl2.pcap): cdea 04 03, BE len 0x0013, the f0 41 0a Roland
+ * DT1 preamble (block[8] is the preamble length echo, oplen - 5), the 12 12
+ * record marker and TAG 01 01 = head-amp. The three zero bytes at block[18:21]
+ * are the CH PARAM VALUE window the caller fills; block[21] is the record's
+ * INNER checksum, stamped by the scaffold; block[22] is the f7 terminator. */
+static const uint8_t TMPL_HEADAMP[REAC_CTRL_BLOCK_LEN] = {
+	0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe,
+	0x13 - 5, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x12,
+	0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0xf7,
+};
+#define HEADAMP_ARG_OFF 18   /* CH PARAM VALUE, block-relative (frame [36:39]) */
+#define HEADAMP_ARG_LEN  3
+#define HEADAMP_REC_OFF 16   /* TAG..CKSUM,      block-relative (frame [34:40]) */
+#define HEADAMP_REC_LEN  6
+
+static const uint8_t *ctrl_model_block(const struct reac_box_model *m,
+                                       enum ctrl_block b)
+{
+	switch (b) {
+	case BLOCK_CONFIG: return m->config_block;
+	case BLOCK_NAME:   return m->name_block;
+	case BLOCK_CC0014: return m->cc0014;
+	case BLOCK_CC0013: return m->cc0013;
+	case BLOCK_CC0016: return m->cc0016;
+	case BLOCK_CC001A: return m->cc001a;
+	case BLOCK_EXTRA:  return m->extra_block;
+	default:           return NULL;   /* not a matrix block */
+	}
+}
+
+static int ctrl_gate_ok(const struct reac_box_model *m, enum ctrl_gate g)
+{
+	switch (g) {
+	case GATE_HAS_NAME:  return m->has_name;
+	case GATE_HAS_EXTRA: return m->has_extra;
+	default:             return 1;
+	}
+}
+
+/* Lay a row's 32-byte control block [18:50] over `frame`, then overwrite the
+ * row's argument window with the caller's bytes. The block is zeroed first, so
+ * this is safe over an already-built frame: the audio [50:], the counter and the
+ * ethernet header are untouched. */
+static void ctrl_lay_block(uint8_t *frame, const struct ctrl_frame *f,
+                           const struct reac_box_model *m, const uint8_t *args)
+{
+	uint8_t *block = frame + REAC_CTRL_BLOCK_OFF;
+	const uint8_t *from;
+
+	memset(block, 0, REAC_CTRL_BLOCK_LEN);
+	switch ((enum ctrl_block)f->block) {
+	case BLOCK_ZERO:
+		break;
+	case BLOCK_DESC:
+		for (int k = 0; k < REAC_CTRL_BLOCK_LEN / 2; k++) {
+			block[2 * k]     = DESC_WORD_HI;
+			block[2 * k + 1] = DESC_WORD_LO;
+		}
+		break;
+	case BLOCK_TMPL:
+		memcpy(block, f->tmpl, REAC_CTRL_BLOCK_LEN);
+		break;
+	default:
+		from = ctrl_model_block(m, (enum ctrl_block)f->block);
+		if (from)
+			memcpy(block, from, REAC_CTRL_BLOCK_LEN);
+		break;
+	}
+	if (args && f->arg_len)
+		memcpy(block + f->arg_off, args, f->arg_len);
+}
+
+/* THE CHECKSUM ORDER, MADE STRUCTURAL.
+ *
+ * An op-0403 record carries a Roland DT1 checksum (INNER, sum-to-0x80) INSIDE
+ * the REAC control block's own checksum (OUTER, sum-to-0). The inner byte is one
+ * of the bytes the outer sum covers, so it MUST be stamped first — a record
+ * finished with only the block helper, or with the block helper first, looks
+ * perfect on the wire and the box rejects it.
+ *
+ * This function is the only place in reac_ctrl that stamps either checksum, and
+ * CKSUM_RECORD falls through into CKSUM_BLOCK. A table row therefore cannot ask
+ * for the outer checksum alone on a frame that carries a record, and cannot ask
+ * for them in the wrong order: the order is not a convention a builder has to
+ * remember, it is the only path through the switch. */
+static void ctrl_finish(uint8_t *frame, const struct ctrl_frame *f)
+{
+	switch ((enum ctrl_cksum)f->cksum) {
+	case CKSUM_RECORD:
+		reac_ctrl_record_cksum_stamp(frame + REAC_CTRL_BLOCK_OFF + f->rec_off,
+		                             f->rec_len);
+		/* fall through - the outer checksum covers the byte just stamped */
+	case CKSUM_BLOCK:
+		reac_ctrl_block_cksum_stamp(frame + REAC_CTRL_BLOCK_OFF);
+		break;
+	case CKSUM_NONE:
+		break;
+	}
+}
+
+/* The six-step ritual, once. Returns the frame length, or 0 when the row is not
+ * emitted for this model / the width is not a real box width. */
+static size_t ctrl_emit(uint8_t *out, const struct ctrl_frame *f,
+                        const uint8_t dst[6], const uint8_t src[6],
+                        uint16_t counter, int n_ch, const uint8_t *args,
+                        float *const *planar, int ns)
+{
+	/* The braid packs channel PAIRS: box widths are even, 2..40 (628 B at 16,
+	 * 340 B at 8). Rows sized from the matrix carry a verified width already. */
+	if (f->len == LEN_ARG_WIDTH &&
+	    (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1)))
+		return 0;
+
+	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
+	if (!ctrl_gate_ok(m, (enum ctrl_gate)f->gate))
+		return 0;
+
+	size_t len = (f->len == LEN_DOWNSTREAM)
+	           ? (size_t)REAC_FRAME_BYTES
+	           : box_frame_len(f->len == LEN_MODEL_WIDTH ? m->in_ch : n_ch);
+
+	memset(out, 0, len);
+	put_hdr(out, dst, src, counter, f->type0, f->type1);
+	ctrl_lay_block(out, f, m, args);
+	if (f->audio)
+		reac_braid_encode(out + AUDIO_OFF, n_ch, planar, n_ch, ns);
+	ctrl_finish(out, f);
+	out[len - 2] = REAC_END_MARKER_0;
+	out[len - 1] = REAC_END_MARKER_1;
+	return len;
+}
+
+/* Lay a row over an ALREADY-BUILT frame: the type word [16:18] and the control
+ * block [18:50] change, the audio [50:], the counter and the C2 EA tail the
+ * frame already carries are preserved. Shares ctrl_lay_block + ctrl_finish with
+ * ctrl_emit, so an overlaid record gets its two checksums in the same order a
+ * freshly built one does — the stamp path cannot drift from the build path. */
+static void ctrl_stamp(uint8_t *frame, const struct ctrl_frame *f, const uint8_t *args)
+{
+	frame[TYPE_OFF] = f->type0;
+	frame[TYPE_OFF + 1] = f->type1;
+	ctrl_lay_block(frame, f, NULL, args);
+	ctrl_finish(frame, f);
+}
+
+/* The table. One row per control frame; the evidence for each block lives with
+ * the bytes (TMPL_* here, or the box-model matrix above). */
+enum ctrl_frame_id {
+	CTRL_BOX_HB = 0,
+	CTRL_UPSTREAM_FILLER,
+	CTRL_FLOOD_FILLER,
+	CTRL_CONFIG_ANNOUNCE,
+	CTRL_NAME_FRAME,
+	CTRL_COLDCONNECT,
+	CTRL_COLDCONNECT_0013,
+	CTRL_COLDCONNECT_0016,
+	CTRL_COLDCONNECT_001A,
+	CTRL_EXTRA_FRAME,
+	CTRL_HEADAMP,
+	CTRL_FRAME_COUNT,
+};
+
+/* Rows CTRL_CONFIG_ANNOUNCE..CTRL_EXTRA_FRAME are the RECONSTRUCTED JOIN frames
+ * (experimental, not byte-verified as a SEQUENCE): each block is byte-matched to
+ * a real capture, but the order and timing a box emits them in is reconstructed
+ * from REAC-CONNECTION-FSM.md, not observed end to end. */
+static const struct ctrl_frame CTRL_FRAMES[CTRL_FRAME_COUNT] = {
+	/* The box keep-alive, in a box-width audio slot. Checksum byte 0x7a on the
+	 * wire (reac-captures/wired-reac-a-bothdirs) — the test cross-checks it. */
+	[CTRL_BOX_HB] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_TMPL, .tmpl = TMPL_BOX_HB,
+		.cksum = CKSUM_BLOCK, .len = LEN_ARG_WIDTH },
+	/* The established unicast upstream: the 32-byte descriptor [18:50] = 00 7a per
+	 * slot (16 slots), as the real box, over audio in the BRAIDED layout (resolved
+	 * 2026-07-10, task #108). FILLER (type 00 00) is checksum-exempt. */
+	[CTRL_UPSTREAM_FILLER] = {
+		.type0 = 0x00, .type1 = 0x00, .block = BLOCK_DESC,
+		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
+	/* The presence-flood FILLER (broadcast, unlinked): counter + type 00 00 + a
+	 * ZERO control block [18:50] (no 0x7a per-slot descriptor) + LIVE audio
+	 * [50:626] + end marker. Verified on the wire
+	 * (m200-s1608-realbox-establish-2026-07-11.pcap): a real S-1608's cold-boot
+	 * flood carries a zero control block but a LIVE audio region (it varies every
+	 * frame) — it is NOT an all-zero payload. The 0x7a descriptor is what
+	 * distinguishes the ESTABLISHED unicast upstream from this broadcast announce;
+	 * the audio itself is present in both. */
+	[CTRL_FLOOD_FILLER] = {
+		.type0 = 0x00, .type1 = 0x00, .block = BLOCK_ZERO,
+		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
+	/* The config-announce (cdea 01 03 0010) — the SETUP DECLARATION the master
+	 * enrols the box from; the selector byte sets the displayed model family. The
+	 * verified blocks already sum to 0, so the outer stamp is a no-op that keeps
+	 * the invariant rather than a correction. */
+	[CTRL_CONFIG_ANNOUNCE] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CONFIG,
+		.cksum = CKSUM_BLOCK, .len = LEN_MODEL_WIDTH },
+	/* The ASCII model-name frame (cdea 04 01 001b) — required for the 0x84 family
+	 * so the desk shows the exact model ("S-0808") instead of the generic family
+	 * name. The 0x82 / S-1608 family is named by its selector alone and emits
+	 * nothing here. */
+	[CTRL_NAME_FRAME] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_NAME,
+		.cksum = CKSUM_NONE, .len = LEN_MODEL_WIDTH, .gate = GATE_HAS_NAME },
+	/* The cold-connect escalation a real S-1608 sends: 0014 -> 0013 -> 0016 ->
+	 * 001a, each the model's 32-byte control block over LIVE audio. The block's
+	 * [38:66] region is frame[52:80] and is AUDIO, not device inventory — on a
+	 * real box it varies every frame (verified 2026-07-11,
+	 * m200-s1608-realbox-establish). The master needs no inventory tail: it learns
+	 * the box from the L2 source and echoes THIS block back verbatim as its grant,
+	 * so a cold-connect is the control block over live audio, exactly like the
+	 * unicast upstream but with cdea 04 03 replacing the 0x7a descriptor.
+	 *
+	 * 0014: the 0x41 at block[10] is descriptor DATA, not a MAC tail — the block
+	 * is MAC-independent. Sum(block) mod 256 == 0 holds as captured, so the outer
+	 * stamp is a no-op that keeps the invariant.
+	 * 0013: the variant a real box INTERLEAVES with the 0014 (S-1608 cold boot,
+	 * m200-s1608-BIDIR-reboot-2026-07-11); block[31]=0x02 trailer, and the
+	 * captured block sums to 0xfe mod 256 — NOT sum-to-0, which is the evidence
+	 * that the cold-connect is not checksum-validated the way 0014 happens to be.
+	 * It is therefore emitted RAW, as are 0016 and 001a.
+	 * 0016: a MODEL-specific inventory block the mixer uses to identify the box.
+	 * 001a: the fullest MODEL-specific box inventory.
+	 * All four byte-matched per model (matrix-m200-s1608 / -s0808, 2026-07-11;
+	 * S-4000S from s4000s-coldboot-m5000-2026-07-12). */
+	[CTRL_COLDCONNECT] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CC0014,
+		.cksum = CKSUM_BLOCK, .len = LEN_ARG_WIDTH, .audio = 1 },
+	[CTRL_COLDCONNECT_0013] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CC0013,
+		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
+	[CTRL_COLDCONNECT_0016] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CC0016,
+		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
+	[CTRL_COLDCONNECT_001A] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_CC001A,
+		.cksum = CKSUM_NONE, .len = LEN_ARG_WIDTH, .audio = 1 },
+	/* The cdea 04 02 000d frame some models (S-0808) send during cold-connect —
+	 * part of the inventory the mixer reads to name the exact model. Emitted raw
+	 * (byte-verified, matrix-m200-s0808); models without it emit nothing. */
+	[CTRL_EXTRA_FRAME] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_EXTRA,
+		.cksum = CKSUM_NONE, .len = LEN_MODEL_WIDTH, .gate = GATE_HAS_EXTRA },
+	/* The console-side preamp command, master->box at the downstream width. The
+	 * ONLY row that carries a DT1 record — and naming CKSUM_RECORD is all it has
+	 * to do: ctrl_finish() stamps the inner checksum and then the outer one, in
+	 * that order, because that is the only path through its switch. */
+	[CTRL_HEADAMP] = {
+		.type0 = 0xcd, .type1 = 0xea, .block = BLOCK_TMPL, .tmpl = TMPL_HEADAMP,
+		.arg_off = HEADAMP_ARG_OFF, .arg_len = HEADAMP_ARG_LEN,
+		.rec_off = HEADAMP_REC_OFF, .rec_len = HEADAMP_REC_LEN,
+		.cksum = CKSUM_RECORD, .len = LEN_DOWNSTREAM },
+};
+
+size_t reac_ctrl_build_box_hb(uint8_t *out, const uint8_t master[6],
+                              const uint8_t src[6], uint16_t counter, int n_ch)
+{
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_BOX_HB], master, src, counter,
+	                 n_ch, NULL, NULL, 0);
+}
+
+size_t reac_ctrl_build_upstream_filler(uint8_t *out, const uint8_t master[6],
+                                       const uint8_t src[6], uint16_t counter,
+                                       int n_ch, float *const *planar, int ns)
+{
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_UPSTREAM_FILLER], master, src,
+	                 counter, n_ch, NULL, planar, ns);
+}
+
+size_t reac_ctrl_build_flood_filler(uint8_t *out, const uint8_t bcast[6],
+                                    const uint8_t src[6], uint16_t counter,
+                                    int n_ch, float *const *planar, int ns)
+{
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_FLOOD_FILLER], bcast, src,
+	                 counter, n_ch, NULL, planar, ns);
+}
 
 size_t reac_ctrl_build_config_announce(uint8_t *out, const uint8_t master[6],
                                        const uint8_t src[6], uint16_t counter, int in_ch)
 {
-	const struct reac_box_model *m = reac_box_model_by_channels(in_ch);
-	size_t len = box_frame_len(m->in_ch);       /* width-matched: S-1608 628 B / S-0808 340 B */
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->config_block, 32);
-	reac_ctrl_checksum_apply(out);              /* no-op: verified blocks already sum to 0 */
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_CONFIG_ANNOUNCE], master, src,
+	                 counter, in_ch, NULL, NULL, 0);
 }
 
 size_t reac_ctrl_build_name_frame(uint8_t *out, const uint8_t master[6],
                                   const uint8_t src[6], uint16_t counter, int in_ch)
 {
-	const struct reac_box_model *m = reac_box_model_by_channels(in_ch);
-	if (!m->has_name)
-		return 0;                               /* 0x82 family: named by selector, no frame */
-	size_t len = box_frame_len(m->in_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->name_block, 32);  /* emitted raw (byte-verified) */
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_NAME_FRAME], master, src,
+	                 counter, in_ch, NULL, NULL, 0);
 }
 
 size_t reac_ctrl_build_coldconnect(uint8_t *out, const uint8_t master[6],
                                    const uint8_t src[6], uint16_t counter,
                                    int n_ch, float *const *planar, int ns)
 {
-	/* The cold-connect cdea 04 03 0014 block — from the matrix per model. The 0x41
-	 * at block[10] is descriptor DATA, not a MAC tail (the block is MAC-independent;
-	 * the master learns the box from the L2 source and echoes the block as its
-	 * grant). Sum(block) mod 256 == 0 holds as captured. */
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;
-	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
-	size_t len = box_frame_len(n_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc0014, 32);
-	/* payload[38:66] = frame[52:80] is AUDIO, not device inventory: on a real box
-	 * that region varies every frame (verified 2026-07-11,
-	 * m200-s1608-realbox-establish). The master needs NO inventory tail — it learns
-	 * the box from the L2 source and echoes THIS 32-byte control block back verbatim
-	 * as the grant. So the cold-connect is the control block over LIVE audio, exactly
-	 * like the unicast upstream but with cdea 04 03 replacing the 0x7a descriptor. */
-	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
-	reac_ctrl_checksum_apply(out);        /* no-op by construction (block sums 0) */
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_COLDCONNECT], master, src,
+	                 counter, n_ch, NULL, planar, ns);
 }
 
-/* The cdea 04 03 0013 cold-connect variant a real box INTERLEAVES with the 0014
- * (S-1608 cold boot, m200-s1608-BIDIR-reboot-2026-07-11): same framing, a distinct
- * 32-byte control block with BE len 0x0013 and its own descriptor. It is NOT
- * sum-to-0 (the captured block sums to 0xfe mod 256), which proves the cold-connect
- * is not checksum-validated the way the 0014 block happens to be — so it is emitted
- * RAW (no checksum_apply). Over live braided audio like every box->master frame. */
 size_t reac_ctrl_build_coldconnect_0013(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns)
 {
-	/* cdea 04 03 0013 — from the matrix per model (block[31]=0x02 trailer; not
-	 * sum-to-0, so emitted RAW). Byte-matched per model. */
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;
-	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
-	size_t len = box_frame_len(n_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc0013, 32);
-	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_COLDCONNECT_0013], master, src,
+	                 counter, n_ch, NULL, planar, ns);
 }
 
 size_t reac_ctrl_build_coldconnect_0016(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns)
 {
-	/* The third cold-connect variant (cdea 04 03, BE len 0x0016): a MODEL-specific
-	 * inventory block the mixer uses to identify the box. Byte-matched per model
-	 * (matrix-m200-s1608 / -s0808, 2026-07-11). */
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;
-	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
-	size_t len = box_frame_len(n_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc0016, 32);
-	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_COLDCONNECT_0016], master, src,
+	                 counter, n_ch, NULL, planar, ns);
 }
 
 size_t reac_ctrl_build_coldconnect_001a(uint8_t *out, const uint8_t master[6],
                                         const uint8_t src[6], uint16_t counter,
                                         int n_ch, float *const *planar, int ns)
 {
-	/* The fourth/final cold-connect variant (cdea 04 03, BE len 0x001a) — the fullest
-	 * MODEL-specific box inventory. Byte-matched per model (matrix-m200 captures). */
-	if (n_ch < 2 || n_ch > REAC_MAX_CHANNELS || (n_ch & 1))
-		return 0;
-	const struct reac_box_model *m = reac_box_model_by_channels(n_ch);
-	size_t len = box_frame_len(n_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->cc001a, 32);
-	place_braided_audio(out + AUDIO_OFF, n_ch, planar, ns);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_COLDCONNECT_001A], master, src,
+	                 counter, n_ch, NULL, planar, ns);
 }
 
 size_t reac_ctrl_build_extra_frame(uint8_t *out, const uint8_t master[6],
                                    const uint8_t src[6], uint16_t counter, int in_ch)
 {
-	/* The cdea 04 02 000d frame some models (S-0808) send during cold-connect —
-	 * part of the inventory the mixer reads to name the exact model. Emitted raw
-	 * (byte-verified, matrix-m200-s0808). Returns 0 for models without it. */
-	const struct reac_box_model *m = reac_box_model_by_channels(in_ch);
-	if (!m->has_extra)
-		return 0;
-	size_t len = box_frame_len(m->in_ch);
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	memcpy(out + REAC_CTRL_BLOCK_OFF, m->extra_block, 32);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_EXTRA_FRAME], master, src,
+	                 counter, in_ch, NULL, NULL, 0);
 }
 
 /* ---- Head-amp source control (op 04 03, record TAG 01 01) ---- */
@@ -581,52 +796,18 @@ static int headamp_args_ok(uint8_t param, uint8_t value)
 	}
 }
 
-/* Write the head-amp type [16:18] + control block [18:50] into `frame` (a 0013
- * record container: TAG 01 01 + CH PARAM VALUE + the INNER record checksum),
- * then apply the OUTER block checksum at [49]. The control block is zeroed first,
- * so this is safe to STAMP over an existing FILLER frame — the audio region
- * [50:], the counter [14:16] and the ethernet header are untouched. Assumes the
- * args have already passed headamp_args_ok. */
-static void put_headamp_block(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value)
-{
-	frame[16] = 0xcd; frame[17] = 0xea;       /* control-frame type */
-	memset(frame + REAC_CTRL_BLOCK_OFF, 0, 32);/* clear the 32-byte block [18:50] */
-	frame[18] = 0x04; frame[19] = 0x03;       /* the record container */
-	frame[20] = 0x00; frame[21] = 0x13;       /* BE len 0x0013 */
-	frame[22] = 0x00; frame[23] = 0x02;
-	frame[24] = 0x00; frame[25] = 0xfe;
-	frame[26] = 0x13 - 5;                     /* preamble length echo: oplen - 5 */
-	frame[27] = 0xf0; frame[28] = 0x41; frame[29] = 0x0a;   /* f0 41 0a 00 00 */
-	frame[32] = 0x12; frame[33] = 0x12;       /* record marker */
-	frame[34] = 0x01; frame[35] = 0x01;       /* TAG 01 01 = head-amp */
-	frame[36] = ch; frame[37] = param; frame[38] = value;
-	/* INNER record checksum: TAG..CKSUM sums to 0x80 mod 256. (For this record
-	 * that reduces to CH+PARAM+VALUE+CKSUM == 0x7e, but compute the general
-	 * record sum — the rule is the record's, not the head-amp's.) */
-	unsigned s = 0;
-	for (int i = 34; i < 39; i++)
-		s += frame[i];
-	frame[39] = (uint8_t)((0x80 - s) & 0xff);
-	frame[40] = 0xf7;                         /* record terminator */
-	reac_ctrl_checksum_apply(frame);          /* OUTER block checksum at [49] */
-}
-
 size_t reac_ctrl_build_headamp(uint8_t *out, const uint8_t master[6],
                                const uint8_t src[6], uint16_t counter,
                                uint8_t ch, uint8_t param, uint8_t value)
 {
-	/* The console-side preamp command, byte-truthed against a live M-200
-	 * (m200-headamp-re/ctl2.pcap): a 0013 record container whose record is
-	 * TAG 01 01 + CH PARAM VALUE + the INNER record checksum, over a zero
-	 * audio region at the downstream (master) width. */
+	/* A real console BROADCASTS these interleaved in its stream, so the caller
+	 * passes the broadcast MAC like every builder's first MAC arg. */
+	const uint8_t args[HEADAMP_ARG_LEN] = { ch, param, value };
+
 	if (!headamp_args_ok(param, value))
 		return 0;
-	size_t len = REAC_FRAME_BYTES;        /* master frames are downstream width */
-	memset(out, 0, len);
-	put_hdr(out, master, src, counter, 0xcd, 0xea);
-	put_headamp_block(out, ch, param, value);
-	out[len - 2] = REAC_END_MARKER_0; out[len - 1] = REAC_END_MARKER_1;
-	return len;
+	return ctrl_emit(out, &CTRL_FRAMES[CTRL_HEADAMP], master, src, counter,
+	                 0, args, NULL, 0);
 }
 
 int reac_ctrl_stamp_headamp(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t value)
@@ -634,10 +815,13 @@ int reac_ctrl_stamp_headamp(uint8_t *frame, uint8_t ch, uint8_t param, uint8_t v
 	/* Overlay a head-amp record onto an already-built downstream frame (the
 	 * MASTER-role emit path stamps it over a FILLER slot — see reac_headamp_tx).
 	 * Only the type [16:18] + control block [18:50] change; the audio, counter and
-	 * C2/EA tail the frame already carries are preserved. */
+	 * C2/EA tail the frame already carries are preserved. Returns -1 on a bad
+	 * param/value, leaving the frame untouched. */
+	const uint8_t args[HEADAMP_ARG_LEN] = { ch, param, value };
+
 	if (!headamp_args_ok(param, value))
 		return -1;
-	put_headamp_block(frame, ch, param, value);
+	ctrl_stamp(frame, &CTRL_FRAMES[CTRL_HEADAMP], args);
 	return 0;
 }
 
@@ -657,10 +841,7 @@ int reac_ctrl_headamp_record_verify(const uint8_t *frame)
 	 * console builds CKSUM so the six bytes sum to 0x80 mod 256 (byte-verified
 	 * on the M-200, m200-headamp-re/DECODE.md). A frame that fails this carries a
 	 * corrupted preamp record and its CH/PARAM/VALUE must not be trusted. */
-	unsigned s = 0;
-	for (int i = 34; i < 40; i++)
-		s += frame[i];
-	return ((s & 0xff) == 0x80) ? 0 : -1;
+	return reac_ctrl_record_cksum_verify(frame + 34, 6);
 }
 
 /* SENS dB <-> VALUE (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).

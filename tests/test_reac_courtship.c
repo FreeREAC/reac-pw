@@ -6,7 +6,7 @@
  * The strongest offline gate for the event-driven establishment (#130): both
  * halves are pure decision cores, so the whole M-5000 <-> S-1608 sequence runs
  * as a frame-by-frame simulation. Every master emission (reac_master_next +
- * reac_master_stamp onto a reac_tx_build FILLER) is parsed and fed into
+ * reac_master_stamp onto a reac_downstream_build FILLER) is parsed and fed into
  * reac_slave_step_rx (frame-arrival = the box's clock); every slave emission
  * (the reac_ctrl builders the live engine uses) is fed through
  * reac_ctrl_classify_box_frame + reac_master_rx (the pacer's ingest path).
@@ -30,6 +30,7 @@
 #include "reac_fsm.h"
 #include "reac_tx.h"
 #include <reac/reac.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -68,7 +69,7 @@ static int step(struct court *c)
 		return -1;                          /* counter must free-run */
 	c->m_counter_next++;
 
-	reac_tx_build(mf, NULL, 0, REAC_SAMPLES_PER_PKT, counter, M_SRC);
+	reac_downstream_build(mf, NULL, 0, REAC_SAMPLES_PER_PKT, counter, M_SRC);
 	reac_master_stamp(&c->m, mf, e, idx);
 
 	switch (e) {

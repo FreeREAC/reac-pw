@@ -2,11 +2,12 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_master.h"
+#include "reac_master_fsm.h" /* the pure (state, event) -> edge decision table */
 #include "reac_ctrl.h"   /* reac_ctrl_checksum_apply, REAC_CTRL_* offsets */
 #include "reac_grant.h"  /* the generated enrollment sweep + slot allocator */
 
 #include <reac/reac.h>   /* REAC_FRAME_BYTES, REAC_END_MARKER_*, ... */
-#include <stdlib.h>      /* getenv (REACPW_ANNOUNCE_UNGRANTED A/B toggle) */
+#include <stdlib.h>      /* getenv (the REACPW_* env overrides) */
 #include <string.h>
 
 /* ------------------------------------------------------------------------- *
@@ -52,14 +53,12 @@ static const uint8_t SUB02_BLK[34] = { 0xcd, 0xea, 0x01, 0x02, 0x00, 0x0e, 0x00,
 /* The cfea master-MAC field sits at template idx 11..16 (block [9:15]). */
 #define ANNOUNCE_MAC_IDX 11
 
-/* Set blk[33] so the 32-byte control block [2:34] sums to 0 mod 256 (the
- * cdea/cfea checksum rule; identical to reac_ctrl_checksum_apply on a frame). */
+/* Set blk[33] so the 32-byte control block [2:34] sums to 0 mod 256 — the
+ * cdea/cfea checksum rule, delegated to the ONE implementation in reac_ctrl
+ * (a 34-byte template is type word + block, so the block starts at +2). */
 static void stamp_block_cksum(uint8_t blk[34])
 {
-	unsigned s = 0;
-	for (int i = 2; i < 33; i++)   /* block bytes [18:49] = template [2:33] */
-		s += blk[i];
-	blk[33] = (uint8_t)((256 - (s & 0xff)) & 0xff);
+	reac_ctrl_block_cksum_stamp(blk + 2);
 }
 
 /* ---- PROBE: the rotating hunt sequence (#130) -----------------------------
@@ -128,6 +127,35 @@ static const uint8_t ENROLL_BLK[34] = {
 };
 #define REAC_ENROLL_CONSOLE_IDX 8   /* ENROLL_BLK[8] = console-model byte (0/1) */
 
+/* Wide-safe default enroll width (operator directive 2026-07-24: "40 is the safe
+ * default"). 32 = 4 input groups + 1 output group (4x0x41 + 1x0xc3) — the widest
+ * config any REAL box uses (the S-4000's own enrol, golden-validated) and the
+ * widest that keeps a valid output group. It USES the full 40-slot fabric with the
+ * maximum addressable inputs. A box's DECLARED width narrows this at recognition
+ * (reac_master_set_box). Bump to 40 (5x0x41, no output group) only for input-only
+ * VIRTUAL stageboxes — that exceeds every hardware capture. */
+#define REAC_ENROLL_DEFAULT_WIDTH 32
+
+/* Rewrite the ENROLL group map (block[9:19]) for `in_ch` input channels. A PURE
+ * FUNCTION OF WIDTH, no per-box constant: input groups (0x41) fill the input region
+ * [9:14] from the front; the remaining "non-input" groups (0xc3) fill the output
+ * region [14:19] from the back. Verified byte-for-byte against the M-200, M-300 and
+ * M-5000 golden enrols (8ch=1x41, 16ch=2x41, 32ch=4x41 — identical across all three
+ * console generations, only the [8] console byte differs) and extended to the full
+ * 40-slot fabric (5x41). Leaves [8] (console-model byte) and the frame template
+ * intact; re-checksums. */
+static void set_enroll_width(uint8_t blk[34], int in_ch)
+{
+	int n_in = in_ch / 8;                          /* input groups, 1..5 */
+	if (n_in < 1) n_in = 1;
+	if (n_in > 5) n_in = 5;
+	for (int i = 0; i < 5; i++) {
+		blk[9  + i] = (i <  n_in) ? 0x41 : 0x00;   /* input region  [9:14]  */
+		blk[14 + i] = (i >= n_in) ? 0xc3 : 0x00;   /* output region [14:19] */
+	}
+	stamp_block_cksum(blk);
+}
+
 /* The mixer profiles reac-pw can impersonate. MAC + console_field are the only
  * per-mixer identity; the grants are box-defined. MACs are the captured desk
  * addresses (matrix-m{200,300,5000}-*). M-200/M-300 are V-Mixer (console 0);
@@ -156,14 +184,29 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
 {
-	int native = (mixer && mixer->console_field != 0) ? 96000 : 48000;
+	/* THE RATE IS A CHOICE MADE AT THE MASTER — not a property of the desk model.
+	 *
+	 * On a real Roland desk the operator picks the REAC sample rate from a menu;
+	 * the desk then drives the segment at it and every stagebox follows. The box
+	 * has no rate setting of its own and no say in the matter — it adapts to the
+	 * cadence it is given. reac-pw IS the master, so `--rate` is our equivalent of
+	 * that menu, and there is nothing to clamp it against.
+	 *
+	 * This function used to force a V-Mixer-identified master to 48 kHz and report
+	 * `--rate 96000` as clamped, on the theory that the console identity byte
+	 * selects the rate (00 = V-Mixer => 48k only, 01 = OHRCA => 96k). That was an
+	 * inference, never demonstrated, and it is wrong: the identity byte says which
+	 * desk we are impersonating, not which rate the operator chose. Likewise the
+	 * old "OHRCA is natively 96 kHz" default — an M-5000 runs at whatever its REAC
+	 * menu is set to, so a profile-dependent default was equally unfounded.
+	 *
+	 * So: honour the request, and default to 48 kHz (the working standard for live
+	 * work) for every profile. Kept as a function rather than deleted so that a
+	 * real, demonstrated rule would have one obvious home. See issue #73. */
+	(void)mixer;
 	if (clamped)
 		*clamped = 0;
-	if (mixer && mixer->console_field != 0)
-		return requested ? requested : native;   /* OHRCA: honor --rate, default 96k */
-	if (requested && requested != native && clamped)
-		*clamped = 1;                            /* V-Mixer: 48k always, report the override */
-	return native;
+	return requested ? requested : 48000;
 }
 
 /* Build the probe for the CURRENT burst position + link state, publish its
@@ -271,8 +314,8 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
  * 0xfe section marker at the wrap (idx 48). */
 static uint8_t ring_at(int i)
 {
-	i %= REAC_M_FABRIC_RING;
-	return (i == REAC_M_FABRIC_RING - 1) ? REAC_CHANMAP_MARKER : (uint8_t)i;
+	i %= REAC_M_CHANMAP_RING;
+	return (i == REAC_M_CHANMAP_RING - 1) ? REAC_CHANMAP_MARKER : (uint8_t)i;
 }
 
 /* The master's window emit ORDER (measured off the M-200): the marker window
@@ -282,7 +325,7 @@ static uint8_t ring_at(int i)
 static int chanmap_start(int f)
 {
 	if (f == 0)
-		return REAC_M_FABRIC_RING - 1;      /* the 0xfe marker window */
+		return REAC_M_CHANMAP_RING - 1;      /* the 0xfe marker window */
 	int i    = f - 1;                       /* 0..47 */
 	int base = 7 - (i / 6);                 /* 7,6,5,4,3,2,1,0 */
 	int k    = i % 6;                       /* 0..5 */
@@ -295,7 +338,7 @@ static int chanmap_start(int f)
 static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 {
 	(void)cfg;
-	for (int f = 0; f < REAC_M_FABRIC_RING; f++) {
+	for (int f = 0; f < REAC_M_CHANMAP_RING; f++) {
 		uint8_t *blk = frames[f];
 		memset(blk, 0, 34);
 		blk[0] = 0xcd; blk[1] = 0xea;
@@ -318,7 +361,7 @@ static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 		blk[31] = 0x00; blk[32] = 0x00;       /* terminator */
 		stamp_block_cksum(blk);
 	}
-	return REAC_M_FABRIC_RING;
+	return REAC_M_CHANMAP_RING;
 }
 
 /* Allocate `in_ch` fabric slots and regenerate the grant sweep for them. Keeps the
@@ -384,8 +427,8 @@ const char *reac_master_drop_name(enum reac_master_drop_reason r)
  * before granting; reac-pw's ~1.6 s dwell grants too fast for the box to react,
  * so REACPW_GRANT_DWELL_S=30 gives a ~30 s recognized-ungranted hold. ONLY the
  * dwell LENGTH changes: the FSM still runs ENROLL->dwell->burst->ESTABLISHED,
- * the dwell keeps emitting the w0x10/cnt0 announce (REACPW_ANNOUNCE_UNGRANTED,
- * default ON), and the same-box GRANTING guard in reac_master_rx keeps the box's
+ * the dwell keeps emitting the w0x10/cnt0 announce (the M-200-matching
+ * recognized-but-ungranted hold), and the same-box GRANTING guard in reac_master_rx keeps the box's
  * repeated cold-connect JOIN retries from restarting the dwell. Returns the
  * override in SECONDS, or -1 when UNSET / non-numeric / non-positive (leave the
  * built-in dwell untouched). Read once + cached, matching the file's other
@@ -488,7 +531,10 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	 * (V-Mixer 0 / OHRCA 1). apply_block re-checksums at stamp time. */
 	memcpy(m->enroll_blk, ENROLL_BLK, 34);
 	m->enroll_blk[REAC_ENROLL_CONSOLE_IDX] = m->cfg.console_field;
-	stamp_block_cksum(m->enroll_blk);
+	/* Seed the WIDE-safe default enrol; the box's declared width narrows it at
+	 * recognition (reac_master_set_box). set_enroll_width re-checksums. */
+	set_enroll_width(m->enroll_blk, REAC_ENROLL_DEFAULT_WIDTH);
+	m->enroll_pending = 0;
 
 	/* Seed the probe rotation at phase 0 / sub 0x02 (hunting) so FILLER frames
 	 * carry a valid descriptor from the very first slot, before any probe fires. */
@@ -556,6 +602,19 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	 * updated ENROLL, re-arming the box to consume the wider grant. */
 	set_enroll_width(m->enroll_blk, in_ch);
 
+	/* Enrol the box's DECLARED input width. The cdea 0103 000d group map is the gate
+	 * the box reads to open its audio return to full width (verified byte-for-byte
+	 * across the M-200/M-300/M-5000 golden enrols: 8ch=1x41, 16ch=2x41, 32ch=4x41).
+	 * Without this the box only ever sees the wide DEFAULT enrol and the recognizer's
+	 * width never reaches the wire — the root cause of the S-4000 stuck at 8ch
+	 * (recognized 32, but enroll_blk stayed the static template). set_enroll_width
+	 * keeps [8] (console byte) and re-checksums. enroll_pending makes the GRANTING
+	 * dwell re-emit ONE ENROLL at the new width, so a box recognized AFTER the initial
+	 * (tick-0) ENROLL still widens — mirrors the golden, which sends its enrol ~200ms
+	 * into the session, after reading the box config. */
+	set_enroll_width(m->enroll_blk, in_ch);
+	m->enroll_pending = 1;
+
 	m->cfg.out_channels = (uint8_t)in_ch;    /* cfea width byte := box input width */
 	uint16_t box_count = (m->state == REAC_M_GRANTING ||
 	                      m->state == REAC_M_ESTABLISHED) ? 1 : 0;
@@ -569,107 +628,6 @@ void reac_master_set_headamp_src(struct reac_master *m,
 	/* Rebuild so the next grant enrolls the CURRENT head-amp state. Same
 	 * allocation — only group A's values change. */
 	rebuild_grant_sweep(m, m->alloc.width);
-
-	/* REACPW_EST_COMMIT (default OFF): a LIVE head-amp edit while already
-	 * ESTABLISHED rebuilt the sweep above, but the box will not re-copy its
-	 * STAGING table to ACTIVE until it sees a fresh SUB01->SUB02 pair (see
-	 * control_cadence). Re-arm PROMPTLY (SUB_GAP + a small settle, not the full
-	 * post-establish SCENE_SETTLE_DEN wait enter_established uses) so the edit
-	 * reaches hardware quickly instead of waiting for the sustained cadence's
-	 * next scheduled re-arm. Ordering: the rebuild above already ran, so the
-	 * pair still fires strictly AFTER the new staging is loaded. No-op with the
-	 * flag off (est_commit is untouched -> stays 0) or before ESTABLISHED
-	 * (nothing to flush yet — enter_established will arm the first pair). */
-	if (reac_master_est_commit_enabled() && m->state == REAC_M_ESTABLISHED)
-		m->est_commit = REAC_M_EST_COMMIT_SUB_GAP + REAC_M_EST_COMMIT_LIVE_SETTLE;
-}
-
-/* A/B TOGGLE (default ON): REACPW_ANNOUNCE_UNGRANTED.
- *
- * Model the real M-200's RECOGNIZED-BUT-UNGRANTED window (reac-firmware-re/
- * HEADAMP-MASTER-STATE-2026-07-17.md, Update 9 "Lead A"): once a box is
- * recognized the desk announces the cfea with the BOX WIDTH already set but the
- * box-count field STILL 0, and HOLDS that announced through the ENTIRE
- * ENROLL->grant dwell, flipping to count=1 only at grant. That held window is
- * believed to be what commits 48V on the ANCHOR / last box input; without it
- * reac-pw jumps idle(count0)->granted(count1) and the anchor input never sees the
- * ungranted state on the wire.
- *
- *   ON  (default): enter_granting announces count=0 (width already stamped by
- *                  reac_master_set_box at recognition); the GRANTING dwell emits
- *                  the cfea announce cadence (count=0) instead of hard FILLER, so
- *                  the recognized-but-ungranted window actually reaches the wire
- *                  for the full dwell; count flips to 1 at enter_established.
- *   OFF (REACPW_ANNOUNCE_UNGRANTED=0): the prior behaviour — count=1 latched at
- *                  enter_granting (the 2026-07-12 blink fix) and hard FILLER
- *                  through the dwell. Establishment is byte-unchanged when off.
- *
- * The anchor-commit theory is unconfirmed and this touches the establishment
- * cadence, so it stays A/B-able on the rig WITHOUT a rebuild. Read once + cached:
- * the pacer calls the FSM at wire rate. */
-static int announce_ungranted_enabled(void)
-{
-	static int cached = -1;
-	if (cached < 0) {
-		const char *v = getenv("REACPW_ANNOUNCE_UNGRANTED");
-		cached = (v && (v[0] == '0' || v[0] == 'n' || v[0] == 'N')) ? 0 : 1;
-	}
-	return cached;
-}
-
-/* A/B TOGGLE (default OFF): REACPW_ANNOUNCE_BURST — hypothesis #1 extension.
- *
- * Builds ON REACPW_ANNOUNCE_UNGRANTED. That flag holds the count=0 recognized-but-
- * ungranted cfea (box width set, box-count 0 in announce_blk) and re-emits it on the
- * ~1/s announce cadence through the ENROLL->grant DWELL only. Dwell-only announce did
- * NOT elicit the real M-200's box escalation on the rig: the box's op0403 TAG0100 JOIN
- * field stays 01 (never climbs 01->05->0d), so per-input phantom never commits.
- *
- * With THIS flag ON, the same count=0 ungranted window ALSO reaches the wire on the
- * free-running announce_tick THROUGHOUT the grant BURST — the FILLER slots between the
- * actual GRANT slots become cfea announces — so the box sees a PROLONGED recognized-
- * ungranted signal spanning the whole sweep, not just the dwell (hypothesis: that is
- * what climbs the JOIN field and finally commits phantom).
- *
- * ONLY meaningful with REACPW_ANNOUNCE_UNGRANTED also on: announce_blk must still hold
- * count=0 during GRANTING (enter_granting stamps it; enter_established flips it to 1).
- * Actual GRANT/ENROLL slots are NEVER displaced — only FILLER converts — so with this
- * flag OFF the burst path is byte-identical to today. Read once + cached like
- * announce_ungranted_enabled(): the pacer calls the FSM at wire rate. */
-static int announce_burst_enabled(void)
-{
-	static int cached = -1;
-	if (cached < 0) {
-		const char *v = getenv("REACPW_ANNOUNCE_BURST");
-		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
-		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
-	}
-	return cached;
-}
-
-/* NEW FLAG (default OFF): REACPW_EST_COMMIT — the post-establish scene COMMIT.
- *
- * With the flag OFF (unset) the established cadence AND the head-amp seed are
- * byte-identical to today. With it ON, two coupled behaviours arm: (1) the pacer
- * seeds every GRANTED head-amp channel (base..base+w-1) into the DMX send table at
- * open — operator value if set, else the safe default (reac_grant_headamp_value) —
- * so the whole 16x3 op-0403 scene is re-pushed post-establish and the box's staging
- * holds every channel; (2) enter_established arms est_commit so control_cadence emits
- * the ordered SUB01 -> SUB02 pair once, driving the box's scene-FSM state-4 bulk
- * commit (FUN_0c003c8a) that latches the whole preamp scene into hardware. Read once
- * + cached like the file's other getenv knobs (the static local IS the cache); the
- * pacer's open-time seed calls this FIRST (single-threaded, before the pacer thread
- * starts), so the cache is warm by the time enter_established reads it on the pacer
- * thread — no data race. */
-int reac_master_est_commit_enabled(void)
-{
-	static int cached = -1;
-	if (cached < 0) {
-		const char *v = getenv("REACPW_EST_COMMIT");
-		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
-		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
-	}
-	return cached;
 }
 
 /* Restart the control cycle at slot 0 (the burst head — the first slot emits a
@@ -717,9 +675,12 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	 * that drains head-amp edits into the table — so there is no race. Keeps the current
 	 * sweep on a transient allocate/build failure (rebuild_grant_sweep is all-or-nothing). */
 	rebuild_grant_sweep(m, m->alloc.width);
-	/* cfea box-count on latch. With REACPW_ANNOUNCE_UNGRANTED (default ON) we hold
-	 * count=0 so the announce carries the RECOGNIZED-BUT-UNGRANTED window a real M-200
-	 * holds through the whole dwell; the count flips to 1 at enter_established.
+	/* cfea box-count on latch: hold count=0 so the announce carries the
+	 * RECOGNIZED-BUT-UNGRANTED window a real M-200 holds through the whole
+	 * dwell (reac-firmware-re/HEADAMP-MASTER-STATE-2026-07-17.md, Update 9
+	 * "Lead A"); the count flips to 1 at enter_established. The prior
+	 * count=1-on-latch behaviour (the 2026-07-12 blink fix) jumped straight to
+	 * granted and the box never saw the ungranted state on the wire.
 	 *
 	 * That window must carry the RECOGNIZED BOX WIDTH, not the idle cfea default.
 	 * gen_cfea's width byte is cfg.out_channels, which reac_master_set_box only widens
@@ -730,11 +691,7 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	 * m->alloc.width already holds the granted box width in BOTH paths (init-seeded
 	 * from cfg.in_channels, re-set by reac_master_set_box) and is exactly the width
 	 * the w0x10/cnt1 granted announce carries, so build the ungranted announce from it
-	 * with count=0.
-	 *
-	 * With the flag OFF we keep the prior count=1-on-latch behaviour straight off
-	 * m->cfg (the box sees itself acknowledged pre-lock — the 2026-07-12 blink fix),
-	 * so establishment is byte-unchanged when A/B'd off. */
+	 * with count=0. */
 	/* Stamp the recognized width PERSISTENTLY into m->cfg (not a throwaway copy) so the
 	 * count=1 GRANTED announce enter_established re-emits from m->cfg carries it too. The
 	 * throwaway-copy version widened only the dwell, so on cold-connect the granted announce
@@ -742,8 +699,7 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	 * the box never held a stable 16-wide recognition through the commit. m->alloc.width holds
 	 * the recognized width here (init-seeded from cfg.in_channels, re-set by reac_master_set_box). */
 	m->cfg.out_channels = m->alloc.width;
-	gen_cfea(m->announce_blk, m->src, &m->cfg,
-	         announce_ungranted_enabled() ? 0 : 1);
+	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);
 }
 
 /* Re-fire the grant window for the CURRENTLY-recognized box. reac_master_set_box
@@ -767,27 +723,47 @@ static void enter_established(struct reac_master *m)
 	 * streams), phase-offset so they never contend for a slot. */
 	reset_control_cadence(m);
 	m->link_check = m->link_check_reload;
-	/* Arm the post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF): count
-	 * down (fps/SCENE_SETTLE_DEN + SUB_GAP) FILLER-eligible slots so control_cadence
-	 * fires SUB01 once the post-establish head-amp scene re-push has settled, then
-	 * SUB02 SUB_GAP slots later — the ordered pair that drives the box's scene-FSM
-	 * state-4 bulk phantom commit. OFF leaves est_commit 0 (never armed), so the
-	 * commit block in control_cadence is inert and the locked cadence is byte-
-	 * identical to today. This only seeds the FIRST pair: control_cadence's
-	 * ESTABLISHED branch RE-ARMS est_commit to the shorter PERIOD_DEN cadence every
-	 * time SUB02 fires, so the pair keeps repeating for the whole ESTABLISHED
-	 * lifetime (SUSTAIN, not one-shot — see the flag's header comment). */
-	m->est_commit = reac_master_est_commit_enabled()
-		? m->fps / REAC_M_EST_COMMIT_SCENE_SETTLE_DEN + REAC_M_EST_COMMIT_SUB_GAP
-		: 0;
 	/* GRANT confirmed -> announce the box as GRANTED (count=1). This is the flip a
-	 * real M-200 makes at grant: with REACPW_ANNOUNCE_UNGRANTED the announce held
-	 * count=0 (recognized-but-ungranted) through the dwell+burst and rises to 1
-	 * exactly here. Idempotent when the flag is off (enter_granting already latched
-	 * count=1). enter_established is only ever reached from GRANTING, where enter_granting
+	 * real M-200 makes at grant: the announce held count=0 (recognized-but-
+	 * ungranted) through the dwell+burst and rises to 1 exactly here.
+	 * enter_established is only ever reached from GRANTING, where enter_granting
 	 * STAMPED the recognized width into m->cfg, so this granted announce carries it too —
 	 * no width collapse at latch. */
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 1);
+}
+
+/* The full ENROLL + dwell + sweep has been emitted: the box-accept gate (and
+ * the tick self-complete threshold). +1 is the leading ENROLL slot;
+ * +grant_dwell the ENROLL->grant hold. Establishing EARLIER cuts the sweep —
+ * a warm-relink box unicasts from slot 0 and cut the burst to ~1 frame (rig
+ * 2026-07-12: GRANTING->ESTABLISHED in 0.25 ms, LED blinking); a heartbeat
+ * accept mid-sweep leaves a PARTIAL head-amp scene and the box mutes the
+ * unconfigured channels (rig 2026-07-23: "on for a second, then all mute LEDs
+ * lit"). A real M-200 puts the COMPLETE 16x3 scene on the wire during the
+ * grant window (m200-s1608-keepalive) and the box holds it. */
+static int grant_delivered(const struct reac_master *m)
+{
+	return m->grant_ticks >=
+	       m->grant_dwell + m->grant_burst_len * m->grant_stride + 1;
+}
+
+/* Execute one edge of the decision table (reac_master_fsm_step): latch the
+ * drop reason, then run the entry action for the target state. box_src/blk32
+ * feed enter_granting only (the JOIN latch; NULL blk32 for the warm-relink
+ * CONFIG path keeps the previous join_blk, as before). */
+static void apply_edge(struct reac_master *m, const struct reac_master_edge *e,
+                       const uint8_t box_src[6], const uint8_t blk32[32])
+{
+	if (e->drop != REAC_M_DROP_NONE)
+		m->drop_reason = e->drop;
+	if (!e->enter)
+		return;
+	switch (e->next) {
+	case REAC_M_PROBING:     enter_probing(m);                      break;
+	case REAC_M_GRANTING:    enter_granting(m, box_src, blk32);     break;
+	case REAC_M_ESTABLISHED: enter_established(m);                  break;
+	case REAC_M_IDLE:        break;   /* never a transition target */
+	}
 }
 
 int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
@@ -798,114 +774,32 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 	m->presence_tick = REAC_M_PRESENCE_TIMEOUT;
 
 	/* The pacer is ticking us if RX arrives; IDLE only means "first slot not
-	 * emitted yet" — treat it as PROBING so an early JOIN is not lost. */
-	if (m->state == REAC_M_IDLE)
-		enter_probing(m);
-
-	switch (m->state) {
-	case REAC_M_IDLE:   /* unreachable (promoted above) */
-	case REAC_M_PROBING:
-		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			enter_granting(m, box_src, blk32);
-			return 1;
-		}
-		if (ev == REAC_M_RX_BOX_CONFIG) {
-			/* WARM RELINK: a previously-synced box skips flood + cold-connect
-			 * and re-appears streaming unicast, re-declaring itself with its
-			 * config-announce (no 04 03 JOIN). This is a SPECIFIC checksum-valid
-			 * frame, not mere presence, so it does not break the anti-#130 rule.
-			 * Route it through GRANTING to fire the 32-frame grant burst — the
-			 * frame the box needs to cross GRANTING->LOCKED and go SOLID. The
-			 * earlier cut jumped straight to ESTABLISHED and skipped the burst,
-			 * which is exactly why the box reached our-side established but its
-			 * own light kept BLINKING (measured 2026-07-12, matrix-m200-s0808:
-			 * the real M-200 emits the burst here). */
-			enter_granting(m, box_src, NULL);
-			return 1;
-		}
-		/* Presence-flood / stray unicast: diagnostic only. Presence alone
-		 * must NOT trigger the grant (the anti-#130 golden rule). */
-		return 0;
-
-	case REAC_M_GRANTING:
-		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			/* The SAME box keeps cold-connecting on its own ~100 ms retry grid
-			 * for as long as it hasn't seen the grant — which now spans the
-			 * ~1.6 s ENROLL->grant dwell (grant_dwell) too. Resetting on every
-			 * such retry would perpetually restart the dwell and the box would
-			 * never be granted, so HOLD for the same box (symmetric to the
-			 * same-box hold already used in ESTABLISHED, below). A JOIN from a
-			 * DIFFERENT box is a genuinely new box: re-latch and restart the
-			 * window for it. */
-			if (memcmp(box_src, m->box_mac, 6) != 0) {
-				enter_granting(m, box_src, blk32);
-				return 1;
-			}
-			return 0;
-		}
-		if (ev == REAC_M_RX_BOX_HEARTBEAT) {
-			/* HOLD GRANTING until the FULL grant sweep is delivered. The box
-			 * heartbeats within ~1 ms of GRANTING; establishing there cuts the sweep
-			 * to a couple of channels, so the box gets a PARTIAL head-amp scene and
-			 * reverts/mutes the unconfigured channels (rig 2026-07-23: "on for a
-			 * second, then all mute LEDs lit"). A real M-200 puts the COMPLETE 16x3
-			 * scene on the wire during the grant window (m200-s1608-keepalive) and the
-			 * box holds it. Match that: establish only once the whole sweep is out. */
-			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
-				enter_established(m);
-				return 1;
-			}
-			return 0;
-		}
-		if (ev == REAC_M_RX_BOX_UNICAST || ev == REAC_M_RX_BOX_CONFIG) {
-			/* The box's unicast is the accept — BUT only once the FULL 32-frame
-			 * grant burst has been delivered. A cold-JOIN box switches to unicast
-			 * AFTER it sees the grant, so this gate is already satisfied; a WARM-
-			 * RELINK box is unicasting from the first slot, so without this gate the
-			 * very next unicast cut the burst to ~1 frame and the box never locked
-			 * solid (measured on the rig 2026-07-12: GRANTING->ESTABLISHED in 0.25 ms).
-			 * Before the burst completes, the unicast only confirms presence (keeps
-			 * granting); anti-#130 holds — establish still needs a box frame, never a
-			 * blind timer, and the grant window still expires BACK to PROBING. */
-			if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1) {
-				enter_established(m);   /* +1: the leading ENROLL slot; +grant_dwell: the dwell */
-				return 1;
-			}
-			return 0;
-		}
-		if (ev == REAC_M_RX_BOX_BYE) {
-			m->drop_reason = REAC_M_DROP_BYE;
-			enter_probing(m);
-			return 1;
-		}
-		return 0;
-
-	case REAC_M_ESTABLISHED:
-		/* Every box RX event reloads the 600-frame link-check budget. */
-		m->link_check = m->link_check_reload;
-		if (ev == REAC_M_RX_BOX_BYE) {
-			m->drop_reason = REAC_M_DROP_BYE;
-			enter_probing(m);
-			return 1;
-		}
-		if (ev == REAC_M_RX_BOX_JOIN && blk32) {
-			/* A JOIN from a DIFFERENT box -> re-grant the new one. But the SAME
-			 * box keeps JOINing on its cold-connect retry grid WHILE it completes
-			 * its own TX_MUTE dwell to lock — re-granting on each such JOIN tore
-			 * down the stable locked stream the box needs, so it never finished
-			 * locking (rig 2026-07-12: box cold-connects forever, LED blinks faster,
-			 * no heartbeat). HOLD ESTABLISHED for the same box (its JOINs just keep
-			 * the link alive); only a MAC change re-courts. */
-			if (memcmp(box_src, m->box_mac, 6) != 0) {
-				m->drop_reason = REAC_M_DROP_MAC_CHANGE;
-				enter_granting(m, box_src, blk32);
-				return 1;
-			}
-			return 0;   /* same box still settling — stay locked, hold the stream */
-		}
-		return 0;
+	 * emitted yet" — promote to PROBING so an early JOIN is not lost. */
+	if (m->state == REAC_M_IDLE) {
+		struct reac_master_edge s =
+			reac_master_fsm_step(m->state, REAC_M_EV_START);
+		apply_edge(m, &s, NULL, NULL);
 	}
-	return 0;
+
+	/* Every box RX event while established reloads the link-check budget
+	 * (budget mechanics, not a transition decision — including an event that
+	 * then transitions out, as before). */
+	if (m->state == REAC_M_ESTABLISHED)
+		m->link_check = m->link_check_reload;
+
+	/* Fold the guards into the event, then take the table's edge. The rows
+	 * carry the rig rationale for every guard — same-box JOIN retries hold
+	 * the dwell/lock, presence never grants (anti-#130), accepts establish
+	 * only after full delivery — see reac_master_fsm.c + docs/MASTER-FSM.md. */
+	enum reac_master_ev dev =
+		reac_master_fsm_classify(ev, blk32 != NULL,
+		                         memcmp(box_src, m->box_mac, 6) == 0,
+		                         grant_delivered(m));
+	struct reac_master_edge e = reac_master_fsm_step(m->state, dev);
+	apply_edge(m, &e, box_src,
+	           (dev == REAC_M_EV_JOIN_NEW || dev == REAC_M_EV_JOIN_SAME)
+	               ? blk32 : NULL);
+	return e.transitioned;
 }
 
 /* The CYCLE-LOCKED control cadence a real master advertises in BOTH the unlinked
@@ -952,36 +846,10 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 			m->chanmap_cursor = (m->chanmap_cursor + 1) % m->chanmap_nframes;
 			return REAC_M_EMIT_CHANMAP;
 		}
-		/* SUSTAINED post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF).
-		 * enter_established arms est_commit ONLY when the flag is on; when off it is 0
-		 * and this whole block is inert, so the LOCKED cadence stays byte-identical to
-		 * today (cfea + chanmap only — the "0 sub01/sub02 established" invariant holds).
-		 * When armed it counts down the FILLER-eligible slots reaching here (announce +
-		 * chanmap already returned above, so this NEVER displaces a 1/s keep-alive and
-		 * never collides with their offsets), and once the current settle has elapsed it
-		 * drives the box's scene-FSM state-4 bulk phantom commit by emitting the ordered
-		 * pair a real M-200 sends at scene recall: SUB01 first, then SUB02 SUB_GAP slots
-		 * later. Reaching 0 RE-ARMS to fps/PERIOD_DEN instead of disarming — a WORKING
-		 * console SUSTAINS this pair continuously on the established cadence (a
-		 * committing S-0808 capture shows ~134 SUB events over 79.5 s), and a one-shot
-		 * pair only ever flushes STAGING->ACTIVE the instant it fires, leaving any
-		 * non-anchor input whose staging changes afterward stuck unflushed. SUB01/SUB02
-		 * are byte-identical to the M-200's, so the box accepts them and stays
-		 * ESTABLISHED — this never times it back to PROBING. */
-		if (m->est_commit > 0) {
-			m->est_commit--;
-			if (m->est_commit == REAC_M_EST_COMMIT_SUB_GAP)
-				return REAC_M_EMIT_SUB01;   /* strictly before SUB02 */
-			if (m->est_commit == 0)
-				/* ONE-SHOT: fire the SUB01->SUB02 pair EXACTLY once after establish
-				 * and stop (est_commit stays 0, no re-arm). This is the Monday
-				 * 2026-07-20 behaviour that committed the anchor. d932c88 changed it to
-				 * SUSTAIN (re-arm to fps/PERIOD_DEN and keep re-firing), and the repeated
-				 * pair makes the box drop the link a few seconds after sync ("it syncs and
-				 * goes" — rig 2026-07-22). The single staging->active flush is enough to
-				 * commit; re-firing is what breaks it. */
-				return REAC_M_EMIT_SUB02;
-		}
+		/* NOTE: the locked cadence emits NOTHING else — no SUB01/SUB02 (the
+		 * "0 sub01/sub02 established" invariant a real M-200 holds; the
+		 * REACPW_EST_COMMIT scene-commit experiment that emitted the pair here
+		 * was debunked by the 2026-07-22 protocol audit and removed). */
 		return REAC_M_EMIT_FILLER;
 	}
 
@@ -1014,8 +882,11 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 	m->counter++;                 /* free-running, wraps at 16 bits like the desk's */
 
 	/* First emitted slot: the pacer is running, so we probe — always. */
-	if (m->state == REAC_M_IDLE)
-		enter_probing(m);
+	if (m->state == REAC_M_IDLE) {
+		struct reac_master_edge s =
+			reac_master_fsm_step(m->state, REAC_M_EV_START);
+		apply_edge(m, &s, NULL, NULL);
+	}
 
 	/* Presence diagnostic decay (logging only — never a state input). */
 	if (m->box_seen && --m->presence_tick <= 0)
@@ -1046,17 +917,26 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		if (m->grant_ticks == 0) {
 			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
 		} else if (m->grant_ticks <= m->grant_dwell) {
-			/* The dwell. With REACPW_ANNOUNCE_UNGRANTED (default ON) we HOLD the
-			 * RECOGNIZED-BUT-UNGRANTED cfea (box width set, count=0 — stamped by
-			 * enter_granting) on the wire at the free-running ~1/s announce cadence,
-			 * FILLER between: a real M-200 keeps announcing this window through the
-			 * whole ENROLL->grant hold. reac-pw used to emit hard FILLER here, so the
-			 * cfea NEVER reached the wire during the dwell (announce-slot STARVATION)
-			 * and the anchor input never saw the ungranted state. With the flag OFF
-			 * this stays hard FILLER (prior behaviour, byte-unchanged). Repeated box
-			 * cold-connect bursts land here too (reac_master_rx's same-box GRANTING
-			 * guard keeps them from restarting the dwell). */
-			if (announce_ungranted_enabled() && ++m->announce_tick >= m->fps) {
+			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
+			 * config-announce is parsed ~1ms into GRANTING, see reac_pacer.c): deliver
+			 * ONE fresh ENROLL at the now-DECLARED width before the grant burst, so the
+			 * box opens its audio return to full width (the S-4000 8->32 fix). The
+			 * golden sends its (single) enrol in this same dwell window ~200ms in. One
+			 * frame, taken from an announce/filler slot — the burst is unchanged. */
+			if (m->enroll_pending) {
+				m->enroll_pending = 0;
+				emit = REAC_M_EMIT_ENROLL;
+			} else
+			/* The dwell. HOLD the RECOGNIZED-BUT-UNGRANTED cfea (box width set,
+			 * count=0 — stamped by enter_granting) on the wire at the free-running
+			 * ~1/s announce cadence, FILLER between: a real M-200 keeps announcing
+			 * this window through the whole ENROLL->grant hold. reac-pw used to
+			 * emit hard FILLER here, so the cfea NEVER reached the wire during the
+			 * dwell (announce-slot STARVATION) and the anchor input never saw the
+			 * ungranted state. Repeated box cold-connect bursts land here too
+			 * (reac_master_rx's same-box GRANTING guard keeps them from restarting
+			 * the dwell). */
+			if (++m->announce_tick >= m->fps) {
 				m->announce_tick = 0;
 				emit = REAC_M_EMIT_ANNOUNCE;
 			} else {
@@ -1071,26 +951,9 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 					idx = k;
 				}
 			}
-			/* Every NON-grant burst slot would emit hard FILLER. With
-			 * REACPW_ANNOUNCE_BURST (default OFF) convert those FILLER slots to the
-			 * cfea announce on the free-running ~1/s announce_tick, so the count=0
-			 * RECOGNIZED-BUT-UNGRANTED window (held in announce_blk by enter_granting)
-			 * keeps reaching the wire THROUGHOUT the burst — extending the dwell-only
-			 * ungranted window across the whole grant sweep to give the box a
-			 * prolonged signal to escalate. announce_tick free-runs on EVERY burst slot
-			 * (so the ~1/s cadence stays true across the burst), but ANNOUNCE is emitted
-			 * only when it wraps AND this slot is not a GRANT slot — a wrap landing on a
-			 * GRANT slot holds the tick and defers to the next FILLER slot, so GRANT/
-			 * ENROLL delivery is byte-identical and the full sweep is still delivered.
-			 * Only meaningful with REACPW_ANNOUNCE_UNGRANTED also on (announce_blk must
-			 * hold count=0). With the flag OFF the guard short-circuits BEFORE
-			 * ++announce_tick, so this branch is fully inert and the burst is byte-
-			 * identical to today. */
-			if (announce_burst_enabled() && ++m->announce_tick >= m->fps &&
-			    emit != REAC_M_EMIT_GRANT) {
-				m->announce_tick = 0;
-				emit = REAC_M_EMIT_ANNOUNCE;
-			}
+			/* Every NON-grant burst slot emits hard FILLER (announce_tick holds
+			 * through the burst; the REACPW_ANNOUNCE_BURST experiment that
+			 * converted these slots to cfea announces was superseded and removed). */
 		}
 		m->grant_ticks++;
 		/* Once the FULL enroll + 32-block burst is delivered, COMMIT to ESTABLISHED
@@ -1102,8 +965,12 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * not "granting into silence"; the ~6.5 s link-check budget in ESTABLISHED
 		 * drops back to PROBING if the box is genuinely gone (anti-#130 preserved as
 		 * a BACKWARD safety, just not a forward-blocking gate). */
-		if (m->grant_ticks >= m->grant_dwell + m->grant_burst_len * m->grant_stride + 1)
-			enter_established(m);
+		if (grant_delivered(m)) {
+			struct reac_master_edge e =
+				reac_master_fsm_step(m->state,
+				                     REAC_M_EV_GRANT_DELIVERED);
+			apply_edge(m, &e, NULL, NULL);
+		}
 		break;
 
 	case REAC_M_ESTABLISHED:
@@ -1112,8 +979,9 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * it (reac_master_rx). */
 		emit = control_cadence(m, &idx);
 		if (--m->link_check <= 0) {
-			m->drop_reason = REAC_M_DROP_PEER_GONE;
-			enter_probing(m);
+			struct reac_master_edge e =
+				reac_master_fsm_step(m->state, REAC_M_EV_LINK_LOST);
+			apply_edge(m, &e, NULL, NULL);
 		}
 		break;
 	}
@@ -1131,7 +999,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 
 /* Overwrite type [16:18] + control block [18:50] of `frame` with `blk` (a 34-byte
  * [type|block] template), then re-apply the cdea/cfea checksum at [49]. The audio,
- * counter and C2/EA tail that reac_tx_build wrote are untouched. */
+ * counter and C2/EA tail that reac_downstream_build wrote are untouched. */
 #define REAC_TYPE_OFF 16   /* type [16:18], control block [18:50] follows */
 
 static void apply_block(uint8_t *frame, const uint8_t blk[34])
@@ -1170,7 +1038,7 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
 {
 	switch (emit) {
 	case REAC_M_EMIT_FILLER:
-		/* reac_tx_build (or the pacer's silent-underrun filler) already wrote
+		/* reac_downstream_build (or the pacer's silent-underrun filler) already wrote
 		 * type 00 00 + audio + tail; stamp 16x "00 <current-probe-checksum>",
 		 * which is exactly what a real master repeats there (#130). */
 		stamp_filler_descriptor(frame, m->filler_desc);

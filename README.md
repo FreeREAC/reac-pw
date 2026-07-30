@@ -8,33 +8,43 @@ no new code per destination.
 
 ## What it is
 
-The **RX source node** is a 40-channel `reac:capture` Audio/Source fed from a live
-REAC wire (AF_PACKET, EtherType `0x8819`) or a pcap replay, decoded with the
-proven plain-LE core and handed to PipeWire's adapter for channel-map,
-format-convert and adaptive resample. The **TX sink node** (`reac:playback`) is a
+The **RX source node** is a `reac:capture` Audio/Source fed from a live REAC wire
+(AF_PACKET, EtherType `0x8819`) or a pcap replay and handed to PipeWire's adapter
+for channel-map, format-convert and adaptive resample. Both RX directions decode
+libreac's braid oracle — box returns (the master's RX), rig-proven on real
+microphones, and the master's downstream broadcast, which since libreac 0.5.0
+`reac_decode()` un-braids too, so the decoder now agrees with the encoder in the
+same binary (issue #80). The **TX sink node** (`reac:playback`) is a
 working REAC **master**: it encodes the graph's PCM into the downstream broadcast,
 clocks the wire from a SCHED_FIFO cadence pacer at a steady pps, and drives the
 cdea/cfea JOIN/HOLD handshake so a real Roland stagebox slaves to it (see Status).
 
 Everything REAC-specific is reused, not reinvented:
 
-- **libreac** (`FreeREAC/libreac`, header `<reac/reac.h>`) — frame validate, the
-  byte-14/15 counter, gap math, `reac_detect_rate_fd` / `reac_rate_snap`. Pulled
-  as a meson subproject.
-- **reac-aes67 core** (`FreeREAC/reac-aes67`, `src/`) — `reac_decode.c` (plain-LE
-  sample-major `(s*40+ch)*3`, on-rig coherence 0.999), `reac_capture.c` (live
-  AF_PACKET), `pcap_source.c` (classic pcap reader). Compiled straight in from a
-  sibling checkout.
+- **libreac >= 0.5.0** (`FreeREAC/libreac`, headers `<reac/*.h>`) — the single
+  REAC byte-layout oracle: frame validate, the byte-14/15 counter, gap math,
+  `reac_detect_rate_fd` / `reac_rate_snap`, the braid codec
+  (`<reac/reac_braid.h>`), the f32↔s24 sample pair (`<reac/reac_sample.h>`),
+  the box-upstream decode (`<reac/reac_upstream.h>`), the OHRCA +2 length rule
+  (`reac_frame_clean_len`), plus `reac_decode.c` (the downstream decode —
+  braided since 0.5.0, with the old plain-LE layout kept only as the named
+  diagnostic `reac_decode_plain_le()`), `reac_capture.c` (live AF_PACKET) and
+  `pcap_source.c` (classic pcap reader). System `libreac-devel` via pkg-config,
+  or the meson wrap fallback. The floor is 0.5.0 rather than 0.3.0 because a
+  0.4.x libreac links fine and then decodes the downstream with the layout the
+  encoder does not write (#80).
 
-reac-pw itself is only the lock-free ring, the RX feeder, and the two PipeWire
-nodes.
+reac-pw itself is the lock-free ring, the RX feeder, the control plane (cdea/cfea
+and DT1 record builders + the two checksums), the master and slave establishment
+FSMs, the grant/ENROLL sweep, the head-amp send model, the cadence pacer and its
+clock discipline, the multi-box registry, and the PipeWire nodes. See DESIGN.md's
+Files table.
 
 ## Build and run
 
 External deps are just PipeWire and SPA via pkg-config (Fedora: `pipewire-devel`),
-plus pthreads and libm. libreac is fetched by the meson wrap; the reac-aes67 core
-is read from a sibling checkout (`../reac-aes67-pub` by default — override with
-`-Dreac_aes67=PATH`).
+plus pthreads and libm. libreac resolves to the system `libreac-devel` when new
+enough, else the meson wrap fetches and builds it as a subproject.
 
 ```
 meson setup   build
@@ -68,9 +78,10 @@ slave's own width is `--box-channels`.)
 The REAC broadcast is always 40 ch × 12 samples × 3 B; the sample rate lives in
 the packet rate (pps = rate/12), never on the wire.
 
-- **`reac:capture` (source).** A `pw_filter` with 40 mono-F32 DSP output ports —
-  exactly the ring's planar layout. A non-realtime feeder thread reads frames,
-  validates and counter-stamps with libreac, decodes with the reac-aes67 core,
+- **`reac:capture` (source).** A `pw_filter` with mono-F32 DSP output ports —
+  exactly the ring's planar layout, 40 wide by default and narrowed to the box's
+  real input width when `--box` declares one. A non-realtime feeder thread reads frames,
+  validates, counter-stamps and decodes with libreac,
   and writes whole REAC frames into a lock-free SPSC ring. The only realtime code
   is `on_process()`: it dequeues one PipeWire quantum per channel and returns —
   no format or rate conversion, that's the adapter on each outgoing link.
@@ -82,7 +93,8 @@ the packet rate (pps = rate/12), never on the wire.
   master clock and async-resamples the DAC to it. Same node, only the driver flag
   + clock registration differ.
 - **`reac:playback` (sink, the REAC master).** N mono-F32 input ports; the RT
-  `process()` encodes each 12-sample group with `reac_tx_build` and submits it to
+  `process()` encodes each 12-sample group with libreac's `reac_downstream_build`
+  and submits it to
   a lock-free TX frame ring (no syscall on the graph thread). A dedicated
   SCHED_FIFO pacer thread (mlockall, prio ~79, `clock_nanosleep` TIMER_ABSTIME)
   emits one frame per slot at a fixed pps (125 µs @96 k) and stamps the master
@@ -108,22 +120,30 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   tracking; offline-testable.
 - **Lock-free ring** — implemented, unit-tested (round-trip, underrun, overrun);
   the test needs no PipeWire so CI can run it anywhere.
-- **TX sink node (REAC master)** — implemented: `reac_tx` encoder (round-trips
-  through the decode core to 24-bit ULP), the `reac_master` cdea/cfea JOIN/HOLD
-  handshake (control blocks byte-match the captured M-5000 + checksum), and the
-  `reac_pacer` SCHED_FIFO cadence pacer (8000 fps / 125 µs measured on the wire).
-  Loopback PCM→REAC→PCM verified (a tone played into `reac:playback` reaches the
-  wire FILLER audio). **Not yet verified: a real Roland desk linking** — no desk
-  on the bench; built correct-by-construction against the captures. The
-  hardware-verify gate (does `RCQ` go `establishing`→`established`, does audio
-  reach the box) is in [DESIGN.md](DESIGN.md).
+- **TX sink node (REAC master)** — implemented and **rig-verified**: `reac_tx`
+  encoder (round-trips through the decode core to 24-bit ULP), the `reac_master`
+  cdea/cfea JOIN/HOLD handshake (control blocks byte-match the captured M-200 /
+  M-300 / M-5000 + checksum), and the `reac_pacer` SCHED_FIFO cadence pacer
+  (125 µs @ 96 k / 250 µs @ 48 k measured on the wire). A real **S-0808** and a
+  real **S-1608** cold-connect, are granted, reach ESTABLISHED and hold a 1/s
+  heartbeat with zero drops; the box's mic channels reach `reac:capture` and run
+  end-to-end through openmixer. See
+  [docs/REAC-MIXER-PROTOCOL.md](docs/REAC-MIXER-PROTOCOL.md) (the five fixes that
+  made the box lock SOLID) and
+  [docs/MASTER-HARDWARE-VERIFY.md](docs/MASTER-HARDWARE-VERIFY.md) (the run, the
+  observability, the remaining gaps). Still unverified on hardware: the 96 kHz
+  OHRCA emit path, whose gate is in that same file.
 - **SLAVE role** (`--role slave`, `reac_slave` over `reac_ctrl`/`reac_fsm`) —
   implemented: we respond to an external master, lock to its cadence (the master
   owns the clock — no own pacer), RX its audio via `reac:capture`, and return our
   input channels upstream at the box's slots. The establishment + HOLD FSM is
-  offline-tested from the captured master control kinds (`test_reac_slave`); the
-  JOIN cold-connect bytes + a real link both ways are behind the slave hardware-
-  verify gate in [DESIGN.md](DESIGN.md).
+  offline-tested from the captured master control kinds (`test_reac_slave`), and a
+  real, cold-booted **M-200** enrolled reac-pw as a 16-ch stagebox in its REAC
+  menu and held the link across a 300 s run (2026-07-11). The **M-5000 (OHRCA)**
+  still re-hunts after granting us — the open gap is the OHRCA established-state
+  shape, not a clock wall. See
+  [docs/REAC-BOX-STATE-DIAGRAM.md](docs/REAC-BOX-STATE-DIAGRAM.md) and
+  [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md).
 - **Role selection** (`--role master|slave`, `reac_role.h`) — default master
   preserves the original behaviour; parse + validation unit-tested.
 

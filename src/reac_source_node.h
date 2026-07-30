@@ -74,6 +74,20 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 
 void reac_source_node_destroy(struct reac_source_node *n);
 
+/* Live-update the reac-capture node's badge props (task #154 / issue #208). This node
+ * is built before the pacer exists and has no pacer handle or timer of its own, so its
+ * create-time seed (probing/none/0x0) would otherwise never change even after the box
+ * establishes. The reac-playback sink — which DOES own the pacer + a main-loop timer —
+ * pushes the recognized state here from that same (shared, single-loop) timer, so the
+ * capture badge stops lying and tracks the box in lock-step with the playback side.
+ * Args are the already-formatted strings the sink computes (reac.link-state name, box
+ * model token, "INxOUT" width); a NULL arg leaves that key untouched. No-op on a NULL
+ * node / one with no filter yet. Main-loop thread only (same loop as the caller). */
+void reac_source_node_publish_link(struct reac_source_node *n,
+                                   const char *link_state,
+                                   const char *box_model,
+                                   const char *box_width);
+
 /* Bring *slot to a reac-capture node of `channels` output ports labelled `label`.
  * ONE entry point the library owns, callable from startup AND the recognition
  * path — it decides create vs. rebuild internally:

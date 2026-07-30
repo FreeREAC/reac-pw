@@ -4,9 +4,9 @@
 /* reac_rx — the non-realtime RX feeder.
  *
  * Owns the wire source (live AF_PACKET via reac_capture, or pcap replay via
- * pcap_source), validates + decodes each 0x8819 frame with the reac-aes67
- * plain-LE core, converts the planar s24 output to float, and pushes it into
- * the shared ring for the PipeWire process() callback.
+ * pcap_source), validates + decodes each 0x8819 frame with libreac's braid
+ * core, converts the planar s24 output to float, and pushes it into the shared
+ * ring for the PipeWire process() callback.
  *
  * It is ALSO the rate authority: it tracks the byte-14/15 free-running counter
  * slope against CLOCK_MONOTONIC (or a NIC PHC), which gives both the recovered
@@ -22,13 +22,11 @@
 #include <stdint.h>
 #include <pthread.h>
 #include "reac_ring.h"
-
-/* OHRCA (M-5000/M-480) downstream frame length: the standard REAC_FRAME_BYTES
- * (1492) plus a 2-byte per-frame CRC-16 trailer appended after the C2 EA end
- * marker (measured on live M-5000 captures, 2026-07-11). Defined here (reac-pw
- * owned) rather than in libreac's reac.h, which stays pristine as an upstream
- * wrap subproject. Kept as a literal to avoid include-order coupling. */
-#define REAC_FRAME_BYTES_OHRCA 1494
+/* REAC_FRAME_BYTES_OHRCA + reac_frame_clean_len(): the OHRCA +2 length rule
+ * moved to its one home in libreac (>= 0.3.0) — it applies to both directions,
+ * not just this RX gate. What the 2 bytes are is still open (#80); the rule is
+ * about length normalization and holds either way. */
+#include <reac/reac.h>
 
 enum reac_rx_kind {
 	REAC_RX_PCAP,    /* offline replay (pcap_source) */
@@ -65,6 +63,13 @@ struct reac_rx {
 	/* rate-slope estimator (counter-vs-monotonic), filtered ppm error vs the
 	 * nominal recovered rate; the source node reads this for io_rate_match. */
 	_Atomic int ppm_error_milli;  /* ppm * 1000, signed; 0 until enough samples */
+	/* How many estimates have been PUBLISHED. ppm_error_milli is 0 both before the
+	 * first window closes and when the slope is genuinely zero, so a consumer that
+	 * steers anything off it needs to tell those apart — 0 with no estimate yet is
+	 * "no information", not "the reference agrees with us". It also gives freshness
+	 * for free: a counter that stops advancing is a reference that stopped
+	 * producing (the clock-discipline BOX source, #75). */
+	_Atomic uint32_t ppm_seq;
 
 	/* update_ppm() window state — instance-owned (was function-static, which
 	 * survived a pcap-loop restart and made RX a non-reentrant singleton). Reset
@@ -80,11 +85,44 @@ struct reac_rx {
 	uint8_t up_src[6];
 	int     up_src_locked;
 
+	/* Duplicate-frame guard. Two different sources put the same frame on the
+	 * wire twice, and both land here:
+	 *
+	 *   1. the OVER-CLOCK repeat — a 48 kHz box driven at the 96 kHz doubled
+	 *      cadence (the #156 OHRCA path) re-transmits each frame verbatim,
+	 *      same length, ~125 us apart (measured on the S-4000S: 100% of
+	 *      adjacent same-counter pairs equal);
+	 *   2. the MIRROR TWIN — a capture rig mirroring BOTH RX and TX of one port
+	 *      sees a transiting frame twice, same src MAC and same counter, with
+	 *      one copy carrying 2 bytes of the frame's own Ethernet FCS after the
+	 *      C2 EA end marker and the other not. Those two copies differ in
+	 *      LENGTH (1492 vs 1494 downstream, 628 vs 630 upstream, ...), which is
+	 *      why the guard compares reac_frame_clean_len() bytes: on the clean
+	 *      prefix the pair is byte-identical, on the wire length it never is.
+	 *      Measured 2026-07-29 over the capture corpus: 61 of 83 captures carry
+	 *      the twin, and on a mirrored S-1608 cold-connect the master's stream
+	 *      is exactly 2 frames per counter (166,666 -> 83,333) while the box's
+	 *      is 1 (83,334 -> 83,334, untouched).
+	 *
+	 * Feeding both copies concatenates every 12-sample block, so each block
+	 * plays twice -> a granular per-frame stutter (the "granulated audio"
+	 * symptom) and the effective rate doubles (96 kHz into a 48 kHz
+	 * reac-capture -> overrun). Dropping the copy restores the true cadence.
+	 *
+	 * It cannot eat a genuine frame: the 16-bit counter is inside the compared
+	 * bytes, so consecutive distinct frames are never byte-identical, and the
+	 * corpus sweep found 0 adjacent same-counter pairs that differ in any byte
+	 * (i.e. a same-counter pair is always a copy, never new audio). */
+	uint8_t prev_frame[1560];   /* >= the rx frame buffer (REAC_FRAME_BYTES + 64) */
+	size_t  prev_clean_len;     /* reac_frame_clean_len() of what prev_frame holds */
+	int     have_prev_frame;
+
 	/* diagnostics */
 	_Atomic uint64_t frames_ok;
 	_Atomic uint64_t frames_bad;
 	_Atomic uint64_t frames_other; /* valid REAC, but the OTHER stream (gated out) */
 	_Atomic uint64_t counter_gaps; /* lost frames inferred from counter jumps */
+	_Atomic uint64_t frames_dup;   /* OHRCA byte-identical duplicates dropped */
 
 	/* the source node (RT thread) publishes its last ring-read stats here so the
 	 * non-RT telemetry below can print them — keeps fprintf off the RT path. */

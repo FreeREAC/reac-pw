@@ -8,7 +8,7 @@
  * stagebox slaves to us. It drives the master's establishment state machine —
  * probe -> grant -> established + the periodic channel-map/announce — by writing
  * the real cdea/cfea control block into the 32-byte block [18:50] of the
- * downstream broadcast frame that reac_tx_build emits.
+ * downstream broadcast frame that libreac's reac_downstream_build builds.
  *
  * EVENT-DRIVEN (task #130): a real M-5000 never advances the establishment on a
  * timer — it PROBES until the box's cold-connect (cdea 04 03) arrives, ECHOES
@@ -25,13 +25,22 @@
  * control block to stamp (reac_master_next + reac_master_stamp). The cdea/cfea
  * cadence is carried in-band on the 8000 fps broadcast exactly as the real
  * master does (control frames occupy audio slots, never add to the stream).
- */
+ *
+ * The transition DECISIONS live in an explicit (state, event) -> edge table
+ * (reac_master_fsm.h, spec docs/MASTER-FSM.md); reac_master_rx and the cadence
+ * are its event producers, the enter_* functions its entry actions. One
+ * deliberate forward timer exists since the 2026-07-12 rig fix: GRANTING
+ * self-completes to ESTABLISHED once the full ENROLL + dwell + sweep is
+ * delivered (GRANTING is only ever entered on a validated box frame, so this
+ * is not granting into silence; the established peer-gone budget is the
+ * backward safety). All other timers still only move BACKWARD to PROBING. */
 #ifndef REAC_MASTER_H
 #define REAC_MASTER_H
 
 #include <stdint.h>
 #include <stddef.h>
 
+#include "reac_slots.h"   /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_grant.h"   /* struct reac_grant_alloc, REAC_GRANT_SWEEP_MAX */
 
 struct reac_headamp_tx;   /* reac_headamp_tx.h — the head-amp state group A pushes */
@@ -130,45 +139,18 @@ enum reac_master_drop_reason {
  * tick-driven) and fps-scaled at init like link_check_reload. */
 #define REAC_M_GRANT_DWELL_SECONDS_X10 16   /* 1.6 s, scaled by fps at init */
 
-/* Post-establish scene COMMIT (REACPW_EST_COMMIT, default OFF). At scene recall a
- * real M-200, WHILE ESTABLISHED, re-pushes the full head-amp scene and then emits an
- * ordered SUB01 -> SUB02 pair; that pair drives the box's scene-FSM (FUN_0c0037ee)
- * to its state-4 bulk commit (FUN_0c003c8a), which copies the head-amp staging into
- * active for EVERY slot and flushes the phantom groups to hardware. reac-pw only ever
- * emitted SUB01/SUB02 while PROBING, so it never fired the box's commit and only the
- * anchor input latched 48V. When the flag is on, enter_established arms est_commit to
- * (fps/SCENE_SETTLE_DEN + SUB_GAP) FILLER-eligible slots: SUB01 fires ~fps/SCENE_SETTLE_DEN
- * slots in (well after the post-establish scene re-push has settled), SUB02 SUB_GAP
- * slots later. OFF leaves est_commit 0, so the locked cadence is byte-identical to today.
- *
- * SUSTAIN, not one-shot (2026-07-21): a real WORKING console does not fire this pair
- * once — it SUSTAINS SUB01->SUB02 continuously on the established cadence (a committing
- * S-0808 capture shows ~134 SUB events over 79.5 s, ~1.7/s). A one-shot pair only ever
- * flushes the box's STAGING->ACTIVE table the instant it fires, so any non-anchor input
- * whose staging changed after that (or was never in place at the first flush) never
- * commits. control_cadence's ESTABLISHED branch now RE-ARMS est_commit to fps/PERIOD_DEN
- * FILLER-eligible slots the moment SUB02 fires, so the ordered pair repeats for the whole
- * ESTABLISHED lifetime instead of disarming. PERIOD_DEN=1 => ~fps slots between pairs,
- * i.e. ~1 pair/sec — inside the ~1.7/s real flood, so it never outruns the box's own
- * commit rate. Still flag-gated: OFF never arms est_commit in the first place, so the
- * re-arm branch is unreachable and inert. */
-#define REAC_M_EST_COMMIT_SCENE_SETTLE_DEN 4   /* SUB01 after ~fps/4 (~250 ms) FILLER slots */
-#define REAC_M_EST_COMMIT_SUB_GAP          8   /* FILLER slots between SUB01 and SUB02 */
-#define REAC_M_EST_COMMIT_PERIOD_DEN       1   /* sustain re-arm: fps/DEN FILLER-eligible
-                                                 * slots between SUB pairs (~1/s);
-                                                 * PERIOD_DEN=1 keeps it under the observed
-                                                 * ~1.7/s real cadence */
-#define REAC_M_EST_COMMIT_LIVE_SETTLE      4   /* small settle before a LIVE head-amp
-                                                 * re-arm's SUB01 (reac_master_set_headamp_src) */
-
-/* The REAC fabric is a RING of 49 positions: channels 0x00..0x2f (48) followed by
- * the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
+/* The CHANMAP is a RING of 49 positions: head-amp channels 0x00..0x2f (48) followed
+ * by the 0xfe section marker at the wrap. A channel-map frame advertises 8 consecutive
  * ring positions, and a real master emits ONE window per start position — so the
  * full sweep is exactly 49 frames (measured live off an M-200 driving an S-1608,
  * 2026-07-11, #130). An earlier 11-frame figure came from an M-300 capture too
- * short to contain the whole rotation. */
-#define REAC_M_FABRIC_RING        49
-#define REAC_M_CHANMAP_FRAMES_MAX REAC_M_FABRIC_RING
+ * short to contain the whole rotation.
+ *
+ * This ring spans the HEAD-AMP slot space, not the 40-slot AUDIO fabric — it was
+ * spelled REAC_M_FABRIC_RING, which said "fabric" while counting head-amp channels
+ * (#69). Both spaces are defined once in reac_slots.h. */
+#define REAC_M_CHANMAP_RING       REAC_HEADAMP_RING   /* 49 = 48 slots + 0xfe */
+#define REAC_M_CHANMAP_FRAMES_MAX REAC_M_CHANMAP_RING
 
 /* Console I/O config: everything the downstream generator needs to synthesize
  * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
@@ -179,7 +161,9 @@ enum reac_master_drop_reason {
 struct reac_console_cfg {
 	uint8_t out_channels;   /* box analog outputs: cfea outCh [18]. (Does NOT
 	                         * size the chanmap: a real master sweeps the whole
-	                         * 40-slot fabric regardless of console width, #130.)
+	                         * 48-slot chanmap ring regardless of console
+	                         * width, #130 — that ring is the HEAD-AMP space,
+	                         * not the 40-slot audio fabric, see reac_slots.h.)
 	                         * S-1608 = 8, M-5000 downstream box = 16.        */
 	uint8_t in_channels;    /* box analog inputs: sizes the UPSTREAM parser
 	                         * (box->master); carried for the caller, not a
@@ -301,9 +285,14 @@ struct reac_master {
 	 * rebuilt on box recognition (reac_master_set_box) and whenever the head-amp
 	 * source changes (reac_master_set_headamp_src). */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
+	int      enroll_pending;  /* set by reac_master_set_box when the box's DECLARED
+	                           * width narrowed enroll_blk after the initial ENROLL;
+	                           * the GRANTING dwell re-emits ONE ENROLL at the new
+	                           * width (the box widens/narrows to it, matching the
+	                           * golden's post-recognition enrol) then clears this. */
 	int      grant_dwell;     /* dwell slots between ENROLL and the grant burst
 	                           * (fps*REAC_M_GRANT_DWELL_SECONDS_X10/10, set at init) */
-	struct reac_grant_alloc alloc;   /* the fabric slots we granted this box    */
+	struct reac_grant_alloc alloc;   /* the head-amp slots we granted this box  */
 	uint8_t  grant_burst[REAC_GRANT_SWEEP_MAX][34];  /* the generated sweep     */
 	int      grant_burst_len; /* rows in grant_burst                            */
 	const struct reac_headamp_tx *headamp_src;  /* head-amp state group A pushes;
@@ -322,14 +311,6 @@ struct reac_master {
 	                            * (rig 2026-07-12). Phase-offset from cfea.        */
 	int      link_check;        /* countdown to peer-gone */
 	int      link_check_reload; /* ~6.5 s of frames (fps-scaled), the reload value */
-
-	/* One-shot post-establish scene COMMIT countdown (REACPW_EST_COMMIT, default
-	 * OFF). Armed by enter_established ONLY when the flag is on (else 0 = inert);
-	 * counts down the FILLER-eligible ESTABLISHED slots and drives the ordered
-	 * SUB01 -> SUB02 pair that fires the box's scene-FSM state-4 bulk phantom commit
-	 * (see control_cadence). 0 when disarmed -> the LOCKED cadence is byte-identical
-	 * to today. */
-	int      est_commit;
 
 	/* Diagnostics (never gate the establishment) */
 	int      box_seen;        /* sustained box broadcast FILLER on the wire */
@@ -373,14 +354,7 @@ void reac_master_regrant(struct reac_master *m);
  * `tx` is BORROWED (not copied) and must outlive `m`; NULL -> the safe defaults.
  * Regenerates the sweep immediately so a later grant enrolls the current state.
  * The pacer owns both the master and the head-amp table on one thread, so no
- * locking is implied. Call from the FSM-owning thread.
- *
- * REACPW_EST_COMMIT (default OFF): when on and the FSM is already ESTABLISHED,
- * also re-arms est_commit for a PROMPT fresh SUB01->SUB02 pair (SUB_GAP + a small
- * settle, not the full post-establish SCENE_SETTLE_DEN wait) so a LIVE head-amp
- * edit re-flushes the box's STAGING->ACTIVE table right away instead of waiting
- * for the sustained cadence's next scheduled re-arm. No-op with the flag off or
- * before ESTABLISHED (est_commit is left untouched — 0 when the flag is off). */
+ * locking is implied. Call from the FSM-owning thread. */
 void reac_master_set_headamp_src(struct reac_master *m,
                                  const struct reac_headamp_tx *tx);
 
@@ -403,7 +377,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
                                        int *tmpl_idx);
 
 /* Stamp the control block for `emit` into a downstream frame already built by
- * reac_tx_build (1492 B: hdr + audio + C2 EA tail). For FILLER this is a no-op.
+ * reac_downstream_build (1492 B: hdr + audio + C2 EA tail). For FILLER this is a no-op.
  * For the cdea/cfea kinds it overwrites type [16:18] + control block [18:50]
  * and applies the checksum, leaving audio + counter + tail intact. GRANT echoes
  * m->join_blk verbatim; CHANMAP/ANNOUNCE use the generated m->chanmap[idx] /
@@ -412,12 +386,6 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
  * Returns 0, or -1 on a bad kind/index. */
 int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
                       enum reac_master_emit emit, int tmpl_idx);
-
-/* REACPW_EST_COMMIT (default OFF) flag accessor — read once + cached. Exposed so the
- * pacer's open-time head-amp seed and enter_established's est_commit arming read the
- * SAME flag (single source of truth). Returns 1 when the post-establish scene commit
- * is enabled, else 0. */
-int reac_master_est_commit_enabled(void);
 
 /* Human-readable names for the caller's logging. */
 const char *reac_master_state_name(enum reac_master_state s);

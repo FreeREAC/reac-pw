@@ -437,6 +437,36 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			        ts, bm ? bm->display : "(unknown)", mac);
 			break;
 		}
+		case REAC_PEV_CLOCK: {
+			/* The reference in use is NEVER implicit (#75). Every change of source
+			 * or state prints role + pace + reference + the device behind it, and
+			 * free-run is printed as free-run — we never dress it up as lock.
+			 * The pacer is the master path by construction; the slave path runs no
+			 * pacer, so no slave line can ever come out of here. */
+			char line[224];
+			int32_t applied = (int32_t)((uint32_t)e.blk[0] |
+			                            ((uint32_t)e.blk[1] << 8) |
+			                            ((uint32_t)e.blk[2] << 16) |
+			                            ((uint32_t)e.blk[3] << 24));
+			char label[REAC_CLOCK_LABEL_MAX];
+			memcpy(label, e.blk + 4, REAC_CLOCK_LABEL_MAX);
+			label[REAC_CLOCK_LABEL_MAX - 1] = '\0';
+			/* State and quality were packed into one byte at the RT end (#77). */
+			reac_clock_describe_full(REAC_ROLE_MASTER,
+			                         (enum reac_clock_source)e.a,
+			                         (enum reac_clock_state)(e.b & 0x0f),
+			                         (enum reac_clock_quality)(e.b >> 4),
+			                         label, line, sizeof line);
+			/* Derived, not read across the thread boundary: the applied ppm in the
+			 * event and the immutable nominal period give the steered period
+			 * exactly (reac_dll_period_ns' formula). */
+			double ppm = (double)applied / 1000.0;
+			long steered = (long)((double)p->period_ns / (1.0 + ppm / 1e6) + 0.5);
+			fprintf(out, "reac-clock: [%.6f] %s (applied %+.3f ppm, "
+			        "period %ld ns vs nominal %ld ns)\n", ts, line,
+			        ppm, steered, p->period_ns);
+			break;
+		}
 		case REAC_PEV_SIGHTING: {
 			/* MAIN THREAD: fold the sighting into the discovery table the sink node
 			 * publishes from. `owned` is decided HERE, against the master's current
@@ -577,6 +607,146 @@ int reac_pacer_headamp_drain(struct reac_pacer *p)
 		atomic_fetch_add_explicit(&p->ha_cmd_applied, (uint64_t)applied,
 		                          memory_order_relaxed);
 	return applied;
+}
+
+/* ---- clock discipline (#75) --------------------------------------------- *
+ * The pacer has always free-run on CLOCK_MONOTONIC. That is correct only when
+ * nothing else on the rig is the clock master; the moment a word-clock-locked
+ * converter, a PHC, or a stagebox fed from a house clock is the reference, our
+ * cadence and the true clock walk apart — small per second, inexorable over a
+ * set, and heard as periodic resampling artefacts or a link that behaves for
+ * twenty minutes and then does not.
+ *
+ * This closes the loop we were already measuring: reac_rx is the rate authority
+ * and already publishes a filtered ppm error (the source node feeds it to
+ * PipeWire's io_rate_match). We simply never steered TX with it. */
+
+int reac_clock_label_set(struct reac_clock_label *l, const char *name)
+{
+	if (!name)
+		return 0;
+	if (strncmp(l->name, name, REAC_CLOCK_LABEL_MAX) == 0)
+		return 0;                     /* the common case: nothing to publish */
+	uint32_t s = atomic_load_explicit(&l->seq, memory_order_relaxed);
+	atomic_store_explicit(&l->seq, s + 1, memory_order_release);   /* odd: writing */
+	strncpy(l->name, name, REAC_CLOCK_LABEL_MAX - 1);
+	l->name[REAC_CLOCK_LABEL_MAX - 1] = '\0';
+	atomic_store_explicit(&l->seq, s + 2, memory_order_release);   /* even: done */
+	return 1;
+}
+
+int reac_clock_label_get(const struct reac_clock_label *l, char *out, size_t cap)
+{
+	uint32_t before = atomic_load_explicit(&l->seq, memory_order_acquire);
+	if (before & 1u)
+		return 0;                     /* a write is in flight */
+	strncpy(out, l->name, cap - 1);
+	out[cap - 1] = '\0';
+	uint32_t after = atomic_load_explicit(&l->seq, memory_order_acquire);
+	return before == after;           /* 0 = torn; print nothing, not half a name */
+}
+
+void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
+                              int present, int ppm_milli, const char *label,
+                              enum reac_clock_quality quality, uint64_t now_ns)
+{
+	if ((unsigned)src >= REAC_CLOCK_SRC_COUNT || src == REAC_CLOCK_SRC_FREERUN)
+		return;   /* free-run is not published; it is what "nothing" means */
+	if (present) {
+		reac_clock_label_set(&p->clock_label[src], label);
+		atomic_store_explicit(&p->clock_quality[src], (int)quality,
+		                      memory_order_relaxed);
+		atomic_store_explicit(&p->clock_ppm_milli[src], ppm_milli,
+		                      memory_order_relaxed);
+		/* Release: the stamp is what the consumer keys freshness off, so it must
+		 * become visible AFTER the value it vouches for. */
+		atomic_store_explicit(&p->clock_stamp_ns[src], now_ns, memory_order_release);
+		atomic_fetch_or_explicit(&p->clock_present, 1u << src, memory_order_relaxed);
+	} else {
+		atomic_fetch_and_explicit(&p->clock_present, ~(1u << src),
+		                          memory_order_relaxed);
+	}
+}
+
+long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns)
+{
+	/* INERT. Not "the discipline decided to do nothing" — the discipline is never
+	 * consulted, so the deadline advances by exactly the constant it always did. */
+	if (!p->clock_follow)
+		return p->period_ns;
+
+	if (++p->clock_slots < REAC_CLOCK_TICK_SLOTS)
+		return p->slot_period_ns;
+	p->clock_slots = 0;
+
+	/* What is actually available right now: a presence bit AND a sample no older
+	 * than REAC_CLOCK_STALE_NS. A publisher that died leaves its bit set; ageing
+	 * it out here is what turns that into an honest holdover instead of a lock
+	 * claim against a reference that stopped talking. */
+	uint32_t present = atomic_load_explicit(&p->clock_present, memory_order_relaxed);
+	uint32_t avail = 0;
+	for (int s = 1; s < REAC_CLOCK_SRC_COUNT; s++) {
+		if (!(present & (1u << s)))
+			continue;
+		uint64_t stamp = atomic_load_explicit(&p->clock_stamp_ns[s],
+		                                      memory_order_acquire);
+		if (stamp && now_ns - stamp < REAC_CLOCK_STALE_NS)
+			avail |= 1u << s;
+		/* Hand the publisher's inferred grade to the discipline (#77) before it
+		 * selects, so a structurally disqualified reference is skipped in the same
+		 * walk that skips an absent one. */
+		reac_clock_disc_set_quality(&p->clock, (enum reac_clock_source)s,
+		                            (enum reac_clock_quality)
+		                            atomic_load_explicit(&p->clock_quality[s],
+		                                                 memory_order_relaxed));
+	}
+
+	/* Only a NEW sample steers the loop: re-feeding the same estimate every tick
+	 * would inflate the update count and let a stalled publisher's last value look
+	 * like continuous evidence of lock. */
+	/* The SAME selection the discipline is about to make — graded, so the source
+	 * we test for a fresh sample can never be one the discipline then refuses. */
+	enum reac_clock_source sel = reac_clock_select_graded(p->clock.role, avail,
+	                                                      p->clock.quality,
+	                                                      p->clock.min_quality);
+	double ppm = 0.0;
+	int have = 0;
+	if (sel != REAC_CLOCK_SRC_FREERUN) {
+		uint64_t stamp = atomic_load_explicit(&p->clock_stamp_ns[sel],
+		                                      memory_order_acquire);
+		if (stamp != p->clock_stamp_seen[sel]) {
+			p->clock_stamp_seen[sel] = stamp;
+			ppm = (double)atomic_load_explicit(&p->clock_ppm_milli[sel],
+			                                   memory_order_relaxed) / 1000.0;
+			have = 1;
+		}
+	}
+
+	reac_clock_disc_update(&p->clock, avail, ppm, have);
+
+	/* The reference in use must never be implicit: every change of source or state
+	 * goes into the transcript. RT-safe — the event ring, same as every other
+	 * pacer-thread log. */
+	if (p->clock.generation != p->clock_gen_seen) {
+		p->clock_gen_seen = p->clock.generation;
+		int32_t applied = (int32_t)(reac_dll_applied_ppm(&p->clock.dll) * 1000.0);
+		uint8_t blk[32] = { 0 };
+		blk[0] = (uint8_t)applied;         blk[1] = (uint8_t)(applied >> 8);
+		blk[2] = (uint8_t)(applied >> 16); blk[3] = (uint8_t)(applied >> 24);
+		/* Name the actual device in the same event, so the drain never has to
+		 * reach back into pacer-thread state to format the line. */
+		if (p->clock.src != REAC_CLOCK_SRC_FREERUN)
+			reac_clock_label_get(&p->clock_label[p->clock.src],
+			                     (char *)blk + 4, REAC_CLOCK_LABEL_MAX);
+		/* State and quality share `b`: blk is full (4 bytes of ppm + the 28-byte
+		 * label) and both enums are well under 16 values. Unpacked in the drain. */
+		uint8_t b = (uint8_t)(p->clock.state |
+		                      (reac_clock_disc_quality(&p->clock) << 4));
+		pev_push(p, REAC_PEV_CLOCK, (uint8_t)p->clock.src, b, NULL, blk);
+	}
+
+	p->slot_period_ns = reac_clock_disc_period_ns(&p->clock);
+	return p->slot_period_ns;
 }
 
 /* ---- the RT pacer thread ------------------------------------------------ */
@@ -748,8 +918,17 @@ static void *pacer_loop(void *arg)
 
 		/* Advance the absolute deadline by exactly one period (no drift). If we
 		 * woke a full period or more late (scheduler hiccup), snap forward so we
-		 * don't burst-catch-up and smear the cadence. */
-		deadline += (uint64_t)p->period_ns;
+		 * don't burst-catch-up and smear the cadence.
+		 *
+		 * The period is a CONSTANT unless clock following is enabled (#75). With
+		 * the knob unset this is `p->period_ns`, the same expression as before —
+		 * reac_pacer_clock_tick is not even entered, so the cadence and every
+		 * emitted byte are identical to a build without this code. When enabled,
+		 * the discipline steers the period CONTINUOUSLY and the deadline still
+		 * advances by exactly one period: the phase is never stepped, so a
+		 * correction is a slow pull rather than an audible click. */
+		deadline += (uint64_t)(p->clock_follow ? reac_pacer_clock_tick(p, mono_ns())
+		                                       : p->period_ns);
 		uint64_t now = mono_ns();
 		if (now > deadline) {
 			atomic_fetch_add_explicit(&p->late_wakes, 1, memory_order_relaxed);
@@ -771,6 +950,23 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	p->period_ns = reac_pacer_period_ns(cfg->fps);
 	p->prev_state = REAC_M_IDLE;
 	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
+
+	/* Clock discipline (#75). The object is always initialised — it costs a memset
+	 * — but it is only ever CONSULTED when the knob is set. With clock_follow == 0
+	 * the pacer advances its deadline by p->period_ns exactly as it always has.
+	 * The pacer is the MASTER path by definition (a slave runs no pacer; frame
+	 * arrival is its slot clock), hence the master hierarchy. */
+	p->clock_follow = cfg->clock_follow;
+	p->slot_period_ns = p->period_ns;
+	reac_clock_disc_init(&p->clock, REAC_ROLE_MASTER, p->period_ns);
+	if (p->clock_follow) {
+		char line[160];
+		fprintf(stderr, "reac-clock: following ENABLED (REACPW_CLOCK_FOLLOW) — %s, "
+		        "nominal period %ld ns; the reference in use is reported on every "
+		        "change\n",
+		        reac_clock_disc_describe(&p->clock, line, sizeof line),
+		        p->period_ns);
+	}
 	/* min starts at "unset" so the pacer thread's first slot records the true low;
 	 * the drain flattens min>max to the current depth if no slot has run yet. */
 	atomic_store_explicit(&p->ring_depth_min, UINT32_MAX, memory_order_relaxed);
@@ -799,29 +995,6 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	for (int i = 0; i < cfg->n_headamps; i++)
 		reac_headamp_tx_set(&p->headamp, cfg->headamps[i].ch,
 		                    cfg->headamps[i].param, cfg->headamps[i].value);
-
-	/* Post-establish SCENE COMMIT seed (REACPW_EST_COMMIT, default OFF): stage the
-	 * COMPLETE granted head-amp scene so the box's staging holds EVERY channel before
-	 * the SUB01 -> SUB02 commit fires. The DMX re-assert only sweeps SET cells
-	 * (reac_headamp_tx gates on ->set), so an operator who configured just a few
-	 * channels would leave the rest never re-asserted post-grant and thus absent from
-	 * staging at commit time — only the anchor input would latch. Seed every GRANTED
-	 * channel (m->alloc base..base+w-1, already reflecting the console cfg from
-	 * reac_master_init above) with its EFFECTIVE value: the operator's when set, else
-	 * the same safe default the grant sweep already enrolled (reac_grant_headamp_value).
-	 * That marks the cell SET so the existing sweep re-pushes it. Because the seeded
-	 * value EQUALS what reac_grant_headamp_value returns for an unset cell, the grant
-	 * burst bytes rebuilt by reac_master_set_headamp_src below are UNCHANGED — only the
-	 * post-establish DMX coverage widens. OFF: the loop is skipped and the table (hence
-	 * the whole downstream) is byte-identical to today. */
-	if (reac_master_est_commit_enabled()) {
-		int base = p->master.alloc.base;
-		int end  = base + p->master.alloc.width;
-		for (int ch = base; ch < end; ch++)
-			for (uint8_t param = 0; param < REAC_HEADAMP_NPARAMS; param++)
-				reac_headamp_tx_set(&p->headamp, (uint8_t)ch, param,
-				    reac_grant_headamp_value(&p->headamp, (uint8_t)ch, param));
-	}
 
 	/* Point the master's GRANT sweep at this table: group A of the enrollment sweep
 	 * IS the initial head-amp state push (reac_grant.h), so the state we enroll a
