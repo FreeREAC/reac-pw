@@ -344,6 +344,12 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
  * the FSM-owning thread on a box recognition. */
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
 
+/* Re-fire the grant burst for the currently-recognized box (m->box_mac), so a width
+ * learned AFTER the cold-connect JOIN (reac_master_set_box, from the box's config-
+ * announce) is actually DELIVERED on the wire. Without it the box keeps its JOIN-time
+ * default enrollment; a wider box (S-4000S) stays at its 8-ch cold-connect floor. */
+void reac_master_regrant(struct reac_master *m);
+
 /* Point the grant sweep's group A at the head-amp state to push on enrollment.
  * `tx` is BORROWED (not copied) and must outlive `m`; NULL -> the safe defaults.
  * Regenerates the sweep immediately so a later grant enrolls the current state.
