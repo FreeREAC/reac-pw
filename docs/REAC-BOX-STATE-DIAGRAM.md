@@ -13,6 +13,30 @@
 > artifact, not a REAC field (proof below). The real OHRCA gap is still open —
 > most likely the per-generation downstream audio layout (W4/#135) — but there is
 > nothing to crack or emit for a trailer. See the M-200 section below.
+>
+> **~~UPDATE 2026-07-25 — the FCS finding is DOWNSTREAM-only.~~ RETRACTED
+> 2026-07-29 (#82): it is FCS residue in BOTH directions.** The retracted update
+> read the box's UPSTREAM `1206 B` returns as `1204 + a REAL OHRCA CRC-16 trailer`,
+> on the grounds that the box "mixes ~1/8 trailerless 1204 B frames, which an FCS
+> could never do". Measured on the very capture the fixtures come from
+> (`matrix-m200-s4000-2026-07-24.pcap`), that argument inverts the evidence:
+>
+> - **every** one of the 2,224 `1204 B` frames is immediately preceded by a
+>   `1206 B` frame that is byte-identical over the clean 1204 — they are the
+>   clean copy of a mirror twin, not trailerless box output (0 lone `1204`s);
+> - the trailing 2 bytes of all **94,458** `1206 B` upstream frames equal
+>   `low16(crc32(prefix))` little-endian — 100 %, the frame's own FCS, which no
+>   box-generated field could reproduce;
+> - same for the `1494 B` downstream (99,902/99,902) and the `342 B` S-0808-shaped
+>   returns (6/6). Corpus-wide: **217,558/217,558**.
+>
+> So: `+2` = Ethernet FCS residue from a both-directions port mirror, upstream and
+> downstream alike. Do not emit it; normalize the length with
+> `reac_frame_clean_len()` (libreac `<reac/reac_upstream.h>` since 2026-07-28,
+> `87297ca`) and dedup the twin on that clean length (`src/reac_rx.c`, #82).
+> Evidence: [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
+> + the checked-in real 1206 B frames `UP32A`/`UP32B`
+> (`tests/upstream_fixtures.inc`).
 
 Reconstructed from live M-5000 (OHRCA, 96 kHz) captures, 2026-07-11: a real
 S-1608 cold-boot (`real-s1608-coldboot-m5000-2026-07-11.pcap`) and reac-pw's
@@ -75,8 +99,10 @@ satisfied. On the **M-5000 (OHRCA)** the master takes `GRANTING → HUNTING`
 instead (PROBE ~680/s post-grant). Since the same reac-pw build, same pacer, same
 V-Mixer-shaped upstream locks the M-200 but not the M-5000, the missing arrow is
 an **OHRCA-shaped ESTABLISHED stream** (96 kHz upstream; likely the per-generation
-audio layout — NOT a CRC trailer, that was the Ethernet-FCS artifact, see the
-falsified-trailer note) — not a clock/hardware property of the box. reac-pw's *own*
+audio layout — NOT a DOWNSTREAM CRC trailer, that was the Ethernet-FCS artifact;
+the box's UPSTREAM +2 trailer is real but is an RX-strip concern, not something
+to emit — see the falsified-trailer note + its 2026-07-25 update) — not a
+clock/hardware property of the box. reac-pw's *own*
 transitions are right
 on both desks (it floods, cold-connects, is granted, establishes); only the
 OHRCA post-grant emission is still unmatched.
@@ -218,10 +244,15 @@ differs (S-1608 `02 02`, S-0808 `01 00`, S-4000S `02 05` at the discriminating
 byte). The S-4000S heartbeat also carries channel-slot data (`29 38 00 …`) where
 S-1608/S-0808 send an all-zero heartbeat — reac-pw sends the generic heartbeat and
 the M-200 still enrolled it, so the heartbeat is not identity-bearing. Note: the
-S-4000S's real frame is 1204 B (`box_frame_len(32)`), ending in `c2ea`, with NO
-REAC trailer; reac-pw emits exactly that. (Some M-5000 captures showed 1206 B —
-that was 2 bytes of the Ethernet FCS from a mirror config, NOT a box field; see
-the falsified-trailer note.)
+S-4000S's real frame is 1204 B (`box_frame_len(32)`), ending in `c2ea`; reac-pw
+emits exactly that and is accepted. ~~(Some M-5000 captures showed 1206 B — that
+was 2 bytes of the Ethernet FCS from a mirror config, NOT a box field.)~~
+**CORRECTED 2026-07-25:** the 1206 B upstream frames carry a REAL OHRCA CRC-16
+trailer after the end marker (`1206 = 52 + 32·36 + 2`), interleaved with ~1/8
+trailerless 1204 B frames — a box field, not the FCS (that artifact remains true
+only for the master's DOWNSTREAM 1492→1494 case). reac-pw strips the trailer on
+RX; see [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
+and the captured `UP32A`/`UP32B` fixtures (`tests/upstream_fixtures.inc`).
 
 The S-4000 merge/split units (`c4:06:80`, `c4:08:bc`) are also `0x84` with a
 distinct descriptor; their menu names are unconfirmed → not yet rows.

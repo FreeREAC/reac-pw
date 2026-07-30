@@ -35,24 +35,52 @@ m_dep        = cc.find_library('m', required : false)
 # Prefer the system libreac (Fedora libreac-devel -> found via pkg-config and
 # linked dynamically). Fall back to the bundled subproject where there is no
 # system lib (OpenWrt SDK / a plain dev checkout).
-libreac_dep = dependency('libreac',
+# >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
+# clean-len rule, the ENCODE side (since 0.4.0 — reac_braid_encode +
+# reac_downstream_build) AND, since 0.5.0, a reac_decode() that reads the SAME
+# braid its own encoder writes. This version floor is load-bearing twice over:
+# reac-pw no longer carries its own encoder, so a 0.3.x libreac must fail at
+# configure time rather than at link time; and a 0.4.x libreac would still LINK
+# while decoding the downstream as plain LE, so the RX path would silently
+# disagree with the TX path about the wire layout (#80). Building quietly
+# against an older system libreac is exactly what this floor exists to stop.
+libreac_dep = dependency('libreac', version : '>=0.5.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
-# The REAC decode / capture / pcap core now comes from libreac (libreac_dep,
-# >=0.2.0) via <reac/reac_decode.h> etc. — no sibling reac-aes67 checkout needed.
+# The floor bites on BOTH resolution paths, verified when it was raised:
+#   - system libreac-devel 0.2.0 -> rejected by pkg-config, fallback taken;
+#   - a stale subprojects/libreac left over from a 0.4.0 build -> rejected too,
+#     because the wrap patches the version-carrying shim in at clone time, so an
+#     old checkout reports its own old version. `meson subprojects update`, or
+#     just remove subprojects/libreac and reconfigure.
+# The RPM (--wrap-mode=nofallback) has no fallback to take, so its floor is the
+# spec's BuildRequires: pkgconfig(libreac) >= 0.5.0 — keep the two in step.
+
+# The REAC decode / capture / pcap core comes from libreac via
+# <reac/reac_decode.h> etc., and since 0.3.0 so do the braid codec
+# (<reac/reac_braid.h>), the f32<->s24 pair (<reac/reac_sample.h>) and the
+# box-upstream decode (<reac/reac_upstream.h>). Since 0.4.0 the ENCODE side is
+# there too (<reac/reac_encode.h>): reac_downstream_build builds the 1492 B
+# master broadcast and reac_braid_encode lays the braided audio region of the
+# box->master frames reac_ctrl builds. Since 0.5.0 both RX directions read that
+# one braid — reac_decode for the downstream, reac_upstream_decode for the box
+# return — so the encoder and the decoder in this binary agree by construction.
+# reac-pw keeps only what libreac will not
+# do — AF_PACKET emission (reac_tx.c), the SCHED_FIFO pacer, and the
+# control-block/checksum handshake. No local copies of any layout.
 
 # --- the reac-pw client -----------------------------------------------------
 reac_pw_src = [
   'src/main.c',
   'src/reac_ring.c',
   'src/reac_rx.c',
-  'src/reac_upstream.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
   'src/reac_grant.c',
   'src/reac_master.c',
+  'src/reac_master_fsm.c',
   'src/reac_pacer.c',
   'src/reac_slave.c',
   'src/reac_mac.c',
@@ -65,6 +93,7 @@ reac_pw_src = [
   'src/reac_boxreg.c',
   'src/reac_link_state.c',
   'src/reac_disco.c',
+  'src/reac_clock.c',
 ]
 
 executable('reac-pw',
@@ -79,18 +108,32 @@ ring_test = executable('test_reac_ring',
 test('reac_ring', ring_test)
 
 # --- unit test: TX encoder round-trips through the libreac decode core ---------
-# No PipeWire, no socket — pure encode->decode bit-compare. reac_decode comes from
-# libreac_dep (<reac/reac_decode.h>).
+# No PipeWire, no socket — pure encode->decode bit-compare. The encoder itself is
+# libreac's reac_downstream_build now; src/reac_tx.c is still linked for
+# reac_eth_crc32 (the OHRCA-trailer RE verifier, not part of any encode path).
 tx_test = executable('test_reac_tx',
   ['tests/test_reac_tx.c', 'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
 
+# --- BYTE-IDENTITY gate for the encoder's move into libreac -------------------
+# main auto-deploys to the live rig, so this pins the emitted BYTES, not just the
+# behaviour: FNV-1a-64 digests of a deterministic corpus (1120 downstream frames,
+# 9240 box->master frames across every builder and box width), whose expected
+# constants were computed by running the PRE-MOVE encoder. libreac's own
+# tests/test_encode.c pins the same downstream constant from the other side of
+# the wrap. A mismatch is a wire-format regression — never update the constant.
+encode_golden_test = executable('test_reac_encode_golden',
+  ['tests/test_reac_encode_golden.c', 'src/reac_ctrl.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_encode_golden', encode_golden_test)
+
 # --- unit test: the UPSTREAM (stagebox->master) frame decode -------------------
 # Captured-frame fixtures (MAC-sanitized) + the resolved braid layout; no I/O.
 upstream_test = executable('test_reac_upstream',
-  ['tests/test_reac_upstream.c', 'src/reac_upstream.c'],
+  ['tests/test_reac_upstream.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_upstream', upstream_test)
@@ -99,15 +142,25 @@ test('reac_upstream', upstream_test)
 # Runs the real feeder thread over a temp pcap that interleaves both streams
 # (synthetic 40-ch broadcast + the captured box return + a second box).
 rx_gate_test = executable('test_reac_rx_gate',
-  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c',
-   'src/reac_upstream.c'],
+  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
 
+# --- unit test: the OHRCA duplicate-frame guard (frames_dup) ------------------
+# Runs the real feeder thread over a temp pcap of DOUBLED byte-identical
+# delivery (the mirrored-RX-path / doubled-cadence granulated-audio bug):
+# exactly one twin dropped per frame, single-cadence ring, and a negative —
+# distinct frames at doubled cadence pass untouched (dup == 0).
+rx_dup_test = executable('test_reac_rx_dup',
+  ['tests/test_reac_rx_dup.c', 'src/reac_rx.c', 'src/reac_ring.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_rx_dup', rx_dup_test)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
-  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_upstream.c'],
+  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)
@@ -138,12 +191,22 @@ test('reac_fsm', fsm_test)
 # constants are byte-exact, the grant echoes the JOIN, and the FSM sequences
 # IDLE->...->ESTABLISHED with the continuous 5-message cadence in both states.
 master_test = executable('test_reac_master',
-  ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_headamp_tx.c',
+  ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
    'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master', master_test)
+
+# --- unit test: the MASTER establishment decision core (pure table) ------------
+# Every (state, event) pair of the transition table — all 4 x 11 = 44, ignores
+# included — asserted against docs/MASTER-FSM.md, plus the classifier fold
+# (rx kind x have-block/same-box/grant-delivered guards). Pure — no socket, no
+# struct reac_master.
+master_fsm_test = executable('test_reac_master_fsm',
+  ['tests/test_reac_master_fsm.c', 'src/reac_master_fsm.c'],
+  include_directories : [include_directories('src')])
+test('reac_master_fsm', master_fsm_test)
 
 # --- acceptance test: the S-1608 downstream is byte-exact vs the M-300 capture -
 # Feeds the generator the S-1608 config and asserts the generated CHANMAP equals
@@ -151,8 +214,8 @@ test('reac_master', master_test)
 # + checksum (and is fully byte-exact when our MAC is the M-300's), and every
 # generated control block sums to 0 mod 256. The #130 hardware-verify gate.
 s1608_test = executable('test_reac_s1608',
-  ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
+  ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_s1608', s1608_test)
@@ -171,10 +234,48 @@ test('reac_lat', lat_test)
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+   'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
+   'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
+
+# --- unit test: the clock-discipline core — hierarchy + the period DLL (#75) ---
+# Pure: ppm in, period out. No socket, no PipeWire, no clock read. Pins the
+# ROLE-DEPENDENT lock hierarchy (master: phc > graph > freerun, with a slaved box
+# deliberately absent; slave: the wire and nothing else), the DLL's convergence /
+# absence of overshoot / slew + clamp bounds / rejection of insane samples, honest
+# degradation (free-run is never called locked; a vanished reference HOLDS the last
+# good rate), and a replay of a noisy counter series that must not be chased.
+# Since #77 it also pins reference QUALITY: the name heuristic may only REJECT
+# (an unrecognised professional interface must never be demoted), an operator
+# designation outranks the heuristic, the DLL's measured residual variance
+# outranks both, and our own estimator's noise floor sits provably inside the
+# "we cannot tell" band so it can never be reported as an unstable reference.
+clock_test = executable('test_reac_clock',
+  ['tests/test_reac_clock.c', 'src/reac_clock.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [m_dep])
+test('reac_clock', clock_test)
+
+# --- unit test: the pacer's clock-discipline WIRING (#75) ---------------------
+# No socket, no RT privilege: drives reac_pacer_clock_publish / _clock_tick the way
+# the publishers and the RT thread do. Proves INERTNESS first (knob unset -> every
+# tick returns the nominal period, the discipline is never advanced, the transcript
+# is unchanged), then the two references the rig actually uses to the same standard:
+# the elected PipeWire driver (graph) and a stagebox that is itself the clock master
+# (box) — including the closed-loop case of a box slaved to US, where the cadence
+# must park rather than run away. Also the label seqlock and the reference hierarchy
+# end to end, and (#77) the quality path: a hardware-but-display-derived graph clock
+# losing to the box, an operator-designated reference reported by tier as well as by
+# name, and a measurably jittery one flagged rather than ejected.
+pacer_clock_test = executable('test_reac_pacer_clock',
+  ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_clock.c',
+   'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_pacer_clock', pacer_clock_test)
 
 # --- unit test: the SLAVE-role establishment decision core (pure, no socket) ----
 # Drives the slave decision core (reac_slave_step_* over the reac_fsm brain) through
@@ -205,14 +306,14 @@ test('reac_vboxgain', vboxgain_test)
 # --- unit test: the full offline COURTSHIP (our master <-> our slave) ----------
 # Both establishment cores are pure, so the whole M-5000 <-> S-1608 sequence runs
 # as a frame-by-frame simulation with no socket: master emissions (next+stamp on
-# reac_tx_build FILLERs) feed reac_slave_step_rx; slave emissions (the reac_ctrl
+# reac_downstream_build FILLERs) feed reac_slave_step_rx; slave emissions (the reac_ctrl
 # builders) feed reac_ctrl_classify_box_frame + reac_master_rx. Pins the golden
 # ordering (probe -> box JOIN -> echoed grant -> box unicast -> both ESTABLISHED
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
 courtship_test = executable('test_reac_courtship',
-  ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_slave.c',
-   'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
-   'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
+  ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_slave.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c',
+   'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
@@ -244,8 +345,7 @@ test('reac_link_state', link_state_test)
 # and all-or-nothing JSON. Frames come from the reac_ctrl builders, so the test
 # runs on the same bytes the wire carries.
 disco_test = executable('test_reac_disco',
-  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c',
-   'src/reac_upstream.c'],
+  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_disco', disco_test)
@@ -293,8 +393,8 @@ test('reac_headamp_prop', headamp_prop_test)
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
   ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
-   'src/reac_master.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
-   'src/reac_headamp_tx.c'],
+   'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
+   'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_headamp_live', headamp_live_test)
@@ -305,10 +405,13 @@ test('reac_headamp_live', headamp_live_test)
 # (width x 3 group-A records, params 0/1/2 per channel, channels contiguous from
 # base), byte-exactness of every generated record against the proven head-amp
 # builder, the value-sourcing rule (head-amp table when set, safe default otherwise),
-# and that group B stays the fixed width-invariant constant. Pure — no socket.
+# and that group B stays the fixed width-invariant constant. ALSO pins the two slot
+# spaces apart (#69): the same base-32 x width-16 span is LEGAL as head-amp (an
+# S-1608 reaching CH 47) and ILLEGAL as audio (past the 40 slots the frame carries),
+# which is why reac_boxreg links in here. Pure — no socket.
 grant_test = executable('test_reac_grant',
   ['tests/test_reac_grant.c', 'src/reac_grant.c', 'src/reac_ctrl.c',
-   'src/reac_headamp_tx.c'],
+   'src/reac_headamp_tx.c', 'src/reac_boxreg.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_grant', grant_test)
@@ -323,8 +426,8 @@ test('reac_grant', grant_test)
 # M-300 goldens (reac_m200_golden.inc, reac_grant_golden.inc) regardless of
 # profile. Pure — no socket.
 conformance_test = executable('test_reac_conformance',
-  ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_ctrl.c',
-   'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
+  ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_conformance', conformance_test)

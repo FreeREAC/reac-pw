@@ -7,13 +7,20 @@ inputs. This is the clock-*tractable* half of REAC: the desk owns the crystal
 and reac-pw slaves to its cadence — the inverse of the master role's unproven
 hardware-clock blocker (#131).
 
-**Why slave first (vs master):** the 2026-07-11 mixer-vs-box matrix
-(`reac-firmware-re/MIXER-VS-BOX-MATRIX.md`) proved the box side is fully
-characterized and that the master-side box-mute is a physical/clock-domain
-problem — not L2 content. As a slave, reac-pw *receives* the desk's
-hardware-locked cadence and phase-aligns to it (the proven `reac-repacer-clk`
-principle), so it sidesteps that blocker while building the same disciplined
-pacer master will later need.
+**Why slave first (vs master) — the original rationale, since falsified.** The
+2026-07-11 mixer-vs-box matrix (`reac-firmware-re/MIXER-VS-BOX-MATRIX.md`) proved
+the box side is fully characterized, and concluded that the master-side box-mute was
+a physical/clock-domain problem rather than L2 content. Slaving first would sidestep
+that blocker, since a slave *receives* the desk's hardware-locked cadence.
+
+⚠ The blocker was not a clock. The master role now locks a real S-0808 and S-1608
+SOLID from `CLOCK_MONOTONIC` pacing; the gap was the PROTOCOL — cfea box-count, the
+missing ENROLL, the byte-exact grant sweep, grant self-complete + HOLD, the box
+heartbeat ([`REAC-MIXER-PROTOCOL.md`](REAC-MIXER-PROTOCOL.md), "Rigorously RULED
+OUT: TX timing jitter"). The reciprocal falsification happened on this side too — a
+real M-200 enrols our `CLOCK_MONOTONIC`-paced slave (see W5 CONNECTED below). #131
+survives only as a fidelity item, not a blocker. The slave-first ORDER was still
+right, and the work below still stands; only its stated reason does not.
 
 ## Already implemented (verified in-tree, do NOT re-scope)
 
@@ -21,9 +28,11 @@ pacer master will later need.
 - Establishment FSM (`src/reac_fsm.c`): PHY→FLOOD→COLDCONNECT
   (`0014→0013→0016→001a`)→TX_MUTE→ESTABLISHED→heartbeat/DROP; learns the master
   MAC from the wire. Offline-proven end-to-end by `tests/test_reac_courtship.c`.
-- Braided upstream encoder (`src/reac_ctrl.c: place_braided_audio`,
-  `reac_ctrl_build_upstream_filler`) — planar float → box-width braided upstream
-  frame. Layout verified against rig captures (task #108).
+- Braided upstream encoder (libreac's `reac_braid_encode`, driven by
+  `src/reac_ctrl.c: reac_ctrl_build_upstream_filler`) — planar float → box-width
+  braided upstream frame. Layout verified against rig captures (task #108); the
+  braid loop itself moved to libreac 2026-07-29 (it was the same loop as the
+  downstream encoder's), the frame envelope + control block stayed here.
 - Downstream RX → PipeWire source node (`src/reac_source_node.c`,
   `src/reac_rx.c`) — the master's audio decoded to capture ports.
 
@@ -46,14 +55,24 @@ arrival + the master's counter — never a free-running pacer. Verify
 desk owns the clock: "recover + align," not "generate a crystal."
 Files: `src/reac_slave.c`, `src/reac_rx.c` (arrival hook).
 
-### W3 — Configurable box width + identity  ·  effort S
-Present as a chosen box via `--box-channels {8,16,32}`; set config-announce
-(`01030010`) width and the per-unit `0014 [20]/[22]` field to match a plausible
-box. Currently hardcoded to `REAC_SLAVE_BOX_CHANNELS_DEFAULT`.
-Files: `src/main.c`, `src/reac_slave.c`, `src/reac_ctrl.c`.
+### W3 — Configurable box width + identity  ·  **DONE**
+Was: "currently hardcoded to `REAC_SLAVE_BOX_CHANNELS_DEFAULT`". It is not — that
+constant is only the default when no flag is given (`src/main.c:201`). `--box-channels N`
+(even, 2..40) sets the width directly, and `--box-model {s1608,s0808,s4000s}` picks a
+whole FIXED-matrix row — selector, ASCII name frame, `0402000d`, descriptor and width
+in one choice (`src/main.c:258-278`, `BOX_MODELS` at `src/reac_ctrl.c:237`). The width
+threads through every builder: `reac_slave.c` passes `s->box_channels` into
+`reac_ctrl_build_config_announce` and each cold-connect variant
+(`src/reac_slave.c:258-324`).
 
-### W4 — Downstream decode: OHRCA frame length + per-generation layout  ·  effort S–M
-Two distinct issues found in `src/reac_rx.c`:
+Model rows are the law here, not a knob — see the fixed model matrix in
+[`REAC-BOX-STATE-DIAGRAM.md`](REAC-BOX-STATE-DIAGRAM.md), all three rows
+live-verified on a real M-200 (2026-07-12). There is no "S-1608 with 8 channels".
+
+### W4 — Downstream decode: OHRCA frame length + audio layout  ·  **CLOSED**
+Two distinct issues found in `src/reac_rx.c`, both now closed: the layout half (b)
+is one braid, every generation, and the frame-length half (a) is Ethernet FCS
+residue from the capture path, in both directions.
 
 **(a) ⚠ FALSIFIED (2026-07-12): the "+2 CRC-16 trailer" was the ETHERNET FCS.**
 The earlier claim — that the M-5000 (OHRCA) frame is 1494 B = a 1492 B REAC frame
@@ -70,6 +89,24 @@ Consequence: there is **nothing to crack and nothing to emit** — the Ethernet 
 is computed by the NIC hardware, so reac-pw's frames already carry a valid one.
 Do NOT reintroduce a "per-frame CRC-16 trailer" gate or emitter.
 
+✅ **SETTLED 2026-07-29 in favour of the paragraph above (#82).** The competing
+record — libreac's `<reac/reac.h>` reading `REAC_FRAME_BYTES_OHRCA` as a real
+per-frame OHRCA trailer — was retired by FreeREAC/libreac#15 and the corpus sweep
+behind it. Numbers, over the whole private capture corpus (83 pcaps):
+
+- trailing 2 bytes == `low16(crc32(preceding))` little-endian on **217,558 of
+  217,558** trailered frames, both directions, every generation;
+- **61 of 83** captures carry the artefact and **22 carry none** — including OHRCA
+  rigs, so generation is not the variable; the capture rig is;
+- the "~1/8 trailerless 1204 B frames, which an FCS cannot produce" argument that
+  kept the upstream half alive is inverted: on
+  `matrix-m200-s4000-2026-07-24.pcap` **all 2,224** `1204 B` frames are the clean
+  copy of a byte-identical `1206 B` twin (0 lone `1204`s).
+
+So `+2` = Ethernet FCS residue, upstream and downstream alike, and it is a
+DUPLICATE-frame signal as much as a length one: `src/reac_rx.c` dedups on
+`reac_frame_clean_len()` because the mirror twin's two copies differ only by it.
+
 **Why it masqueraded as a counter-seeded CRC-16.** The Ethernet FCS is a CRC-32
 over the whole frame *including the counter field*, so 2 of its bytes are a linear
 (GF(2)) function of the counter for constant content — which is exactly the
@@ -78,19 +115,43 @@ a bespoke counter-seeded CRC-16. Standard CRC-16 sweeps missed because it was ne
 a CRC-16; it was 2 bytes of the CRC-32 FCS. Lesson: verify capture ground-truth
 (mirror/SPAN byte-faithfulness) before RE-ing a "trailer".
 
-**(b) Per-generation audio layout.** `reac_rx` decodes downstream via
-`reac_decode` = **plain-LE**, which is CORRECT for the M-5000 (OHRCA) but WRONG
-for M-200/M-300 (they braid the downstream → would decode as noise). No change
-needed for the M-5000; add a per-generation switch/autodetect before targeting a
-V-Mixer desk. Wrong layout = silent noise, so wire-verify.
+**(b) ✅ CLOSED (2026-07-29, #80): the downstream decodes the BRAID, like
+everything else.** This item originally read "plain-LE is CORRECT for the M-5000
+(OHRCA) but WRONG for M-200/M-300", i.e. a per-generation switch. That split is
+dead: the zoneA/zoneB goldens are the M-5000's OWN two REAC ports carrying program
+audio, and they decode at coherence 0.988/0.981 under the braid versus 0.234/0.236
+under plain-LE (the table in [`VALIDATION-PLAN.md`](VALIDATION-PLAN.md) Stage B).
+The "plain-LE is rig-validated on a live M-5000, coherence 0.999" evidence that
+produced the split is explained there as a mid→hi lane shift amplifying quiet
+braided audio 256× into a coherent-looking image — wrong-layout decodes can look
+BETTER than the truth on quiet material. The operator has since confirmed that
+every mixer generation puts out the same downstream format, so per-generation
+divergence is not an open question, it is a discarded guess.
+
+The braid is the wire format in both directions (libreac's `<reac/reac_braid.h>`
+is the oracle, and `src/reac_tx.c` has encoded with it unconditionally since the
+`REAC_TX_LAYOUT` override was removed in a4f7359). The RX side followed on
+2026-07-29 by way of the dependency rather than the call site: **libreac 0.5.0**
+un-braids inside `reac_decode()` with an unchanged signature, so raising the
+floor to `>=0.5.0` made `src/reac_rx.c` correct with no logic change. Independent
+verification upstream: on a frame libreac itself built, 0 of 480 samples agreed
+before, 480 of 480 after. The plain-LE layout survives only as the explicitly
+named diagnostic `reac_decode_plain_le()`, which reac-pw does not call.
+
+Wrong layout = plausible-sounding noise, so the on-wire re-check still wants LOUD
+program, never a quiet room.
 
 Files: `src/reac_rx.c` (`gate_accepts`, `feed_frame`).
 
-### W5 — On-wire validation against a real master  ·  rig time  ·  the proof
-`test_reac_courtship.c` only proves our-slave ↔ our-master. Prove a real desk
-GRANTs our cold-connect, reaches ESTABLISHED, streams to us, and shows our
-upstream on its input meters. Box templates are fully RE'd (low risk) but this
-is the milestone that counts.
+### W5 — On-wire validation against a real master  ·  **PASSED on V-Mixer, OPEN on OHRCA**
+`test_reac_courtship.c` only proves our-slave ↔ our-master, so a shared wrong
+assumption passes it. The wire test: a real desk GRANTs our cold-connect, reaches
+ESTABLISHED, streams to us, and shows our upstream on its input meters.
+
+Result: a real cold-booted **M-200** grants and enrols reac-pw, and holds 300 s —
+"W5 CONNECTED" below, with the census and the config-announce frame that unlocked
+it. The **M-5000** grants us and then reverts to hunting; still open. The input-meter
+half is blocked on W1 (nothing fills `tx_ring` in the slave role yet).
 
 ## Build order (each ends in a wire test)
 
@@ -104,8 +165,12 @@ is the milestone that counts.
    minutes, no slips.*
 
 ## Open risks
-- **W4 layout** — silent-noise failure mode if the per-generation layout is wrong.
-- **W5 reciprocal handshake** — desk granting our slave is unproven on the wire.
+- ~~**W4 layout** — plausible-noise failure mode while RX decodes plain-LE and TX
+  encodes the braid (#80).~~ **Closed 2026-07-29** with the libreac `>=0.5.0`
+  floor: both directions read the one braid. A wrong layout still fails quietly
+  rather than loudly, so the on-wire re-check wants loud program.
+- **W5 on OHRCA** — the M-5000 grants our slave and then re-hunts. Settled on
+  V-Mixer (M-200 enrols us and holds).
 - **W2 phase-lock** — the clock piece; tractable (desk owns clock) but slips
   must be avoided (downstream frame-slip injects a 12-sample phase step).
 
@@ -120,11 +185,33 @@ directions, CHANMAP + heartbeat ~0.5/s. No re-hunt, no drop.
 
 This closes W5 **for V-Mixer desks (M-200/M-300/M-200i)** and **falsifies the
 "clock-domain wall" reasoning below**: reac-pw paces off `CLOCK_MONOTONIC`, yet a
-real desk accepts it as a settled box. The M-5000 (OHRCA) is still open, but the
-cause is now understood to be the **OHRCA established-state shape** (1494 B frame +
-per-frame CRC-16 trailer, 96 kHz upstream — see W4) that reac-pw does not yet
-emit, NOT a hardware crystal requirement. Remaining slave work for full M-5000
-support: emit the OHRCA-width upstream + CRC-16 trailer, then re-test.
+real desk accepts it as a settled box. The M-5000 (OHRCA) is still open, and the
+cause is the **OHRCA established-state shape** that reac-pw does not yet emit, NOT
+a hardware crystal requirement.
+
+⚠ **This paragraph originally named that shape as "1494 B frame + per-frame CRC-16
+trailer, 96 kHz upstream" and set the remaining work as "emit the OHRCA-width
+upstream + CRC-16 trailer". Both halves of that are dead:**
+
+- The **1494 B downstream frame**: read as a mirror/SPAN artifact — 2 bytes of the
+  Ethernet FCS — the very next day, and reproduced independently for the master
+  direction (W4(a) below; `docs/MASTER-HARDWARE-VERIFY.md`, "The 1494-byte frame
+  is a capture artifact"). That reading is contested by libreac's `<reac/reac.h>`
+  and is being re-checked (#80; see the ⚠ note under W4(a)). Either way there is
+  nothing here for a slave to emit: on the artifact reading a literal 1494 B
+  payload puts 2 garbage bytes ahead of the NIC's own real FCS, and on the
+  trailer reading the bytes are the master's to produce, not the box's.
+- The box **upstream** `+2` IS real (a genuine OHRCA CRC-16 trailer on the S-4000's
+  1206 B returns), but it is an **RX-strip** concern, not something a slave emits —
+  see [`OHRCA-UPSTREAM-DUPLICATE-FRAMES.md`](OHRCA-UPSTREAM-DUPLICATE-FRAMES.md)
+  and the `UP32A`/`UP32B` fixtures in `tests/upstream_fixtures.inc`.
+
+The leading remaining suspect for the M-5000 gap is the 96 kHz upstream cadence.
+The other half of that pair — a per-generation downstream audio layout
+(W4(b)/#135) — is **gone**: there is one downstream format across every mixer
+generation, and since 2026-07-29 both directions decode it (see W4(b) and #80).
+Do not budget work for a downstream trailer either; whichever way the `+2` reading
+lands, a slave never emits one.
 
 ## W5 live result (2026-07-11): GRANTED — the missing frame was the config-announce
 

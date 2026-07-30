@@ -10,30 +10,72 @@
 
 /* ---- The allocator ------------------------------------------------------- *
  *
- * base(width) + width, one DERIVED RULE (not a per-model table), wire-proven
- * byte-for-byte against the goldens in reac-captures/captures/:
+ * EVIDENCE — the WHOLE capture corpus, not three goldens. docs/PLACEMENT-EVIDENCE.md
+ * (#210) streams all 82 captures in reac-captures (~19 GB); 42 of them carry a grant
+ * sweep, and those 42 collapse to exactly three observed placements:
  *
- *   box      inputs  base   group-A slots  golden
- *   S-0808     8      0x00   0x00..0x07     matrix-m200-s0808-2026-07-11
- *   S-1608    16      0x20   0x20..0x2f     matrix-m200-s1608-2026-07-11
- *   S-4000S   32      0x00   0x00..0x1f     matrix-m200-s4000-2026-07-24 + matrix-m5000-s4000-unit{1,2}
+ *   box      inputs  observed base  group-A slots  sweeps  desks that agree
+ *   S-0808     8        0x00          0x00..0x07     11    M-200i, M-300, M-5000
+ *   S-1608    16        0x20          0x20..0x2f     21    M-200i, M-300, M-5000
+ *   S-4000S   32        0x00          0x00..0x1f      5    M-200i, M-5000
  *
- * THE RULE: base = (width == 16) ? 0x20 : 0x00. The S-1608 firmware sits its 16
- * inputs at fabric offset 0x20; every other Roland width bases at 0x00. This is
- * console-generation-INDEPENDENT — the S-4000S bases at 0x00 under both a real M-200
- * (matrix-m200-s4000-2026-07-24) and a real M-5000, which settled what the earlier
- * three-point set (one S-4000S golden, from an M-5000) could not. It is the SAME rule
- * reac_slave.c uses to DECLARE its base (ch_base = box_channels==16 ? 0x20 : 0x00),
- * and it equals the model's head-amp CH base baked into the rest of the stack
- * (reac_ctrl.h, openmixer) — so master-read, slave-declare and head-amp all derive
- * from ONE width value. 24 (S-2416) falls out with no new case: base 0x00, slots
- * 0x00..0x17, frame 916 B. The base+width travel to the box in the grant (no hardwired
- * base to match); the 0x2f fabric ceiling is real (a 32-wide box cannot base at 0x20 —
- * it would run to 0x3f), gated by reac_grant_alloc_fits.
+ * Every sweep is contiguous; no two sweeps of the same box ever disagree.
  *
- * reac-pw grants ONE box at a time; when several boxes must share the fabric (#129)
- * this becomes a free-list and the base rule becomes each box's placement preference. */
+ * WHAT THE CORPUS SETTLES. The base is a deterministic function of WHAT THE BOX
+ * DECLARES AT COLD-CONNECT, and of nothing else we can name. Dead, each by capture:
+ *   - lowest-fit (predicts 0x00 for a 16-wide box) and top-aligned-to-0x2f (predicts
+ *     0x28 for an S-0808, 0x10 for an S-4000S) — both contradicted outright;
+ *   - f(desk): three desk models grant the SAME box the SAME base, and ONE M-200i
+ *     grants 0x00 and 0x20 to two boxes in one session (ctl2.pcap);
+ *   - f(enrolment order) / next-free: 22 consecutive re-joins in one capture, zero
+ *     drift (s0808-reboot-enrollfix);
+ *   - f(box MAC / unit identity): reac-pw's slave on a DIFFERENT MAC that merely
+ *     DECLARES the S-1608's blocks is granted 0x20 by a real M-200 (9 sweeps);
+ *   - f(ENROLL group map 0103 000d): the map is a pure width function, front-packed
+ *     from group 0 — and 17 of 18 real-S-1608 captures never receive one at all;
+ *   - f(CHANMAP 0103 0019): byte-identical full 49-position ring for every box.
+ *
+ * WHAT IT STILL DOES NOT SETTLE. Three carriers stay perfectly collinear across all
+ * 42 rows, because we own only three declaration variants: the declared WIDTH (this
+ * table), the config-announce selector byte (0x82 vs 0x84), and config-announce byte
+ * [9] (0x02 vs 0x00, for which base == byte[9] * 0x10 holds on every row). Naming any
+ * one of them "the law" would be picking one of three indistinguishable hypotheses.
+ * PLACEMENT-EVIDENCE.md ends with the 5-run rig experiment that separates them — a
+ * one-byte patch to our own slave declaration, no new hardware.
+ *
+ * SO: we keep pinning the OBSERVED base per width. Reasons, in order: (a) it predicts
+ * all 42 rows and is the only placement each real box is known to have accepted;
+ * (b) the S-1608's 0x20 origin is already baked into the rest of the stack as that
+ * model's head-amp CH base (reac_ctrl.h's head-amp block comment, openmixer's
+ * channel mapping), so choosing differently here would silently desync them;
+ * (c) a wrong-but-self-consistent allocation is exactly the failure we are fixing —
+ * being consistent with the REST OF THE WORLD is the whole point.
+ *
+ * NOTE ON THE CEILING — RESOLVED IN CODE (#69). The 0x2f ceiling this allocator
+ * enforces is the HEAD-AMP / chanmap channel space (48 slots), NOT the audio fabric:
+ * cfea advertises 40 audio slots ([17] = 0x28) and the ENROLL map spans exactly those
+ * 40 (5 groups x 8). The S-1608 runs to 0x2f = 47, past 40 — so group-A CH is not an
+ * audio-fabric index. The constant used to be spelled REAC_GRANT_FABRIC_CEILING,
+ * which named the audio fabric while measuring the head-amp space; both spaces are
+ * now defined once, honestly, in reac_slots.h and this allocator takes the head-amp
+ * one. Where a box's AUDIO lands stays reac_boxreg's decision over
+ * REAC_AUDIO_FABRIC_SLOTS. Multi-box allocation (#129) must keep them apart.
+ *
+ * This is a POLICY table, deliberately separated from the mechanism below it, so
+ * multi-box allocation (#129 — several boxes sharing one fabric) can replace the
+ * policy without touching the sweep generator. Today reac-pw grants ONE box at a
+ * time, so a static policy is honest; the day two boxes must coexist, this becomes
+ * a real free-list over the fabric and the observed bases become preferences. */
+struct grant_placement {
+	uint8_t width;
+	uint8_t base;
+};
 
+static const struct grant_placement OBSERVED_PLACEMENT[] = {
+	{  8, 0x00 },   /* S-0808  */
+	{ 16, 0x20 },   /* S-1608  */
+	{ 32, 0x00 },   /* S-4000S */
+};
 
 int reac_grant_alloc_fits(int base, int width)
 {
@@ -42,8 +84,10 @@ int reac_grant_alloc_fits(int base, int width)
 	if (base < 0)
 		return 0;
 	/* The ceiling test, stated as the doc states it: the LAST slot the box would
-	 * own is base+width-1, and it must not pass 0x2f. */
-	return (base + width - 1) <= REAC_GRANT_FABRIC_CEILING;
+	 * own is base+width-1, and it must not pass 0x2f. HEAD-AMP space — see the
+	 * ceiling note above and reac_slots.h: 0x20+16 = 0x2f is legal here precisely
+	 * because it is NOT an audio-fabric index. */
+	return (base + width - 1) <= REAC_HEADAMP_CEILING;
 }
 
 int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
@@ -51,14 +95,26 @@ int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
 	if (!out || in_ch <= 0 || in_ch > REAC_GRANT_MAX_WIDTH)
 		return -1;
 
-	/* base(width): the S-1608's 16 inputs sit at fabric 0x20, every other width at
-	 * 0x00 (see the block comment; the SAME rule as reac_slave.c's ch_base). fits()
-	 * gates the 0x2f ceiling — it forbids a 32-wide box taking 0x20 (would run to
-	 * 0x3f) and keeps any width from allocating past the fabric. */
-	int base = (in_ch == 16) ? 0x20 : 0x00;
-	if (!reac_grant_alloc_fits(base, in_ch))
+	/* The observed base for this width, when we have one AND it still fits. The
+	 * fits() gate is not ceremony: it is what forbids a 32-wide box from taking
+	 * the S-1608's 0x20, and it keeps a future policy edit from silently
+	 * allocating past the head-amp space. */
+	for (size_t i = 0; i < sizeof OBSERVED_PLACEMENT / sizeof OBSERVED_PLACEMENT[0]; i++) {
+		if (OBSERVED_PLACEMENT[i].width != in_ch)
+			continue;
+		if (!reac_grant_alloc_fits(OBSERVED_PLACEMENT[i].base, in_ch))
+			break;                       /* observed base no longer placeable */
+		out->base  = OBSERVED_PLACEMENT[i].base;
+		out->width = (uint8_t)in_ch;
+		return 0;
+	}
+
+	/* An unobserved width (or an observed base that does not fit): take the lowest
+	 * base that does. "Width-many contiguous slots wherever they fit", with the
+	 * space otherwise empty — reac-pw grants one box at a time (see #129). */
+	if (!reac_grant_alloc_fits(0, in_ch))
 		return -1;
-	out->base  = (uint8_t)base;
+	out->base  = 0x00;
 	out->width = (uint8_t)in_ch;
 	return 0;
 }
@@ -178,8 +234,8 @@ int reac_grant_build_sweep(uint8_t sweep[][34], int max,
 	if (!reac_grant_alloc_fits(alloc->base, w))
 		return -1;
 	/* Every slot we are about to address must be a real head-amp channel — the
-	 * fabric ceiling already guarantees this, but assert it against the head-amp
-	 * channel space too so the two can never drift apart unnoticed. */
+	 * fits() ceiling already guarantees this, but assert it against reac_ctrl's
+	 * own bound too so the two can never drift apart unnoticed. */
 	if (alloc->base + w > REAC_HEADAMP_MAX_CH)
 		return -1;
 	int n = REAC_GRANT_SWEEP_LEN(w);

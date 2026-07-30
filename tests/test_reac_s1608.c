@@ -7,9 +7,10 @@
  * Ground truth: reac-captures/m300-s1608-*.pcap (2026-07-10), real M-300 master
  * 00:40:ab:c9:d8:5b driving an S-1608 (16 in / 8 out).
  *
- *   CHANMAP — the chanmap carries NO MAC, so the generated fabric SWEEP must equal
+ *   CHANMAP — the chanmap carries NO MAC, so the generated chanmap SWEEP must equal
  *             the captured M-300's 11 windows EXACTLY (bytes + checksums), tiling
- *             the whole 40-slot fabric 0x00..0x2f (#130); window 0 is the fe frame
+ *             the whole 48-slot HEAD-AMP space 0x00..0x2f (#130) — not the 40-slot
+ *             audio fabric the cfea below advertises (#69); window 0 is the fe frame
  *             (marker + 0x00..0x06, checksum 0xb7).
  *   CFEA    — the cfea embeds OUR MAC, so a generated frame must equal the
  *             captured M-300 cfea EXCEPT the 6 MAC bytes [11:17] and the
@@ -23,6 +24,7 @@
 #include "reac_ctrl.h"
 #include "reac_tx.h"
 #include <reac/reac.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -50,7 +52,7 @@ static const uint8_t OUR_MAC[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static void stamp(const struct reac_master *m, uint8_t *f,
                   enum reac_master_emit emit, int idx)
 {
-	reac_tx_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, 0x1234, OUR_MAC);
+	reac_downstream_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, 0x1234, OUR_MAC);
 	reac_master_stamp(m, f, emit, idx);
 }
 
@@ -105,7 +107,7 @@ static int test_probe_rotation(void)
 		uint16_t cnt;
 		int idx;
 		enum reac_master_emit e = reac_master_next(&m, &cnt, &idx);
-		reac_tx_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, cnt, OUR_MAC);
+		reac_downstream_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, cnt, OUR_MAC);
 		reac_master_stamp(&m, f, e, idx);
 
 		if (e == REAC_M_EMIT_PROBE) {
@@ -145,8 +147,9 @@ int main(void)
 	CHK(memcmp(f + 16, CAP_CHANMAP, 34) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
-	/* CHANMAP SWEEP: all 11 windows byte-EXACT vs the captured M-300 fabric sweep
-	 * (tiles 0x00..0x2f; #130 — a box enrolls only after it sees its own slots). */
+	/* CHANMAP SWEEP: all 11 windows byte-EXACT vs the captured M-300 chanmap sweep
+	 * (tiles the 48-slot head-amp space 0x00..0x2f; #130 — a box enrolls only after
+	 * it sees its own slots). */
 	for (int i = 0; i < GOLD_CHANMAP_WINDOWS; i++) {
 		stamp(&m, f, REAC_M_EMIT_CHANMAP, i);
 		CHK(memcmp(f + 16, GOLD_CHANMAP_SWEEP[i], 34) == 0);

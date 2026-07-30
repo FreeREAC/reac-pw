@@ -6,7 +6,7 @@
  * FUNCTIONAL:
  *   - pw_filter registered Audio/Sink with N INPUT mono ports (the channel count)
  *   - realtime process() de-stages each quantum into 12-sample REAC frames,
- *     encodes them with reac_tx_build, and SUBMITS them to the SCHED_FIFO cadence
+ *     encodes them with reac_downstream_build (libreac), and SUBMITS them to the SCHED_FIFO cadence
  *     pacer (reac_pacer) — NO syscall on the RT graph thread.
  *   - the pacer thread clocks the wire at a fixed pps and stamps the master
  *     JOIN/HOLD handshake (reac_master: probe -> cdea 04 03 grant -> established
@@ -23,8 +23,11 @@
 
 #include "reac_ring.h"
 
+struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */
+
 struct pw_loop;
 struct reac_sink_node;
+struct reac_source_node;       /* reac_source_node.h — the peer reac-capture node (#208) */
 struct reac_box_model;         /* reac_ctrl.h — the autodetected box (in/out widths) */
 struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp table */
 
@@ -42,6 +45,16 @@ struct reac_sink_cfg {
 	/* Optional MASTER head-amp send table (task #155), forwarded to the pacer. */
 	const struct reac_headamp_setting *headamps;
 	int n_headamps;
+	/* Clock discipline (#75), forwarded to the pacer. 0 (the default) = the pacer
+	 * free-runs on CLOCK_MONOTONIC exactly as before and no reference is even
+	 * read. See docs/ENV-KNOBS.md (REACPW_CLOCK_FOLLOW). */
+	int clock_follow;
+	/* Operator-DESIGNATED clock reference (#77): a case-insensitive SUBSTRING of
+	 * the device name ("Babyface"), from REACPW_CLOCK_REF. A device that matches
+	 * outranks every name heuristic — the operator knows their hardware and we do
+	 * not. NULL/empty (the default) designates nothing, and nothing about the
+	 * grading or the selection changes. Inert unless clock_follow is set. */
+	const char *clock_ref;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
@@ -79,6 +92,21 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
  * the pacer's recognized_box) — the main-loop autodetect watcher polls this to
  * decide the reac-capture / reac-playback widths. */
 const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n);
+
+/* Wire the peer reac-capture node's SLOT (#208) so the sink's main-loop badge timer
+ * also keeps the source node's reac.link-state / box-model / box-width in sync — the
+ * capture node has no pacer handle of its own. Pass the address of main's source-node
+ * pointer (`&src`) so a source rebuilt on a live box-width change is followed. Call once
+ * after both nodes exist; pass NULL slot to detach. */
+void reac_sink_node_set_peer_source(struct reac_sink_node *n,
+                                    struct reac_source_node **src_slot);
+
+/* Wire the RX feeder as the BOX clock reference's measurement source (#75): the
+ * sink's existing main-loop timer forwards reac_rx's filtered counter-slope ppm to
+ * the pacer's discipline. Borrowed pointer, main-loop use only, no RT path
+ * touched. Never wired -> the box tier is simply never available, and with clock
+ * following disabled the forward is not even attempted. */
+void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 

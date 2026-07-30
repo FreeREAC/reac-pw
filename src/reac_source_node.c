@@ -253,6 +253,29 @@ void reac_source_node_destroy(struct reac_source_node *n)
 	free(n);
 }
 
+/* See the header: the sink's main-loop timer drives this so the capture badge follows
+ * the box. pw_filter_update_properties MERGES — only the keys we set change; the ports,
+ * rate, media.* seeded at create persist untouched. A NULL arg skips that key. */
+void reac_source_node_publish_link(struct reac_source_node *n,
+                                   const char *link_state,
+                                   const char *box_model,
+                                   const char *box_width)
+{
+	if (!n || !n->filter)
+		return;
+	struct pw_properties *props = pw_properties_new(NULL, NULL);
+	if (!props)
+		return;
+	if (link_state)
+		pw_properties_set(props, REAC_PROP_LINK_STATE, link_state);
+	if (box_model)
+		pw_properties_set(props, REAC_PROP_BOX_MODEL, box_model);
+	if (box_width)
+		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
+	pw_filter_update_properties(n->filter, NULL, &props->dict);
+	pw_properties_free(props);
+}
+
 int reac_source_node_ensure(struct reac_source_node **slot,
                             const struct reac_source_node_cfg *cfg,
                             int channels, const char *label)
