@@ -568,27 +568,13 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
  * at recognition time — enter_granting's own gen_cfea call (fired moments later
  * by the same RX event, see reac_pacer.c) then just re-confirms it with the
  * latched box_count. */
-/* Stamp the ENROLL record's group map (cdea 01 03 000d, block[9:18]) for a box of
- * `width` INPUTS — the field that tells the box how many of the 40 fabric slots are
- * ITS inputs, i.e. the AUDIO-RETURN width. 0x41 marks an 8-channel INPUT group,
- * packed from block[9] up; 0xc3 marks a non-input group, packed from block[18] down;
- * the 5-byte middle stays zero (always 5 groups = 40/8). Static it was hardwired to
- * 1x0x41 (8-ch), which capped EVERY box's audio return at 8 regardless of the grant
- * width — the S-4000S 8->32 root cause. Derived from width: S-0808 1x41, S-1608 2x41,
- * S-2416 3x41, S-4000S 4x41. Re-stamps the block checksum. */
-static void set_enroll_width(uint8_t blk[34], int width)
-{
-	int in_groups  = width / 8;          /* 0x41 groups — the box's inputs      */
-	int non_groups = (40 - width) / 8;   /* 0xc3 groups — the rest of the fabric */
-	for (int i = 9; i <= 18; i++)
-		blk[i] = 0x00;
-	for (int g = 0; g < in_groups && (9 + g) <= 18; g++)
-		blk[9 + g] = 0x41;
-	for (int g = 0; g < non_groups && (18 - g) >= 9; g++)
-		blk[18 - g] = 0xc3;
-	stamp_block_cksum(blk);
-}
-
+/* NOTE: this branch carried its own set_enroll_width, added when the ENROLL group map
+ * was still hardwired to 1x0x41 (8 input slots) and capping every box's audio return at
+ * 8 whatever the grant width. That fix reached main first, so the definition now lives
+ * at the top of this file. The two were byte-for-byte equivalent — both emit 0x41 groups
+ * packed up from block[9] and 0xc3 groups packed down from block[18], verified equal for
+ * widths 8/16/32 — so the duplicate is simply dropped and the calls below bind to main's.
+ * Git merged the two definitions side by side without complaint; the compiler caught it. */
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 {
 	(void)out_ch;   /* S-0808 and S-1608 are both 8-OUT — the INPUT width distinguishes */
