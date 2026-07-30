@@ -568,6 +568,13 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
  * at recognition time — enter_granting's own gen_cfea call (fired moments later
  * by the same RX event, see reac_pacer.c) then just re-confirms it with the
  * latched box_count. */
+/* NOTE: this branch carried its own set_enroll_width, added when the ENROLL group map
+ * was still hardwired to 1x0x41 (8 input slots) and capping every box's audio return at
+ * 8 whatever the grant width. That fix reached main first, so the definition now lives
+ * at the top of this file. The two were byte-for-byte equivalent — both emit 0x41 groups
+ * packed up from block[9] and 0xc3 groups packed down from block[18], verified equal for
+ * widths 8/16/32 — so the duplicate is simply dropped and the calls below bind to main's.
+ * Git merged the two definitions side by side without complaint; the compiler caught it. */
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 {
 	(void)out_ch;   /* S-0808 and S-1608 are both 8-OUT — the INPUT width distinguishes */
@@ -575,6 +582,11 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	 * over them (group B is width-invariant). A width we cannot place keeps the
 	 * current sweep — never an empty grant. */
 	rebuild_grant_sweep(m, in_ch);
+	/* The ENROLL group map carries the box's AUDIO-RETURN width (how many slots are
+	 * its inputs). Derive it from the recognized width so the box opens its full
+	 * return — the re-grant (reac_master_regrant -> enter_granting) re-emits this
+	 * updated ENROLL, re-arming the box to consume the wider grant. */
+	set_enroll_width(m->enroll_blk, in_ch);
 
 	/* Enrol the box's DECLARED input width. The cdea 0103 000d group map is the gate
 	 * the box reads to open its audio return to full width (verified byte-for-byte
@@ -674,6 +686,20 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	 * the recognized width here (init-seeded from cfg.in_channels, re-set by reac_master_set_box). */
 	m->cfg.out_channels = m->alloc.width;
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);
+}
+
+/* Re-fire the grant window for the CURRENTLY-recognized box. reac_master_set_box
+ * rebuilds the sweep for a width learned AFTER the cold-connect JOIN (from the box's
+ * config-announce) but never re-emits it — so the box keeps the stale JOIN-time
+ * default enrollment and streams only that many inputs (an S-4000S granted the 16-wide
+ * base-0x20 default enrolls ZERO of its base-0x00 inputs and stays at its 8-ch
+ * cold-connect floor). Re-opening the grant window against the same box MAC delivers
+ * the corrected width sweep — the dynamic 8/16/24/32 fix. enter_granting rebuilds from
+ * m->alloc.width, already re-set to the recognized width by reac_master_set_box; a
+ * real M-200 re-emits the sweep continuously, so re-firing once here is conservative. */
+void reac_master_regrant(struct reac_master *m)
+{
+	enter_granting(m, m->box_mac, NULL);
 }
 
 static void enter_established(struct reac_master *m)
