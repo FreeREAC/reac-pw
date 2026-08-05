@@ -116,6 +116,9 @@ enum reac_master_drop_reason {
 	REAC_M_DROP_BYE,           /* explicit box disconnect (hb selector 0x00)    */
 	REAC_M_DROP_MAC_CHANGE,    /* JOIN from a different box — re-grant the new  */
 	REAC_M_DROP_GRANT_TIMEOUT, /* grant window expired with no box unicast      */
+	REAC_M_DROP_BOX_UNKNOWN,   /* the box latched but never declared WHAT it is,
+	                            * so we had no width to enroll and refused to
+	                            * invent one. Back to probing; it may re-join.  */
 };
 
 /* Established link-check budget. The firmware constant 0x0258 = 600 frames
@@ -153,30 +156,42 @@ enum reac_master_drop_reason {
 #define REAC_M_CHANMAP_FRAMES_MAX REAC_M_CHANMAP_RING
 
 /* Console I/O config: everything the downstream generator needs to synthesize
- * the chanmap + cfea for a specific box. The master MAC is NOT here — it is OUR
- * L2 source MAC (passed to reac_master_init), which the cfea embeds so the
- * on-wire announced identity always equals the L2 source (a mismatch is a
- * documented slave-disconnect trigger). Fed the S-1608 config the generator
- * reproduces the captured M-300 downstream byte-for-byte. */
+ * the chanmap + cfea. The master MAC is NOT here — it is OUR L2 source MAC
+ * (passed to reac_master_init), which the cfea embeds so the on-wire announced
+ * identity always equals the L2 source (a mismatch is a documented
+ * slave-disconnect trigger).
+ *
+ * THIS IS THE MASTER'S OWN IDENTITY, NEVER A BOX DECLARATION (2026-08-05). The
+ * box on the wire is learned from the wire and from nowhere else — see the
+ * "no box known" contract on reac_master_init. `in_channels` used to seed the
+ * grant allocation, which made a compile-time constant the origin of every
+ * head-amp slot address; it is gone. What is left here is what the master
+ * announces about ITSELF plus the width byte the cfea carries, which
+ * reac_master_set_box re-stamps from the RECOGNIZED box. */
 struct reac_console_cfg {
-	uint8_t out_channels;   /* box analog outputs: cfea outCh [18]. (Does NOT
-	                         * size the chanmap: a real master sweeps the whole
-	                         * 48-slot chanmap ring regardless of console
-	                         * width, #130 — that ring is the HEAD-AMP space,
-	                         * not the 40-slot audio fabric, see reac_slots.h.)
-	                         * S-1608 = 8, M-5000 downstream box = 16.        */
-	uint8_t in_channels;    /* box analog inputs: sizes the UPSTREAM parser
-	                         * (box->master); carried for the caller, not a
-	                         * downstream field. S-1608 = 16.                 */
+	uint8_t out_channels;   /* cfea outCh [18]: the CONNECTED box's input width
+	                         * once one is recognized (reac_master_set_box
+	                         * re-stamps it); the idle placeholder until then.
+	                         * (Does NOT size the chanmap: a real master sweeps
+	                         * the whole 48-slot chanmap ring regardless of
+	                         * console width, #130 — that ring is the HEAD-AMP
+	                         * space, not the 40-slot audio fabric, see
+	                         * reac_slots.h.)                                 */
 	uint8_t console_field;  /* cfea [19] and [21] (move together): the emulated
 	                         * MASTER model. M-300 = 0x00, M-5000 = 0x01.     */
 };
 
-/* The default (S-1608 driven by an emulated M-300): 8 out, 16 in, console 0.
- * reac_master_init(cfg == NULL) uses this, so the byte-exact S-1608 path is the
- * out-of-the-box behaviour. */
-#define REAC_CONSOLE_CFG_S1608 \
-	((struct reac_console_cfg){ .out_channels = 8, .in_channels = 16, .console_field = 0 })
+/* The IDLE console: what the master announces about itself before any box has
+ * declared itself on the wire. out_channels is the cfea width byte's placeholder
+ * (0x08, the value every captured desk announces while unlinked); console_field 0
+ * is the V-Mixer identity. reac_master_init(cfg == NULL) uses this.
+ *
+ * It declares NO BOX. There is deliberately no in_channels here any more: a box
+ * width in a compile-time constant is a box we have never seen, and it used to
+ * be the origin of the grant allocation and hence of every head-amp slot address
+ * (see reac_master_init). */
+#define REAC_CONSOLE_CFG_IDLE \
+	((struct reac_console_cfg){ .out_channels = 8, .console_field = 0 })
 
 /* A MIXER PROFILE — the desk reac-pw impersonates. The grant burst is box-defined
  * (a box locks to any valid grant), so the only per-mixer identity is a small set
@@ -292,7 +307,13 @@ struct reac_master {
 	                           * golden's post-recognition enrol) then clears this. */
 	int      grant_dwell;     /* dwell slots between ENROLL and the grant burst
 	                           * (fps*REAC_M_GRANT_DWELL_SECONDS_X10/10, set at init) */
-	struct reac_grant_alloc alloc;   /* the head-amp slots we granted this box  */
+	struct reac_grant_alloc alloc;   /* THE box identity: the head-amp slots we
+	                           * allocated to the box that is ON THIS WIRE. width
+	                           * == 0 means NO BOX IS KNOWN — a normal state, not
+	                           * an error (reac_master_has_box). Written ONLY by
+	                           * reac_master_set_box (recognition) and cleared by
+	                           * reac_master_forget_box (every fall back to
+	                           * PROBING). Nothing else may seed it.            */
 	uint8_t  grant_burst[REAC_GRANT_SWEEP_MAX][34];  /* the generated sweep     */
 	int      grant_burst_len; /* rows in grant_burst                            */
 	const struct reac_headamp_tx *headamp_src;  /* head-amp state group A pushes;
@@ -329,20 +350,61 @@ struct reac_master {
 
 /* Initialize for a given source MAC, console config + frame rate (3675/4000/
  * 8000 fps). `src` is OUR master L2 MAC (Roland OUI); it is stamped into the
- * generated cfea so the announced identity equals the L2 source. `cfg` selects
- * the box I/O the downstream advertises; NULL -> the S-1608 default (8 out /
- * 16 in / M-300 console field), which reproduces the captured M-300 downstream
- * byte-for-byte. Starts in IDLE; the first reac_master_next() enters PROBING. */
+ * generated cfea so the announced identity equals the L2 source. `cfg` is the
+ * master's OWN identity (console model + the idle cfea width byte); NULL ->
+ * REAC_CONSOLE_CFG_IDLE. Starts in IDLE; the first reac_master_next() enters
+ * PROBING.
+ *
+ * IT STARTS WITH NO BOX (2026-08-05, the operator's ruling: "we should not start
+ * reac-pw with a preconfigured box, it has to be dynamic"). alloc.width == 0 and
+ * grant_burst_len == 0 until a real box declares itself on the wire and
+ * reac_master_set_box is called with what it declared. That is a NORMAL running
+ * state — reac-pw comes up, probes, and waits for a box, exactly as an unlinked
+ * desk does.
+ *
+ * WHAT THIS REPLACES, and why it is not merely tidier. init used to allocate the
+ * grant sweep from cfg.in_channels, whose only ever value was the S-1608's 16 —
+ * hard-coded in reac_sink_node.c, reachable from no CLI flag. So the head-amp
+ * slot addresses of a box we had never seen came from a compile-time constant:
+ * base 0x20, width 16. A box that reached GRANTING before declaring its model
+ * (the cold-connect JOIN carries no width) was granted THAT enrollment. If it was
+ * not a 16-input box, the grant claimed slots it does not own and claimed none
+ * that it does — link established, audio fine, every later head-amp record
+ * ignored (the 2026-07-17 live failure recorded in reac_grant.h). Recognition
+ * DID correct it a moment later on every box in the fixed matrix, which is why
+ * this stayed latent; a box outside the matrix, or one whose config-announce is
+ * lost, had nothing to correct it. Now there is no fabricated box to fall back
+ * to, so the wire is the only source and the failure cannot be silent. */
 void reac_master_init(struct reac_master *m, const uint8_t src[6],
                       const struct reac_console_cfg *cfg, int fps);
 
-/* Allocate fabric slots for the AUTODETECTED box (the recognizer, #137) and
- * REGENERATE the grant sweep for that allocation. Keyed on the box's INPUT width
- * (the sweep enrolls the box's inputs; S-0808 and S-1608 are both 8-OUT, so the
- * output count does not distinguish them). A width we cannot place keeps the
- * current allocation + sweep and the caller should log the fallback. Call from
- * the FSM-owning thread on a box recognition. */
+/* Is a real box's declaration currently in force? 0 = none known (the startup
+ * state, and the state after every drop). The grant sweep is empty while this is
+ * 0, and the master will not enroll anything — see reac_master_next's GRANTING
+ * hold. */
+int reac_master_has_box(const struct reac_master *m);
+
+/* Allocate head-amp slots for the box THE WIRE DECLARED (the recognizer, #137)
+ * and REGENERATE the grant sweep for that allocation. Keyed on the box's INPUT
+ * width (the sweep enrolls the box's inputs; S-0808 and S-1608 are both 8-OUT, so
+ * the output count does not distinguish them). This is the ONLY way a box width
+ * ever enters the master. A width we cannot place leaves the master's box
+ * identity untouched — including the enroll/cfea width bytes, which used to be
+ * stamped from the bad width even as the allocation was refused. Call from the
+ * FSM-owning thread on a box recognition. */
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
+
+/* Forget the box: no allocation, no sweep, the wide-safe ENROLL and the idle
+ * cfea back. Called on EVERY backward transition to PROBING (enter_probing), so
+ * "PROBING" means "we know nothing about any box" by construction.
+ *
+ * This is what makes a box SWAP safe. Recognition only fires on a CHANGE of
+ * matched model, so without forgetting, a box that leaves and is replaced by one
+ * whose config-announce we cannot match would inherit the departed box's base
+ * and be enrolled at slots it does not own — the same silent failure, one box
+ * removed. Re-derivation is then unconditional: whatever joins next declares
+ * itself from scratch. */
+void reac_master_forget_box(struct reac_master *m);
 
 /* Re-fire the grant burst for the currently-recognized box (m->box_mac), so a width
  * learned AFTER the cold-connect JOIN (reac_master_set_box, from the box's config-

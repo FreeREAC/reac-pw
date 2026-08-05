@@ -51,6 +51,8 @@ struct court {
 	/* tallies */
 	long m_probes, m_subs, m_announces, m_grants, m_chanmaps, m_enrolls;
 	long s_joins_fed, s_unicasts_fed, s_heartbeats_fed, s_floods_fed;
+	long s_configs_fed;            /* box config-announces the master RECOGNIZED */
+	unsigned cc_phase;             /* the box's cold-connect frame rotation */
 	int  m_granted_before_join;    /* the #130 regression flag */
 	int  slave_on;                 /* feed slave frames into the master? */
 };
@@ -115,9 +117,23 @@ static int step(struct court *c)
 	case REAC_SLAVE_EMIT_COLDCONNECT:
 		/* the unicast cold-connect phase: cdea 04 03 on the grid, audio between */
 		if (d.with_join) {
-			n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
-			                                16, NULL, REAC_SAMPLES_PER_PKT);
-			c->s_joins_fed++;
+			/* A real box's cold-connect is a ROTATION, not one repeated frame
+			 * (reac_slave.c's coldconnect_phase % 8): the 04 03 0014 join, the
+			 * 0013/0016/001a inventory, and — the one that matters here — the
+			 * config-announce in which it DECLARES WHAT IT IS. The master learns the
+			 * box from that frame and from nothing else, so a harness that only ever
+			 * replayed the join was modelling a box that never introduces itself. */
+			switch (c->cc_phase++ % 8) {
+			case 4:
+				n = reac_ctrl_build_config_announce(sf, c->s.fsm.master_mac, S_SRC,
+				                                    sc, 16);
+				break;
+			default:
+				n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
+				                                16, NULL, REAC_SAMPLES_PER_PKT);
+				c->s_joins_fed++;
+				break;
+			}
 		} else {
 			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
 			                                    16, NULL, REAC_SAMPLES_PER_PKT);
@@ -141,6 +157,16 @@ static int step(struct court *c)
 		break;
 	}
 	if (n > 0) {
+		/* The master's REAL ingest order (reac_pacer_rx_ingest): RECOGNIZE first,
+		 * then feed the FSM. Recognition is not decoration here — it is the only
+		 * way the master ever learns the box's width, and without it there is
+		 * nothing to enroll and no grant to emit. Modelling the courtship without
+		 * it would be testing a master that cannot court anything. */
+		const struct reac_box_model *bm = reac_ctrl_identify_box(sf, n);
+		if (bm) {
+			c->s_configs_fed++;
+			reac_master_set_box(&c->m, bm->in_ch, bm->out_ch);
+		}
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
 		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)

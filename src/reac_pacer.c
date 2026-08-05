@@ -218,6 +218,19 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 	pev_push(p, REAC_PEV_STATE, (uint8_t)from, (uint8_t)to, p->master.box_mac, blk);
 }
 
+/* The published box model is a MIRROR of the master's box identity, never a
+ * parallel truth. The master forgets its box on every fall back to PROBING
+ * (enter_probing -> reac_master_forget_box), so the published model has to go with
+ * it — otherwise reac.box-model / reac.box-width keep naming a box that has left
+ * the wire, and a consumer computing a head-amp address from that width addresses
+ * a box that is not there. Call after every step of the master. */
+static void sync_published_box(struct reac_pacer *p)
+{
+	if (!reac_master_has_box(&p->master) &&
+	    atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
+		atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
+}
+
 void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len)
 {
 	/* PASSIVE DISCOVERY first, and independently (task #178). The socket is already
@@ -258,21 +271,27 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 		atomic_load_explicit(&p->recognized_box, memory_order_relaxed);
 	if (bm && bm != prev_bm) {
 		atomic_store_explicit(&p->recognized_box, bm, memory_order_release);
-		/* Autodetect: select the grant burst for THIS matrix model (its in/out
-		 * width) so the master emits the correct model's sweep on the next grant. */
+		/* THE box identity, from the only place it can honestly come from: what the
+		 * box said it is. Everything downstream — the head-amp base, the grant sweep,
+		 * the ENROLL group map, the cfea width, the published node props, the node
+		 * widths — is derived from this call and from nothing else. */
 		int prev_w = p->master.alloc.width;   /* the width we have ALREADY granted */
 		reac_master_set_box(&p->master, bm->in_ch, bm->out_ch);
-		/* set_box rebuilds the sweep for the recognized width but does NOT re-emit it.
-		 * The cold-connect JOIN carries no width, so the box was granted the stale
-		 * default (autodetect starts at the S-1608 16-wide/base-0x20 cfg). If the
-		 * recognized width DIFFERS, re-fire so the box gets its FULL-width enrollment
-		 * (the S-4000S 8->32 fix, and the correct 8-wide grant for the S-0808). A box
-		 * recognized at the width already granted (S-1608 at the 16 default) does NOT
-		 * re-fire -> its establishment stays byte-identical. */
+		/* set_box rebuilds the sweep for the declared width but does NOT re-emit it,
+		 * and a box already GRANTED at a different width is holding an enrollment for
+		 * slots that are not its own. Re-fire so it gets the corrected sweep (the
+		 * S-4000S 8->32 fix, and the correct 8-wide base-0x00 grant for an S-0808 that
+		 * had been granted 16 wide). A box declaring the width we already granted does
+		 * NOT re-fire -> its establishment stays byte-identical.
+		 *
+		 * The `box_seen` term this gate also carried is gone. It is the 600-frame
+		 * presence DECAY flag, and we are standing inside the handler for a frame from
+		 * that very box — a "is the box there" test that can read 0 while we hold the
+		 * box's own frame in our hands is a stale diagnostic gating a correctness
+		 * action, which is how a wrong-width enrollment gets to survive on the wire. */
 		if (bm->in_ch != prev_w &&
 		    (p->master.state == REAC_M_GRANTING ||
-		     p->master.state == REAC_M_ESTABLISHED) &&
-		    p->master.box_seen)
+		     p->master.state == REAC_M_ESTABLISHED))
 			reac_master_regrant(&p->master);
 		pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)bm->in_ch, 0, parsed.src, NULL);
 	}
@@ -280,6 +299,7 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	enum reac_master_state from = p->master.state;
 	int changed = reac_master_rx(&p->master, ev, parsed.src,
 	                             ev == REAC_M_RX_BOX_JOIN ? frame + 18 : NULL);
+	sync_published_box(p);   /* a BYE / MAC-change drop forgets the box here */
 
 	/* presence GAINED edge (LOST decays in the per-slot path) */
 	if (p->master.box_seen && !p->presence_seen)
@@ -885,11 +905,13 @@ static void *pacer_loop(void *arg)
 				reac_ctrl_stamp_headamp(frame, hch, hparam, hval);
 		}
 
-		/* Timer-driven backward transitions (grant-window expiry, peer-gone
+		/* Timer-driven backward transitions (the undeclared-box hold, peer-gone
 		 * budget) happen inside reac_master_next — mirror + log them here. */
-		if (p->master.state != p->prev_state)
+		if (p->master.state != p->prev_state) {
 			note_transition(p, p->prev_state, p->master.state,
 			                REAC_PEV_CAUSE_TIMER);
+			sync_published_box(p);   /* a peer-gone drop forgets the box */
+		}
 		/* presence LOST edge (the 600-frame decay ran out in next()) */
 		if (!p->master.box_seen && p->presence_seen) {
 			pev_push(p, REAC_PEV_PRESENCE, 0, 0, NULL, NULL);

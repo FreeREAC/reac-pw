@@ -40,6 +40,11 @@ enum reac_master_ev {
 	REAC_M_EV_BYE,            /* box heartbeat with selector 0x00             */
 	REAC_M_EV_GRANT_DELIVERED,/* tick: ENROLL + dwell + full sweep emitted    */
 	REAC_M_EV_LINK_LOST,      /* tick: established link-check budget drained  */
+	REAC_M_EV_BOX_UNKNOWN,    /* tick: the ungranted hold elapsed and the box
+	                           * still has not declared WHAT IT IS, so there is
+	                           * nothing to enroll. Backward only: we keep
+	                           * probing and inviting rather than guess a width
+	                           * (reac_master_next's GRANTING hold).           */
 	REAC_M_EV_COUNT
 };
 
