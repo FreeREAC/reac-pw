@@ -211,6 +211,33 @@ rules rather than transitions:
   moment the pacer emits. Presence (sustained box broadcast FILLER) is a
   *diagnostic* flag with a 600-frame decay, logged on gained/lost edges.
 
+**THE BOX COMES FROM THE WIRE (2026-08-05).** The master starts knowing nothing
+about any box: no allocation, no enrollment sweep, and no way for anything typed to
+supply one. `reac_master_set_box` — driven by the box's own config-announce, matched
+against the fixed model matrix — is the only door in, and `reac_master_forget_box`
+(run on every backward transition to PROBING) the only way out, so a swapped box can
+never inherit a departed one's head-amp base. No box present is a normal running
+state, not an error; a cold-connect JOIN carries no width, so GRANTING with nothing
+declared HOLDS the ungranted announce a real M-200 holds and then falls back to
+probing rather than guess. `--box` is retired (accepted, ignored, reported once); a
+SLAVE's `--box-channels` stays, because our own width is a fact about us with no wire
+to learn it from.
+
+What this removed: the grant used to be allocated at init from `cfg.in_channels`,
+whose only ever value was the S-1608's 16 (hard-coded in `reac_sink_node.c`). A box
+that reached GRANTING before declaring its model was granted THAT enrollment — head-amp
+slots `0x20..0x2f` claimed for a box whose inputs may live at `0x00..0x07`. Recognition
+corrected it a moment later for every box in the matrix, which is why it stayed latent;
+a box outside the matrix, or one whose config-announce was lost, had nothing to correct
+it, and the failure is silent by construction (the box links, streams audio, and ignores
+every head-amp record — the class `reac_grant.h` records from 2026-07-17).
+
+The master publishes what it decided so a consumer never has to re-derive it:
+`reac.box-model` / `reac.box-width` / `reac.headamp.channels` as before, plus
+`reac.box-source` (`wire` while a box is known, `none` otherwise) and
+`reac.headamp.base` — the head-amp wire channel the box's input 1 sits at, i.e. the
+`base` in `CH = base + (input - 1)`. `reac_link_state.h` defines all of them.
+
 **Byte source-of-truth.** The probe/SUB01/SUB02 blocks are FIXED protocol
 constants replayed verbatim from a real **M-300** driving an S-1608
 (`reac-captures/m300-s1608-*.pcap`, 2026-07-10, master `00:40:ab:c9:d8:5b`);
@@ -416,7 +443,7 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 
 | File | Role |
 |---|---|
-| `src/main.c` | CLI + lifecycle: parse `--role`, open feeder, create source node, then (master) the sink or (slave) the slave engine; run the loop |
+| `src/main.c` | CLI + lifecycle: parse `--role` (no `--box` — the master's box is learned from the wire), open feeder, create source node, then (master) the sink or (slave) the slave engine; run the loop |
 | `src/reac_role.h` | **role selection**: `--role master\|slave` parse + validation (slave requires `--tx`), header-only + unit-tested |
 | `src/reac_ring.{h,c}` | lock-free SPSC planar-float ring (RX hot-path → process(); also the slave's upstream-input carrier) |
 | `src/reac_rx.{h,c}` | non-RT feeder: wire source (live/pcap) → libreac validate → role-gated decode (downstream 40-ch / upstream box return) → f32 → ring; counter-slope ppm estimator |
