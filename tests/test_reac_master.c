@@ -111,6 +111,11 @@ static enum reac_master_emit slot(struct reac_master *m, int *idx,
 static void establish(struct reac_master *m, uint16_t *cnt, const uint8_t box[6])
 {
 	reac_master_rx(m, REAC_M_RX_BOX_JOIN, box, ZONEA_JOIN);
+	/* The box declares WHAT IT IS — its config-announce, which reac_pacer turns into
+	 * this call. Nothing can be enrolled before it: the cold-connect JOIN carries no
+	 * width and the master no longer holds a fabricated one to fall back on. Every
+	 * re-join re-declares, because a drop forgets the box (reac_master_forget_box). */
+	reac_master_set_box(m, 16, 8);
 	/* +1 for the leading ENROLL slot, +grant_dwell for the ENROLL->grant dwell
 	 * (~1.6 s, matching the measured M-200 gap), before the 32-block burst. */
 	for (int i = 0; i < m->grant_dwell + m->grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
@@ -133,8 +138,14 @@ int main(void)
 
 	uint8_t f[REAC_FRAME_BYTES];
 	struct reac_master m;
-	struct reac_console_cfg s1608 = REAC_CONSOLE_CFG_S1608;
-	reac_master_init(&m, SRC, &s1608, FPS);
+	struct reac_console_cfg idle = REAC_CONSOLE_CFG_IDLE;
+	reac_master_init(&m, SRC, &idle, FPS);
+
+	/* The master starts knowing NOTHING about any box (2026-08-05): no allocation,
+	 * no sweep, and the IDLE cfea below is what it announces about itself. Sections
+	 * that need a box DECLARE one, because on the wire the box is what declares it. */
+	CHK(reac_master_has_box(&m) == 0);
+	CHK(m.alloc.width == 0 && m.grant_burst_len == 0);
 
 	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
 	 * fe frame (marker + 0x00..0x06), asserted below against GOLD_CHANMAP. */
@@ -173,7 +184,7 @@ int main(void)
 	 * immediately at recognition time, before any grant/RX event. */
 	{
 		struct reac_master mw;
-		reac_master_init(&mw, SRC, &s1608, FPS);
+		reac_master_init(&mw, SRC, &idle, FPS);
 
 		reac_master_set_box(&mw, 16, 8);             /* S-1608: 16 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
@@ -197,6 +208,11 @@ int main(void)
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 	}
 
+	/* The box declares itself (what reac_pacer does on the config-announce). Only
+	 * now is there an enrollment to grant. */
+	reac_master_set_box(&m, 16, 8);
+	CHK(reac_master_has_box(&m) == 1);
+
 	/* 3. the grant is the master's OWN burst sweep (byte-exact M-200 cdea 04 03),
 	 * NOT an echo of the box's JOIN (the echo model was falsified by
 	 * matrix-m200-s0808 2026-07-12 — a locked box gets the master's sweep). Block
@@ -218,7 +234,7 @@ int main(void)
 	{
 		struct reac_master mg;
 
-		reac_master_init(&mg, SRC, &s1608, FPS);
+		reac_master_init(&mg, SRC, &idle, FPS);
 		reac_master_set_box(&mg, 16, 8);                 /* a real S-1608 links */
 		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
 		CHK(mg.grant_burst_len == 56);                   /* 8 + 16*3 */
@@ -241,20 +257,18 @@ int main(void)
 		}
 		CHK(groupa == 16 * 3);
 
-		/* An unplaceable width must NOT leave an empty grant: cfg.in_channels is
-		 * load-bearing now (it sizes the sweep) where the old code ignored cfg and
-		 * fell back to a replayed table, so a 0/garbage width would otherwise mean
-		 * "grant nothing" and silently mute the box. */
-		struct reac_console_cfg zero = { .out_channels = 8, .in_channels = 0,
-		                                 .console_field = 0 };
-		struct reac_master mz;
-		reac_master_init(&mz, SRC, &zero, FPS);
-		CHK(mz.grant_burst_len > 0);
-		CHK(mz.alloc.width > 0);
-
+		/* A width we cannot place must not HALF-apply: the allocation, the ENROLL
+		 * group map and the cfea width byte move together or not at all. The
+		 * previous cut let the allocation be refused and then stamped the bad width
+		 * into the ENROLL and the announce anyway. */
+		uint8_t enroll_before[34];
+		memcpy(enroll_before, mg.enroll_blk, 34);
+		uint8_t cfea_before = mg.cfg.out_channels;
 		reac_master_set_box(&mg, 999, 8);                /* nonsense recognition */
 		CHK(mg.grant_burst_len == 56);                   /* previous sweep retained */
 		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
+		CHK(memcmp(enroll_before, mg.enroll_blk, 34) == 0);
+		CHK(mg.cfg.out_channels == cfea_before);
 	}
 
 	/* 4. PROBE / SUB01 / SUB02 are the fixed M-300 constants, byte-exact. */
@@ -326,7 +340,7 @@ int main(void)
 	    f[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);   /* end marker survives the stamp */
 
 	/* ---- (a) NO-RX SOAK: the direct anti-#130 regression test ------------ */
-	reac_master_init(&m, SRC, &s1608, FPS);
+	reac_master_init(&m, SRC, &idle, FPS);
 	CHK(m.state == REAC_M_IDLE);
 	uint16_t cnt = 0;
 	int idx;
@@ -376,7 +390,7 @@ int main(void)
 	 * indices 30..33 (measured 11/11 bursts on the M-300 establish capture), and
 	 * every probe — special or rotating — publishes its checksum as the FILLER
 	 * descriptor. */
-	reac_master_init(&m, SRC, &s1608, FPS);
+	reac_master_init(&m, SRC, &idle, FPS);
 	cnt = 0;
 	int specials_seen = 0;
 	for (long i = 0; i < 2L * m.cycle_len; i++) {
@@ -415,6 +429,14 @@ int main(void)
 	CHK(m.state == REAC_M_GRANTING);
 	CHK(memcmp(m.box_mac, BOX, 6) == 0);
 	CHK(m.grant_attempts == 1);
+	/* A cold-connect JOIN carries NO WIDTH, so there is still nothing to enroll:
+	 * the master holds the ungranted window instead of granting a guess. The box
+	 * declares itself a moment later (a real one's config-announce lands ~1 ms into
+	 * GRANTING, see reac_pacer.c) and THAT is what fills the enrollment in. */
+	CHK(reac_master_has_box(&m) == 0);
+	CHK(m.grant_burst_len == 0);
+	reac_master_set_box(&m, 16, 8);
+	CHK(m.grant_burst_len == 56);
 
 	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the ~1.6 s
 	 * grant_dwell hold (matching the measured M-200 ENROLL->grant gap: Δ1.503 s
@@ -495,11 +517,12 @@ int main(void)
 	 * a master that timed back to PROBING here made the box re-attempt forever (LED
 	 * blinking faster, never solid). A real M-200 commits after granting and holds;
 	 * the peer-gone budget below is the backward safety if the box truly vanishes. */
-	reac_master_init(&m, SRC, &s1608, FPS);
+	reac_master_init(&m, SRC, &idle, FPS);
 	cnt = 0;
 	slot(&m, NULL, &cnt);                        /* IDLE -> PROBING on first slot */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
+	reac_master_set_box(&m, 16, 8);              /* the box declares itself */
 	for (int i = 0; i < m.grant_dwell + m.grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
 		slot(&m, NULL, &cnt);
 	CHK(m.state == REAC_M_ESTABLISHED);          /* self-completed after dwell + full burst */
@@ -635,6 +658,146 @@ int main(void)
 		printf("OK: --mixer m5000 resolves 96 kHz (48k for V-Mixer profiles "
 		       "unchanged), fps = rate/12 (4000 @48k / 8000 @96k), frame size "
 		       "stays REAC_FRAME_BYTES for both\n");
+	}
+
+	/* ================================================================== *
+	 * THE BOX IS WHAT THE WIRE SAYS IT IS (2026-08-05)
+	 *
+	 * The master used to hold a 16-channel enrollment for head-amp slots
+	 * 0x20..0x2f before it had seen anything — REAC_CONSOLE_CFG_S1608's
+	 * in_channels, hard-coded in reac_sink_node.c. These cases pin the three
+	 * places that fabrication could reach the wire, each stated as a VALUE on
+	 * the emitted records rather than as a shape.
+	 * ================================================================== */
+	{
+		struct reac_master mb;
+		uint16_t bc = 0;
+
+		/* (a) STARTUP. No box, no allocation, no sweep — and that is a normal
+		 * running state, not a degraded one: reac-pw comes up before anything is
+		 * plugged in and waits. */
+		reac_master_init(&mb, SRC, &idle, FPS);
+		CHK(reac_master_has_box(&mb) == 0);
+		CHK(mb.alloc.width == 0 && mb.alloc.base == 0);
+		CHK(mb.grant_burst_len == 0);
+		/* and it cannot stamp a grant it does not have */
+		CHK(reac_master_stamp(&mb, f, REAC_M_EMIT_GRANT, 0) == -1);
+
+		/* (b) THE SEED-vs-WIRE CASE, which is the whole point. A cold-connect
+		 * JOIN carries no width. Under the fabricated seed this master would now
+		 * be holding a 16-wide base-0x20 sweep for a box that has said nothing at
+		 * all, and would put it on the wire — enrolling slots 0x20..0x2f for a box
+		 * whose inputs live at 0x00..0x07, which links, streams audio, and then
+		 * ignores every head-amp record (reac_grant.h, live 2026-07-17). Drive the
+		 * ENTIRE dwell and assert what actually reaches the wire: nothing. */
+		slot(&mb, NULL, &bc);                       /* IDLE -> PROBING */
+		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
+		CHK(mb.state == REAC_M_GRANTING);
+		CHK(reac_master_has_box(&mb) == 0);         /* the JOIN said nothing */
+		int emitted_grants = 0, emitted_enrolls = 0;
+		for (int i = 0; i < mb.grant_dwell; i++) {
+			enum reac_master_emit e = slot(&mb, NULL, &bc);
+			if (e == REAC_M_EMIT_GRANT)  emitted_grants++;
+			if (e == REAC_M_EMIT_ENROLL) emitted_enrolls++;
+		}
+		CHK(emitted_grants == 0);      /* NOTHING enrolled: we do not guess a box */
+		CHK(emitted_enrolls == 1);     /* the wide-safe arm frame, once */
+		CHK(mb.state == REAC_M_GRANTING);           /* still holding, not established */
+
+		/* (c) THE BOX DECLARES ITSELF — an S-0808, 8 inputs. The window restarts
+		 * and the burst that reaches the wire enrolls 0x00..0x07, every record. */
+		reac_master_set_box(&mb, 8, 8);
+		CHK(reac_master_has_box(&mb) == 1);
+		CHK(mb.alloc.base == 0x00 && mb.alloc.width == 8);
+		CHK(mb.grant_burst_len == 32);              /* 8 + 8*3 */
+		CHK(mb.grant_ticks == 0);                   /* window restarted */
+		int ga_records = 0;
+		emitted_grants = 0;
+		for (int i = 0; i < mb.grant_dwell + mb.grant_burst_len * REAC_M_GRANT_STRIDE + 2; i++) {
+			int gi;
+			enum reac_master_emit e = slot(&mb, &gi, &bc);
+			if (e != REAC_M_EMIT_GRANT)
+				continue;
+			emitted_grants++;
+			build_and_stamp(&mb, f, e, gi, planar);
+			CHK(f[16] == 0xcd && f[17] == 0xea);    /* a real cdea grant frame */
+			CHK(reac_ctrl_checksum_verify(f) == 0);
+			if (f[32] == 0x12 && f[33] == 0x12 && f[34] == 0x01 && f[35] == 0x01) {
+				ga_records++;
+				CHK(f[36] <= 0x07);                 /* the S-0808's own slots */
+			}
+		}
+		CHK(emitted_grants == 32);
+		CHK(ga_records == 8 * 3);                   /* phantom+pad+sens per input */
+		CHK(mb.state == REAC_M_ESTABLISHED);
+
+		/* (d) A BOX SWAP RE-DERIVES EVERYTHING. The 8-wide box goes; the master
+		 * forgets it, so nothing of the departed box's placement can be inherited
+		 * by whatever joins next — which matters most for the box we CANNOT
+		 * identify, since no recognition edge would ever fire to correct it. */
+		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_BYE, BOX, NULL) == 1);
+		CHK(mb.state == REAC_M_PROBING);
+		CHK(reac_master_has_box(&mb) == 0);
+		CHK(mb.alloc.width == 0 && mb.grant_burst_len == 0);
+		/* a DIFFERENT box joins and declares 16 inputs: base moves to 0x20 */
+		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
+		reac_master_set_box(&mb, 16, 8);
+		CHK(mb.alloc.base == 0x20 && mb.alloc.width == 16);
+		CHK(mb.grant_burst_len == 56);
+		for (int i = 0; i < mb.grant_burst_len; i++) {
+			const uint8_t *r = mb.grant_burst[i];
+			if (r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01)
+				CHK(r[20] >= 0x20 && r[20] <= 0x2f);   /* NOT the old box's slots */
+		}
+
+		/* (e) A BOX THAT NEVER DECLARES ITSELF is not guessed at. The hold expires
+		 * and we go back to probing — still inviting, never enrolled at a made-up
+		 * base. Recoverable and loud beats plausible and wrong. */
+		struct reac_master mu;
+		uint16_t uc = 0;
+		reac_master_init(&mu, SRC, &idle, FPS);
+		slot(&mu, NULL, &uc);
+		CHK(reac_master_rx(&mu, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
+		int held_grants = 0;
+		for (int i = 0; i <= mu.grant_dwell; i++) {
+			enum reac_master_emit e = slot(&mu, NULL, &uc);
+			if (e == REAC_M_EMIT_GRANT)
+				held_grants++;
+		}
+		CHK(held_grants == 0);
+		CHK(mu.state == REAC_M_PROBING);
+		CHK(mu.drop_reason == REAC_M_DROP_BOX_UNKNOWN);
+
+		/* (f) AND IT CANNOT ESTABLISH UNENROLLED. The box's accept establishes
+		 * only once the full sweep has been delivered; with no sweep at all that
+		 * predicate must read FALSE, not vacuously true — otherwise the box links
+		 * with audio flowing and not one head-amp slot claimed, which is this same
+		 * failure reached from the opposite side. */
+		struct reac_master mn;
+		uint16_t nc = 0;
+		reac_master_init(&mn, SRC, &idle, FPS);
+		slot(&mn, NULL, &nc);
+		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
+		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 0);
+		CHK(mn.state == REAC_M_GRANTING);           /* held, NOT established */
+		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_HEARTBEAT, BOX, NULL) == 0);
+		CHK(mn.state == REAC_M_GRANTING);
+		/* and the predicate itself, at the boundary the emit loop cannot reach:
+		 * "the full sweep has left the wire" must read FALSE for an EMPTY sweep,
+		 * not trivially true because zero blocks take zero slots to send. The hold
+		 * above happens to drop out of GRANTING first today, so this is the guard
+		 * that keeps the predicate honest if that bound ever changes. */
+		mn.grant_ticks = mn.grant_dwell + 1;    /* past the delivery threshold */
+		CHK(mn.grant_burst_len == 0);
+		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 0);
+		CHK(mn.state == REAC_M_GRANTING);       /* still NOT established */
+
+		printf("OK: the box comes from the wire — a master with no declaration has "
+		       "no allocation and no sweep, a cold-connect JOIN alone enrolls "
+		       "NOTHING, the declared width places the sweep (S-0808 -> 0x00..0x07, "
+		       "S-1608 -> 0x20..0x2f) on every emitted group-A record, a swap "
+		       "re-derives from scratch, and an undeclared box is neither guessed "
+		       "at nor established\n");
 	}
 
 	return 0;

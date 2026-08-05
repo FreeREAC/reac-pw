@@ -7,11 +7,12 @@ Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 reac-pw puts the REAC fabric into the PipeWire graph as one node:
 `reac:capture`, an `Audio/Source` with mono float output ports
-`capture_01`..`capture_NN` (see [DESIGN.md](../DESIGN.md)). Without
-`--box` that is the full 40-slot fabric; with `--box MODEL` the node is
-sized and labelled to the declared box's real input width, so a saved
-patch sees the box rather than the fabric
-(`src/reac_source_node.h`). It carries the decoded broadcast at the
+`capture_01`..`capture_NN` (see [DESIGN.md](../DESIGN.md)). As a master it
+is sized and labelled to the RECOGNIZED box's real input width — learned
+from the box's own config-announce, never configured — so a saved patch
+sees the box rather than the fabric (`src/reac_source_node.h`); it is the
+full 40-slot fabric only where there is no recognizer (a pcap replay or a
+TX-less monitor). It carries the decoded broadcast at the
 recovered REAC rate, de-interleaved by libreac and fed through its
 validate/counter/rate-detect into the lock-free ring.
 
@@ -321,7 +322,7 @@ physics, not by missing software.
                                   ├─► pw-record / file     (§1)
                                   ├─► Ardour/DAW inputs    (§1)
   reac:capture (F32 ports: 40,    ├─► module-rtp-sink ─► AES67/RTP      (§2)
-  or the box width under --box) ──►├─► module-rtp-sink + ptp4l ─► AES67+PTP / Dante (§3, §4)
+  or the recognized box width) ──►├─► module-rtp-sink + ptp4l ─► AES67+PTP / Dante (§3, §4)
   (the only thing reac-pw owns)   ├─► ALSA MADI card sink  (§5, needs RME)
                                   ├─► g_audio UAC2 gadget  (§6, needs OTG port)
                                   └─► module-avb / OpenAvnu (§7, needs AVB infra)

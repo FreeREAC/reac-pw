@@ -65,13 +65,25 @@ downstream sink, or the slave's upstream-return + handshake socket; needs
 `CAP_NET_RAW`, plus `CAP_SYS_NICE` for the master pacer's SCHED_FIFO). The slave
 role requires `--tx`.
 
-On the master, `--box MODEL[:NAME]` (`MODEL` = `s0808`, `s1608`, or `s4000s`)
-declares the single box on this REAC segment, sizing and labelling
-`reac:capture`/`reac:playback` to its real input/output width; the optional
-`:NAME` overrides the node label (default the model name). `--name NAME` suffixes
-the PipeWire node names (`reac-capture.NAME`, `reac-playback.NAME`) so one master
-per REAC VLAN/segment can coexist in the same graph. (`--box` is master-only; a
-slave's own width is `--box-channels`.)
+On the master, **the box is learned from the wire and nothing configures it.**
+reac-pw starts knowing nothing, probes, and waits; no box present is a normal
+state, not an error. When a box declares itself (its `cdea 01 03 0010`
+config-announce, matched against the fixed model matrix) the master allocates its
+head-amp slots, generates the enrollment sweep for exactly those slots, and sizes
+and labels `reac:capture`/`reac:playback` to its real input/output width. Swap the
+box and all of that is re-derived; unplug it and it is forgotten rather than left
+standing as a claim about a box that has gone.
+
+`--box` is **retired** (2026-08-05): accepted, ignored, and reported once, plus
+once more if the wire disagrees with it. It declared a fact only the wire can
+state, and two sources for one fact means nothing forces them to agree while only
+one of them is ever true — the head-amp slot addresses of a box nobody had seen
+came from a compile-time default. A SLAVE's `--box-channels` / `--box-model` stay:
+that is our declaration about ourselves, and there is no wire to learn it from.
+
+`--name NAME` suffixes the PipeWire node names (`reac-capture.NAME`,
+`reac-playback.NAME`) so one master per REAC VLAN/segment can coexist in the same
+graph.
 
 ## Node model
 
@@ -79,8 +91,9 @@ The REAC broadcast is always 40 ch × 12 samples × 3 B; the sample rate lives i
 the packet rate (pps = rate/12), never on the wire.
 
 - **`reac:capture` (source).** A `pw_filter` with mono-F32 DSP output ports —
-  exactly the ring's planar layout, 40 wide by default and narrowed to the box's
-  real input width when `--box` declares one. A non-realtime feeder thread reads frames,
+  exactly the ring's planar layout, sized to the recognized box's real input width
+  (40 wide only where there is no recognizer: a pcap replay or a TX-less
+  monitor). A non-realtime feeder thread reads frames,
   validates, counter-stamps and decodes with libreac,
   and writes whole REAC frames into a lock-free SPSC ring. The only realtime code
   is `on_process()`: it dequeues one PipeWire quantum per channel and returns —

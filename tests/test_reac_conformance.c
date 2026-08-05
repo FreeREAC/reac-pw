@@ -63,7 +63,7 @@ int main(void)
 
 	for (size_t c = 0; c < sizeof CONF_CONSOLES / sizeof CONF_CONSOLES[0]; c++) {
 		const struct conf_console *cc = &CONF_CONSOLES[c];
-		struct reac_console_cfg cfg = { .out_channels = 8, .in_channels = 16,
+		struct reac_console_cfg cfg = { .out_channels = 8,
 		                                .console_field = cc->console_field };
 		struct reac_master m;
 		reac_master_init(&m, cc->mac, &cfg, FPS);

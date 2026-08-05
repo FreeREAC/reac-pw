@@ -476,11 +476,26 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	char ha_channels[16];
 	snprintf(ha_channels, sizeof ha_channels, "%d", bm ? bm->in_ch : 0);
 
+	/* The head-amp BASE, from the same allocator the master granted with. Derived
+	 * here rather than shipped across a second atomic on purpose: reac_grant_allocate
+	 * is pure and total for a matrix width, so calling it is reading the master's
+	 * decision, not re-deciding it. Publishing it at all is what lets a consumer stop
+	 * re-deriving the base from the width against its own placement table. */
+	char ha_base[16];
+	snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
+	if (bm) {
+		struct reac_grant_alloc a;
+		if (reac_grant_allocate(&a, bm->in_ch) == 0)
+			snprintf(ha_base, sizeof ha_base, "%u", a.base);
+	}
+
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
 		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
 		REAC_PROP_BOX_WIDTH,       width,
+		REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
 		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
+		REAC_PROP_HEADAMP_BASE,    ha_base,
 		NULL);
 	if (props) {
 		pw_filter_update_properties(n->filter, NULL, &props->dict);
@@ -706,6 +721,8 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
 			REAC_PROP_BOX_MODEL, "none",
 			REAC_PROP_BOX_WIDTH, "0x0",
+			REAC_PROP_BOX_SOURCE, REAC_BOX_SOURCE_NONE,
+			REAC_PROP_HEADAMP_BASE, REAC_BOX_SOURCE_NONE,
 			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
 			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
 			 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
@@ -836,9 +853,13 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		.prio = 0,        /* default 79 */
 		.cpu = -1,        /* no pin by default (set on a dedicated rig host) */
 		.src_mac = n->src,
-		/* Advertise the S-1608 downstream (8 out / 16 in); the console_field is
-		 * the emulated mixer model, from the --mixer profile (default V-Mixer). */
-		.console = REAC_CONSOLE_CFG_S1608,
+		/* The master's OWN identity, and NO BOX (2026-08-05). The box comes from
+		 * the wire; the console_field is the emulated mixer model, from the
+		 * --mixer profile (default V-Mixer). This line used to read
+		 * REAC_CONSOLE_CFG_S1608, whose in_channels=16 was the real origin of
+		 * every head-amp slot address until a box was recognized — a hard-coded
+		 * box, reachable from no flag and visible in no log. */
+		.console = REAC_CONSOLE_CFG_IDLE,
 	};
 	pcfg.console.console_field = cfg->console_field;
 	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */

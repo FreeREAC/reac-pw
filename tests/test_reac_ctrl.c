@@ -258,8 +258,42 @@ int main(void)
 	if (check_record_cksum_order())
 		return 1;
 
+
+	/* 9. THE RETIRED --box PIN'S ONE REMAINING JOB: say once that what somebody
+	 * typed disagrees with what the box declared. Exactly once is the contract —
+	 * the box repeats its config-announce, so a per-frame notice becomes thousands
+	 * of identical lines and stops being read, while never saying it is how a wrong
+	 * pin sat in reac.env unnoticed for a session. */
+	{
+		const char *pin = "s1608";
+		CHK(reac_box_pin_notice(&pin, "s0808") == 1);   /* disagrees -> notice */
+		CHK(pin == NULL);                                /* consumed */
+		CHK(reac_box_pin_notice(&pin, "s0808") == 0);   /* and never again */
+
+		pin = "s1608:Drums";                             /* the :label is not the model */
+		CHK(reac_box_pin_notice(&pin, "s0808") == 1);
+		pin = "s1608:Drums";
+		CHK(reac_box_pin_notice(&pin, "s1608") == 0);   /* agrees -> silence */
+		CHK(pin == NULL);                                /* still consumed */
+
+		/* a prefix must not read as agreement in either direction */
+		pin = "s16";
+		CHK(reac_box_pin_notice(&pin, "s1608") == 1);
+		pin = "s1608";
+		CHK(reac_box_pin_notice(&pin, "s16") == 1);
+
+		/* nothing typed, or nothing recognized yet: nothing to say */
+		pin = NULL;
+		CHK(reac_box_pin_notice(&pin, "s0808") == 0);
+		pin = "s1608";
+		CHK(reac_box_pin_notice(&pin, NULL) == 0);
+		CHK(pin != NULL);        /* NOT consumed: we have not recognized anything */
+		CHK(reac_box_pin_notice(NULL, "s0808") == 0);
+	}
+
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
 	       "parser + descriptor + audio round-trip + box-frame classifier clean, "
-	       "DT1 record checksum stamped before the block checksum\n");
+	       "DT1 record checksum stamped before the block checksum, "
+	       "retired --box pin disagreement reported exactly once\n");
 	return 0;
 }

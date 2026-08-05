@@ -94,9 +94,9 @@ static const uint8_t *gold_probe(int phase, uint8_t sub)
 static int test_probe_rotation(void)
 {
 	uint8_t f[REAC_FRAME_BYTES];
-	struct reac_console_cfg s1608 = REAC_CONSOLE_CFG_S1608;
+	struct reac_console_cfg idle = REAC_CONSOLE_CFG_IDLE;
 	struct reac_master m;
-	reac_master_init(&m, OUR_MAC, &s1608, 8000);
+	reac_master_init(&m, OUR_MAC, &idle, 8000);
 
 	const int expect[10] = { 0, 0, 6, 6, 2, 2, 8, 8, 4, 4 };
 	int np = 0, fillers_checked = 0;
@@ -134,11 +134,11 @@ static int test_probe_rotation(void)
 int main(void)
 {
 	uint8_t f[REAC_FRAME_BYTES];
-	struct reac_console_cfg s1608 = REAC_CONSOLE_CFG_S1608;
+	struct reac_console_cfg idle = REAC_CONSOLE_CFG_IDLE;
 
 	/* --- with OUR distinct MAC: chanmap EXACT, cfea EXACT except MAC+cksum --- */
 	struct reac_master m;
-	reac_master_init(&m, OUR_MAC, &s1608, 8000);
+	reac_master_init(&m, OUR_MAC, &idle, 8000);
 	CHK(m.chanmap_nframes == GOLD_CHANMAP_WINDOWS);   /* full 49-window fabric sweep */
 
 	/* CHANMAP: no MAC -> byte-EXACT vs the capture. Window 0 is the fe frame
@@ -171,7 +171,7 @@ int main(void)
 
 	/* --- with the M-300 MAC as OUR src: cfea is byte-EXACT incl. checksum ---- */
 	struct reac_master m300;
-	reac_master_init(&m300, M300_MAC, &s1608, 8000);
+	reac_master_init(&m300, M300_MAC, &idle, 8000);
 	stamp(&m300, f, REAC_M_EMIT_ANNOUNCE, 0);
 	CHK(memcmp(f + 16, CAP_CFEA, 34) == 0);   /* …00 40 ab c9 d8 5b … 28 08 … d4 */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
