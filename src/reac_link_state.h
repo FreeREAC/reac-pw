@@ -40,6 +40,27 @@
 #define REAC_PROP_BOX_MODEL  "reac.box-model"
 #define REAC_PROP_BOX_WIDTH  "reac.box-width"
 
+/* WHERE the box identity came from. There is exactly one possible answer while a
+ * box is known — the wire — and saying so explicitly is the point: reac-pw has no
+ * configured box any more (the master's --box was retired 2026-08-05), so a
+ * consumer can trust reac.box-model without asking whether an operator typed it.
+ * A consumer that finds this key absent is talking to a reac-pw that COULD still
+ * be running a pinned model and should treat the model as unattributed.
+ *
+ * REAC_PROP_HEADAMP_BASE is the head-amp WIRE CHANNEL the box's input 1 sits at —
+ * `base` in `CH = base + (input - 1)`. It is published because the alternative is
+ * every consumer re-deriving it from the width against its own copy of the
+ * placement table (openmixer does exactly that today), which is a second
+ * implementation of a policy only reac-pw can actually observe, and it is wrong
+ * the moment the placement rule gains a case. Decimal; REAC_BOX_SOURCE_NONE when
+ * no box is known, so a numeric parse fails rather than reading as base 0. */
+#define REAC_PROP_BOX_SOURCE   "reac.box-source"
+#define REAC_PROP_HEADAMP_BASE "reac.headamp.base"
+
+/* reac.box-source values. */
+#define REAC_BOX_SOURCE_WIRE "wire"   /* the box declared itself; we matched it */
+#define REAC_BOX_SOURCE_NONE "none"   /* no box on this wire — a normal state   */
+
 /* reac.discovery.* — passive discovery (task #178): what is ON THE SEGMENT, as opposed
  * to the reac.link-state/box-* keys above, which describe only the peer THIS master
  * joined. Same seam, same node, same 200 ms poll; see reac_disco.h for the rules that

@@ -377,6 +377,18 @@ const struct reac_box_model *reac_ctrl_identify_box(const uint8_t *frame, size_t
 	return NULL;
 }
 
+int reac_box_pin_notice(const char **pin, const char *recognized_token)
+{
+	if (!pin || !*pin || !recognized_token)
+		return 0;
+	/* The pin's model token is everything before the optional ":label". */
+	size_t toklen = strcspn(*pin, ":");
+	int disagrees = strlen(recognized_token) != toklen ||
+	                strncmp(*pin, recognized_token, toklen) != 0;
+	*pin = NULL;              /* consumed: at most one notice per pin, ever */
+	return disagrees;
+}
+
 /* ---- The control-frame scaffold + descriptor table ------------------------
  *
  * Every frame reac-pw emits is the same six-step ritual: zero the frame, stamp

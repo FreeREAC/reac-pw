@@ -104,7 +104,7 @@ static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
-	  "         [--mixer M] [--box MODEL[:NAME]] [--box-channels N] [--name NAME] [--src-mac M]\n"
+	  "         [--mixer M] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -113,15 +113,17 @@ static void usage(const char *p)
 	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
-	  "  --box-channels N  slave role: our input width (even 2..40; 8=S-0808, 16=S-1608,\n"
+	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
+	  "                which no wire can tell us (even 2..40; 8=S-0808, 16=S-1608,\n"
 	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
 	  "  --mixer M     master role: which Roland desk to impersonate (m200|m300|m5000;\n"
 	  "                default m200). Sets the master MAC + console model; the grants\n"
 	  "                are box-defined so any box locks to any profile.\n"
-	  "  --box MODEL[:NAME]  master role: declare the box on THIS segment (one REAC/VLAN\n"
-	  "                per box). MODEL is s0808|s1608|s4000s; sizes + labels reac:capture\n"
-	  "                to its inputs and reac:playback to its outputs. Optional :NAME sets\n"
-	  "                the openmixer label (default the model name).\n"
+	  "  (no --box)    master role: the box on this segment is LEARNED FROM THE WIRE and\n"
+	  "                nothing else. reac-pw starts with no box, probes, and sizes +\n"
+	  "                labels reac:capture / reac:playback the moment a box declares\n"
+	  "                itself; a box swapped later re-derives everything. --box is\n"
+	  "                RETIRED: it is accepted, ignored, and reported once.\n"
 	  "  --name NAME   per-instance PipeWire node suffix (reac-capture.NAME /\n"
 	  "                reac-playback.NAME) so one master per REAC VLAN/segment coexists.\n"
 	  "  --headamp CH:PARAM:VALUE  master role, repeatable: a per-channel head-amp\n"
@@ -157,9 +159,11 @@ static void usage(const char *p)
 	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n", p);
 }
 
-/* MASTER autodetect (no --box): a main-loop watcher that polls the box the pacer
- * recognized on the wire and (re)sizes the reac-capture / reac-playback nodes to its
- * real widths. Node create/destroy MUST run on the main/loop thread; recognition runs
+/* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
+ * the pacer recognized on the wire and (re)sizes the reac-capture / reac-playback
+ * nodes to its real widths. Starting with NO BOX PRESENT is the normal state: nothing
+ * plugged, nothing in the graph, and the nodes appear sized to the box the moment it
+ * declares itself. Node create/destroy MUST run on the main/loop thread; recognition runs
  * in the RT pacer thread, which hands the model over via the pacer's atomic
  * recognized_box (read here through reac_sink_node_recognized_box) — so no pw_* call is
  * ever made from the pacer thread. The library owns the node lifecycle: this reads the
@@ -169,6 +173,8 @@ struct autodetect_ctx {
 	struct reac_sink_node       *sink;  /* the master engine (owns the recognizer)   */
 	struct reac_source_node_cfg  scfg;  /* stable reac-capture create args           */
 	const struct reac_box_model *last;  /* last model acted on (edge-detects changes) */
+	const char                  *pin;   /* a retired --box value, for the disagreement
+	                                     * notice; NULL once reported (report ONCE)  */
 };
 
 static void on_autodetect_timer(void *data, uint64_t expirations)
@@ -179,6 +185,17 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	if (!bm || bm == c->last)
 		return;   /* nothing recognized yet, or the same model as last poll */
 	c->last = bm;
+	/* A stale pin that DISAGREES with the wire, said ONCE and never again. Once per
+	 * frame is how a disagreement becomes wallpaper; never saying it is what let a
+	 * wrong pin sit in reac.env unnoticed. The wire has already won — this changes
+	 * nothing, it only names the line in reac.env that is now a lie. */
+	{
+		const char *pin = c->pin;   /* the notice CONSUMES c->pin; keep it to print */
+		if (reac_box_pin_notice(&c->pin, bm->token))
+			fprintf(stderr, "reac-pw: --box said '%.*s', the wire says %s — the WIRE "
+			        "wins. Remove REAC_BOX from reac.env; nothing typed can be right "
+			        "about this.\n", (int)strcspn(pin, ":"), pin, bm->display);
+	}
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
 		fprintf(stderr, "reac-pw: could not size reac-capture to %d ch (%s)\n",
@@ -199,9 +216,8 @@ int main(int argc, char **argv)
 	uint8_t src_mac[6];
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
-	int master_box_in = 0, master_box_out = 0; /* master: declared box widths (0 = 40 fabric) */
-	int box_set = 0;                /* --box given (a master-role option)         */
-	const char *box_label = NULL;   /* --box name: openmixer label for this box  */
+	const char *retired_box_pin = NULL;   /* --box: retired, remembered only to report
+	                                       * that the wire disagreed with it (once) */
 	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
 	/* --headamp CH:PARAM:VALUE (master role, repeatable): the per-channel head-amp
 	 * DMX table the master re-asserts to the box (task #155). At most one cell per
@@ -277,25 +293,19 @@ int main(int argc, char **argv)
 				return 2;
 			}
 		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {
-			/* MASTER role: declare the box on THIS segment (one REAC/VLAN per box).
-			 * Sizes reac:capture to the box's real inputs + reac:playback to its
-			 * outputs, and labels them. Form: <model>[:name] e.g. s1608:Drums. */
-			static char spec[64];
-			snprintf(spec, sizeof spec, "%s", argv[++i]);
-			char *colon = strchr(spec, ':');
-			if (colon) { *colon = '\0'; box_label = colon + 1; }
-			const struct reac_box_model *bm = reac_box_model_by_token(spec);
-			if (!bm) {
-				size_t nm; const struct reac_box_model *t = reac_box_model_table(&nm);
-				fprintf(stderr, "reac-pw: unknown --box model '%s'; known:", spec);
-				for (size_t k = 0; k < nm; k++) fprintf(stderr, " %s", t[k].token);
-				fprintf(stderr, "\n");
-				return 2;
-			}
-			master_box_in = bm->in_ch;
-			master_box_out = bm->out_ch;
-			if (!box_label) box_label = bm->display;
-			box_set = 1;
+			/* RETIRED 2026-08-05. It declared "the box on this segment" — a fact only
+			 * the wire can state, and which the wire does state, in the box's own
+			 * config-announce. Two sources for one fact means nothing forces them to
+			 * agree and only one of them is ever true; the daemon now learns the box
+			 * and learns it again when it changes.
+			 *
+			 * Accepted and IGNORED rather than rejected, deliberately: rejecting it
+			 * turns an unedited reac.env into a crash-loop on a console that is
+			 * otherwise working, possibly mid-show. It has no effect at all — the
+			 * value is remembered only to say, once, that the wire disagreed with it
+			 * (see the autodetect watcher), which is the one thing a stale pin is
+			 * still good for. */
+			retired_box_pin = argv[++i];
 		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
 			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
 		} else if (!strcmp(argv[i], "--headamp") && i + 1 < argc) {
@@ -328,16 +338,15 @@ int main(int argc, char **argv)
 		                "upstream return + handshake)\n");
 		return 2;
 	}
-	/* --box declares a MASTER-role box (sizes + labels reac:capture/reac:playback
-	 * to a real box on this segment); it is consumed only on the master path. As a
-	 * slave it is a silent no-op whose label still leaks into our node description —
-	 * reject the mix rather than mislead. A slave's own identity is --box-channels. */
-	if (role == REAC_ROLE_SLAVE && box_set) {
-		fprintf(stderr, "reac-pw: --box is a master-role option (it declares the box "
-		                "this master serves); for slave identity use --box-channels "
-		                "(e.g. --box-channels 16 = S-1608)\n");
-		return 2;
-	}
+	/* --box is retired. Say so ONCE, at startup, in both roles: it is the line that
+	 * tells an operator with an inherited reac.env why the flag they set no longer
+	 * appears to do anything. A slave's own width — a different fact, ours to
+	 * declare, with no wire to learn it from — is --box-channels / --box-model, and
+	 * both stay. */
+	if (retired_box_pin)
+		fprintf(stderr, "reac-pw: --box '%s' IGNORED — the box is learned from the "
+		                "wire, not configured. Drop it (and REAC_BOX from reac.env). "
+		                "A SLAVE's own width is --box-channels.\n", retired_box_pin);
 	/* --headamp drives the box's preamps — only the MASTER commands them; as a slave
 	 * WE are the box and receive them (surfaced in the RX log). Reject the mix. */
 	if (role == REAC_ROLE_SLAVE && n_headamps > 0) {
@@ -424,12 +433,15 @@ int main(int argc, char **argv)
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_sink_cfg scfg = { .ifname = tx_if,
-		                              .channels = master_box_out ? master_box_out
-		                                                         : REAC_MAX_CHANNELS,
+		                              /* The graph filter is DEFERRED until a box is
+		                               * recognized (reac_sink_node_new leaves it at 0
+		                               * and the autodetect watcher sizes it), so this
+		                               * is only the ceiling. */
+		                              .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = master_src, .master_mac = NULL,
 		                              .console_field = mixer->console_field,
-		                              .inst = inst_name, .label = box_label,
+		                              .inst = inst_name, .label = NULL,
 		                              .headamps = n_headamps ? headamps : NULL,
 		                              .n_headamps = n_headamps,
 		                              /* #75: default OFF -> the pacer free-runs on
@@ -513,6 +525,7 @@ int main(int argc, char **argv)
 		adc.src = &src;
 		adc.sink = sink;
 		adc.scfg = src_cfg;
+		adc.pin  = retired_box_pin;   /* reported once, if the wire disagrees */
 		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
 		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
 		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
@@ -526,10 +539,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "reac-pw: MASTER autodetect — reac-capture / reac-playback "
 		        "appear sized to the box once it is recognized on the wire\n");
 	} else {
-		/* No recognizer (slave, or pcap / no-TX master): expose the source now. Slave
-		 * -> the 40-ch downstream; master -> the --box width (0 -> the 40-ch fabric). */
-		int src_ch = (role == REAC_ROLE_MASTER) ? master_box_in : 0;
-		if (reac_source_node_ensure(&src, &src_cfg, src_ch, box_label) != 0) {
+		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
+		 * the full 40-slot fabric. With no recognizer there is nothing that could
+		 * honestly narrow it to a box, and nothing may pretend otherwise. */
+		if (reac_source_node_ensure(&src, &src_cfg, 0, NULL) != 0) {
 			fprintf(stderr, "reac-pw: failed to create reac:capture node\n");
 			return 1;
 		}

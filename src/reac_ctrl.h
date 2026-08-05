@@ -167,6 +167,19 @@ const struct reac_box_model *reac_box_model_table(size_t *count);
  * back to the descriptor/width carried in the frame. PURE (no socket). */
 const struct reac_box_model *reac_ctrl_identify_box(const uint8_t *frame, size_t len);
 
+/* The RETIRED --box pin's one and only remaining job: say ONCE that what somebody
+ * typed disagrees with what the wire declared. `*pin` is the raw pin value
+ * ("s1608" or "s1608:Drums"; NULL = nothing was typed) and is CONSUMED — set to
+ * NULL — on the first call that sees a recognized model, whether or not it
+ * disagreed. Returns 1 exactly when a notice is due.
+ *
+ * "Exactly once" is the whole contract, and it is why this is a function and not
+ * three lines at a call site: the box repeats its config-announce, so a notice
+ * evaluated per frame becomes several thousand identical lines an hour and stops
+ * being read. Saying nothing is the other failure — that is how a wrong pin sits
+ * in reac.env for a session. PURE: no I/O, the caller does the printing. */
+int reac_box_pin_notice(const char **pin, const char *recognized_token);
+
 /* Config-announce (cdea 01 03 0010) — the SETUP DECLARATION the master enrolls
  * the box from. Byte-verified per model; the selector byte sets the displayed
  * model family. in_ch selects the fixed-matrix row (falls back to S-1608). */
