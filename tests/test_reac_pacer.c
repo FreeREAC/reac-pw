@@ -240,6 +240,24 @@ int main(void)
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.master.state == REAC_M_ESTABLISHED);
 
+		/* THE PUBLISHED BOX IS A MIRROR, NOT A PARALLEL TRUTH. On a drop the master
+		 * forgets the box, and what we publish has to go with it: reac.box-model /
+		 * reac.box-width are what a consumer computes a head-amp address from, so a
+		 * model left standing after the box has left is the console asserting a box
+		 * that is not there. Then a re-join re-derives it from the wire, as always. */
+		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, 16);
+		bf[22] = 0x00;                            /* selector 0x00 = the box's BYE */
+		reac_ctrl_checksum_apply(bf);             /* a corrupt block is not a BYE */
+		reac_pacer_rx_ingest(&p3, bf, bn);
+		CHK(p3.master.state == REAC_M_PROBING);
+		CHK(reac_master_has_box(&p3.master) == 0);
+		CHK(atomic_load(&p3.recognized_box) == NULL);
+
+		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 5, 16);
+		reac_pacer_rx_ingest(&p3, bf, bn);
+		CHK(atomic_load(&p3.recognized_box) != NULL);
+		CHK(p3.master.alloc.base == 0x20 && p3.master.alloc.width == 16);
+
 		/* drain formats + counts every queued event, then returns 0 */
 		FILE *sink = tmpfile();
 		CHK(sink != NULL);
