@@ -95,11 +95,11 @@ read the group-A base out of `placement_scan.py`:
 
 | run | reac-pw slave declares | if base is… |
 |---|---|---|
-| 1 (control) | `--box s1608` unmodified | `0x20` — confirms the rig reproduces the corpus |
+| 1 (control) | `--box-model s1608` unmodified | `0x20` — confirms the rig reproduces the corpus |
 | 2 | s1608 block, selector `[6]` `0x82`→`0x84`, re-checksummed | `0x00` ⇒ carrier is the **selector**; `0x20` ⇒ it is not |
 | 3 | s1608 block, byte `[9]` `0x02`→`0x00`, re-checksummed | `0x00` ⇒ carrier is **byte[9]** (and `base = byte[9]*0x10` is the law) |
 | 4 | s0808 block with selector→`0x82` **and** byte[9]→`0x02` | `0x20` ⇒ the two model bytes carry it and **width does not** |
-| 5 (control) | `--box s0808` unmodified | `0x00` |
+| 5 (control) | `--box-model s0808` unmodified | `0x00` |
 
 If runs 2–4 all leave the base unmoved, the carrier is the declared **width** and
 today's table *is* the law — write it as `base = (width == 16) ? 0x20 : 0x00` only once

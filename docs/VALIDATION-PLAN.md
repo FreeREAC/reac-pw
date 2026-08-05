@@ -19,8 +19,11 @@ and `MASTER-HARDWARE-VERIFY.md`'s superseded-rate note.
    `CAP_NET_RAW` and so skips off-rig. (Do not gate on a count: it was 12 tests when
    this plan was written and is 29 now. `meson test` reports the total itself.)
 2. **setcap + establishment** — `sudo setcap cap_net_raw,cap_sys_nice+ep build/reac-pw`
-   then `./build/reac-pw --live enp131s0 --role master --mixer m200 --tx enp131s0 --box s1608:S-1608`.
-   Pass: log reaches `ESTABLISHED` + steady heartbeat; `tx/s ≈ 4000`.
+   then `./build/reac-pw --live enp131s0 --role master --mixer m200 --tx enp131s0`.
+   Pass: `recognized box = …` names the box that is actually attached, then the log
+   reaches `ESTABLISHED` + steady heartbeat; `tx/s ≈ 4000`. Nothing declares the
+   box — starting with none attached and plugging it in mid-run must reach the same
+   place.
    (Re-`setcap` after every rebuild — the link strips file caps.)
 3. **Box-width nodes** — `pw-dump | grep reac`. Pass: `reac-capture` = **16** out ports,
    `reac-playback` = **8** in ports, descriptions `"S-1608 — 16 ch / 8 ch"`. (The "40 inputs" fix.)
@@ -135,9 +138,11 @@ full-scale-noise channel count; 3000 downstream frames each; audio offsets
 ### Stage D — multi-box end-to-end (needs the VLAN trunk — operator)
 9. Trunk the host switch port carrying the box VLANs; per box:
    `ip link add link enp131s0 name reac.<vid> type vlan id <vid>`. Pass: `reac-pw --live reac.<vid>` sees the box.
-10. One master per VLAN: `reac-pw --live reac.10 … --box s1608:Drums --name drums`,
-    `… reac.20 … --box s0808:Vocals --name vocals`. Pass: `reac-capture.drums`(16) + `reac-capture.vocals`(8)
-    coexist, both boxes lock.
+10. One master per VLAN: `reac-pw --live reac.10 … --name drums`,
+    `… reac.20 … --name vocals`. Each recognizes whatever is on ITS segment. Pass:
+    `reac-capture.drums` and `reac-capture.vocals` coexist at the widths their own
+    boxes declared, both boxes lock. Swap the two boxes between VLANs and the widths
+    must follow the boxes, not the names.
 11. openmixer shows two named groups at real widths, both patch/audio independently. → **multi-box validated.**
 
 **Merge order:** #8 (reac-pw) first, then #156 (openmixer depends on the reac-pw node contract).

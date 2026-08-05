@@ -415,6 +415,7 @@ const char *reac_master_drop_name(enum reac_master_drop_reason r)
 	case REAC_M_DROP_BYE:           return "explicit-BYE";
 	case REAC_M_DROP_MAC_CHANGE:    return "box-mac-change";
 	case REAC_M_DROP_GRANT_TIMEOUT: return "grant-timeout";
+	case REAC_M_DROP_BOX_UNKNOWN:   return "box-undeclared";
 	}
 	return "?";
 }
@@ -456,7 +457,7 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	m->state = REAC_M_IDLE;
 	memcpy(m->src, src, 6);
 	m->fps = fps > 0 ? fps : 8000;
-	m->cfg = cfg ? *cfg : REAC_CONSOLE_CFG_S1608;
+	m->cfg = cfg ? *cfg : REAC_CONSOLE_CFG_IDLE;
 
 	/* The cycle-locked control choreography, all slot offsets measured on the
 	 * M-300/S-1608 establish capture at 4000 fps and scaled by fps (see the
@@ -497,26 +498,19 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 		if (dwell_s > 0)
 			m->grant_dwell = m->fps * dwell_s;
 	}
-	/* Allocate the fabric slots for the console's declared box and GENERATE the
-	 * enrollment sweep for that allocation. The recognizer re-allocates + re-builds
-	 * per autodetected model via reac_master_set_box.
+	/* NO BOX YET — the correct startup state, not a degraded one (see this
+	 * function's header comment). There is nothing to allocate and nothing to
+	 * enroll until a real box declares itself on the wire; reac_master_set_box is
+	 * the only door in, and reac_master_forget_box the only way back out.
 	 *
-	 * The default now follows cfg.in_channels (the box width this console config
-	 * declares — 16 for the S-1608 default), where the old code defaulted to a
-	 * replayed S-0808 table regardless of cfg: the default sweep and the default
-	 * cfg used to disagree with each other, which is precisely the desync class
-	 * this task removes. */
-	m->headamp_src = NULL;                     /* safe defaults until set */
-	/* cfg.in_channels is now LOAD-BEARING (it sizes the grant), where before this
-	 * task the grant ignored cfg entirely and defaulted to a replayed S-0808 table.
-	 * A caller that leaves it 0 would allocate nothing and we would emit an EMPTY
-	 * grant — a silent, box-mute failure. Fall back to the documented S-1608
-	 * default width instead, which is what cfg == NULL already means. */
-	int in_ch = m->cfg.in_channels;
-	if (rebuild_grant_sweep(m, in_ch) != 0) {
-		rebuild_grant_sweep(m, REAC_CONSOLE_CFG_S1608.in_channels);
-		m->cfg.in_channels = REAC_CONSOLE_CFG_S1608.in_channels;
-	}
+	 * What stood here allocated the sweep from cfg.in_channels — in practice always
+	 * the S-1608's 16 — so a master that had never seen a box nonetheless held a
+	 * complete 16-channel enrollment for head-amp slots 0x20..0x2f, ready to grant
+	 * it to whatever cold-connected first. */
+	m->headamp_src     = NULL;                 /* safe defaults until set */
+	m->alloc.base      = 0;
+	m->alloc.width     = 0;                    /* == no box known */
+	m->grant_burst_len = 0;
 	/* Peer-gone budget = ~6.5 s of frames (the measured M-200i hold), rate-scaled
 	 * so it is the same wall-clock at 44.1/48/96k (#130). */
 	m->link_check_reload = (m->fps * REAC_M_LINKCHECK_SECONDS_X10) / 10;
@@ -575,19 +569,40 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
  * packed up from block[9] and 0xc3 groups packed down from block[18], verified equal for
  * widths 8/16/32 — so the duplicate is simply dropped and the calls below bind to main's.
  * Git merged the two definitions side by side without complaint; the compiler caught it. */
+int reac_master_has_box(const struct reac_master *m)
+{
+	return m && m->alloc.width > 0;
+}
+
+void reac_master_forget_box(struct reac_master *m)
+{
+	if (!m)
+		return;
+	m->alloc.base      = 0;
+	m->alloc.width     = 0;
+	m->grant_burst_len = 0;
+	m->enroll_pending  = 0;
+	memset(m->box_mac, 0, sizeof m->box_mac);
+	/* Back to the wide-safe ENROLL and the idle cfea width byte: everything we
+	 * advertise about "the box" must go when the box does, or the next one inherits
+	 * the last one's shape. set_enroll_width re-checksums. */
+	set_enroll_width(m->enroll_blk, REAC_ENROLL_DEFAULT_WIDTH);
+	m->cfg.out_channels = REAC_CONSOLE_CFG_IDLE.out_channels;
+	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);
+}
+
 void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 {
 	(void)out_ch;   /* S-0808 and S-1608 are both 8-OUT — the INPUT width distinguishes */
-	/* Allocate width-many contiguous fabric slots for this box and rebuild group A
-	 * over them (group B is width-invariant). A width we cannot place keeps the
-	 * current sweep — never an empty grant. */
-	rebuild_grant_sweep(m, in_ch);
-	/* The ENROLL group map carries the box's AUDIO-RETURN width (how many slots are
-	 * its inputs). Derive it from the recognized width so the box opens its full
-	 * return — the re-grant (reac_master_regrant -> enter_granting) re-emits this
-	 * updated ENROLL, re-arming the box to consume the wider grant. */
-	set_enroll_width(m->enroll_blk, in_ch);
-
+	/* Allocate width-many contiguous head-amp slots for this box and rebuild group A
+	 * over them (group B is width-invariant). A width we CANNOT place leaves the box
+	 * identity exactly as it was and returns — it must not half-apply. The previous
+	 * cut let rebuild fail and then stamped the bad width into the ENROLL group map
+	 * and the cfea anyway, so a nonsense recognition still reached the wire while the
+	 * allocation it was supposed to describe did not. */
+	int had_box = reac_master_has_box(m);
+	if (rebuild_grant_sweep(m, in_ch) != 0)
+		return;
 	/* Enrol the box's DECLARED input width. The cdea 0103 000d group map is the gate
 	 * the box reads to open its audio return to full width (verified byte-for-byte
 	 * across the M-200/M-300/M-5000 golden enrols: 8ch=1x41, 16ch=2x41, 32ch=4x41).
@@ -600,6 +615,20 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	 * into the session, after reading the box config. */
 	set_enroll_width(m->enroll_blk, in_ch);
 	m->enroll_pending = 1;
+
+	/* The box declared itself while we were HOLDING an ungranted window for it
+	 * (reac_master_next's GRANTING hold): restart the window now that there is a
+	 * width, so the burst timeline runs from tick 0 and the whole sweep reaches the
+	 * wire. Without this the hold's elapsed ticks would put the burst cursor past
+	 * the sweep's last row and the box would be established with nothing enrolled. */
+	if (!had_box && m->state == REAC_M_GRANTING) {
+		m->grant_ticks    = 0;
+		m->announce_tick  = 0;
+		/* The restarted window's own tick-0 ENROLL already carries the declared
+		 * width, so the mid-dwell re-ENROLL has nothing left to correct. Emitting
+		 * both would put two enrols on the wire where every golden shows one. */
+		m->enroll_pending = 0;
+	}
 
 	m->cfg.out_channels = (uint8_t)in_ch;    /* cfea width byte := box input width */
 	uint16_t box_count = (m->state == REAC_M_GRANTING ||
@@ -633,9 +662,22 @@ static void reset_control_cadence(struct reac_master *m)
  * established drop). The counter is NOT touched — it free-runs. */
 static void enter_probing(struct reac_master *m)
 {
+	/* A BACKWARD transition means the courtship ended: peer-gone, BYE, a box that
+	 * never declared itself. That is the one place a departed box's width and base
+	 * are dropped, and it is what stops the NEXT box inheriting them (a swap on a
+	 * live segment; see reac_master_forget_box). forget_box re-generates the idle
+	 * cfea, so it subsumes the announce this used to regenerate here.
+	 *
+	 * The IDLE -> PROBING promotion is NOT such a transition — it is the pacer's
+	 * first slot, and forgetting there would silently discard a box declared before
+	 * the pacer ticked. Gate on where we came from, not on where we are going. */
+	int backward = (m->state != REAC_M_IDLE);
 	m->state = REAC_M_PROBING;
 	reset_control_cadence(m);
-	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);   /* no box enrolled */
+	if (backward)
+		reac_master_forget_box(m);
+	else
+		gen_cfea(m->announce_blk, m->src, &m->cfg, 0);   /* no box enrolled */
 }
 
 /* Open a grant window (ENROLL, then the grant_dwell hold, then the burst)
@@ -684,7 +726,12 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	 * COLLAPSED to w0x08/cnt1 the instant the box latched (verified: w0x10/cnt1=0 on the wire) —
 	 * the box never held a stable 16-wide recognition through the commit. m->alloc.width holds
 	 * the recognized width here (init-seeded from cfg.in_channels, re-set by reac_master_set_box). */
-	m->cfg.out_channels = m->alloc.width;
+	if (reac_master_has_box(m))
+		m->cfg.out_channels = m->alloc.width;
+	/* No box declared yet (a cold-connect JOIN carries no width): hold the IDLE
+	 * width byte rather than announce a zero-input box. The dwell below waits for
+	 * the box's config-announce, which is what a real desk's ~27 s ungranted hold
+	 * is for; reac_master_next refuses to emit a grant until it arrives. */
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);
 }
 
@@ -727,8 +774,17 @@ static void enter_established(struct reac_master *m)
  * unconfigured channels (rig 2026-07-23: "on for a second, then all mute LEDs
  * lit"). A real M-200 puts the COMPLETE 16x3 scene on the wire during the
  * grant window (m200-s1608-keepalive) and the box holds it. */
+/* Has the FULL enrollment left the wire? With no box known there IS no sweep, so
+ * the answer is no — and it must be no, not "trivially yes". Both the tick
+ * self-complete (EV_GRANT_DELIVERED) and the box's own accept (EV_ACCEPT /
+ * EV_CONFIG) are gated on this predicate, so an empty sweep would otherwise
+ * ESTABLISH a box that was never enrolled: link up, audio flowing, not one
+ * head-amp slot claimed — precisely the failure this whole path exists to
+ * prevent, arrived at from the opposite direction. */
 static int grant_delivered(const struct reac_master *m)
 {
+	if (!reac_master_has_box(m))
+		return 0;
 	return m->grant_ticks >=
 	       m->grant_dwell + m->grant_burst_len * m->grant_stride + 1;
 }
@@ -899,7 +955,35 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * on the box's unicast/config accept (reac_master_rx): the box switches to
 		 * unicast the instant it sees the grant, so it locks off even a partial
 		 * burst. No forward timer — window expiry with no accept falls BACK to
-		 * PROBING (anti-#130); the box's JOIN retry grid re-opens it. */
+		 * PROBING (anti-#130); the box's JOIN retry grid re-opens it.
+		 *
+		 * A COLD-CONNECT JOIN CARRIES NO WIDTH, so GRANTING can be entered before
+		 * the box has said what it is. There is nothing to enroll yet, and there is
+		 * no longer a fabricated box to enroll instead (reac_master_init) — so HOLD:
+		 * keep the ungranted announce on the wire, which is exactly what a real
+		 * M-200 does for ~27 s while it reads the box's config, and let the box's
+		 * config-announce fill the width in (reac_master_set_box restarts this
+		 * window the moment it does). If it never arrives we fall BACK to PROBING
+		 * and keep inviting rather than guess: a guessed enrollment claims slots the
+		 * box does not own and claims none that it does, and the box cannot tell us
+		 * so — it links, streams audio, and silently ignores every head-amp record
+		 * (reac_grant.h, live 2026-07-17). Recoverable and loud beats plausible and
+		 * wrong. */
+		if (!reac_master_has_box(m)) {
+			if (m->grant_ticks == 0) {
+				emit = REAC_M_EMIT_ENROLL;   /* the wide-safe arm frame */
+			} else if (++m->announce_tick >= m->fps) {
+				m->announce_tick = 0;
+				emit = REAC_M_EMIT_ANNOUNCE; /* the ungranted hold, ~1/s */
+			}
+			m->grant_ticks++;
+			if (m->grant_ticks > m->grant_dwell) {
+				struct reac_master_edge e =
+					reac_master_fsm_step(m->state, REAC_M_EV_BOX_UNKNOWN);
+				apply_edge(m, &e, NULL, NULL);
+			}
+			break;
+		}
 		if (m->grant_ticks == 0) {
 			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
 		} else if (m->grant_ticks <= m->grant_dwell) {

@@ -63,11 +63,15 @@ boxes` (S-1608=16 → base 0; a following S-0808=8 → base 16; …), capped at 
   with mics), defer downstream multi-box until a 2-box capture RE's the slot field.
 
 ### Names (optional) — independent, ship first
-`--box <model>[:name][@base]` (repeatable) OR `--box-name <mac>=<name>`. Store on the
-box registry; publish per box into the PipeWire node/port metadata so openmixer shows
-"Drums (S-1608) ch 1-16" rather than bare `capture_01`. With no name, fall back to the
-recognised model + MAC tail. Deterministic base assignment (join order) unless `@base`
-pins it. This piece needs NO second box and NO wire RE — testable on the S-1608.
+A NAME is the one thing about a box that the wire cannot state, so it is the one
+thing that may still be typed: `--box-name <mac>=<name>`, keyed on the box's MAC.
+Everything else — model, width, base, placement — comes from the box's own
+config-announce and must not be re-declarable; the `--box <model>[:name][@base]`
+form this used to propose is exactly the shape retired in 2026-08-05 (a typed model
+that can contradict the wire). Store the name on the box registry; publish per box
+into the PipeWire node/port metadata so openmixer shows "Drums (S-1608) ch 1-16"
+rather than bare `capture_01`. With no name, fall back to the recognised model + MAC
+tail. Base assignment stays the allocator's (join order).
 
 ## Build order
 1. **Names + box registry scaffold** (single box) — **DONE**: `src/reac_boxreg.{h,c}`
