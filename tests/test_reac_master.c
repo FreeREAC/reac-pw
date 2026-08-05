@@ -782,6 +782,15 @@ int main(void)
 		CHK(mn.state == REAC_M_GRANTING);           /* held, NOT established */
 		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_HEARTBEAT, BOX, NULL) == 0);
 		CHK(mn.state == REAC_M_GRANTING);
+		/* and the predicate itself, at the boundary the emit loop cannot reach:
+		 * "the full sweep has left the wire" must read FALSE for an EMPTY sweep,
+		 * not trivially true because zero blocks take zero slots to send. The hold
+		 * above happens to drop out of GRANTING first today, so this is the guard
+		 * that keeps the predicate honest if that bound ever changes. */
+		mn.grant_ticks = mn.grant_dwell + 1;    /* past the delivery threshold */
+		CHK(mn.grant_burst_len == 0);
+		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 0);
+		CHK(mn.state == REAC_M_GRANTING);       /* still NOT established */
 
 		printf("OK: the box comes from the wire — a master with no declaration has "
 		       "no allocation and no sweep, a cold-connect JOIN alone enrolls "
