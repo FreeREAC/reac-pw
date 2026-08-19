@@ -191,7 +191,7 @@ int main(void)
 	 * the latter being exactly the channel the old REAC_MAX_CHANNELS=40 bound
 	 * silently rejected. */
 	struct reac_headamp_tx tx;
-	reac_headamp_tx_init(&tx, 8000);
+	reac_headamp_tx_init(&tx);
 	CHK(reac_headamp_tx_set(&tx, 0x20, REAC_HEADAMP_PHANTOM, 1) == 0);
 	CHK(reac_headamp_tx_set(&tx, 0x20, REAC_HEADAMP_SENS, 0x07) == 0);
 	CHK(reac_headamp_tx_set(&tx, 0x2f, REAC_HEADAMP_PAD, 1) == 0);
@@ -293,7 +293,7 @@ int main(void)
 	 * ---------------------------------------------------------------- */
 	{
 		struct reac_headamp_tx gtx;
-		reac_headamp_tx_init(&gtx, 8000);
+		reac_headamp_tx_init(&gtx);
 		for (size_t i = 0; i < sizeof GOLD_S1608_CELLS / sizeof GOLD_S1608_CELLS[0]; i++)
 			CHK(reac_headamp_tx_set(&gtx, GOLD_S1608_CELLS[i][0],
 			                        GOLD_S1608_CELLS[i][1],
