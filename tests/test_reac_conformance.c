@@ -116,7 +116,7 @@ int main(void)
 		 * that desk's grant EXACTLY no matter which console we are impersonating. */
 		{
 			struct reac_headamp_tx tx;
-			reac_headamp_tx_init(&tx, FPS);
+			reac_headamp_tx_init(&tx);
 			for (size_t i = 0; i < sizeof GOLD_S1608_CELLS / sizeof GOLD_S1608_CELLS[0]; i++)
 				CHK(reac_headamp_tx_set(&tx, GOLD_S1608_CELLS[i][0],
 				                        GOLD_S1608_CELLS[i][1],
