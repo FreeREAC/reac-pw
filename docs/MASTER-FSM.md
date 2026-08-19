@@ -31,7 +31,7 @@ call sites drive it —
 | `IDLE` | pacer not emitting yet / shutdown only | (none — the `memset` init state) |
 | `PROBING` | unlinked: FILLER + the cycle-locked hunt cadence (probe burst + sub01/sub02/chanmap + free-running cfea) | `enter_probing()` — `reset_control_cadence()` + regenerate the cfea with box-count 0 |
 | `GRANTING` | box latched: ENROLL, the ~1.6 s recognized-but-ungranted dwell, then the generated cdea 04 03 enrollment sweep | `enter_granting(box_src, blk)` — latch `box_mac`/`join_blk`, `grant_ticks = 0`, `grant_attempts++`, rebuild the sweep from the live head-amp state, stamp the recognized width into the cfea with box-count 0 |
-| `ESTABLISHED` | linked: the locked cadence (cfea + chanmap, each metronomic 1/s, nothing else) | `enter_established()` — `reset_control_cadence()`, reload the link-check budget, regenerate the cfea with box-count 1 |
+| `ESTABLISHED` | linked: the locked cadence (cfea + chanmap, each metronomic 1/s, nothing else) | `enter_established()` — `reset_control_cadence()`, reload the link-check budget, regenerate the cfea with box-count 1. Pacer-side, on the same transition (`note_transition`): arm the one-shot COMPLETE head-amp scene replay (`reac_headamp_tx_arm_scene`, task #179) — a real M-200 puts the whole width × 3 scene on the wire behind every grant (m200-s1608-BIDIR-reboot), and it is what restores a power-cycled box's pins |
 
 `reset_control_cadence()` is the shared sub-action of `enter_probing` and
 `enter_established`: cycle position 0, cfea tick phase-offset ~0.75 s, chanmap
@@ -109,6 +109,25 @@ byte-pinned by `tests/test_reac_master.c`, `tests/test_reac_s1608.c`,
 real M-200/M-300 captures. The decision core refactor moves only the
 transition DECISIONS; the emit sites and their timing constants are the
 goldens' territory.
+
+While ESTABLISHED, two overlays ride FILLER slots and nothing else: a pending
+operator head-amp EDGE, and the entry-armed scene replay (one record per sweep
+stride until the width × 3 scene is out, then silence — no periodic re-assert
+exists on the wire; captures hold 20.8–33 s of established head-amp silence).
+
+## The law of this file
+
+Every state, entry action, transition and deliberate ignore lives HERE, and
+reconnection behaviour attaches to the diagram — an entry action or a
+transition-observer action on an EXISTING transition — never as a new state or
+timer invented at a call site. The head-amp scene replay (2026-08-19) is the
+worked example: a box that power-cycles simply re-courts, so the restore is the
+GRANTING→ESTABLISHED entry's business, not a new "RECOVERING" state. One known
+caveat lives console-side by design: a freshly-BOOTED box ignores head-amp
+records while its input board initialises, so the console's scene watch re-applies
+its recorded scene again after a settle window (openmixer `server.ts`,
+`REAC_SCENE_SETTLE_REPLAY_MS`) — deliberately not a reac-pw state, because the
+wire protocol has no readback to hang a state on.
 
 ## Decision-core mapping (#61) — LANDED
 
