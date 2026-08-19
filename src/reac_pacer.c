@@ -199,6 +199,17 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 	memset(p->rx_since_change, 0, sizeof p->rx_since_change);
 	p->probing_slots = 0;
 
+	/* Every entry into ESTABLISHED replays the COMPLETE head-amp scene for the
+	 * granted slots — the M-200's own answer to a box that power-cycled and came
+	 * back with blank pins (measured: m200-s1608-BIDIR-reboot, the full width x 3
+	 * scene 10 ms behind the re-grant). The grant-window sweep alone is not
+	 * enough: a fast lock (box heartbeat accept) cuts it off mid-burst, and a
+	 * partial scene mutes the unconfigured channels. Same thread as the table's
+	 * emitter, so no synchronisation is needed. */
+	if (to == REAC_M_ESTABLISHED && from != REAC_M_ESTABLISHED)
+		reac_headamp_tx_arm_scene(&p->headamp, p->master.alloc.base,
+		                          p->master.alloc.width);
+
 	if (from == REAC_M_GRANTING && to == REAC_M_PROBING &&
 	    p->master.drop_reason == REAC_M_DROP_GRANT_TIMEOUT) {
 		atomic_fetch_add_explicit(&p->drops[REAC_M_DROP_GRANT_TIMEOUT], 1,
@@ -893,13 +904,14 @@ static void *pacer_loop(void *arg)
 		 * touch establishment: it only ever OVERWRITES a FILLER slot, and only once
 		 * ESTABLISHED. It never replaces a PROBE/GRANT/CHANMAP/CFEA/ENROLL frame, so
 		 * the verified grant/chanmap/announce cadence (reac_master_next) is
-		 * untouched. The table is inactive unless the operator set a cell, so with
-		 * no head-amp config this branch never fires and the wire is unchanged.
+		 * untouched. It fires for a pending operator edge OR for the one-shot
+		 * complete-scene replay note_transition arms at every establishment (the
+		 * power-cycle restore); once both are drained the wire goes silent again.
 		 * The counter + audio the frame already carries are preserved (stamp only
-		 * rewrites the control block [16:50]). RIG-GATED for on-wire validation
-		 * (needs reac-pw as MASTER to a real box + a 48V meter). */
+		 * rewrites the control block [16:50]). */
 		if (emit == REAC_M_EMIT_FILLER &&
-		    p->master.state == REAC_M_ESTABLISHED && p->headamp.active) {
+		    p->master.state == REAC_M_ESTABLISHED &&
+		    (p->headamp.active || p->headamp.replay_width)) {
 			uint8_t hch, hparam, hval;
 			if (reac_headamp_tx_next(&p->headamp, &hch, &hparam, &hval))
 				reac_ctrl_stamp_headamp(frame, hch, hparam, hval);
@@ -1013,7 +1025,7 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * downstream stays byte-identical to a no-head-amp master. Loaded here (before
 	 * the pacer thread starts) so the table is single-writer from the RT thread on
 	 * — no cross-thread mutation, no race with establishment. */
-	reac_headamp_tx_init(&p->headamp, cfg->fps);
+	reac_headamp_tx_init(&p->headamp);
 	for (int i = 0; i < cfg->n_headamps; i++)
 		reac_headamp_tx_set(&p->headamp, cfg->headamps[i].ch,
 		                    cfg->headamps[i].param, cfg->headamps[i].value);

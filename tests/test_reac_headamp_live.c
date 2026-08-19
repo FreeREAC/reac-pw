@@ -77,7 +77,7 @@ int main(void)
 	{
 		struct reac_pacer p;
 		memset(&p, 0, sizeof p);
-		reac_headamp_tx_init(&p.headamp, 4000);   /* 48k cadence */
+		reac_headamp_tx_init(&p.headamp);
 
 		/* Nothing queued yet: the table is inactive and silent. */
 		uint8_t ch, pr, v;
@@ -118,7 +118,7 @@ int main(void)
 	{
 		struct reac_pacer p;
 		memset(&p, 0, sizeof p);
-		reac_headamp_tx_init(&p.headamp, 4000);
+		reac_headamp_tx_init(&p.headamp);
 		int queued = 0;
 		for (int i = 0; i < REAC_HEADAMP_CMD_RING + 32; i++)
 			queued += reac_pacer_headamp_set(&p, 0, REAC_HEADAMP_SENS, 1);
@@ -134,7 +134,7 @@ int main(void)
 	{
 		struct reac_pacer p;
 		memset(&p, 0, sizeof p);
-		reac_headamp_tx_init(&p.headamp, 4000);
+		reac_headamp_tx_init(&p.headamp);
 
 		struct writer_ctx w = { .p = &p };
 		atomic_store(&w.done, 0);
