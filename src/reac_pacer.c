@@ -278,16 +278,14 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	if (ev == REAC_M_RX_BOX_JOIN)
 		atomic_fetch_add_explicit(&p->rx_joins, 1, memory_order_relaxed);
 
-	/* MASTER as mixer: SELF-CONFIGURATION FROM THE WIRE. THE box geometry, from
-	 * the only place it can honestly come from: what the box DECLARED — the
-	 * config-announce port table (libreac reac_ports_parse; operator ruling
-	 * 2026-08-20: dynamic detection, never a hand-kept list). Everything
-	 * downstream — the head-amp base, the grant sweep, the ENROLL group map,
-	 * the cfea width, the published node props, the node widths — derives from
-	 * set_box and from nothing else. The fixed matrix (task #137) only NAMES
-	 * the model for the log and the published props: an unnamed box is still
-	 * sized and granted. Emit once per declared geometry (the box repeats its
-	 * config-announce ~1/s). */
+	/* MASTER as mixer: SELF-CONFIGURATION FROM THE WIRE. THE box geometry comes
+	 * from what the box DECLARED — the config-announce port table (libreac
+	 * reac_ports_parse) — never a hand-kept list. Everything downstream — the
+	 * head-amp base, the grant sweep, the ENROLL group map, the cfea width, the
+	 * published node props, the node widths — derives from set_box and from
+	 * nothing else. The fixed matrix only NAMES the model for the log and the
+	 * published props: an unnamed box is still sized and granted. Emit once per
+	 * declared geometry (the box repeats its config-announce ~1/s). */
 	struct reac_box_ports ports;
 	if (len >= REAC_CTRL_BLOCK_OFF + REAC_CTRL_BLOCK_LEN &&
 	    reac_ports_parse(frame + REAC_CTRL_BLOCK_OFF, &ports) == 0) {

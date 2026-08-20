@@ -424,10 +424,8 @@ int main(int argc, char **argv)
 	int tx_ring_init = 0;
 
 	if (tx_if && role == REAC_ROLE_MASTER) {
-		/* Default master MAC = THIS NIC's own address (operator ruling 2026-08-20:
-		 * our frames carry OUR identity — real boxes sync to us on it, and a cloned
-		 * desk MAC collides with the real desk and makes captures ambiguous).
-		 * --src-mac overrides it; the mixer profile sets the console-model byte. */
+		/* Default master MAC = THIS NIC's own address (reac_mac.h); --src-mac
+		 * overrides it. The mixer profile sets only the console-model byte. */
 		uint8_t master_mac_buf[6];
 		if (!src_mac_set && reac_mac_default_src(tx_if, master_mac_buf) != 0)
 			fprintf(stderr, "reac-pw: could not read %s hardware address for the "
