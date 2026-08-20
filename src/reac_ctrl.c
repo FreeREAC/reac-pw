@@ -90,6 +90,14 @@ enum reac_ctrl_kind reac_ctrl_parse(const uint8_t *frame, size_t len,
 		out->kind = REAC_CTRL_FILLER;
 	} else if (t0 == 0xcf && t1 == 0xea) {
 		out->kind = REAC_CTRL_MASTER_ANNOUNCE;
+	} else if (t0 == 0xce && t1 == 0xea) {
+		/* A splitter's announce — the split role's own frame type, unicast to
+		 * the master ~1/s, block-checksummed like every announce (reac-aes67
+		 * REAC-PROTOCOL.md §6/§10.1, source-derived from reacdriver). Never
+		 * yet captured on our rig (§14.1: the last unmapped type), so this
+		 * names the kind and nothing more — no field decoding until a real
+		 * capture grounds the layout. */
+		out->kind = REAC_CTRL_SPLIT_ANNOUNCE;
 	} else if (t0 == 0xcd && t1 == 0xea) {
 		if (out->op0 == 0x04 && out->op1 == 0x03) {
 			/* op 04 03 is a RECORD CONTAINER, not one opcode: after the
