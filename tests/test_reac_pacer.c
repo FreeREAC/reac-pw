@@ -19,6 +19,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <linux/if_packet.h>
+#include <net/if.h>
+#include <netinet/in.h>
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -293,32 +298,93 @@ int main(void)
 	}
 	CHK(reac_pacer_period_ns(8000) == p.period_ns);
 
+	/* An RX socket beside the TX, to assert THE FRAME DOUBLING on the wire:
+	 * every real desk emits every downstream frame TWICE with the same counter
+	 * (issue #92 — M-200 @48k full-rate and M-5000 @96k hunting/established,
+	 * measured in the 2026-07 goldens), and boxes dedup by counter (our own RX
+	 * does: reac_rx_dup). On lo a packet socket sees each sendto twice — the TX
+	 * pass (PACKET_OUTGOING) and the loopback delivery — so only the delivered
+	 * copy counts, or a single-emission pacer would look doubled. */
+	int rx = socket(AF_PACKET, SOCK_RAW | SOCK_NONBLOCK, htons(0x8819));
+	CHK(rx >= 0);
+	struct sockaddr_ll bll = { 0 };
+	bll.sll_family   = AF_PACKET;
+	bll.sll_protocol = htons(0x8819);
+	bll.sll_ifindex  = (int)if_nametoindex("lo");
+	CHK(bind(rx, (struct sockaddr *)&bll, sizeof bll) == 0);
+	int rcv = 4 << 20;
+	setsockopt(rx, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof rcv);
+
 	/* prime the ring so the pacer emits queued frames (not only silent FILLER). */
 	memset(in, 0, sizeof in);
 	for (int i = 0; i < 100; i++)
 		reac_pacer_submit(&p, in, REAC_FRAME_BYTES);
 
+	static uint8_t seen[65536];   /* per-counter delivery tally */
+	uint8_t rbuf[2048];
+
 	CHK(reac_pacer_start(&p) == 0);
 	uint64_t t0 = mono_ns();
-	struct timespec slice = { 0, 200000000 };      /* 200 ms */
-	nanosleep(&slice, NULL);
+	uint64_t rx_deadline = t0 + 200000000ull;      /* 200 ms, drained live */
+	int drained_after_stop = 0;
+	for (;;) {
+		struct sockaddr_ll from;
+		socklen_t fl = sizeof from;
+		ssize_t rn = recvfrom(rx, rbuf, sizeof rbuf, MSG_DONTWAIT,
+		                      (struct sockaddr *)&from, &fl);
+		if (rn < 0) {
+			if (drained_after_stop)
+				break;                 /* stopped AND the socket is empty */
+			if (mono_ns() >= rx_deadline) {
+				reac_pacer_stop(&p);
+				drained_after_stop = 1;
+				continue;              /* one final drain pass */
+			}
+			struct timespec ms = { 0, 1000000 };
+			nanosleep(&ms, NULL);
+			continue;
+		}
+		if (from.sll_pkttype == PACKET_OUTGOING)
+			continue;                      /* the TX pass, not a delivery */
+		if (rn >= 16 && rbuf[12] == 0x88 && rbuf[13] == 0x19) {
+			uint16_t c = (uint16_t)(rbuf[14] | (rbuf[15] << 8));
+			if (seen[c] < 255)
+				seen[c]++;
+		}
+		if (!drained_after_stop && mono_ns() >= rx_deadline) {
+			reac_pacer_stop(&p);
+			drained_after_stop = 1;
+		}
+	}
 	uint64_t dt = mono_ns() - t0;
-	reac_pacer_stop(&p);
+	close(rx);
 
 	uint64_t tx = p.tx_frames;
-	double expected = (double)dt / 1e9 * 8000.0;   /* fps * seconds */
+	double expected = (double)dt / 1e9 * 8000.0 * REAC_PACER_TX_REPS;
 	double ratio = expected > 0 ? (double)tx / expected : 0;
-	printf("pacer emitted %llu frames in %.1f ms (expected ~%.0f @8000 fps, ratio %.2f), "
+	printf("pacer emitted %llu frames in %.1f ms (expected ~%.0f @8000 fps x%d, ratio %.2f), "
 	       "late_wakes=%llu tx_errors=%llu\n",
-	       (unsigned long long)tx, dt / 1e6, expected, ratio,
+	       (unsigned long long)tx, dt / 1e6, expected, REAC_PACER_TX_REPS, ratio,
 	       (unsigned long long)p.late_wakes, (unsigned long long)p.tx_errors);
 	reac_pacer_close(&p);
+
+	int pairs = 0, singles = 0, more = 0;
+	for (int i = 0; i < 65536; i++) {
+		if (seen[i] == 2) pairs++;
+		else if (seen[i] == 1) singles++;
+		else if (seen[i] > 2) more++;
+	}
+	printf("wire counters: pairs=%d singles=%d over-doubled=%d\n", pairs, singles, more);
+	CHK(pairs + singles > 400);          /* the probe saw the stream at all (control) */
+	CHK(pairs > 400);                    /* the doubling is on the wire...            */
+	CHK(singles <= pairs / 20 + 2);      /* ...for (essentially) every frame          */
+	CHK(more == 0);                      /* and never tripled                         */
 
 	/* Allow generous slack for a non-RT CI host (SCHED_FIFO may be denied): the
 	 * cadence should still be in the right ballpark, never wildly fast/slow. */
 	CHK(ratio > 0.5 && ratio < 1.5);
 
 	printf("OK: pacer period (125/250/272 us) + SPSC ring (FIFO/overrun/underrun) + "
-	       "steady ~8000 fps emit\n");
+	       "steady ~8000 fps emit, every frame doubled on the wire\n");
 	return 0;
 }

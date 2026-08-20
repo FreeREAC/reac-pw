@@ -38,6 +38,20 @@
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
 
+/* THE FRAME DOUBLING (issue #92). Every real desk transmits every downstream
+ * frame TWICE, back-to-back, with the SAME counter — measured across the
+ * 2026-07 goldens: the M-200 @48k alternates counter deltas 0,1,0,1 through
+ * its whole full-rate stream (8000 pps wire = 4000 unique fps — which also
+ * reconciles libreac's REAC_MODE_48K with the captured pace), and the M-5000
+ * @96k doubles every sparse control emission while hunting AND established
+ * (delta 0 = half of all deltas; counter free-running at 8000/s underneath).
+ * Boxes are single-emission upstream, so this is a DOWNSTREAM property, and
+ * receivers dedup by counter (ours does: reac_rx_dup). A single-emission
+ * master is distinguishable from every real desk on the wire — and it is the
+ * one measured difference in the S-4000 join refusal (2026-08-20 logs).
+ * Per-slot wire pps is therefore fps * REAC_PACER_TX_REPS. */
+#define REAC_PACER_TX_REPS 2
+
 /* Lock-free SPSC ring of fixed-size frame slots (the TX equivalent of reac_ring,
  * but carrying whole encoded frames not planar samples). Producer = PipeWire
  * process(); consumer = the pacer thread. */

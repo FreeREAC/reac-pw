@@ -941,14 +941,21 @@ static void *pacer_loop(void *arg)
 		/* Non-blocking send (the socket carries SOCK_NONBLOCK). The pacer runs
 		 * SCHED_FIFO: a blocking sendto() on a backed-up NIC tx queue would stall
 		 * THIS thread mid-period and smear the cadence the pacer exists to protect.
-		 * On EAGAIN/EWOULDBLOCK we drop this slot (bump tx_errors) and move on — the
-		 * absolute-deadline snap-forward below keeps the next slot on time. */
-		ssize_t r = sendto(p->fd, frame, REAC_FRAME_BYTES, MSG_DONTWAIT,
-		                   (struct sockaddr *)&sll, sizeof sll);
-		if (r < 0)
-			atomic_fetch_add_explicit(&p->tx_errors, 1, memory_order_relaxed);
-		else
-			atomic_fetch_add_explicit(&p->tx_frames, 1, memory_order_relaxed);
+		 * On EAGAIN/EWOULDBLOCK we drop that emission (bump tx_errors) and move on —
+		 * the absolute-deadline snap-forward below keeps the next slot on time.
+		 *
+		 * THE FRAME DOUBLING (REAC_PACER_TX_REPS, issue #92): the slot's frame goes
+		 * out twice, back-to-back, SAME bytes SAME counter — every real desk does,
+		 * at both rates and in every state (see reac_pacer.h). tx_frames counts
+		 * wire frames, so it advances by up to TX_REPS per slot. */
+		for (int rep = 0; rep < REAC_PACER_TX_REPS; rep++) {
+			ssize_t r = sendto(p->fd, frame, REAC_FRAME_BYTES, MSG_DONTWAIT,
+			                   (struct sockaddr *)&sll, sizeof sll);
+			if (r < 0)
+				atomic_fetch_add_explicit(&p->tx_errors, 1, memory_order_relaxed);
+			else
+				atomic_fetch_add_explicit(&p->tx_frames, 1, memory_order_relaxed);
+		}
 
 		/* Advance the absolute deadline by exactly one period (no drift). If we
 		 * woke a full period or more late (scheduler hiccup), snap forward so we
