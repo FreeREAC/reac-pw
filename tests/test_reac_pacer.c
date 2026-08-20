@@ -282,6 +282,43 @@ int main(void)
 		reac_frame_ring_free(&p3.ring);
 	}
 
+	/* 3b. DYNAMIC DETECTION (operator ruling 2026-08-20): geometry comes from
+	 * the box's DECLARATION — the config-announce port table (libreac
+	 * reac_ports_parse) — and the matrix only NAMES the model. An unnamed
+	 * 0x84-family variant (a tail byte no matrix row carries, table intact)
+	 * must still size the master: set_box from the declared 32x8, ENROLL and
+	 * the cfea width byte follow, while the model stays honestly unnamed. */
+	{
+		static const uint8_t OUR[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0xc4, 0x99, 0x99 };
+		struct reac_pacer p5;
+		memset(&p5, 0, sizeof p5);
+		p5.fd = -1;
+		p5.fps = 8000;
+		memcpy(p5.src, OUR, 6);
+		CHK(reac_frame_ring_init(&p5.ring, 8, 2048) == 0);
+		reac_master_init(&p5.master, OUR, NULL, 8000);
+		p5.prev_state = REAC_M_IDLE;
+
+		uint8_t bf[2048];
+		/* the matrix S-4000S announce (32 in), then a tail byte no row carries —
+		 * the port table at block[8..19] is untouched, so the DECLARATION still
+		 * reads 32x8 while reac_ctrl_identify_box has no byte-exact match. */
+		size_t bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 7, 32);
+		CHK(bn > 0);
+		bf[18 + 26] ^= 0x5a;                      /* block[26]: model tail data */
+		reac_ctrl_checksum_apply(bf);             /* keep the frame VALID */
+		CHK(reac_ctrl_identify_box(bf, bn) == NULL);   /* no row names it */
+
+		reac_pacer_rx_ingest(&p5, bf, bn);
+		CHK(atomic_load(&p5.recognized_box) == NULL);  /* honestly unnamed... */
+		CHK(reac_master_has_box(&p5.master) == 1);     /* ...but SIZED */
+		CHK(p5.master.alloc.width == 32);
+		CHK(p5.master.announce_blk[18] == 32);         /* cfea width byte = declared */
+
+		reac_frame_ring_free(&p5.ring);
+	}
+
 	/* 4. live cadence on lo (best-effort; needs CAP_NET_RAW). */
 	struct reac_pacer p;
 	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = 8000, .prio = 0, .cpu = -1,
