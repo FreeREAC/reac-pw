@@ -2,9 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_mac — the default source MAC is THE NIC'S OWN ADDRESS, verbatim
- * (operator ruling 2026-08-20: real boxes and desks sync to us on our real
- * address; the Roland-OUI stand-in theory and the cloned-desk-MAC default are
- * both refuted — a borrowed identity collides with the real device and makes
+ * (reac_mac.h: a borrowed identity collides with the real device and makes
  * captures ambiguous). The ioctl path is exercised only via the pure
  * reac_mac_compose so the test needs no NIC. */
 #include "reac_mac.h"

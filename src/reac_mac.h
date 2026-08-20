@@ -4,20 +4,12 @@
 /* reac_mac — the single source of the default source MAC every emitting role
  * uses: THE NIC'S OWN HARDWARE ADDRESS, verbatim.
  *
- * Every REAC frame we emit is OURS — it carries this machine's real L2
- * identity, never a cloned desk MAC and never a dressed-up stand-in. Two
- * theories died to get here, both refuted by rig evidence (operator,
- * 2026-08-20):
- *   - impersonating a captured desk's MAC (the old master default) — real
- *     boxes sync to us on our own address;
- *   - keeping a Roland OUI on a stand-in host part (the old slave default,
- *     "a real master may validate the OUI", never demonstrated) — real desks
- *     grant us on our own address too.
- * A borrowed identity is worse than none: it collides with the real device
- * when both are on the wire and makes every capture ambiguous.
- *
- * --src-mac still overrides everything for explicit control (the one remaining
- * legitimate use of a foreign address: directed experiments). */
+ * Every REAC frame we emit carries this machine's real L2 identity — never a
+ * cloned desk MAC and never a Roland-OUI stand-in. Real boxes and desks sync
+ * to our real address (rig-verified, S-0808 + S-1608 cold-connect and 48V);
+ * a borrowed identity collides with the real device when both are on the wire
+ * and makes every capture ambiguous. --src-mac overrides for directed
+ * experiments. */
 #ifndef REAC_MAC_H
 #define REAC_MAC_H
 

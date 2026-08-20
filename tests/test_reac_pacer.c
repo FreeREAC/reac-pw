@@ -282,9 +282,9 @@ int main(void)
 		reac_frame_ring_free(&p3.ring);
 	}
 
-	/* 3b. DYNAMIC DETECTION (operator ruling 2026-08-20): geometry comes from
-	 * the box's DECLARATION — the config-announce port table (libreac
-	 * reac_ports_parse) — and the matrix only NAMES the model. An unnamed
+	/* 3b. DYNAMIC DETECTION: geometry comes from the box's DECLARATION — the
+	 * config-announce port table (libreac reac_ports_parse) — and the matrix
+	 * only NAMES the model. An unnamed
 	 * 0x84-family variant (a tail byte no matrix row carries, table intact)
 	 * must still size the master: set_box from the declared 32x8, ENROLL and
 	 * the cfea width byte follow, while the model stays honestly unnamed. */
