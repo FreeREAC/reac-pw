@@ -193,17 +193,20 @@ struct reac_console_cfg {
 #define REAC_CONSOLE_CFG_IDLE \
 	((struct reac_console_cfg){ .out_channels = 8, .console_field = 0 })
 
-/* A MIXER PROFILE — the desk reac-pw impersonates. The grant burst is box-defined
- * (a box locks to any valid grant), so the only per-mixer identity is a small set
- * of fields: the master MAC and the console-model byte (0 = V-Mixer M-200/M-300,
- * 1 = OHRCA M-5000), which drives BOTH the cfea [19] and the ENROLL console byte
- * (they carry the same 0/1 indicator, measured across matrix-m{200,300,5000}-*).
- * Probe specials + cadence are currently the V-Mixer (M-200) set for every profile
- * — a box still locks, but that is the remaining per-mixer fidelity item. */
+/* A MIXER PROFILE — the desk generation reac-pw speaks as. The grant burst is
+ * box-defined (a box locks to any valid grant), so the only per-mixer identity
+ * left is the console-model byte (0 = V-Mixer M-200/M-300, 1 = OHRCA M-5000),
+ * which drives BOTH the cfea [19] and the ENROLL console byte (they carry the
+ * same 0/1 indicator, measured across matrix-m{200,300,5000}-*). The source
+ * MAC is deliberately NOT a profile field: the master emits from THIS NIC's
+ * own address (operator ruling 2026-08-20 — a cloned desk MAC collides with
+ * the real desk; the conformance suite pins identity == the L2 source).
+ * Probe specials + cadence are currently the V-Mixer (M-200) set for every
+ * profile — a box still locks, but that is the remaining per-mixer fidelity
+ * item. */
 struct reac_mixer_profile {
 	const char *name;        /* CLI token: "m200" | "m300" | "m5000"          */
 	const char *display;     /* "M-200" ...                                   */
-	uint8_t     mac[6];      /* the desk's captured master MAC (default id)    */
 	uint8_t     console_field; /* cfea [19] + ENROLL console byte: 0=V-Mixer,1=OHRCA */
 };
 

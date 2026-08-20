@@ -10,29 +10,25 @@
 #include <net/if.h>
 #include <net/if_arp.h>   /* ARPHRD_ETHER */
 
-const uint8_t reac_roland_oui[3] = { 0x00, 0x40, 0xab };
-
-/* The fallback host part, used only when the NIC hwaddr can't be read. Boxes sit
- * at 00:40:ab:c4:xx:xx and desks at 00:40:ab:c9:xx:xx (per the RE notes), so a
- * host part of 00:00:01 is outside both device-class ranges and cannot collide. */
-static const uint8_t fallback_host[3] = { 0x00, 0x00, 0x01 };
+/* The fallback, used only when the NIC hwaddr can't be read: locally
+ * administered (bit 0x02 in the first octet), so it is by construction not any
+ * manufacturer's address and cannot collide with real gear on the wire. */
+static const uint8_t fallback_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
 int reac_mac_compose(int hw_family, const uint8_t hwaddr[6], uint8_t out[6])
 {
-	memcpy(out, reac_roland_oui, 3);
 	if (hw_family == ARPHRD_ETHER && hwaddr) {
-		memcpy(out + 3, hwaddr + 3, 3);
+		memcpy(out, hwaddr, 6);
 		return 0;
 	}
-	memcpy(out + 3, fallback_host, 3);
+	memcpy(out, fallback_mac, 6);
 	return -1;
 }
 
 int reac_mac_default_src(const char *ifname, uint8_t out[6])
 {
 	/* Fill the fallback first so `out` is valid on every early return. */
-	memcpy(out, reac_roland_oui, 3);
-	memcpy(out + 3, fallback_host, 3);
+	memcpy(out, fallback_mac, 6);
 
 	if (!ifname || !*ifname)
 		return -1;
