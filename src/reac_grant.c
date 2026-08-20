@@ -6,6 +6,7 @@
 #include "reac_headamp_tx.h"  /* struct reac_headamp_tx */
 
 #include <reac/reac.h>        /* REAC_FRAME_BYTES */
+#include <reac/reac_ports.h>  /* reac_headamp_base — the per-width placement law */
 #include <string.h>
 
 /* ---- The allocator ------------------------------------------------------- *
@@ -61,21 +62,13 @@
  * one. Where a box's AUDIO lands stays reac_boxreg's decision over
  * REAC_AUDIO_FABRIC_SLOTS. Multi-box allocation (#129) must keep them apart.
  *
- * This is a POLICY table, deliberately separated from the mechanism below it, so
- * multi-box allocation (#129 — several boxes sharing one fabric) can replace the
- * policy without touching the sweep generator. Today reac-pw grants ONE box at a
- * time, so a static policy is honest; the day two boxes must coexist, this becomes
- * a real free-list over the fabric and the observed bases become preferences. */
-struct grant_placement {
-	uint8_t width;
-	uint8_t base;
-};
-
-static const struct grant_placement OBSERVED_PLACEMENT[] = {
-	{  8, 0x00 },   /* S-0808  */
-	{ 16, 0x20 },   /* S-1608  */
-	{ 32, 0x00 },   /* S-4000S */
-};
+ * The observed per-width base itself lives in libreac (reac_headamp_base — one
+ * home; openmixer reads the same value off the reac.headamp.base node prop).
+ * This allocator stays the POLICY seam, deliberately separated from the
+ * mechanism below it, so multi-box allocation (#129 — several boxes sharing one
+ * fabric) can replace the policy without touching the sweep generator; the day
+ * two boxes must coexist, this becomes a real free-list over the fabric and the
+ * observed bases become preferences. */
 
 int reac_grant_alloc_fits(int base, int width)
 {
@@ -95,16 +88,13 @@ int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
 	if (!out || in_ch <= 0 || in_ch > REAC_GRANT_MAX_WIDTH)
 		return -1;
 
-	/* The observed base for this width, when we have one AND it still fits. The
-	 * fits() gate is not ceremony: it is what forbids a 32-wide box from taking
-	 * the S-1608's 0x20, and it keeps a future policy edit from silently
-	 * allocating past the head-amp space. */
-	for (size_t i = 0; i < sizeof OBSERVED_PLACEMENT / sizeof OBSERVED_PLACEMENT[0]; i++) {
-		if (OBSERVED_PLACEMENT[i].width != in_ch)
-			continue;
-		if (!reac_grant_alloc_fits(OBSERVED_PLACEMENT[i].base, in_ch))
-			break;                       /* observed base no longer placeable */
-		out->base  = OBSERVED_PLACEMENT[i].base;
+	/* The observed base for this width (libreac's reac_headamp_base), when there
+	 * is one AND it still fits. The fits() gate is not ceremony: it is what
+	 * forbids a 32-wide box from taking the S-1608's 0x20, and it keeps a future
+	 * policy edit from silently allocating past the head-amp space. */
+	int base = reac_headamp_base(in_ch);
+	if (base >= 0 && reac_grant_alloc_fits(base, in_ch)) {
+		out->base  = (uint8_t)base;
 		out->width = (uint8_t)in_ch;
 		return 0;
 	}
