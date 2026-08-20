@@ -22,7 +22,7 @@ libreac_m = meson.get_compiler('c').find_library('m', required : false)
 
 libreac_lib = static_library('reac',
   ['src/reac.c', 'src/reac_decode.c', 'src/reac_upstream.c', 'src/reac_encode.c',
-   'src/reac_capture.c', 'src/pcap_source.c'],
+   'src/reac_capture.c', 'src/pcap_source.c', 'src/reac_ports.c'],
   include_directories : libreac_inc,
   dependencies : [libreac_m],
   install : false)
