@@ -291,6 +291,31 @@ int main(void)
 		CHK(reac_box_pin_notice(NULL, "s0808") == 0);
 	}
 
+	/* SPLIT_ANNOUNCE (type ce ea) is a NAMED kind, not UNKNOWN_CTRL — the
+	 * split role's own announce (reac-aes67 REAC-PROTOCOL.md §6/§10.1,
+	 * source-derived from reacdriver; no capture exists yet, §14.1). All
+	 * three documented payload forms carry the same type word; the parser
+	 * keys on the type word alone. Every announce is block-checksummed. */
+	{
+		static const uint8_t FORMS[3][9] = {
+			{ 0x01, 0x00, 0x7f, 0x00, 0x01, 0x03, 0x08, 0x43, 0x05 },  /* first     */
+			{ 0x01, 0x00, 0x02, 0x00, 0x01, 0x03, 0x08, 0x42, 0x05 },  /* second    */
+			{ 0x01, 0x00, 0x02, 0x00, 0x01, 0x03, 0x02, 0x41, 0x05 },  /* keep-alive */
+		};
+		for (int k = 0; k < 3; k++) {
+			memset(f, 0, 64);
+			memcpy(f, MASTER, 6);
+			memcpy(f + 6, SRC, 6);
+			f[12] = 0x88; f[13] = 0x19;
+			f[16] = 0xce; f[17] = 0xea;
+			memcpy(f + 18, FORMS[k], sizeof FORMS[k]);
+			memcpy(f + 27, SRC, 6);          /* data[9..14] = the split's MAC */
+			reac_ctrl_checksum_apply(f);
+			CHK(reac_ctrl_parse(f, 64, &p) == REAC_CTRL_SPLIT_ANNOUNCE);
+			CHK(reac_ctrl_checksum_verify(f) == 0);
+		}
+	}
+
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
 	       "parser + descriptor + audio round-trip + box-frame classifier clean, "
 	       "DT1 record checksum stamped before the block checksum, "

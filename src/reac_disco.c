@@ -18,11 +18,21 @@ const char *reac_disco_role_name(enum reac_disco_role r)
 
 /* The box cold-connect JOIN and the master's grant-burst SHARE the cdea 04 03 opcode
  * (REAC-BOX-STATE-DIAGRAM.md), so the kind alone cannot tell them apart — only the
- * JOIN's full signature can. Mirrors reac_ctrl.c:123-128 deliberately: that matcher
- * decides FSM action, this one decides who is out there. */
+ * JOIN's full signature can. This matcher covers the FULL escalation a real box
+ * walks — 0014 -> 0013 -> 0016 -> 001a, sel 00 02 — box-only in every golden
+ * (S-1608 2026-07-11; S-4000S on M-200, M-5000 and coldboot: reac_s4000_golden.inc).
+ * It deliberately ACCEPTS MORE than the FSM's action matcher (reac_ctrl.c:~160),
+ * which grants only on 0013/0014: a 0016/001a is evidence a box is out there even
+ * while the FSM rightly refuses to treat it as the grant trigger.
+ *
+ * Known residue: the master's grant ECHO (0014, TAG 01 00) is byte-identical to the
+ * box's 0014 join, so those few frames misfile as BOX (4 in 70913 in the M-200
+ * golden); no per-frame signature can split them — direction resolution is the
+ * sighting table's corroboration job (arbitration spec §4, issue #90). */
 static int is_box_join(const struct reac_ctrl_parsed *p)
 {
-	return (p->op_len == 0x0013 || p->op_len == 0x0014) &&
+	return (p->op_len == 0x0013 || p->op_len == 0x0014 ||
+	        p->op_len == 0x0016 || p->op_len == 0x001a) &&
 	       p->sel == 0x00 && p->sel2 == 0x02;
 }
 
@@ -50,11 +60,31 @@ static enum reac_disco_role role_of(const struct reac_ctrl_parsed *p)
 		return REAC_DISCO_ROLE_MASTER;
 	case REAC_CTRL_BOX_HB:            /* cdea 01 03 0001 */
 		return REAC_DISCO_ROLE_BOX;
+	case REAC_CTRL_HEADAMP:           /* 04 03, TAG 01 01 — only a console emits
+		                           * preamp records (m200-headamp-re/DECODE.md;
+		                           * x204 in the S-4000 M-200 golden) */
+		return REAC_DISCO_ROLE_MASTER;
 	case REAC_CTRL_GRANT:             /* cdea 04 03 — BOTH directions use it */
 		return is_box_join(p) ? REAC_DISCO_ROLE_BOX : REAC_DISCO_ROLE_MASTER;
-	case REAC_CTRL_PROBE:             /* cdea 01 ... — the catch-all, see is_box_config */
-		return is_box_config(p) ? REAC_DISCO_ROLE_BOX : REAC_DISCO_ROLE_MASTER;
-	default:
+	case REAC_CTRL_PROBE:
+		/* cdea 01, the parser's catch-all. Arbitration makes this verdict
+		 * load-bearing, so only CAPTURED signatures name a role:
+		 *   - op1 00/01/02 = the master hunt + sub-state families (M-300 RE
+		 *     #130; M-200 and M-5000 goldens: 01 00 001a, 01 01 0018,
+		 *     01 02 000e) -> MASTER;
+		 *   - 01 03 is a DECLARATION family BOTH sides use (0019 master HB,
+		 *     0001 box HB — their own kinds above — and 0010 the box config);
+		 *     beyond those three, and for any other op1, nobody has captured
+		 *     the frame, and a frame nobody has captured must not be able to
+		 *     flip the segment's topology (arbitration spec §4) -> UNKNOWN,
+		 *     still a visible sighting. */
+		if (is_box_config(p))
+			return REAC_DISCO_ROLE_BOX;
+		if (p->op1 <= 0x02)
+			return REAC_DISCO_ROLE_MASTER;
+		return REAC_DISCO_ROLE_UNKNOWN;
+	default:                          /* incl. SPLIT_ANNOUNCE: real gear, role
+		                           * unproven until one is captured (§14.1) */
 		return REAC_DISCO_ROLE_UNKNOWN;
 	}
 }
