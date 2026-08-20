@@ -156,14 +156,14 @@ static void set_enroll_width(uint8_t blk[34], int in_ch)
 	stamp_block_cksum(blk);
 }
 
-/* The mixer profiles reac-pw can impersonate. MAC + console_field are the only
- * per-mixer identity; the grants are box-defined. MACs are the captured desk
- * addresses (matrix-m{200,300,5000}-*). M-200/M-300 are V-Mixer (console 0);
- * M-5000 is OHRCA (console 1). */
+/* The mixer profiles reac-pw can impersonate. console_field is the only
+ * per-mixer identity (the grants are box-defined, and the source MAC is this
+ * NIC's own — see reac_mac.h). M-200/M-300 are V-Mixer (console 0); M-5000 is
+ * OHRCA (console 1). */
 static const struct reac_mixer_profile MIXER_PROFILES[] = {
-	{ "m200",  "M-200",  { 0x00,0x40,0xab,0xc9,0xcc,0x03 }, 0 },
-	{ "m300",  "M-300",  { 0x00,0x40,0xab,0xc9,0xd8,0x5b }, 0 },
-	{ "m5000", "M-5000", { 0x00,0x40,0xab,0xca,0x15,0x4c }, 1 },
+	{ "m200",  "M-200",  0 },
+	{ "m300",  "M-300",  0 },
+	{ "m5000", "M-5000", 1 },
 };
 
 const struct reac_mixer_profile *reac_mixer_profile_by_name(const char *name)

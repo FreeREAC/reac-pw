@@ -120,7 +120,8 @@ enum reac_pacer_evkind {
 	REAC_PEV_GRANT_TIMEOUT,  /* grant window expired: a=attempt# (mod 256)     */
 	REAC_PEV_DROP,           /* backward drop: a=reason, blk=block for BYE     */
 	REAC_PEV_WATCHDOG,       /* still PROBING after 10 s: a=box_seen           */
-	REAC_PEV_RECOGNIZED,     /* box model recognized: a=in_ch (matrix lookup)  */
+	REAC_PEV_RECOGNIZED,     /* box declared its geometry: a=in_ch (declared),
+	                          * b=matrix model index+1 (0 = no row names it)   */
 	REAC_PEV_SIGHTING,       /* passive discovery: a=role, b=model idx+1 (0=?) */
 	REAC_PEV_CLOCK,          /* clock discipline changed (#75): a=reac_clock_source,
 	                          * b=reac_clock_state | (reac_clock_quality << 4)
@@ -256,6 +257,13 @@ struct reac_pacer {
 	 * can load it from another thread without a data race. A pointer store/load
 	 * is lock-free on every arch reac-pw targets. */
 	_Atomic (const struct reac_box_model *) recognized_box;
+	/* The geometry the box DECLARED (config-announce port table, libreac
+	 * reac_ports_parse) and that reac_master_set_box last applied. Pacer-thread
+	 * only (rx_ingest + sync_published_box run there): the dedup that stops the
+	 * repeating config-announce from re-firing set_box every second. 0/0 =
+	 * nothing declared (reset when the box is forgotten, so a re-declaration
+	 * re-fires). The MODEL above only names; this is what sizes. */
+	int declared_in, declared_out;
 	_Atomic uint64_t grant_attempts; /* grant windows opened */
 	_Atomic uint64_t drops[8];       /* backward drops by reac_master_drop_reason */
 

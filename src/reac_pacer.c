@@ -9,6 +9,7 @@
 #include "reac_mac.h"
 
 #include <reac/reac.h>     /* REAC_FRAME_BYTES, REAC_HDR_COUNTER_OFF, ... */
+#include <reac/reac_ports.h> /* the box's declared port table (config-announce) */
 
 #include <stdlib.h>
 #include <string.h>
@@ -237,9 +238,13 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
  * a box that is not there. Call after every step of the master. */
 static void sync_published_box(struct reac_pacer *p)
 {
-	if (!reac_master_has_box(&p->master) &&
-	    atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
-		atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
+	if (!reac_master_has_box(&p->master)) {
+		if (atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
+			atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
+		/* Forget the declared geometry with the box, so a re-declaration after
+		 * a drop re-fires set_box instead of deduping into silence. */
+		p->declared_in = p->declared_out = 0;
+	}
 }
 
 void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len)
@@ -273,38 +278,54 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	if (ev == REAC_M_RX_BOX_JOIN)
 		atomic_fetch_add_explicit(&p->rx_joins, 1, memory_order_relaxed);
 
-	/* MASTER as mixer: recognize the connected box's MODEL from its
-	 * config-announce and match the fixed matrix (task #137). Emit once per new
-	 * model (the box repeats its config-announce). NULL => unknown model; the
-	 * caller can still drive it from the frame's descriptor/width. */
-	const struct reac_box_model *bm = reac_ctrl_identify_box(frame, len);
-	const struct reac_box_model *prev_bm =
-		atomic_load_explicit(&p->recognized_box, memory_order_relaxed);
-	if (bm && bm != prev_bm) {
-		atomic_store_explicit(&p->recognized_box, bm, memory_order_release);
-		/* THE box identity, from the only place it can honestly come from: what the
-		 * box said it is. Everything downstream — the head-amp base, the grant sweep,
-		 * the ENROLL group map, the cfea width, the published node props, the node
-		 * widths — is derived from this call and from nothing else. */
-		int prev_w = p->master.alloc.width;   /* the width we have ALREADY granted */
-		reac_master_set_box(&p->master, bm->in_ch, bm->out_ch);
-		/* set_box rebuilds the sweep for the declared width but does NOT re-emit it,
-		 * and a box already GRANTED at a different width is holding an enrollment for
-		 * slots that are not its own. Re-fire so it gets the corrected sweep (the
-		 * S-4000S 8->32 fix, and the correct 8-wide base-0x00 grant for an S-0808 that
-		 * had been granted 16 wide). A box declaring the width we already granted does
-		 * NOT re-fire -> its establishment stays byte-identical.
-		 *
-		 * The `box_seen` term this gate also carried is gone. It is the 600-frame
-		 * presence DECAY flag, and we are standing inside the handler for a frame from
-		 * that very box — a "is the box there" test that can read 0 while we hold the
-		 * box's own frame in our hands is a stale diagnostic gating a correctness
-		 * action, which is how a wrong-width enrollment gets to survive on the wire. */
-		if (bm->in_ch != prev_w &&
-		    (p->master.state == REAC_M_GRANTING ||
-		     p->master.state == REAC_M_ESTABLISHED))
-			reac_master_regrant(&p->master);
-		pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)bm->in_ch, 0, parsed.src, NULL);
+	/* MASTER as mixer: SELF-CONFIGURATION FROM THE WIRE. THE box geometry comes
+	 * from what the box DECLARED — the config-announce port table (libreac
+	 * reac_ports_parse) — never a hand-kept list. Everything downstream — the
+	 * head-amp base, the grant sweep, the ENROLL group map, the cfea width, the
+	 * published node props, the node widths — derives from set_box and from
+	 * nothing else. The fixed matrix only NAMES the model for the log and the
+	 * published props: an unnamed box is still sized and granted. Emit once per
+	 * declared geometry (the box repeats its config-announce ~1/s). */
+	struct reac_box_ports ports;
+	if (len >= REAC_CTRL_BLOCK_OFF + REAC_CTRL_BLOCK_LEN &&
+	    reac_ports_parse(frame + REAC_CTRL_BLOCK_OFF, &ports) == 0) {
+		const struct reac_box_model *bm = reac_ctrl_identify_box(frame, len);
+		const struct reac_box_model *prev_bm =
+			atomic_load_explicit(&p->recognized_box, memory_order_relaxed);
+		if (bm && bm != prev_bm)
+			atomic_store_explicit(&p->recognized_box, bm, memory_order_release);
+		if (ports.in_ch != p->declared_in || ports.out_ch != p->declared_out) {
+			int prev_w = p->master.alloc.width;   /* the width ALREADY granted */
+			reac_master_set_box(&p->master, ports.in_ch, ports.out_ch);
+			/* set_box refuses a width it cannot place (it must not half-apply);
+			 * record the declaration ONLY once it actually holds, so the box's
+			 * next announce retries instead of being deduped into silence. */
+			if (p->master.alloc.width == ports.in_ch) {
+				/* set_box rebuilds the sweep for the declared width but does NOT
+				 * re-emit it, and a box already GRANTED at a different width is
+				 * holding an enrollment for slots that are not its own. Re-fire so
+				 * it gets the corrected sweep (the S-4000S 8->32 fix, and the
+				 * correct 8-wide base-0x00 grant for an S-0808 that had been
+				 * granted 16 wide). A box declaring the width we already granted
+				 * does NOT re-fire -> its establishment stays byte-identical.
+				 *
+				 * The `box_seen` term this gate also carried is gone. It is the
+				 * 600-frame presence DECAY flag, and we are standing inside the
+				 * handler for a frame from that very box — a "is the box there"
+				 * test that can read 0 while we hold the box's own frame in our
+				 * hands is a stale diagnostic gating a correctness action, which
+				 * is how a wrong-width enrollment gets to survive on the wire. */
+				if (ports.in_ch != prev_w &&
+				    (p->master.state == REAC_M_GRANTING ||
+				     p->master.state == REAC_M_ESTABLISHED))
+					reac_master_regrant(&p->master);
+				p->declared_in  = ports.in_ch;
+				p->declared_out = ports.out_ch;
+				pev_push(p, REAC_PEV_RECOGNIZED, (uint8_t)ports.in_ch,
+				         (uint8_t)(reac_disco_model_index(bm) + 1),
+				         parsed.src, NULL);
+			}
+		}
 	}
 
 	enum reac_master_state from = p->master.state;
@@ -463,9 +484,17 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			break;
 		}
 		case REAC_PEV_RECOGNIZED: {
-			const struct reac_box_model *bm = reac_box_model_by_channels(e.a);
-			fprintf(out, "reac-master: [%.6f] recognized box = %s from %s\n",
-			        ts, bm ? bm->display : "(unknown)", mac);
+			/* b carries the matrix model index+1 (0 = no row names it) — never
+			 * reac_box_model_by_channels here: its S-1608 fallback would NAME a
+			 * box that only declared a width. */
+			const struct reac_box_model *bm = reac_disco_model_by_index((int)e.b - 1);
+			if (bm)
+				fprintf(out, "reac-master: [%.6f] recognized box = %s from %s\n",
+				        ts, bm->display, mac);
+			else
+				fprintf(out, "reac-master: [%.6f] box declared %u inputs from %s "
+				        "(no matrix row — sized from the declaration)\n",
+				        ts, (unsigned)e.a, mac);
 			break;
 		}
 		case REAC_PEV_CLOCK: {

@@ -116,9 +116,9 @@ static void usage(const char *p)
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
 	  "                which no wire can tell us (even 2..40; 8=S-0808, 16=S-1608,\n"
 	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
-	  "  --mixer M     master role: which Roland desk to impersonate (m200|m300|m5000;\n"
-	  "                default m200). Sets the master MAC + console model; the grants\n"
-	  "                are box-defined so any box locks to any profile.\n"
+	  "  --mixer M     master role: which desk GENERATION to speak as (m200|m300|m5000;\n"
+	  "                default m200). Sets the console-model byte only; the grants are\n"
+	  "                box-defined so any box locks to any profile.\n"
 	  "  (no --box)    master role: the box on this segment is LEARNED FROM THE WIRE and\n"
 	  "                nothing else. reac-pw starts with no box, probes, and sizes +\n"
 	  "                labels reac:capture / reac:playback the moment a box declares\n"
@@ -130,13 +130,10 @@ static void usage(const char *p)
 	  "                command the master re-asserts to the box (declarative/DMX).\n"
 	  "                CH = wire channel 0..39; PARAM = phantom|pad|sens; VALUE = 0/1\n"
 	  "                for phantom|pad, 0..55 raw SENS code for sens. RIG-GATED.\n"
-	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default: master role\n"
-	  "                uses the impersonated desk's MAC; slave role uses the Roland OUI\n"
-	  "                (00:40:ab) + the last 3 bytes of the --tx NIC's own hardware\n"
-	  "                address, so it stays Roland-OUI-compatible yet can never collide\n"
-	  "                with a real box (e.g. an S-1608 at 00:40:ab:c4:80:41).\n"
-	  "                Roland allocates ranges per device class (desks 00:40:ab:c9:xx:xx,\n"
-	  "                boxes 00:40:ab:c4:xx:xx) — a box may validate its master's range\n"
+	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default for BOTH\n"
+	  "                roles: the --tx NIC's OWN hardware address, verbatim — our frames\n"
+	  "                carry OUR identity (real boxes and desks sync to it; a borrowed\n"
+	  "                MAC collides with the real device and makes captures ambiguous).\n"
 	  "environment (see docs/ENV-KNOBS.md; unset = default behavior, byte-identical):\n"
 	  "  REACPW_GRANT_DWELL_S=N  master role: hold the recognized-but-ungranted dwell\n"
 	  "                for N whole seconds before the grant burst (default: the built-in\n"
@@ -225,7 +222,7 @@ int main(int argc, char **argv)
 	struct reac_headamp_setting headamps[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int n_headamps = 0;
 	const struct reac_mixer_profile *mixer =
-		reac_mixer_profile_by_name("m200");   /* master: which desk we impersonate */
+		reac_mixer_profile_by_name("m200");   /* master: which desk generation we speak as */
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
@@ -260,8 +257,8 @@ int main(int argc, char **argv)
 				return 2;
 			}
 		} else if (!strcmp(argv[i], "--mixer") && i + 1 < argc) {
-			/* Master role: which Roland desk to impersonate (MAC + console model).
-			 * The grants are box-defined, so a box locks to any profile. */
+			/* Master role: which desk GENERATION to speak as (console-model
+			 * byte). The grants are box-defined, so a box locks to any profile. */
 			mixer = reac_mixer_profile_by_name(argv[++i]);
 			if (!mixer) {
 				fprintf(stderr, "reac-pw: unknown --mixer '%s'; known:", argv[i]);
@@ -427,9 +424,14 @@ int main(int argc, char **argv)
 	int tx_ring_init = 0;
 
 	if (tx_if && role == REAC_ROLE_MASTER) {
-		/* Default master MAC = the impersonated desk's captured address; --src-mac
-		 * overrides it. The mixer profile also sets the console-model byte. */
-		const uint8_t *master_src = src_mac_set ? src_mac : mixer->mac;
+		/* Default master MAC = THIS NIC's own address (reac_mac.h); --src-mac
+		 * overrides it. The mixer profile sets only the console-model byte. */
+		uint8_t master_mac_buf[6];
+		if (!src_mac_set && reac_mac_default_src(tx_if, master_mac_buf) != 0)
+			fprintf(stderr, "reac-pw: could not read %s hardware address for the "
+			        "master source MAC; using the locally-administered fallback\n",
+			        tx_if);
+		const uint8_t *master_src = src_mac_set ? src_mac : master_mac_buf;
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_sink_cfg scfg = { .ifname = tx_if,
@@ -455,7 +457,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "reac-pw: reac:playback sink not created "
 			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
 		else {
-			fprintf(stderr, "reac-pw: MASTER role (impersonating %s) on '%s' — "
+			fprintf(stderr, "reac-pw: MASTER role (%s profile) on '%s' — "
 			        "event-driven establishment: probing until the box's "
 			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
 			        "stderr\n", mixer->display, tx_if);
@@ -473,18 +475,18 @@ int main(int argc, char **argv)
 		if (src_mac_set) {
 			memcpy(box_mac, src_mac, 6);
 		} else if (reac_mac_default_src(tx_if, box_mac) != 0) {
-			/* NIC hwaddr unreadable — the Roland-OUI + fixed-fallback host part is
-			 * still on-wire safe (outside the box/desk device-class ranges), but note
-			 * it so an ambiguous capture is explained. */
+			/* NIC hwaddr unreadable — the locally-administered fallback is still
+			 * on-wire safe (no manufacturer carries it), but note it so an
+			 * ambiguous capture is explained. */
 			fprintf(stderr, "reac-pw: could not read %s hardware address for the box "
-			        "MAC host part; using the fixed fallback\n", tx_if);
+			        "source MAC; using the locally-administered fallback\n", tx_if);
 		}
 		const uint8_t *slave_src = box_mac;
 		fprintf(stderr, "reac-pw: slave box source MAC = "
 		        "%02x:%02x:%02x:%02x:%02x:%02x%s\n",
 		        box_mac[0], box_mac[1], box_mac[2], box_mac[3], box_mac[4], box_mac[5],
 		        src_mac_set ? " (--src-mac override)"
-		                    : " (Roland OUI + this NIC's host part; --src-mac overrides)");
+		                    : " (this NIC's own address; --src-mac overrides)");
 		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
 		tx_ring_init = 1;
 		struct reac_slave_cfg slcfg = { .ifname = tx_if,
