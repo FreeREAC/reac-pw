@@ -40,6 +40,9 @@ enum reac_ctrl_kind {
 	REAC_CTRL_HEADAMP,       /* master cdea 04 03, record TAG 01 01 (head-amp:
 	                          * CH PARAM VALUE — a preamp knob, NOT a grant) */
 	REAC_CTRL_BOX_HB,        /* a box cdea 01 03 0001 81 (our keep-alive) */
+	REAC_CTRL_SPLIT_ANNOUNCE,/* a splitter's ceea announce — the split role's
+	                          * own frame type (reac-aes67 REAC-PROTOCOL.md §6,
+	                          * source-derived; never yet captured, §14.1) */
 	REAC_CTRL_UNKNOWN_CTRL,  /* cdea/cfea we don't classify */
 };
 

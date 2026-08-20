@@ -20,6 +20,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "reac_s4000_golden.inc"
+
 static const uint8_t MASTER[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }; /* stand-in */
 static const uint8_t BOX[6]    = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 }; /* stand-in */
 static const uint8_t OURS[6]   = { 0x00, 0x40, 0xab, 0x99, 0x99, 0x99 }; /* this master */
@@ -234,8 +236,62 @@ int main(void)
 	reac_disco_table_observe(&t, &box, 1, S_(10));
 	CHK(reac_disco_table_json(&t, S_(10), buf, 20) == -1);
 
+	/* ---- (f) GOLDEN REPLAY: real S-4000 frames, byte-verbatim (issue #90).
+	 *
+	 * Every entry is a captured frame with the verdict the classifier must
+	 * reach — the box cold-connect escalation is BOX in all four steps
+	 * (0016/001a used to file as a rival master), an uncaptured cdea 01
+	 * declaration stays UNKNOWN, and a head-amp record is master evidence.
+	 * Provenance and the known grant-echo ambiguity: reac_s4000_golden.inc. */
+	for (size_t i = 0; i < S4000_GOLD_COUNT; i++) {
+		const struct s4000_gold *e = &S4000_GOLD[i];
+		memset(f, 0, sizeof f);
+		memcpy(f, e->head, sizeof e->head);
+		if (reac_disco_classify(f, e->len, OURS, &s) != 0) {
+			fprintf(stderr, "FAIL: golden %zu did not classify\n", i);
+			return 1;
+		}
+		if ((int)s.role != e->role) {
+			fprintf(stderr, "FAIL: golden %zu role %s, expected %s\n", i,
+			        reac_disco_role_name(s.role),
+			        reac_disco_role_name((enum reac_disco_role)e->role));
+			return 1;
+		}
+		if (e->model == NULL ? s.model != NULL
+		                     : (s.model == NULL || strcmp(s.model->token, e->model) != 0)) {
+			fprintf(stderr, "FAIL: golden %zu model %s, expected %s\n", i,
+			        s.model ? s.model->token : "(none)",
+			        e->model ? e->model : "(none)");
+			return 1;
+		}
+	}
+
+	/* ---- (g) SPLIT_ANNOUNCE (ce ea): a splitter's announce is REAL GEAR with
+	 * an UNPROVEN role. The frame is source-derived (reac-aes67
+	 * REAC-PROTOCOL.md §10.1: first-announce data[0..8], the split's MAC at
+	 * data[9..14], block checksummed like every announce) — no capture of one
+	 * exists yet (§14.1, the last unmapped type), so the role must stay
+	 * UNKNOWN: a frame kind nobody has captured must not flip the segment's
+	 * topology. The MAC is still a sighting, like the ambiguous flood above. */
+	static const uint8_t SPLIT[6] = { 0x00, 0x40, 0xab, 0x77, 0x77, 0x77 }; /* stand-in */
+	static const uint8_t SPLIT_FIRST[9] =
+		{ 0x01, 0x00, 0x7f, 0x00, 0x01, 0x03, 0x08, 0x43, 0x05 };
+	memset(f, 0, sizeof f);
+	memcpy(f, MASTER, 6);
+	memcpy(f + 6, SPLIT, 6);
+	f[12] = 0x88; f[13] = 0x19;
+	f[16] = 0xce; f[17] = 0xea;
+	memcpy(f + 18, SPLIT_FIRST, sizeof SPLIT_FIRST);
+	memcpy(f + 27, SPLIT, 6);                 /* data[9..14] = the split's MAC */
+	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_parse(f, 64, &p) == REAC_CTRL_SPLIT_ANNOUNCE);   /* named, not UNKNOWN_CTRL */
+	CHK(reac_disco_classify(f, 64, OURS, &s) == 0);
+	CHK(s.role == REAC_DISCO_ROLE_UNKNOWN);
+	CHK(memcmp(s.mac, SPLIT, 6) == 0);
+	CHK(s.model == NULL);
+
 	printf("OK: disco — presence only from real 0x8819 Roland frames, role from the full "
 	       "signature (never the kind), model never inferred, stale devices withdrawn, "
-	       "JSON all-or-nothing\n");
+	       "JSON all-or-nothing, S-4000 goldens replay byte-verbatim\n");
 	return 0;
 }
