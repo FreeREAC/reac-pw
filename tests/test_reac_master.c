@@ -649,8 +649,10 @@ int main(void)
 		 * fps*K/4000, see reac_master_init). console_field only changes the
 		 * stamped identity bytes, not the cadence math. */
 		struct reac_master mm200, mm5000;
-		reac_master_init(&mm200, m200->mac, NULL, fps_m200_48k);
-		reac_master_init(&mm5000, m5000->mac, NULL, fps_m5000_96k);
+		/* any source MAC does — the profile carries no desk MAC any more (the
+		 * master emits from the NIC's own address; operator ruling 2026-08-20) */
+		reac_master_init(&mm200, src, NULL, fps_m200_48k);
+		reac_master_init(&mm5000, src, NULL, fps_m5000_96k);
 		CHK(mm200.fps == 4000 && mm5000.fps == 8000);
 		CHK(mm5000.cycle_len == mm200.cycle_len * 2);      /* fps doubled -> cycle doubled */
 		CHK(mm5000.chanmap_off == mm200.chanmap_off * 2);

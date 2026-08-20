@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_mac — the stand-in source-MAC helper (task #35, test item D.10). Proves
- * the derived default MAC keeps the Roland OUI, takes its host part from the NIC
- * hwaddr, and can NEVER equal a real box's — the whole point of the change (the
- * old hard-coded 00:40:ab:c4:80:41 IS a real S-1608). The ioctl path is exercised
- * only via the pure reac_mac_compose so the test needs no NIC. */
+/* reac_mac — the default source MAC is THE NIC'S OWN ADDRESS, verbatim
+ * (operator ruling 2026-08-20: real boxes and desks sync to us on our real
+ * address; the Roland-OUI stand-in theory and the cloned-desk-MAC default are
+ * both refuted — a borrowed identity collides with the real device and makes
+ * captures ambiguous). The ioctl path is exercised only via the pure
+ * reac_mac_compose so the test needs no NIC. */
 #include "reac_mac.h"
 
 #include <net/if_arp.h>   /* ARPHRD_ETHER, ARPHRD_LOOPBACK */
@@ -19,34 +20,34 @@ int main(void)
 	uint8_t out[6];
 	const uint8_t hw[6]    = { 0xaa, 0xbb, 0xcc, 0x12, 0x34, 0x56 }; /* a NIC hwaddr */
 	const uint8_t s1608[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 }; /* a real box */
+	const uint8_t m200[6]  = { 0x00, 0x40, 0xab, 0xc9, 0xcc, 0x03 }; /* a real desk */
 
-	/* 1. ETHER hwaddr -> Roland OUI + the NIC's last three bytes. */
+	/* 1. ETHER hwaddr -> the NIC's address VERBATIM: our frames carry OUR
+	 * identity, no OUI dress-up, no borrowed desk MAC. */
 	CHK(reac_mac_compose(ARPHRD_ETHER, hw, out) == 0);
-	CHK(out[0] == 0x00 && out[1] == 0x40 && out[2] == 0xab);   /* Roland OUI kept */
-	CHK(out[3] == 0x12 && out[4] == 0x34 && out[5] == 0x56);   /* host from NIC   */
-	/* The derived MAC must not collide with the real S-1608 whose MAC the old
-	 * hard-coded stand-in WAS (the entire reason for #35). */
-	CHK(memcmp(out, s1608, 6) != 0);
+	CHK(memcmp(out, hw, 6) == 0);
+	CHK(memcmp(out, s1608, 6) != 0 && memcmp(out, m200, 6) != 0);
 
-	/* 2. A non-ethernet family (loopback / no hwaddr) falls back, returns -1, but
-	 * still yields a usable Roland-OUI MAC with a NON-box, NON-desk host part. */
+	/* 2. A non-ethernet family (loopback / no hwaddr) falls back, returns -1,
+	 * and the fallback is LOCALLY ADMINISTERED (02:...) — by construction not
+	 * any manufacturer's address, so it can never collide with real gear. */
 	CHK(reac_mac_compose(ARPHRD_LOOPBACK, hw, out) == -1);
-	CHK(out[0] == 0x00 && out[1] == 0x40 && out[2] == 0xab);
-	CHK(!(out[3] == 0x12 && out[4] == 0x34 && out[5] == 0x56));/* NOT NIC-derived */
-	CHK(out[3] != 0xc4 && out[3] != 0xc9);                     /* not box/desk class */
+	CHK(out[0] & 0x02);                                /* locally administered */
+	CHK(memcmp(out, hw, 6) != 0);                      /* NOT the NIC address  */
+	CHK(memcmp(out, s1608, 6) != 0 && memcmp(out, m200, 6) != 0);
 
-	CHK(reac_mac_compose(ARPHRD_ETHER, NULL, out) == -1);      /* NULL hwaddr -> fallback */
-	CHK(out[0] == 0x00 && out[1] == 0x40 && out[2] == 0xab);
+	CHK(reac_mac_compose(ARPHRD_ETHER, NULL, out) == -1);   /* NULL hwaddr -> fallback */
+	CHK(out[0] & 0x02);
 
 	/* 3. reac_mac_default_src with no interface -> the same safe fallback, -1. */
 	memset(out, 0x55, sizeof out);
 	CHK(reac_mac_default_src(NULL, out) == -1);
-	CHK(out[0] == 0x00 && out[1] == 0x40 && out[2] == 0xab);
-	CHK(out[3] != 0xc4 && out[3] != 0xc9);
-	CHK(memcmp(out, s1608, 6) != 0);
-	CHK(reac_mac_default_src("", out) == -1);                  /* empty name too */
-	CHK(out[0] == 0x00 && out[1] == 0x40 && out[2] == 0xab);
+	CHK(out[0] & 0x02);
+	CHK(memcmp(out, s1608, 6) != 0 && memcmp(out, m200, 6) != 0);
+	CHK(reac_mac_default_src("", out) == -1);               /* empty name too */
+	CHK(out[0] & 0x02);
 
-	printf("OK: reac_mac default src = Roland OUI + NIC host part, never a box MAC\n");
+	printf("OK: reac_mac default src = the NIC's own address verbatim; "
+	       "fallback locally administered, never real gear\n");
 	return 0;
 }
