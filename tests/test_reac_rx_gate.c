@@ -185,7 +185,7 @@ int main(void)
 		struct reac_ring ring;
 		struct reac_rx rx;
 		CHK(reac_rx_open(&rx, &cfg, &ring) == 0);
-		reac_rx_follow_src(&rx, up2 + 6);          /* the master declares BOX 2 */
+		reac_rx_peer_reset(&rx, up2 + 6, 1);          /* the master declares BOX 2 */
 		CHK(rx.up_src_locked == 1);
 		CHK(run_rx(&rx, 20) == 0);
 		/* box 2's frames fed the ring; box 1 — first on the wire — was gated out */
@@ -193,9 +193,19 @@ int main(void)
 		CHK(memcmp(rx.up_src, UP16 + 6, 6) != 0);
 		CHK(atomic_load(&rx.frames_ok) >= 20);
 		CHK(atomic_load(&rx.frames_bad) == 0);
-		/* and it is idempotent: re-declaring the same box changes nothing */
-		reac_rx_follow_src(&rx, up2 + 6);
+		/* idempotent: the same box in the same session changes nothing */
+		unsigned ep = atomic_load(&rx.peer_epoch);
+		reac_rx_peer_reset(&rx, up2 + 6, 1);
 		CHK(memcmp(rx.up_src, up2 + 6, 6) == 0);
+		CHK(atomic_load(&rx.peer_epoch) == ep);
+		/* WARM RECONNECT: the SAME box comes back, but it is a NEW SESSION and its
+		 * counter starts wherever the box's did. The MAC cannot tell this apart,
+		 * so keying on it alone left the old session's continuity in place and a
+		 * clean reconnect reported thousands of counter gaps. The session must
+		 * bump the epoch even though nothing about the peer changed. */
+		reac_rx_peer_reset(&rx, up2 + 6, 2);
+		CHK(atomic_load(&rx.peer_epoch) == ep + 1);
+		CHK(memcmp(rx.up_src, up2 + 6, 6) == 0);   /* still the same box */
 		reac_rx_close(&rx);
 		reac_ring_free(&ring);
 	}

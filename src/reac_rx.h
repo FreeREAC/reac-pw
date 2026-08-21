@@ -84,6 +84,14 @@ struct reac_rx {
 	 * (the 40-slot allocation) is a separate lane. */
 	uint8_t up_src[6];
 	int     up_src_locked;
+	/* Bumped when the PEER changes (reac_rx_peer_reset). A box plug is not a
+	 * special case: it is a lost connection and a reconnect, so everything the
+	 * loop learned from the previous peer — its counter continuity, its rate
+	 * slope, the duplicate guard's previous frame — is stale the moment the MAC
+	 * changes. The loop compares this against its own copy and clears in one
+	 * place, so the reset cannot be half-applied. */
+	unsigned peer_session;       /* the master session this lock belongs to */
+	_Atomic unsigned peer_epoch;
 
 	/* Duplicate-frame guard. Two different sources put the same frame on the
 	 * wire twice, and both land here:
@@ -143,8 +151,9 @@ int reac_rx_open(struct reac_rx *rx, const struct reac_rx_cfg *cfg, struct reac_
  * decoding a MAC that had left the segment: the new box's frames all failed the
  * compare, frames_ok froze, and reac-capture published silence while the wire
  * carried a live microphone. The master already knows which box is here; this is
- * how it says so. Safe to call every tick with the same MAC. */
-void reac_rx_follow_src(struct reac_rx *rx, const uint8_t mac[6]);
+ * how it says so, and a CHANGE resets the per-peer state with it. Safe to call
+ * every tick with the same MAC: the same peer is a no-op. */
+void reac_rx_peer_reset(struct reac_rx *rx, const uint8_t mac[6], unsigned session);
 
 int reac_rx_start(struct reac_rx *rx);
 

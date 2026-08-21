@@ -76,14 +76,21 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
 }
 
-void reac_rx_follow_src(struct reac_rx *rx, const uint8_t mac[6])
+void reac_rx_peer_reset(struct reac_rx *rx, const uint8_t mac[6], unsigned session)
 {
 	if (!rx || !mac)
 		return;
-	if (rx->up_src_locked && memcmp(rx->up_src, mac, 6) == 0)
-		return;                       /* already following this box */
+	if (rx->up_src_locked && memcmp(rx->up_src, mac, 6) == 0 &&
+	    rx->peer_session == session)
+		return;                       /* same peer, same session — nothing was lost */
+	rx->peer_session = session;
 	memcpy(rx->up_src, mac, 6);
 	rx->up_src_locked = 1;
+	/* A new peer means a new session. Everything the loop carries about the old
+	 * one is now a lie: its counter is not ours to continue, its rate slope
+	 * describes a clock that left, and the duplicate guard's previous frame
+	 * belongs to another box. The loop clears them when it sees the bump. */
+	atomic_fetch_add_explicit(&rx->peer_epoch, 1, memory_order_release);
 }
 
 /* The stream gate: does this valid 0x8819 frame belong to the stream we
@@ -176,6 +183,7 @@ static void *rx_loop(void *arg)
 
 	uint16_t last_counter = 0;
 	int have_counter = 0;
+	unsigned seen_epoch = atomic_load_explicit(&rx->peer_epoch, memory_order_acquire);
 	uint64_t pcap_first_ts = 0, wall_first_ns = 0;
 	uint64_t last_stat_ns = 0;   /* periodic RX telemetry (every ~2 s) */
 
@@ -241,6 +249,18 @@ static void *rx_loop(void *arg)
 		}
 
 		uint16_t counter = reac_frame_counter(frame);
+		/* THE PEER CHANGED: drop everything learned from the last one, in one
+		 * place, before it can be mistaken for continuity. Counting the seam as
+		 * lost frames is how a clean reconnect reported thousands of gaps. */
+		unsigned ep = atomic_load_explicit(&rx->peer_epoch, memory_order_acquire);
+		if (ep != seen_epoch) {
+			seen_epoch = ep;
+			have_counter = 0;
+			rx->have_prev_frame = 0;
+			rx->ppm_have_last = 0;
+			rx->ppm_win_frames = 0;
+			atomic_store_explicit(&rx->ppm_error_milli, 0, memory_order_relaxed);
+		}
 		if (have_counter) {
 			uint16_t gap = reac_counter_gap(last_counter, counter);
 			if (gap)
