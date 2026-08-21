@@ -673,7 +673,8 @@ static void on_log_timer(void *data, uint64_t expirations)
 	 * rather than keeping a second, older opinion. Idempotent, so it costs a
 	 * compare per tick once they agree. */
 	if (n->rate_src && reac_master_has_box(&n->pacer.master))
-		reac_rx_follow_src(n->rate_src, n->pacer.master.box_mac);
+		reac_rx_peer_reset(n->rate_src, n->pacer.master.box_mac,
+		                   n->pacer.master.session_seq);
 	sink_publish_box_clock(n);     /* before the drain, so a change prints now */
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
