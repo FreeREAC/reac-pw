@@ -978,7 +978,10 @@ void reac_sink_node_set_peer_source(struct reac_sink_node *n,
  * it learned from the last one. Allocation-free and non-blocking by contract. */
 static void sink_on_session(void *ctx, const uint8_t mac[6], unsigned session)
 {
-	reac_rx_peer_reset((struct reac_rx *)ctx, mac, session);
+	if (mac)
+		reac_rx_peer_reset((struct reac_rx *)ctx, mac, session);
+	else
+		reac_rx_session_end((struct reac_rx *)ctx);   /* the session ended */
 }
 
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx)
