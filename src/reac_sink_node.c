@@ -663,6 +663,17 @@ static void on_log_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct reac_sink_node *n = data;
+	/* THE RX FOLLOWS THE DECLARED BOX. The upstream gate latches the first
+	 * box-shaped source it sees and had no way back out, so after a hot swap it
+	 * kept decoding the departed box's MAC: every frame from the new box failed
+	 * the compare, frames_ok stopped advancing, and reac-capture published
+	 * silence while the wire carried a live microphone (rig 2026-08-21, S-1608
+	 * out / S-0808 in — the box synced, the graph was patched, and MAIN measured
+	 * digital silence). Box identity belongs to the MASTER; the gate mirrors it
+	 * rather than keeping a second, older opinion. Idempotent, so it costs a
+	 * compare per tick once they agree. */
+	if (n->rate_src && reac_master_has_box(&n->pacer.master))
+		reac_rx_follow_src(n->rate_src, n->pacer.master.box_mac);
 	sink_publish_box_clock(n);     /* before the drain, so a change prints now */
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
