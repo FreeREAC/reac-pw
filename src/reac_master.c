@@ -182,6 +182,11 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 	return &MIXER_PROFILES[i];
 }
 
+uint8_t reac_rate_console_field(int rate)
+{
+	return rate == 96000 ? 1 : 0;   /* see the contract in reac_master.h */
+}
+
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
 {
 	/* THE RATE IS A CHOICE MADE AT THE MASTER — not a property of the desk model.
