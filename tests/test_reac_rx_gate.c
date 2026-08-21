@@ -171,6 +171,35 @@ int main(void)
 		reac_ring_free(&ring);
 	}
 
+	/* ---- THE DECLARED BOX WINS OVER THE ONE THAT SPEAKS FIRST ----
+	 * The gate latches the first box-shaped source it sees, and nothing used to
+	 * unlatch it. After a hot swap that left it decoding a MAC which had left the
+	 * segment: every frame from the new box failed the compare, frames_ok froze,
+	 * and reac-capture published silence while the wire carried a live microphone
+	 * (rig 2026-08-21, S-1608 out / S-0808 in). Box identity belongs to the
+	 * master, so it can say so — and then box 1 speaking first must not win. */
+	{
+		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
+		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
+		struct reac_ring ring;
+		struct reac_rx rx;
+		CHK(reac_rx_open(&rx, &cfg, &ring) == 0);
+		reac_rx_follow_src(&rx, up2 + 6);          /* the master declares BOX 2 */
+		CHK(rx.up_src_locked == 1);
+		CHK(run_rx(&rx, 20) == 0);
+		/* box 2's frames fed the ring; box 1 — first on the wire — was gated out */
+		CHK(memcmp(rx.up_src, up2 + 6, 6) == 0);
+		CHK(memcmp(rx.up_src, UP16 + 6, 6) != 0);
+		CHK(atomic_load(&rx.frames_ok) >= 20);
+		CHK(atomic_load(&rx.frames_bad) == 0);
+		/* and it is idempotent: re-declaring the same box changes nothing */
+		reac_rx_follow_src(&rx, up2 + 6);
+		CHK(memcmp(rx.up_src, up2 + 6, 6) == 0);
+		reac_rx_close(&rx);
+		reac_ring_free(&ring);
+	}
+
 	/* ---- UPSTREAM accept: only box 1's return feeds the ring ---- */
 	{
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,

@@ -76,6 +76,16 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
 }
 
+void reac_rx_follow_src(struct reac_rx *rx, const uint8_t mac[6])
+{
+	if (!rx || !mac)
+		return;
+	if (rx->up_src_locked && memcmp(rx->up_src, mac, 6) == 0)
+		return;                       /* already following this box */
+	memcpy(rx->up_src, mac, 6);
+	rx->up_src_locked = 1;
+}
+
 /* The stream gate: does this valid 0x8819 frame belong to the stream we
  * decode? DOWNSTREAM accepts only the fixed 1492 B broadcast. UPSTREAM
  * accepts box-shaped returns and locks onto the first box's src MAC so a

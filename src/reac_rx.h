@@ -137,6 +137,15 @@ struct reac_rx {
 int reac_rx_open(struct reac_rx *rx, const struct reac_rx_cfg *cfg, struct reac_ring *ring);
 
 /* Spawn the feeder thread. Returns 0 / -1. */
+/* Point the UPSTREAM stream gate at a KNOWN box, replacing whatever it latched.
+ * The gate locks onto the first box-shaped source it sees so two boxes cannot
+ * interleave into one ring — but nothing ever unlocked it, so a hot swap left it
+ * decoding a MAC that had left the segment: the new box's frames all failed the
+ * compare, frames_ok froze, and reac-capture published silence while the wire
+ * carried a live microphone. The master already knows which box is here; this is
+ * how it says so. Safe to call every tick with the same MAC. */
+void reac_rx_follow_src(struct reac_rx *rx, const uint8_t mac[6]);
+
 int reac_rx_start(struct reac_rx *rx);
 
 /* Signal stop and join. */
