@@ -245,6 +245,25 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i);
  * `requested` was non-zero and got overridden (the caller should warn), else 0. */
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped);
 
+/* The cfea[19] "console" byte is the segment's RATE CLASS, not the desk's name.
+ *
+ * MEASURED 2026-08-21, and it is the whole story: emitting m5000 vs m200 at the
+ * same --rate 96000 changes exactly ONE byte on the wire — cfea block[19], 0x01
+ * vs 0x00, plus its checksum. Probe, sub01, sub02, chanmap, ENROLL and the grant
+ * burst are byte-identical. And the box's pace follows that byte: 0x01 -> it
+ * returns 8004 fps (96 kHz), 0x00 -> 4002 fps (48 kHz), with our own TX pacing
+ * 8001 fps in both cases.
+ *
+ * So the byte cannot be read as identity. Under the law that THE FAMILY IS
+ * DETACHED FROM THE PACE and the pace is a configured setting that must be
+ * obeyed, it is derived from the RESOLVED RATE and nothing else: 96 kHz -> 1,
+ * 44.1/48 kHz -> 0. Whichever desk generation --mixer names, --rate 96000 puts
+ * 96 kHz on the wire.
+ *
+ * What the box does with 44.1 vs 48 (both class 0) is not established here —
+ * no capture separates them, and this returns 0 for both rather than guess. */
+uint8_t reac_rate_console_field(int rate);
+
 struct reac_master {
 	enum reac_master_state state;
 	uint8_t  src[6];          /* our master MAC (Roland OUI) */
