@@ -254,11 +254,23 @@ int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requeste
  * returns 8004 fps (96 kHz), 0x00 -> 4002 fps (48 kHz), with our own TX pacing
  * 8001 fps in both cases.
  *
- * So the byte cannot be read as identity. Under the law that THE FAMILY IS
- * DETACHED FROM THE PACE and the pace is a configured setting that must be
- * obeyed, it is derived from the RESOLVED RATE and nothing else: 96 kHz -> 1,
- * 44.1/48 kHz -> 0. Whichever desk generation --mixer names, --rate 96000 puts
- * 96 kHz on the wire.
+ * WHAT IS ESTABLISHED, AND WHAT IS NOT. The rig behaviour above is reproducible
+ * and is why this byte is derived from the RESOLVED RATE — 96 kHz -> 1,
+ * 44.1/48 kHz -> 0 — so that under the law THE FAMILY IS DETACHED FROM THE PACE,
+ * --rate 96000 reaches the segment whichever generation --mixer names.
+ *
+ * But the byte's MEANING is not settled, and this comment does not pretend it is.
+ * Across the capture corpus it is CONSTANT PER DESK MAC (M-200i 0x00, M-300 0x00,
+ * M-5000 0x01), which reads as identity just as well — a real desk of a given
+ * family may simply always have run one rate, so the corpus cannot separate
+ * "rate class" from "family". Captures on the M-200i MAC show 8000 fps with 0x00,
+ * which would settle it against the rate-class reading, except that MAC is the one
+ * reac-pw impersonated, so those may be our own traffic.
+ *
+ * TO SETTLE IT: an unambiguous capture of a REAL desk at a rate its family does
+ * not usually run — an M-300 (c9:d8:5b, never impersonated) at 96 kHz, or an
+ * M-5000 (ca:15:4c) at 48 kHz. Until then this is a rig-determined behaviour that
+ * satisfies the law, not a decoded field.
  *
  * What the box does with 44.1 vs 48 (both class 0) is not established here —
  * no capture separates them, and this returns 0 for both rather than guess. */
