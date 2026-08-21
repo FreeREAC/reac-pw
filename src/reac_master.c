@@ -862,6 +862,29 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
  * on the sub-state-0x03 channel-map (cdea 01 03 0019 ...), so the chanmap must
  * be advertised while unlinked too — a master that only probes deadlocks against
  * a box that only joins once it has seen a valid map. */
+/* Is this GRANTING slot due a chanmap? A real desk's rolling channel-map sweep
+ * NEVER STOPS. Measured on the establish window of matrix-m300-s1608,
+ * matrix-m5000-s1608 and matrix-m200-s0808: the frame between the box's CONFIG
+ * announce and the first grant block is a CHANMAP in all three, and the window it
+ * carries is simply the next one in the desk's free-running sweep (0x17, 0x07 and
+ * 0x1e respectively) — not a special frame, just a cadence nobody suspended.
+ *
+ * reac-pw suspended it for the whole grant window: GRANTING emitted only
+ * ENROLL/ANNOUNCE/GRANT/FILLER, so the box was granted before it had ever seen a
+ * map from us. That contradicts this file's own §4 finding — the box's parser
+ * recognizes a master ONLY on the sub-state-0x03 map, which is why the map has to
+ * be advertised while unlinked. The same reason applies while granting; the old
+ * code just never carried it across the state boundary. */
+static int granting_chanmap_due(struct reac_master *m, int *idx)
+{
+	if (++m->est_chanmap_tick < m->fps)
+		return 0;
+	m->est_chanmap_tick = 0;
+	*idx = m->chanmap_cursor;
+	m->chanmap_cursor = (m->chanmap_cursor + 1) % m->chanmap_nframes;
+	return 1;
+}
+
 static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 {
 	*idx = 0;
@@ -972,6 +995,8 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		if (!reac_master_has_box(m)) {
 			if (m->grant_ticks == 0) {
 				emit = REAC_M_EMIT_ENROLL;   /* the wide-safe arm frame */
+			} else if (granting_chanmap_due(m, &idx)) {
+				emit = REAC_M_EMIT_CHANMAP;  /* the map never stops */
 			} else if (++m->announce_tick >= m->fps) {
 				m->announce_tick = 0;
 				emit = REAC_M_EMIT_ANNOUNCE; /* the ungranted hold, ~1/s */
@@ -996,6 +1021,8 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			if (m->enroll_pending) {
 				m->enroll_pending = 0;
 				emit = REAC_M_EMIT_ENROLL;
+			} else if (granting_chanmap_due(m, &idx)) {
+				emit = REAC_M_EMIT_CHANMAP;
 			} else
 			/* The dwell. HOLD the RECOGNIZED-BUT-UNGRANTED cfea (box width set,
 			 * count=0 — stamped by enter_granting) on the wire at the free-running
@@ -1014,13 +1041,17 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			}
 		} else {
 			int gt = m->grant_ticks - 1 - m->grant_dwell; /* burst timeline starts after enroll+dwell */
+			int is_grant_slot = 0;
 			if (gt % m->grant_stride == 0) {
 				int k = gt / m->grant_stride;
 				if (k < m->grant_burst_len) {
 					emit = REAC_M_EMIT_GRANT;   /* an actual grant slot — NEVER displaced */
 					idx = k;
+					is_grant_slot = 1;
 				}
 			}
+			if (!is_grant_slot && granting_chanmap_due(m, &idx))
+				emit = REAC_M_EMIT_CHANMAP;
 			/* Every NON-grant burst slot emits hard FILLER (announce_tick holds
 			 * through the burst; the REACPW_ANNOUNCE_BURST experiment that
 			 * converted these slots to cfea announces was superseded and removed). */
