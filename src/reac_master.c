@@ -184,7 +184,8 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i)
 
 uint8_t reac_rate_console_field(int rate)
 {
-	return rate == 96000 ? 1 : 0;   /* see the contract in reac_master.h */
+	/* Rig-determined, not decoded — see the contract in reac_master.h. */
+	return rate == 96000 ? 1 : 0;
 }
 
 int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requested, int *clamped)
