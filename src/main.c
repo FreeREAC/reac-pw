@@ -451,10 +451,10 @@ int main(int argc, char **argv)
 		                              .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = master_src, .master_mac = NULL,
-		                              /* THE PACE MANDATES THIS BYTE, not the family: it is
-                               * the segment's rate class and the box follows it.
-                               * See reac_rate_console_field. */
-                              .console_field = reac_rate_console_field(rx.sample_rate),
+		                              /* THE FAMILY, as configured. It does NOT come from the
+                               * rate: the two are independent settings and each is
+                               * obeyed as given (see reac_master.h). */
+                              .console_field = mixer->console_field,
 		                              .inst = inst_name, .label = NULL,
 		                              .headamps = n_headamps ? headamps : NULL,
 		                              .n_headamps = n_headamps,
