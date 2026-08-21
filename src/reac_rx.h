@@ -155,6 +155,13 @@ int reac_rx_open(struct reac_rx *rx, const struct reac_rx_cfg *cfg, struct reac_
  * every tick with the same MAC: the same peer is a no-op. */
 void reac_rx_peer_reset(struct reac_rx *rx, const uint8_t mac[6], unsigned session);
 
+/* The session ENDED. Continuity dies here, not when the next one is granted: the
+ * box starts unicasting its return again during PROBING/GRANTING, seconds before
+ * the master reaches ESTABLISHED, and those frames are measured against a counter
+ * that belongs to a session which is over. Identity is left alone — the gate must
+ * keep accepting the box while it re-joins. */
+void reac_rx_session_end(struct reac_rx *rx);
+
 int reac_rx_start(struct reac_rx *rx);
 
 /* Signal stop and join. */
