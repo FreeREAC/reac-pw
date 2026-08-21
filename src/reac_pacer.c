@@ -202,9 +202,13 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 	 * correct answer is 0). Idempotent and allocation-free, so it is safe on this
 	 * RT path; the epoch's release store publishes the new identity to the rx
 	 * thread, which acquires it before using it. */
-	if (to == REAC_M_ESTABLISHED && p->on_session)
-		p->on_session(p->session_ctx, p->master.box_mac,
-		              p->master.session_seq);
+	if (p->on_session) {
+		if (to == REAC_M_ESTABLISHED)
+			p->on_session(p->session_ctx, p->master.box_mac,
+			              p->master.session_seq);
+		else if (from == REAC_M_ESTABLISHED)
+			p->on_session(p->session_ctx, NULL, 0);   /* the session ENDED */
+	}
 	atomic_store_explicit(&p->fsm_state, to, memory_order_release);
 	atomic_store_explicit(&p->grant_attempts, p->master.grant_attempts,
 	                      memory_order_relaxed);

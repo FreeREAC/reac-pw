@@ -76,6 +76,13 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
 }
 
+void reac_rx_session_end(struct reac_rx *rx)
+{
+	if (!rx)
+		return;
+	atomic_fetch_add_explicit(&rx->peer_epoch, 1, memory_order_release);
+}
+
 void reac_rx_peer_reset(struct reac_rx *rx, const uint8_t mac[6], unsigned session)
 {
 	if (!rx || !mac)
