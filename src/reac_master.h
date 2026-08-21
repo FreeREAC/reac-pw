@@ -218,17 +218,27 @@ const struct reac_mixer_profile *reac_mixer_profile_at(int i);
  * state diagram, doubled frequency" — parameterizing the existing 48k path by
  * mixer profile rather than re-engineering the FSM).
  *
- * A V-Mixer desk (console_field 0: M-200/M-300) only ever exists on the wire
- * at 48 kHz: cfea/ENROLL carry no explicit rate field, so a box infers 48 kHz
- * purely from the V-Mixer identity (docs/MASTER-HARDWARE-VERIFY.md, "Sample
- * rate is the desk MODEL, not a clock knob") — reac-pw forces 48 kHz and
- * ignores/reports a mismatched --rate, exactly as before this task. An OHRCA
- * desk (console_field 1: M-5000) is native 96 kHz; its downstream frame shape
- * is IDENTICAL to the V-Mixer's (REAC_FRAME_BYTES, unchanged — see the #156
- * trailer RE in reac_tx.h/tests/test_reac_tx.c: the "1494 B OHRCA frame" some
- * captures show is a mirror-capture artifact, not a real field), so unlike the
- * V-Mixer there is nothing tying it to a fixed rate — `requested` is honored,
- * defaulting to the native 96 kHz when unset.
+ * THE FAMILY IS DETACHED FROM THE PACE (operator, 2026-08-21). A Roland desk —
+ * V-Mixer or OHRCA alike — offers 44.1, 48 and 96 kHz in its REAC menu and
+ * drives the segment at whichever the operator chose; the identity byte says
+ * which desk we impersonate, nothing about the rate. So the pace is a
+ * CONFIGURED SETTING THAT MUST BE OBEYED, for every profile, and only those
+ * three values are legal — anything else needs re-pacing between the rig clock
+ * and the wire, which reac-pw cannot do.
+ *
+ * This comment used to claim the opposite: that a V-Mixer identity pinned the
+ * segment to 48 kHz and OHRCA was natively 96. reac_mixer_resolve_rate stopped
+ * believing that some time ago (it ignores `mixer` entirely) and the comment was
+ * never corrected, so the header and the code have been contradicting each other
+ * — the header describing a rule the function does not implement.
+ *
+ * A DIVERGENCE IS OPEN AGAINST THIS LAW, measured 2026-08-21 and reproducible:
+ * with `--rate 96000` our TX paced 8001 fps under both profiles, and the S-0808
+ * returned 8006 fps (96 k) as an OHRCA master but 4002 fps (48 k) as a V-Mixer
+ * one — the box halved its return, and the resulting two-pace mismatch is
+ * audible as granulated, saturated audio. Our side obeys the setting; the box
+ * does not follow it. Unexplained, and NOT a licence to re-derive the old
+ * identity-selects-rate rule: it is filed as a divergence, not a design.
  *
  * `requested` is the --rate value (0 = unset/auto). Returns the rate reac-pw
  * should actually emit at. If `clamped` is non-NULL, sets *clamped to 1 when
