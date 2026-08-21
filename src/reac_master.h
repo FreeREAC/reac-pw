@@ -261,16 +261,26 @@ int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requeste
  *
  * But the byte's MEANING is not settled, and this comment does not pretend it is.
  * Across the capture corpus it is CONSTANT PER DESK MAC (M-200i 0x00, M-300 0x00,
- * M-5000 0x01), which reads as identity just as well — a real desk of a given
- * family may simply always have run one rate, so the corpus cannot separate
- * "rate class" from "family". Captures on the M-200i MAC show 8000 fps with 0x00,
- * which would settle it against the rate-class reading, except that MAC is the one
- * reac-pw impersonated, so those may be our own traffic.
+ * M-5000 0x01), and every desk in the corpus only ever ran ONE rate — the V-Mixers
+ * at 48 kHz, the M-5000 at 96 — so "rate class" and "family" predict the corpus
+ * identically and it cannot separate them.
+ *
+ * A CORRECTION WORTH KEEPING: the corpus first appeared to show M-200i frames at
+ * 8000 fps carrying 0x00, which would have refuted the rate-class reading outright.
+ * It is the MIRROR-TAP ARTIFACT (see the correction in reac-captures and libreac
+ * reac.h:35): those captures were taken through a port mirroring both directions,
+ * and counting frames without collapsing same-counter pairs doubles the apparent
+ * rate. Measured properly, 50% of the desk frames are duplicates and the real rate
+ * is 4000 fps = 48 kHz. ALWAYS dedupe by the counter at frame[14:16] before
+ * calling a capture's rate.
  *
  * TO SETTLE IT: an unambiguous capture of a REAL desk at a rate its family does
  * not usually run — an M-300 (c9:d8:5b, never impersonated) at 96 kHz, or an
- * M-5000 (ca:15:4c) at 48 kHz. Until then this is a rig-determined behaviour that
- * satisfies the law, not a decoded field.
+ * M-5000 (ca:15:4c) at 48 kHz. The corpus has neither. Until then this is a
+ * rig-determined behaviour that satisfies the law, not a decoded field. Two
+ * alternatives ARE excluded: the box's pace does not follow our source MAC (a
+ * Roland-OUI --src-mac with 0x00 still returned 48 kHz), and it does not follow
+ * our TX cadence alone (we paced 8007 fps and it answered 4004).
  *
  * What the box does with 44.1 vs 48 (both class 0) is not established here —
  * no capture separates them, and this returns 0 for both rather than guess. */
