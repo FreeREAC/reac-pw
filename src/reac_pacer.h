@@ -337,6 +337,8 @@ struct reac_pacer {
 	 * one baseline line via the heartbeat branch. */
 	uint64_t log_last_ns;            /* mono_ns of the last emitted depth line */
 	uint64_t log_last_trims;         /* ring_trims count at the last depth line */
+	unsigned trim_run;               /* consecutive drains that trimmed          */
+	int      trim_warned;            /* the sustained-trim diagnostic fired once */
 };
 
 /* period for an fps (ns). Exposed for the unit test. */
