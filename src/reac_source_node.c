@@ -10,7 +10,7 @@
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include <pipewire/pipewire.h>
-#include <pipewire/filter.h>
+#include <pipewire/stream.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,33 +22,47 @@
  * for more, on_process clamps the read to it so we never write past it. */
 #define REAC_MAX_QUANTUM 8192
 
-/* One output port per REAC channel; pw_filter gives each port its own buffer
- * each cycle, which is exactly the planar layout the ring hands back. */
-struct port { /* per-port user data (PipeWire stores the void* we hand it) */
-	int channel;
-	struct spa_io_rate_match *rate_match; /* set by io_changed; NULL until linked */
-};
-
+/* THIS NODE IS AN ADAPTER, NOT A RAW FILTER (2026-08-21). A pw_filter's ports are
+ * raw DSP ports at the GRAPH rate with no audioconvert in the path, so a filter
+ * could only ever run at the graph's pace — `node.rate` was a REQUEST for the graph
+ * to switch, which an RME-driven 96 kHz graph refuses. The REAC pace and the rig
+ * pace are independent (docs/design/specs/2026-08-21-reac-adapter-pace-and-port-
+ * contract.md), so this is a pw_stream: it declares the REAC rate in its FORMAT and
+ * PipeWire's own resampler bridges the two. Conversion happens here, in the adapter,
+ * and nowhere else — the console is never asked to change pace for a box.
+ *
+ * The stream is F32 PLANAR with AUX0.. positions, which is the same planar layout
+ * the ring hands back, so the RT path still writes straight into the buffer planes. */
 struct reac_source_node {
-	struct pw_filter *filter;
+	struct pw_stream *stream;
+	struct spa_io_rate_match *rate_match; /* node-level; NULL until a resampler exists */
 	struct spa_hook listener;
 	struct reac_ring *ring;
 	struct reac_rx *rx;
 	int sample_rate;
 	int channels;
 	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
-	struct port *ports[REAC_MAX_CHANNELS];
-	float scratch[REAC_MAX_QUANTUM]; /* sink for unlinked ports; never read back */
+	float scratch[REAC_MAX_QUANTUM]; /* sink for absent planes; never read back */
 };
 
 /* REALTIME. Pull one quantum per channel from the ring into the port buffers,
  * then nudge the resampler ratio from the feeder's measured ppm error. */
-static void on_process(void *data, struct spa_io_position *position)
+static void on_process(void *data)
 {
 	struct reac_source_node *n = data;
-	uint32_t nframes = position->clock.duration;
+	struct pw_buffer *pwb = pw_stream_dequeue_buffer(n->stream);
+	if (!pwb)
+		return;                 /* no buffer this cycle — leave the ring untouched */
+	struct spa_buffer *buf = pwb->buffer;
+	/* How many frames the consumer wants, bounded by what the plane can hold. A
+	 * stream buffer is sized by the ADAPTER at OUR rate, so this is already the
+	 * REAC-pace frame count — PipeWire resamples it to the graph on the way out. */
+	uint32_t cap = buf->datas[0].maxsize / (uint32_t)sizeof(float);
+	uint32_t nframes = pwb->requested ? (uint32_t)pwb->requested : cap;
+	if (nframes > cap)
+		nframes = cap;
 	if (nframes > REAC_MAX_QUANTUM)
-		nframes = REAC_MAX_QUANTUM; /* never write past a port/scratch buffer */
+		nframes = REAC_MAX_QUANTUM; /* never write past a plane/scratch buffer */
 
 	/* The ring has ONE shared read cursor across all channels, so we must read
 	 * every channel each cycle or the planes desync. Unlinked ports (no buffer
@@ -58,19 +72,21 @@ static void on_process(void *data, struct spa_io_position *position)
 	float *dst[REAC_MAX_CHANNELS];
 	int got_ports = 0;
 	for (int c = 0; c < n->channels; c++) {
-		/* Belt-and-braces: a NULL port (should never happen — the constructor now
-		 * fails if add_port returns NULL) is treated like an unlinked buffer so the
-		 * ring planes stay aligned and we never deref NULL in the RT path. */
-		float *buf = n->ports[c] ? pw_filter_get_dsp_buffer(n->ports[c], nframes) : NULL;
-		if (buf) {
-			dst[c] = buf;
+		/* A plane the adapter did not give us is discarded into scratch, so the
+		 * ring's ONE shared read cursor stays aligned across channels and the RT
+		 * path never dereferences NULL. */
+		float *plane = ((uint32_t)c < buf->n_datas) ? buf->datas[c].data : NULL;
+		if (plane) {
+			dst[c] = plane;
 			got_ports++;
 		} else {
-			dst[c] = n->scratch; /* unlinked or NULL port: discard into scratch */
+			dst[c] = n->scratch;
 		}
 	}
-	if (got_ports == 0)
-		return; /* nothing linked — leave the ring untouched for a real consumer */
+	if (got_ports == 0) {
+		pw_stream_queue_buffer(n->stream, pwb);
+		return;                 /* no planes — leave the ring for a real consumer */
+	}
 
 	/* Bound latency + keep audio fresh: if the producer over-filled (it paces to
 	 * the wire and can outrun a just-started/quantum-bursty consumer), drop the
@@ -112,28 +128,32 @@ static void on_process(void *data, struct spa_io_position *position)
 	 * area is shared across the port group, so the first linked port carries it. */
 	int ppm_milli = atomic_load_explicit(&n->rx->ppm_error_milli, memory_order_relaxed);
 	double rate = 1.0 + (double)ppm_milli / 1e9; /* ppm*1000 -> fractional */
-	for (int c = 0; c < n->channels; c++) {
-		if (n->ports[c] && n->ports[c]->rate_match) {
-			n->ports[c]->rate_match->rate = rate;
-			break;
-		}
+	if (n->rate_match)
+		n->rate_match->rate = rate;
+
+	/* Tell the adapter how much of each plane we filled. Every plane carries the
+	 * same frame count — the ring's read is planar and aligned by construction. */
+	for (uint32_t c = 0; c < buf->n_datas; c++) {
+		buf->datas[c].chunk->offset = 0;
+		buf->datas[c].chunk->stride = (int32_t)sizeof(float);
+		buf->datas[c].chunk->size = nframes * (uint32_t)sizeof(float);
 	}
+	pw_stream_queue_buffer(n->stream, pwb);
 }
 
-/* PipeWire hands us the SPA_IO areas per port as links come and go. We stash the
- * SPA_IO_RateMatch area so on_process can publish the follower rate into it. */
-static void on_io_changed(void *data, void *port_data, uint32_t id, void *area, uint32_t size)
+/* PipeWire hands us the SPA_IO areas as the stream is configured. We stash the
+ * SPA_IO_RateMatch area so on_process can publish the follower rate into it — the
+ * adapter's resampler is what reads it, which is exactly the drift correction the
+ * filter version did, now driving OUR OWN resampler instead of a peer's. */
+static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 {
-	(void)data;
-	if (!port_data)
-		return; /* node-global io, not a port */
-	struct port *p = port_data;
+	struct reac_source_node *n = data;
 	if (id == SPA_IO_RateMatch)
-		p->rate_match = (size >= sizeof(struct spa_io_rate_match)) ? area : NULL;
+		n->rate_match = (size >= sizeof(struct spa_io_rate_match)) ? area : NULL;
 }
 
-static const struct pw_filter_events filter_events = {
-	PW_VERSION_FILTER_EVENTS,
+static const struct pw_stream_events stream_events = {
+	PW_VERSION_STREAM_EVENTS,
 	.process = on_process,
 	.io_changed = on_io_changed,
 };
@@ -186,7 +206,9 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		 * async-resamples our REAC clock into it. To make REAC the graph
 		 * DRIVER instead, add PW_KEY_NODE_DRIVER "true" + a clock rate and
 		 * register a clock source — see NATIVE-REAC-DESIGN.md Section 3.4. */
-		PW_KEY_NODE_RATE, rate_str,        /* advertise the recovered REAC rate */
+		/* NO node.rate. On a filter that was a REQUEST for the graph to run at the
+		 * REAC rate, which an RME-driven graph refuses; the rate that matters is the
+		 * one in our FORMAT below, which the adapter resamples from. */
 		NULL);
 	/* CREATE-TIME-ONLY badge props (task #154), master role only — see the
 	 * header doc for why: no live update here (this node has no pacer handle),
@@ -198,46 +220,35 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, "0x0");
 	}
 
-	n->filter = pw_filter_new_simple(loop, "reac:capture", props, &filter_events, n);
-	if (!n->filter) {
+	n->stream = pw_stream_new_simple(loop, "reac:capture", props, &stream_events, n);
+	if (!n->stream) {
 		free(n);
 		return NULL;
 	}
 
-	/* Register one DSP (planar F32) output port per REAC channel. pw_filter DSP
-	 * ports are mono float planar, which matches the ring exactly. */
-	for (int c = 0; c < n->channels; c++) {
-		char pname[24], achan[12];
-		snprintf(pname, sizeof pname, "capture_%02d", c + 1);
-		/* Each REAC input is a DISCRETE mono mic — mark it as an AUX channel so no
-		 * graph tool (RaySession/qpwgraph) guesses FL/FR and pairs them as stereo.
-		 * AUX0..AUXN is the standard designation for a multichannel device's
-		 * independent mono ports. */
-		snprintf(achan, sizeof achan, "AUX%d", c);
-		n->ports[c] = pw_filter_add_port(
-			n->filter,
-			PW_DIRECTION_OUTPUT,
-			PW_FILTER_PORT_FLAG_MAP_BUFFERS,
-			sizeof(struct port),
-			pw_properties_new(
-				PW_KEY_FORMAT_DSP, "32 bit float mono audio",
-				PW_KEY_PORT_NAME, pname,
-				PW_KEY_AUDIO_CHANNEL, achan,
-				NULL),
-			NULL, 0);
-		/* A NULL port would later be handed to pw_filter_get_dsp_buffer on the RT
-		 * thread (SPA_CONTAINER_OF on NULL = a wild deref). Fail construction rather
-		 * than return a live-but-broken node. */
-		if (!n->ports[c]) {
-			pw_filter_destroy(n->filter);
-			free(n);
-			return NULL;
-		}
-		n->ports[c]->channel = c;
-	}
+	/* ONE format, not one port per channel: the adapter builds the ports from it.
+	 * F32 PLANAR keeps the ring's layout, and AUX0..AUXN marks each REAC input as a
+	 * DISCRETE mono mic so no graph tool guesses FL/FR and pairs them as stereo.
+	 * PipeWire names the resulting ports capture_AUX0.. — which is why the physical
+	 * input a port carries is DECLARED in openmixer's contract rather than parsed
+	 * out of the name (same spec). */
+	uint8_t fbuf[1024];
+	struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
+	struct spa_audio_info_raw info = {
+		.format = SPA_AUDIO_FORMAT_F32P,
+		.rate = (uint32_t)n->sample_rate,   /* THE REAC PACE — the adapter resamples */
+		.channels = (uint32_t)n->channels,
+	};
+	for (int c = 0; c < n->channels; c++)
+		info.position[c] = (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c);
+	const struct spa_pod *params[1] = {
+		spa_format_audio_raw_build(&fb, SPA_PARAM_EnumFormat, &info),
+	};
 
-	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, NULL, 0) < 0) {
-		pw_filter_destroy(n->filter);
+	if (pw_stream_connect(n->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+	                      PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+	                      params, 1) < 0) {
+		pw_stream_destroy(n->stream);
 		free(n);
 		return NULL;
 	}
@@ -248,20 +259,20 @@ void reac_source_node_destroy(struct reac_source_node *n)
 {
 	if (!n)
 		return;
-	if (n->filter)
-		pw_filter_destroy(n->filter);
+	if (n->stream)
+		pw_stream_destroy(n->stream);
 	free(n);
 }
 
 /* See the header: the sink's main-loop timer drives this so the capture badge follows
- * the box. pw_filter_update_properties MERGES — only the keys we set change; the ports,
+ * the box. pw_stream_update_properties MERGES — only the keys we set change; the ports,
  * rate, media.* seeded at create persist untouched. A NULL arg skips that key. */
 void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
                                    const char *box_model,
                                    const char *box_width)
 {
-	if (!n || !n->filter)
+	if (!n || !n->stream)
 		return;
 	struct pw_properties *props = pw_properties_new(NULL, NULL);
 	if (!props)
@@ -272,7 +283,7 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 		pw_properties_set(props, REAC_PROP_BOX_MODEL, box_model);
 	if (box_width)
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
-	pw_filter_update_properties(n->filter, NULL, &props->dict);
+	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
 }
 
