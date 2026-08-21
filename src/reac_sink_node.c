@@ -672,6 +672,9 @@ static void on_log_timer(void *data, uint64_t expirations)
 	 * digital silence). Box identity belongs to the MASTER; the gate mirrors it
 	 * rather than keeping a second, older opinion. Idempotent, so it costs a
 	 * compare per tick once they agree. */
+	/* Idempotent backstop only. The reset that MATTERS happens in
+	 * note_transition, the instant the session changes; this catches a receiver
+	 * attached after a transition and costs one compare once they agree. */
 	if (n->rate_src && reac_master_has_box(&n->pacer.master))
 		reac_rx_peer_reset(n->rate_src, n->pacer.master.box_mac,
 		                   n->pacer.master.session_seq);
@@ -971,10 +974,20 @@ void reac_sink_node_set_peer_source(struct reac_sink_node *n,
 		n->peer_src = src_slot;
 }
 
+/* RT-path trampoline: the pacer announces a new session, the receiver drops what
+ * it learned from the last one. Allocation-free and non-blocking by contract. */
+static void sink_on_session(void *ctx, const uint8_t mac[6], unsigned session)
+{
+	reac_rx_peer_reset((struct reac_rx *)ctx, mac, session);
+}
+
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx)
 {
 	if (n)
 		n->rate_src = rx;
+		/* Reset the receiver AT the re-establishment, not a tick later. */
+		n->pacer.session_ctx = rx;
+		n->pacer.on_session  = sink_on_session;
 }
 
 void reac_sink_node_destroy(struct reac_sink_node *n)
