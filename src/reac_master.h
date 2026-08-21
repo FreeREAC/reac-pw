@@ -254,10 +254,14 @@ int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requeste
  * returns 8004 fps (96 kHz), 0x00 -> 4002 fps (48 kHz), with our own TX pacing
  * 8001 fps in both cases.
  *
- * WHAT IS ESTABLISHED, AND WHAT IS NOT. The rig behaviour above is reproducible
- * and is why this byte is derived from the RESOLVED RATE — 96 kHz -> 1,
- * 44.1/48 kHz -> 0 — so that under the law THE FAMILY IS DETACHED FROM THE PACE,
- * --rate 96000 reaches the segment whichever generation --mixer names.
+ * MIXER FAMILY AND CLOCK PACE MUST BE DETACHED (operator, 2026-08-21). Neither
+ * may determine the other. This byte carries the FAMILY, exactly as --mixer names
+ * it, and --rate sets the pace; both are obeyed as configured and neither is
+ * inferred from the other.
+ *
+ * Deriving this byte from the rate was tried and is WRONG for the same reason the
+ * old rule was: it merely reversed the coupling, so asking for 96 kHz silently
+ * announced us as an OHRCA desk whatever --mixer said. Detached means detached.
  *
  * But the byte's MEANING is not settled, and this comment does not pretend it is.
  * Across the capture corpus it is CONSTANT PER DESK MAC (M-200i 0x00, M-300 0x00,
@@ -284,7 +288,6 @@ int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requeste
  *
  * What the box does with 44.1 vs 48 (both class 0) is not established here —
  * no capture separates them, and this returns 0 for both rather than guess. */
-uint8_t reac_rate_console_field(int rate);
 
 struct reac_master {
 	enum reac_master_state state;
