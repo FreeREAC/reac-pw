@@ -203,10 +203,24 @@ int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requeste
 	 * So: honour the request, and default to 48 kHz (the working standard for live
 	 * work) for every profile. Kept as a function rather than deleted so that a
 	 * real, demonstrated rule would have one obvious home. See issue #73. */
-	(void)mixer;
+	(void)mixer;   /* LAW: the mixer FAMILY is detached from the clock pace. */
 	if (clamped)
 		*clamped = 0;
-	return requested ? requested : 48000;
+	if (!requested)
+		return 48000;
+	/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz. A Roland desk offers
+	 * exactly these in its REAC menu and drives the segment at the one chosen;
+	 * anything else is not a slower REAC, it is not REAC. Taking an arbitrary
+	 * number here would put a cadence on the wire no box can follow and call it
+	 * configuration. Refuse instead, and say what was asked for — a value outside
+	 * the three needs RE-PACING between the rig clock and the wire, which reac-pw
+	 * cannot do (it has no TX resampler; see the pacer's rate-mismatch warning). */
+	if (requested != 44100 && requested != 48000 && requested != 96000) {
+		if (clamped)
+			*clamped = 1;
+		return 48000;
+	}
+	return requested;
 }
 
 /* Build the probe for the CURRENT burst position + link state, publish its
