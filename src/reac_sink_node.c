@@ -38,11 +38,12 @@
 #include <reac/reac.h>
 #include <reac/reac_encode.h>  /* reac_downstream_build — libreac owns the frame layout */
 #include <pipewire/pipewire.h>
-#include <pipewire/filter.h>
+#include <pipewire/stream.h>
 #include <spa/param/param.h>
 #include <spa/param/props.h>
 #include <spa/param/latency-utils.h>
 #include <spa/param/audio/raw.h>
+#include <spa/param/audio/format-utils.h>   /* spa_format_audio_raw_build */
 #include <spa/pod/builder.h>
 #include <spa/pod/iter.h>
 #include <stdlib.h>
@@ -77,7 +78,15 @@ struct port_in { /* per-port user data PipeWire hands back */
 };
 
 struct reac_sink_node {
-	struct pw_filter *filter;
+	/* AN ADAPTER, NOT A RAW FILTER (2026-08-21). A filter's ports are raw DSP ports
+	 * at the GRAPH rate with no audioconvert, so the node could only run at the
+	 * graph's pace and we made up the difference by TRIMMING the ring — 224978 frames
+	 * discarded in one measured run, audible as granulated, saturated sound. The REAC
+	 * pace and the rig pace are independent and conversion belongs here, in the
+	 * adapter, so this is a pw_stream declaring the REAC rate in its FORMAT and
+	 * PipeWire resamples. See docs/design/specs/2026-08-21-reac-adapter-pace-and-
+	 * port-contract.md in openmixer. */
+	struct pw_stream *stream;
 	struct reac_pacer pacer;
 	int pacer_open;
 	int channels;             /* current filter port count; 0 = no filter yet */
@@ -91,7 +100,9 @@ struct reac_sink_node {
 	                           * the RT graph thread on every quantum. Const after
 	                           * construction, so no synchronisation is needed. */
 	struct spa_source *log_timer;  /* 200 ms event-log drain on the main loop */
-	struct port_in *ports[REAC_MAX_CHANNELS];
+	/* SPA_IO_Position, captured via io_changed — the stream's equivalent of the
+	 * argument pw_filter handed process(). */
+	const struct spa_io_position *position;
 
 	/* 12-sample-per-channel staging accumulator: a PipeWire quantum is not a
 	 * multiple of REAC_SAMPLES_PER_PKT, so we carry the remainder across cycles
@@ -160,12 +171,21 @@ struct reac_sink_node {
  * the master control block are NOT stamped here — the pacer owns the master FSM
  * and stamps them on egress, so the cadence + handshake stay authoritative even
  * across a graph stall. */
-static void on_process(void *data, struct spa_io_position *position)
+static void on_process(void *data)
 {
 	struct reac_sink_node *n = data;
 	if (!n->pacer_open)
 		return;
-	uint32_t nframes = position->clock.duration;
+	const struct spa_io_position *position = n->position;
+	if (!position)
+		return;                 /* no position yet — nothing to pace against */
+	struct pw_buffer *pwb = pw_stream_dequeue_buffer(n->stream);
+	if (!pwb)
+		return;                 /* nothing queued this cycle */
+	struct spa_buffer *sbuf = pwb->buffer;
+	uint32_t nframes = sbuf->datas[0].chunk->size / (uint32_t)sizeof(float);
+	if (nframes > position->clock.duration)
+		nframes = position->clock.duration;
 
 	/* Publish the graph quantum so the pacer's depth guard sizes its band off the
 	 * ACTUAL producer burst (up to one quantum of frames pushed per callback), not
@@ -217,13 +237,15 @@ static void on_process(void *data, struct spa_io_position *position)
 		/* Belt-and-braces: a NULL port (should never happen — the constructor now
 		 * fails if add_port returns NULL) is treated as unlinked, so we never deref
 		 * NULL in the RT path; the stage just carries silence for that slot. */
-		float *b = n->ports[c] ? pw_filter_get_dsp_buffer(n->ports[c], nframes) : NULL;
+		float *b = ((uint32_t)c < sbuf->n_datas) ? sbuf->datas[c].data : NULL;
 		in[c] = b;            /* NULL if this port is unlinked this cycle */
 		if (b)
 			have++;
 	}
-	if (have == 0)
+	if (have == 0) {
+		pw_stream_queue_buffer(n->stream, pwb);
 		return;               /* nothing feeding us — pacer free-runs silent FILLER */
+	}
 
 	float *planar[REAC_MAX_CHANNELS];
 	for (int c = 0; c < n->channels; c++)
@@ -338,13 +360,13 @@ static void sink_publish(struct reac_sink_node *n)
 		float t = n->muted ? 0.0f : n->chan_vol[c];
 		atomic_store_explicit(&n->chan_target[c], t, memory_order_relaxed);
 	}
-	if (!n->filter)
+	if (!n->stream)
 		return;
 	uint8_t buf[2048];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 	const struct spa_pod *params[5];
 	uint32_t np = sink_build_params(n, &b, params);
-	pw_filter_update_params(n->filter, NULL, params, np);
+	pw_stream_update_params(n->stream, params, np);
 }
 
 /* MAIN LOOP: a controller changed our node params. We only care about node-global
@@ -352,12 +374,9 @@ static void sink_publish(struct reac_sink_node *n)
  * channelVolumes is authoritative per-channel; a bare `volume` scalar sets all
  * channels (so both a mono and a per-channel controller work, with no double
  * count). Values are linear (reac_gain.h); negatives clamp to silence. */
-static void on_param_changed(void *data, void *port_data, uint32_t id,
-                             const struct spa_pod *param)
+static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
 	struct reac_sink_node *n = data;
-	if (port_data != NULL)             /* a port param, not the node's Props */
-		return;
 	if (id != SPA_PARAM_Props || param == NULL)
 		return;
 
@@ -425,8 +444,20 @@ static void on_param_changed(void *data, void *port_data, uint32_t id,
 		sink_publish(n);
 }
 
-static const struct pw_filter_events filter_events = {
-	PW_VERSION_FILTER_EVENTS,
+/* The stream hands us its SPA_IO areas as it is configured. The sink needs
+ * SPA_IO_Position for two things the filter got as a process() argument: the graph
+ * quantum (which sizes the pacer's depth guard) and the driver's clock, which is the
+ * graph-clock reference the #75 bridge grades and publishes. */
+static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
+{
+	struct reac_sink_node *n = data;
+	if (id == SPA_IO_Position)
+		n->position = (size >= sizeof(struct spa_io_position)) ? area : NULL;
+}
+
+static const struct pw_stream_events stream_events = {
+	PW_VERSION_STREAM_EVENTS,
+	.io_changed = on_io_changed,
 	.process = on_process,
 	.param_changed = on_param_changed,
 };
@@ -442,7 +473,7 @@ static const struct pw_filter_events filter_events = {
  * "dropped" one-shot-overlay rationale. */
 static void sink_publish_link_props(struct reac_sink_node *n)
 {
-	if (!n->filter)
+	if (!n->stream)
 		return;
 
 	uint64_t drops_total = 0;
@@ -498,7 +529,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		REAC_PROP_HEADAMP_BASE,    ha_base,
 		NULL);
 	if (props) {
-		pw_filter_update_properties(n->filter, NULL, &props->dict);
+		pw_stream_update_properties(n->stream, &props->dict);
 		pw_properties_free(props);
 	}
 
@@ -537,7 +568,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
  * this same timer just above) — no atomics needed and none used. */
 static void sink_publish_disco_props(struct reac_sink_node *n)
 {
-	if (!n->filter)
+	if (!n->stream)
 		return;
 	if (n->pacer.disco.seq == n->disco_seq_last)
 		return;   /* unchanged: do not spam pw_filter_update_properties */
@@ -558,7 +589,7 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		REAC_PROP_DISCO_DEVICES, devices,
 		NULL);
 	if (props) {
-		pw_filter_update_properties(n->filter, NULL, &props->dict);
+		pw_stream_update_properties(n->stream, &props->dict);
 		pw_properties_free(props);
 		n->disco_seq_last = n->pacer.disco.seq;
 	}
@@ -575,7 +606,7 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
  * non-RT path. Returns immediately (no update_params) when the value is stable. */
 static void sink_publish_latency(struct reac_sink_node *n)
 {
-	if (!n->filter)
+	if (!n->stream)
 		return;
 
 	uint32_t depth = n->pacer_open ? reac_frame_ring_readable(&n->pacer.ring) : 0;
@@ -595,7 +626,7 @@ static void sink_publish_latency(struct reac_sink_node *n)
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 	const struct spa_pod *param =
 		spa_process_latency_build(&b, SPA_PARAM_ProcessLatency, &pl);
-	pw_filter_update_params(n->filter, NULL, &param, 1);
+	pw_stream_update_params(n->stream, &param, 1);
 }
 
 /* MAIN LOOP (non-RT): drain the pacer's FSM event ring to stderr, then
@@ -718,7 +749,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	char desc[128];
 	sink_build_desc(desc, sizeof desc, n->label[0] ? n->label : NULL, n->channels);
 
-	n->filter = pw_filter_new_simple(
+	n->stream = pw_stream_new_simple(
 		n->loop,
 		"reac:playback",
 		pw_properties_new(
@@ -727,9 +758,9 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
 			PW_KEY_NODE_NAME, nodename,
 			PW_KEY_NODE_DESCRIPTION, desc,
-			/* The wire is the rate authority; advertise the REAC rate so PipeWire
-			 * resamples whatever the app plays into our pps. */
-			PW_KEY_NODE_RATE, rate_str,
+			/* NO node.rate: on a filter that was a REQUEST for the graph to run at
+			 * the REAC rate, which an RME-driven graph refuses. The rate that matters
+			 * is the one in our FORMAT, which the adapter resamples from. */
 			/* Correct-at-(re)build badge props (task #154): seeded to the "probing/
 			 * none/0x0" baseline and immediately re-stamped from the pacer below.
 			 * Kept live by sink_publish_link_props on the 200 ms log-timer. */
@@ -754,8 +785,8 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			REAC_PROP_DISCO_SEQ, "0",
 			REAC_PROP_DISCO_DEVICES, "[]",
 			NULL),
-		&filter_events, n);
-	if (!n->filter)
+		&stream_events, n);
+	if (!n->stream)
 		return -1;
 
 	/* Shadows to the seeds just published; then re-publish from the live pacer state
@@ -771,31 +802,20 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 		                                            memory_order_relaxed);
 	reac_lat_init(&n->lat);
 
-	for (int c = 0; c < n->channels; c++) {
-		char pname[24], achan[12];
-		snprintf(pname, sizeof pname, "playback_%02d", c + 1);
-		/* Discrete mono box output — AUX channel so no tool pairs them as stereo. */
-		snprintf(achan, sizeof achan, "AUX%d", c);
-		n->ports[c] = pw_filter_add_port(
-			n->filter,
-			PW_DIRECTION_INPUT,
-			PW_FILTER_PORT_FLAG_MAP_BUFFERS,
-			sizeof(struct port_in),
-			pw_properties_new(
-				PW_KEY_FORMAT_DSP, "32 bit float mono audio",
-				PW_KEY_PORT_NAME, pname,
-				PW_KEY_AUDIO_CHANNEL, achan,
-				NULL),
-			NULL, 0);
-		/* A NULL port would later be handed to pw_filter_get_dsp_buffer on the RT
-		 * thread (SPA_CONTAINER_OF on NULL = a wild deref). Fail the (re)build. */
-		if (!n->ports[c]) {
-			pw_filter_destroy(n->filter);
-			n->filter = NULL;
-			return -1;
-		}
-		n->ports[c]->channel = c;
-	}
+	/* ONE format, not one port per channel — the adapter builds the ports from it.
+	 * F32 PLANAR keeps the stage's layout; AUX0..AUXN marks each box output as a
+	 * DISCRETE mono send so no graph tool pairs them as stereo. The rate is THE REAC
+	 * PACE, and PipeWire resamples the graph's pace into it: that is the whole point
+	 * of being an adapter, and it is what removes the ring-trim discards. */
+	uint8_t fbuf[1024];
+	struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
+	struct spa_audio_info_raw finfo = {
+		.format = SPA_AUDIO_FORMAT_F32P,
+		.rate = (uint32_t)n->sample_rate,
+		.channels = (uint32_t)n->channels,
+	};
+	for (int c = 0; c < n->channels; c++)
+		finfo.position[c] = (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c);
 
 	/* Advertise the volume/mute PropInfo + the current (persisted) Props at connect,
 	 * so a controller sees the controls the moment the node appears and standard
@@ -806,9 +826,16 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	const struct spa_pod *cparams[5];
 	uint32_t ncp = sink_build_params(n, &pb, cparams);
 
-	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_RT_PROCESS, cparams, ncp) < 0) {
-		pw_filter_destroy(n->filter);
-		n->filter = NULL;
+	const struct spa_pod *sparams[8];
+	uint32_t nsp = 0;
+	sparams[nsp++] = spa_format_audio_raw_build(&fb, SPA_PARAM_EnumFormat, &finfo);
+	for (uint32_t i = 0; i < ncp && nsp < 8; i++)
+		sparams[nsp++] = cparams[i];
+	if (pw_stream_connect(n->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+	                      PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+	                      sparams, nsp) < 0) {
+		pw_stream_destroy(n->stream);
+		n->stream = NULL;
 		return -1;
 	}
 
@@ -938,7 +965,7 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 		return -1;
 	char want_label[64];
 	snprintf(want_label, sizeof want_label, "%s", label ? label : "");
-	if (n->filter && n->channels == want && strcmp(want_label, n->label) == 0)
+	if (n->stream && n->channels == want && strcmp(want_label, n->label) == 0)
 		return 0;   /* identical box (same width AND label): nothing to do */
 	/* Absent, or a box change — either a different width OR a same-out-width swap that
 	 * only changes the label (e.g. S-1608 -> S-4000S, both 8 out). Either way REBUILD
@@ -950,12 +977,11 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	 * (pw_filter_destroy quiesces the data thread's process() before it returns, so
 	 * n->channels / n->ports are swapped in a clean gap — no RT race), and the
 	 * per-channel gain state persists across the rebuild. */
-	if (n->filter) {
-		pw_filter_destroy(n->filter);
-		n->filter = NULL;
+	if (n->stream) {
+		pw_stream_destroy(n->stream);
+		n->stream = NULL;
 	}
-	for (int c = 0; c < REAC_MAX_CHANNELS; c++)
-		n->ports[c] = NULL;
+	n->position = NULL;   /* the old stream's io area dies with it */
 	n->channels = want;
 	return sink_open_filter(n, label);
 }
@@ -999,8 +1025,8 @@ void reac_sink_node_destroy(struct reac_sink_node *n)
 		return;
 	if (n->log_timer)
 		pw_loop_destroy_source(n->loop, n->log_timer);
-	if (n->filter)
-		pw_filter_destroy(n->filter);   /* stops process() submits first */
+	if (n->stream)
+		pw_stream_destroy(n->stream);   /* stops process() submits first */
 	if (n->pacer_open) {
 		reac_pacer_stop(&n->pacer);     /* join the RT thread */
 		/* Final drain + counters: the shutdown summary of the establishment. */
