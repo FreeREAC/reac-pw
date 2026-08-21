@@ -236,9 +236,18 @@ int main(int argc, char **argv)
 			 * write scribbles the heap. Accept only sane audio rates — the REAC
 			 * world is the 44.1k/48k/88.2k/96k families. */
 			int rate = atoi(argv[++i]);
-			if (rate < 8000 || rate > 192000) {
-				fprintf(stderr, "reac-pw: bad --rate '%s' (want 8000..192000 Hz; "
-				        "REAC runs 44100/48000/88200/96000)\n", argv[i]);
+			/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz. A Roland desk
+			 * offers exactly these and drives the segment at the one chosen;
+			 * anything else is not a slower REAC, it is not REAC, and it would
+			 * need RE-PACING between the rig clock and the wire — which reac-pw
+			 * cannot do, having no TX resampler. This used to accept anything
+			 * from 8000 to 192000 and put it on the wire, a cadence no box can
+			 * follow, called configuration. */
+			if (rate != 44100 && rate != 48000 && rate != 96000) {
+				fprintf(stderr, "reac-pw: illegal --rate '%s'. REAC runs at "
+				        "44100, 48000 or 96000 Hz and nothing else; anything "
+				        "else needs re-pacing, which reac-pw cannot do.\n",
+				        argv[i]);
 				return 2;
 			}
 			rxcfg.forced_rate = rate;
@@ -442,7 +451,10 @@ int main(int argc, char **argv)
 		                              .channels = REAC_MAX_CHANNELS,
 		                              .sample_rate = rx.sample_rate,
 		                              .src_mac = master_src, .master_mac = NULL,
-		                              .console_field = mixer->console_field,
+		                              /* THE PACE MANDATES THIS BYTE, not the family: it is
+                               * the segment's rate class and the box follows it.
+                               * See reac_rate_console_field. */
+                              .console_field = reac_rate_console_field(rx.sample_rate),
 		                              .inst = inst_name, .label = NULL,
 		                              .headamps = n_headamps ? headamps : NULL,
 		                              .n_headamps = n_headamps,
