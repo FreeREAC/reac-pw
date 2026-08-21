@@ -321,6 +321,15 @@ struct reac_master {
 	                           * NULL -> every channel takes the safe default    */
 	uint8_t  join_blk[32];    /* the box's cold-connect block (diagnostic)      */
 	uint8_t  box_mac[6];      /* the joining box's L2 source */
+	/* Bumped every time we reach ESTABLISHED. A box plug is not a special case:
+	 * it is a lost connection and a reconnect, and it comes in two flavours the
+	 * MAC alone cannot tell apart. A DIFFERENT MAC is a cold reconnect — new
+	 * peer, new declared geometry, nodes resize. The SAME MAC returning is a warm
+	 * one — the geometry stands, but it is still a NEW SESSION whose counter
+	 * starts wherever the box's did. Keying stream state on the MAC alone leaves
+	 * the warm case carrying the old session's continuity, which is how a clean
+	 * reconnect reported thousands of counter gaps. */
+	unsigned session_seq;
 	unsigned grant_attempts;  /* windows opened (diagnostic) */
 
 	/* ESTABLISHED */

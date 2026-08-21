@@ -752,6 +752,7 @@ void reac_master_regrant(struct reac_master *m)
 static void enter_established(struct reac_master *m)
 {
 	m->state = REAC_M_ESTABLISHED;
+	m->session_seq++;        /* a new session: see the field's contract */
 	/* Same continuous control cadence as PROBING (PROBE + the four 1/s
 	 * streams), phase-offset so they never contend for a slot. */
 	reset_control_cadence(m);
