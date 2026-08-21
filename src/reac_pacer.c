@@ -584,6 +584,34 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 		fprintf(out, "reac-disco: [%.6f] %d device(s) went silent > %llu s — withdrawn\n",
 		        (double)now / 1e9, gone,
 		        (unsigned long long)(REAC_DISCO_STALE_NS / 1000000000ULL));
+	/* A SUSTAINED trim is not bounded-latency housekeeping, it is a RATE
+	 * MISMATCH, and it must say so instead of hiding as a rising number in the
+	 * telemetry line below. The guard exists because the graph clock can run
+	 * marginally fast against the wire, which trims RARELY. When the wire and the
+	 * graph are at different RATES the producer outruns the consumer forever, so
+	 * the guard trims on drain after drain and throws away ~100 ms of audio each
+	 * time — the "extremely saturated" sound, with nothing in the log that names
+	 * a cause. reac-pw has no TX resampler, so this is the only honest warning we
+	 * can give. Once per run: an operator who reads it can act, and a repeat every
+	 * drain would be the same flood the gate above exists to prevent. */
+	if (rtrims != p->log_last_trims) {
+		if (++p->trim_run >= 20 && !p->trim_warned) {
+			uint64_t rf = atomic_load_explicit(&p->ring_trim_frames,
+			                                   memory_order_relaxed);
+			p->trim_warned = 1;
+			fprintf(out, "reac-pacer: WIRE/GRAPH RATE MISMATCH — the guard has "
+			        "trimmed on %u consecutive drains (%llu trims, %llu frames "
+			        "dropped). This is not latency housekeeping: the graph is "
+			        "producing faster than the wire consumes, so audio is being "
+			        "discarded in ~100 ms chunks. reac-pw has NO TX resampler — "
+			        "run the wire at the graph's rate (--rate) or the audio stays "
+			        "chopped.\n", p->trim_run,
+			        (unsigned long long)rtrims, (unsigned long long)rf);
+		}
+	} else {
+		p->trim_run = 0;
+	}
+
 	int emit = (rtrims != p->log_last_trims) ||
 	           (now - p->log_last_ns >= REAC_PACER_DEPTH_LOG_HB_NS);
 	if (emit) {
