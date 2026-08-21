@@ -194,6 +194,17 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
                             enum reac_master_state to, uint8_t cause)
 {
 	p->prev_state = to;
+	/* A RE-ESTABLISHMENT IS A NEW SESSION, and this is the one door every
+	 * transition passes through — so the receiver is reset here, not by the next
+	 * housekeeping tick. The tick was a whole tick late: the box's first frames
+	 * of the new session arrived against the old session's counter and the seam
+	 * was booked as lost frames (measured: 134 on a clean warm replug, where the
+	 * correct answer is 0). Idempotent and allocation-free, so it is safe on this
+	 * RT path; the epoch's release store publishes the new identity to the rx
+	 * thread, which acquires it before using it. */
+	if (to == REAC_M_ESTABLISHED && p->on_session)
+		p->on_session(p->session_ctx, p->master.box_mac,
+		              p->master.session_seq);
 	atomic_store_explicit(&p->fsm_state, to, memory_order_release);
 	atomic_store_explicit(&p->grant_attempts, p->master.grant_attempts,
 	                      memory_order_relaxed);

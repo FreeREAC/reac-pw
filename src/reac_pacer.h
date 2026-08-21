@@ -219,6 +219,15 @@ int reac_clock_label_get(const struct reac_clock_label *l, char *out, size_t cap
 struct reac_pacer {
 	struct reac_frame_ring ring;     /* graph -> pacer */
 	struct reac_master master;       /* the establishment state machine */
+	/* Announced the instant a session is (re)established, so a consumer can drop
+	 * per-session state at the seam instead of a housekeeping tick later — a tick
+	 * late, the box's first frames of the new session are measured against the
+	 * old session's counter and the seam is booked as lost frames (134 on a
+	 * measured warm replug, where the correct answer is 0). A callback rather
+	 * than a direct call so the pacer keeps knowing nothing about the receiver.
+	 * Must be allocation-free and non-blocking: this fires on the RT path. */
+	void  *session_ctx;
+	void (*on_session)(void *ctx, const uint8_t mac[6], unsigned session);
 	struct reac_headamp_tx headamp;  /* MASTER head-amp DMX send (off unless set) */
 	int fd;                          /* AF_PACKET socket */
 	int ifindex;
