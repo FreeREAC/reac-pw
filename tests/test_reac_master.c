@@ -438,11 +438,10 @@ int main(void)
 	reac_master_set_box(&m, 16, 8);
 	CHK(m.grant_burst_len == 56);
 
-	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the ~1.6 s
-	 * grant_dwell hold (matching the measured M-200 ENROLL->grant gap: Δ1.503 s
-	 * on matrix-m200-s0808-2026-07-11.pcap, Δ1.717 s on matrix-m200-s1608-
-	 * 2026-07-11.pcap — the RX-driven rewrite dropped this dwell and started the
-	 * burst the very next tick), THEN the 32 DISTINCT M-200 sweep blocks in
+	/* collect the grant burst: NO enrol at all for this box — it declared 16 in,
+	 * so it places its own head-amps at base 0x20 and the desk does not place it
+	 * (see the 16-in case in the fabrication block below) — then the grant_dwell
+	 * hold, THEN the 32 DISTINCT M-200 sweep blocks in
 	 * order, byte-exact, 1-per-STRIDE. After the full enroll + dwell + burst the
 	 * master SELF-COMPLETES to ESTABLISHED and HOLDS — the box goes quiet after
 	 * the grant, so a master that waited for a post-burst unicast (or timed back
@@ -452,7 +451,7 @@ int main(void)
 	int span = m.grant_dwell + m.grant_burst_len * REAC_M_GRANT_STRIDE + 4;
 	for (int i = 0; i < span; i++) {
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
-		if (e == REAC_M_EMIT_ENROLL) { CHK(i == 0); saw_enroll = 1; }
+		if (e == REAC_M_EMIT_ENROLL) saw_enroll = 1;
 		CHK(e != REAC_M_EMIT_GRANT || i > m.grant_dwell);  /* no grant before the dwell elapses */
 		if (e == REAC_M_EMIT_GRANT) {
 			if (last_grant_slot >= 0)
@@ -467,7 +466,7 @@ int main(void)
 			grants++;
 		}
 	}
-	CHK(saw_enroll);                            /* the pre-grant arm frame, once */
+	CHK(saw_enroll == 0);                       /* a 16-in box is never enrolled */
 	CHK(grants == m.grant_burst_len);           /* all 32 blocks, byte-exact */
 	CHK(m.state == REAC_M_ESTABLISHED);         /* self-completed + holds after the burst */
 
@@ -702,7 +701,13 @@ int main(void)
 			if (e == REAC_M_EMIT_ENROLL) emitted_enrolls++;
 		}
 		CHK(emitted_grants == 0);      /* NOTHING enrolled: we do not guess a box */
-		CHK(emitted_enrolls == 1);     /* the wide-safe arm frame, once */
+		/* And not one ENROLL either. An enrol ANSWERS a declaration — in every
+		 * capture that has one it follows the box's config-announce, because it
+		 * states what the desk made of what the box said. This box has said
+		 * nothing, so a wide-safe arm frame here is an answer to a question
+		 * nobody asked: the same guess as (b)'s fabricated sweep, one frame
+		 * earlier. (reac-captures ENROLL-IS-THE-GATE-2026-08-21.) */
+		CHK(emitted_enrolls == 0);
 		CHK(mb.state == REAC_M_GRANTING);           /* still holding, not established */
 
 		/* (c) THE BOX DECLARES ITSELF — an S-0808, 8 inputs. The window restarts
@@ -714,9 +719,12 @@ int main(void)
 		CHK(mb.grant_ticks == 0);                   /* window restarted */
 		int ga_records = 0;
 		emitted_grants = 0;
+		emitted_enrolls = 0;
 		for (int i = 0; i < mb.grant_dwell + mb.grant_burst_len * REAC_M_GRANT_STRIDE + 2; i++) {
 			int gi;
 			enum reac_master_emit e = slot(&mb, &gi, &bc);
+			if (e == REAC_M_EMIT_ENROLL)
+				emitted_enrolls++;
 			if (e != REAC_M_EMIT_GRANT)
 				continue;
 			emitted_grants++;
@@ -730,6 +738,10 @@ int main(void)
 		}
 		CHK(emitted_grants == 32);
 		CHK(ga_records == 8 * 3);                   /* phantom+pad+sens per input */
+		/* ONE enrol, and it came AFTER the declaration — the shape every real
+		 * desk shows an 8-in box (M-300 c9:d8:5b and M-5000 ca:15:4c, the two
+		 * addresses reac-pw has never worn: 2/2 captures each). */
+		CHK(emitted_enrolls == 1);
 		CHK(mb.state == REAC_M_ESTABLISHED);
 
 		/* (d) A BOX SWAP RE-DERIVES EVERYTHING. The 8-wide box goes; the master
@@ -750,6 +762,21 @@ int main(void)
 			if (r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01)
 				CHK(r[20] >= 0x20 && r[20] <= 0x2f);   /* NOT the old box's slots */
 		}
+		/* AND A 16-IN BOX IS NEVER ENROLLED AT ALL. A box that declares its own
+		 * non-zero head-amp base (16 in -> 0x20) places itself in the fabric
+		 * ring; the desk does not place it, and every desk we can positively
+		 * identify as real agrees — the M-300 and M-5000 enrol an 8-in box 2/2
+		 * and a 32-in box 2/2, and a 16-in box 0/6. reac-pw enrolling it anyway
+		 * is what holds the S-1608's inputs 9..16 at digital zero: measured on
+		 * the rig, a byte-correct head-amp record reaches CH 0x2f and the slot
+		 * never leaves -106 dBFS while input 8 carries a live mic at -58.6.
+		 * Evidence: reac-captures ENROLL-IS-THE-GATE-2026-08-21.md. */
+		int wide_enrolls = 0;
+		for (int i = 0; i < mb.grant_dwell + mb.grant_burst_len * REAC_M_GRANT_STRIDE + 2; i++) {
+			if (slot(&mb, NULL, &bc) == REAC_M_EMIT_ENROLL)
+				wide_enrolls++;
+		}
+		CHK(wide_enrolls == 0);
 
 		/* (e) A BOX THAT NEVER DECLARES ITSELF is not guessed at. The hold expires
 		 * and we go back to probing — still inviting, never enrolled at a made-up

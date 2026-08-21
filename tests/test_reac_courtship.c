@@ -214,7 +214,15 @@ int main(void)
 	}
 	CHK(!c.m_granted_before_join);            /* grant ONLY after the JOIN */
 	CHK(c.s_joins_fed > 0 && c.m_grants > 0);
-	CHK(c.m_enrolls > 0);                     /* the pre-grant ENROLL frame flowed */
+	/* NOT ONE ENROLL. This courtship is an M-5000 courting an S-1608 (c4:80:41),
+	 * and that is the pairing no real desk ever enrols: keyed on the box's own
+	 * declared port table, the M-300 and the M-5000 — the two addresses reac-pw
+	 * has never worn — enrol an 8-in box 2/2 and a 32-in box 2/2, and a 16-in box
+	 * 0/6. The box places its own head-amps at base 0x20 and the desk does not
+	 * place it. Asserting an enrol here asserted the one frame that holds this
+	 * box's inputs 9..16 at digital zero.
+	 * Evidence: reac-captures m200-s1608-headamp/ENROLL-IS-THE-GATE-2026-08-21.md */
+	CHK(c.m_enrolls == 0);
 	CHK(slot_slave_established >= 0);         /* box linked off the grant */
 	CHK(slot_master_established >= 0);        /* master self-completed after the burst */
 	/* Ordering is now timing-dependent, not a protocol invariant: the master

@@ -614,7 +614,21 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	 * (tick-0) ENROLL still widens — mirrors the golden, which sends its enrol ~200ms
 	 * into the session, after reading the box config. */
 	set_enroll_width(m->enroll_blk, in_ch);
-	m->enroll_pending = 1;
+	/* ...but ONLY for a box the desk actually places. A box whose declaration puts
+	 * its head-amps at a NON-ZERO base (reac_headamp_base: 16 in -> 0x20) states its
+	 * own position in the 48-slot ring, and no desk we can positively identify as
+	 * real ever enrols it: keyed on the DECLARED port table (libreac reac_ports) and
+	 * on the two addresses reac-pw has never worn, the M-300 c9:d8:5b and the M-5000
+	 * ca:15:4c enrol an 8-in box 2/2 and a 32-in box 2/2, and a 16-in box 0/6. Every
+	 * S-1608 enrol in the corpus is ours.
+	 *
+	 * The cost of enrolling it anyway is measured, not inferred: the box takes the
+	 * group map as its placement, and the half of its inputs outside that map
+	 * converts NOTHING. Rig 2026-08-21, S-1608 at base 0x20 — a byte-correct head-amp
+	 * record reaches CH 0x2f and box input 16 stays at -106 dBFS (mathematical zero)
+	 * while input 8 carries a live condenser at -58.6 in the same capture.
+	 * Evidence: reac-captures m200-s1608-headamp/ENROLL-IS-THE-GATE-2026-08-21.md. */
+	m->enroll_pending = (m->alloc.base == 0);
 
 	/* The box declared itself while we were HOLDING an ungranted window for it
 	 * (reac_master_next's GRANTING hold): restart the window now that there is a
@@ -624,10 +638,13 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	if (!had_box && m->state == REAC_M_GRANTING) {
 		m->grant_ticks    = 0;
 		m->announce_tick  = 0;
-		/* The restarted window's own tick-0 ENROLL already carries the declared
-		 * width, so the mid-dwell re-ENROLL has nothing left to correct. Emitting
-		 * both would put two enrols on the wire where every golden shows one. */
-		m->enroll_pending = 0;
+		/* enroll_pending SURVIVES the restart. It used to be cleared here because
+		 * the restarted window opened with a tick-0 arm frame that carried the
+		 * declared width, and emitting both would have put two enrols on the wire
+		 * where every golden shows one. That frame is gone, so this pending enrol
+		 * IS the one enrol — clearing it here dropped it entirely in the common
+		 * case (the box declares itself ~1 ms into GRANTING, reac_pacer.c), which
+		 * is every cold connect. One path, one frame, after the declaration. */
 	}
 
 	m->cfg.out_channels = (uint8_t)in_ch;    /* cfea width byte := box input width */
@@ -970,9 +987,12 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		 * (reac_grant.h, live 2026-07-17). Recoverable and loud beats plausible and
 		 * wrong. */
 		if (!reac_master_has_box(m)) {
-			if (m->grant_ticks == 0) {
-				emit = REAC_M_EMIT_ENROLL;   /* the wide-safe arm frame */
-			} else if (++m->announce_tick >= m->fps) {
+			/* ...and that includes the ENROLL. This branch used to open with a
+			 * wide-safe arm frame at tick 0 — an enrolment for a box that has not
+			 * said what it is, which is the same guess the paragraph above refuses
+			 * to make about the sweep, one frame earlier. An enrol ANSWERS a
+			 * declaration; with nothing declared there is nothing to answer. */
+			if (++m->announce_tick >= m->fps) {
 				m->announce_tick = 0;
 				emit = REAC_M_EMIT_ANNOUNCE; /* the ungranted hold, ~1/s */
 			}
@@ -984,9 +1004,14 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			}
 			break;
 		}
-		if (m->grant_ticks == 0) {
-			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
-		} else if (m->grant_ticks <= m->grant_dwell) {
+		/* NO PRE-DECLARATION ENROLL. This branch used to emit a wide-safe ENROLL at
+		 * tick 0, before the box had declared anything. An enrol ANSWERS a
+		 * declaration — in every capture that has one it follows the box's
+		 * config-announce — so a frame sent ahead of it answers a question nobody
+		 * asked, and it is the same guess reac_grant.h already refuses to make
+		 * about the sweep. The dwell now spans ticks 0..grant_dwell, so the burst
+		 * timeline below is unchanged. */
+		if (m->grant_ticks <= m->grant_dwell) {
 			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
 			 * config-announce is parsed ~1ms into GRANTING, see reac_pacer.c): deliver
 			 * ONE fresh ENROLL at the now-DECLARED width before the grant burst, so the
