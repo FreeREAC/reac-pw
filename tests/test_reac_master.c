@@ -629,6 +629,18 @@ int main(void)
 		CHK(reac_mixer_resolve_rate(m5000, 96000, &clamped) == 96000 && !clamped);
 		CHK(reac_mixer_resolve_rate(m5000, 48000, &clamped) == 48000 && !clamped);
 
+		/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz (operator, 2026-08-21).
+		 * A Roland desk offers exactly these and drives the segment at the one
+		 * chosen. Anything else is not a slower REAC, it is not REAC — it would
+		 * need RE-PACING between the rig clock and the wire, which reac-pw cannot
+		 * do. Refuse it and SAY SO via `clamped`, rather than putting a cadence on
+		 * the wire no box can follow and calling it configuration. */
+		CHK(reac_mixer_resolve_rate(m200,  44100, &clamped) == 44100 && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 44100, &clamped) == 44100 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200,  88200, &clamped) == 48000 && clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 32000, &clamped) == 48000 && clamped);
+		CHK(reac_mixer_resolve_rate(m300,  1,     &clamped) == 48000 && clamped);
+
 		/* fps = rate/REAC_SAMPLES_PER_PKT (reac_sink_node.c) for each resolved
 		 * rate; the pacer's per-fps period (reac_pacer_period_ns) is already
 		 * covered by test_reac_pacer.c — pin the rate->fps mapping here. */
