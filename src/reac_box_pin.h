@@ -24,6 +24,13 @@
  *
  * Where the two disagree, the WIRE WINS and says so exactly once
  * ({@link reac_box_pin_notice}, which survived the retirement for this purpose).
+ *
+ * THE DISAGREEMENT IS ALSO A TEST AFFORDANCE, deliberately (operator, 2026-08-22). Pinning
+ * a box that is NOT the one on the segment reproduces, on demand and without unplugging
+ * anything, the case openmixer's REBIND has to survive: a patch was built expecting one box
+ * and a different one turned up. `--box s0808` on a segment carrying an S-1608 starts the
+ * nodes at 8 channels, then re-sizes them to 16 when the box declares itself -- which is the
+ * same transition a rebind drives, available on a bench with one flag.
  */
 #ifndef REAC_BOX_PIN_H
 #define REAC_BOX_PIN_H
