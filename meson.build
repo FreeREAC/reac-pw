@@ -76,6 +76,7 @@ reac_pw_src = [
   'src/reac_ring.c',
   'src/reac_rx.c',
   'src/reac_pace_watch.c',
+  'src/reac_box_pin.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
@@ -369,6 +370,18 @@ mac_test = executable('test_reac_mac',
   ['tests/test_reac_mac.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')])
 test('reac_mac', mac_test)
+
+# --- unit test: --box MODEL[:LABEL], the fixed-installation pin ---------------
+# Restored 2026-08-22 (operator: reac-pw is a daemon, a permanent rig pins its patch;
+# openmixer autodetects — complementary, not alternatives). The pin declares NODE
+# GEOMETRY AND LABEL only: --box was retired in 902bf39 because it pre-fabricated a
+# head-amp enrollment from a guess, and a box granted slots it does not own links,
+# streams audio and silently ignores every head-amp record.
+box_pin_test = executable('test_reac_box_pin',
+  ['tests/test_reac_box_pin.c', 'src/reac_box_pin.c', 'src/reac_ctrl.c'],
+  dependencies : [libreac_dep],
+  include_directories : [include_directories('src')])
+test('reac_box_pin', box_pin_test)
 
 # --- unit test: does the wire carry the pace we CLAIM it does? ----------------
 # Rig 2026-08-22: --rate 96000 gave a byte-perfect 7996 pps downstream (1492-byte frames,
