@@ -129,8 +129,8 @@ static void usage(const char *p)
 	  "                reac-playback.NAME) so one master per REAC VLAN/segment coexists.\n"
 	  "  --headamp CH:PARAM:VALUE  master role, repeatable: a per-channel head-amp\n"
 	  "                command the master re-asserts to the box (declarative/DMX).\n"
-	  "                CH = wire channel 0..39; PARAM = phantom|pad|sens; VALUE = 0/1\n"
-	  "                for phantom|pad, 0..55 raw SENS code for sens. RIG-GATED.\n"
+	  "                CH = head-amp channel 0..%d; PARAM = phantom|pad|sens; VALUE = 0/1\n"
+	  "                for phantom|pad, 0..%d raw SENS code for sens. RIG-GATED.\n"
 	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default for BOTH\n"
 	  "                roles: the --tx NIC's OWN hardware address, verbatim — our frames\n"
 	  "                carry OUR identity (real boxes and desks sync to it; a borrowed\n"
@@ -154,7 +154,8 @@ static void usage(const char *p)
 	  "                A designated device outranks the name heuristic; it does NOT\n"
 	  "                rescue a structurally unusable one (HDMI/DisplayPort sinks,\n"
 	  "                software timers) and it does NOT outrank measured instability.\n"
-	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n", p);
+	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n",
+	  p, REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
