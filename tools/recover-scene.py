@@ -52,3 +52,18 @@ if __name__ == '__main__':
         sys.exit('REFUSED: not 8904 bytes — truncated or decimated capture')
     if len(sys.argv) > 2:
         open(sys.argv[2], 'wb').write(scene)
+
+# Cross-desk matrix, 2026-08-23 (one capture per combination, self-checked at 8904):
+#
+#   desk    x box      declared  chunks  bytes  scene[+4]  sha256[:12]
+#   M-5000  x S-0808     8904      341    8904    01 00    efc316a55b00
+#   M-300   x S-1608     8904      341    8904    01 00    89947703badd
+#   M-300   x S-0808     8904      341    8904    01 00    89947703badd
+#   M-200i  x S-1608     8904      341    8904    01 00    efc316a55b00
+#
+# Two readings, both load-bearing:
+#   THE SCENE IS A PROPERTY OF THE DESK, NOT THE BOX. M-300 sends one scene to an S-1608
+#   and the same bytes to an S-0808; M-200i and M-5000 send a different scene, byte
+#   identical to each other. Nothing about it is sized or keyed to the box.
+#   SCENE[+4] IS 01 00 ON EVERY DESK GENERATION AND EVERY BOX. A master that drives both
+#   banks sends 01 there, so zeroing it moves away from working hardware, not toward it.
