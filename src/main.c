@@ -38,6 +38,7 @@
 #include "reac_mac.h"
 #include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
+#include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
@@ -104,7 +105,7 @@ static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
-	  "         [--mixer M] [--box-channels N] [--name NAME] [--src-mac M]\n"
+	  "         [--mixer M] [--box MODEL[:LABEL]] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -182,16 +183,19 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	if (!bm || bm == c->last)
 		return;   /* nothing recognized yet, or the same model as last poll */
 	c->last = bm;
-	/* A stale pin that DISAGREES with the wire, said ONCE and never again. Once per
-	 * frame is how a disagreement becomes wallpaper; never saying it is what let a
-	 * wrong pin sit in reac.env unnoticed. The wire has already won — this changes
-	 * nothing, it only names the line in reac.env that is now a lie. */
+	/* A pin that DISAGREES with the wire, said ONCE and never again. Once per frame is
+	 * how a disagreement becomes wallpaper; never saying it is what lets a wrong pin sit
+	 * in a unit file unnoticed for months. The wire has already won by the time this
+	 * prints — it changes nothing, it only tells the operator which typed line is now
+	 * describing a box that is not there. */
 	{
 		const char *pin = c->pin;   /* the notice CONSUMES c->pin; keep it to print */
 		if (reac_box_pin_notice(&c->pin, bm->token))
-			fprintf(stderr, "reac-pw: --box said '%.*s', the wire says %s — the WIRE "
-			        "wins. Remove REAC_BOX from reac.env; nothing typed can be right "
-			        "about this.\n", (int)strcspn(pin, ":"), pin, bm->display);
+			fprintf(stderr, "reac-pw: --box pinned '%.*s', the wire says %s — the "
+			        "WIRE WINS and the nodes are now sized to it. The pin is still what "
+			        "this segment shows before a box is powered, so fix it if this box "
+			        "is the permanent one.\n",
+			        (int)strcspn(pin, ":"), pin, bm->display);
 	}
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
@@ -213,7 +217,9 @@ int main(int argc, char **argv)
 	uint8_t src_mac[6];
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
-	const char *retired_box_pin = NULL;   /* --box: retired, remembered only to report
+	const struct reac_box_model *pin_model = NULL;  /* --box: pinned NODE geometry     */
+	const char *pin_label = NULL;                   /* --box: pinned node label        */
+	const char *box_pin_spec = NULL;      /* --box verbatim, for the wire-wins notice
 	                                       * that the wire disagreed with it (once) */
 	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
 	/* --headamp CH:PARAM:VALUE (master role, repeatable): the per-channel head-amp
@@ -299,19 +305,30 @@ int main(int argc, char **argv)
 				return 2;
 			}
 		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {
-			/* RETIRED 2026-08-05. It declared "the box on this segment" — a fact only
-			 * the wire can state, and which the wire does state, in the box's own
-			 * config-announce. Two sources for one fact means nothing forces them to
-			 * agree and only one of them is ever true; the daemon now learns the box
-			 * and learns it again when it changes.
+			/* MASTER role: the operator's PIN for a FIXED INSTALLATION — the nodes
+			 * exist, named and sized, from boot rather than appearing when the box
+			 * powers up (operator, 2026-08-22: reac-pw is a daemon in its own right
+			 * and a permanent rig pins its patch; openmixer is the autodetect case,
+			 * and the two are complementary, not alternatives).
 			 *
-			 * Accepted and IGNORED rather than rejected, deliberately: rejecting it
-			 * turns an unedited reac.env into a crash-loop on a console that is
-			 * otherwise working, possibly mid-show. It has no effect at all — the
-			 * value is remembered only to say, once, that the wire disagreed with it
-			 * (see the autodetect watcher), which is the one thing a stale pin is
-			 * still good for. */
-			retired_box_pin = argv[++i];
+			 * IT PINS NODE GEOMETRY AND LABEL, AND NOTHING ELSE. This flag was retired
+			 * on 2026-08-05 because it also pre-fabricated a head-amp ENROLLMENT from
+			 * a guess, and a box granted slots it does not own "links, streams audio,
+			 * and silently ignores every head-amp record" (902bf39). That door stays
+			 * shut: reac_master_set_box remains fed only by what a box declares about
+			 * itself. The pin says what to CALL the ports and how many to make; the
+			 * wire says what is actually out there, and where they disagree the WIRE
+			 * WINS and says so once (reac_box_pin_notice, autodetect watcher above). */
+			const char *spec = argv[++i];
+			if (reac_box_pin_parse(spec, &pin_model, &pin_label) != 0) {
+				size_t nm; const struct reac_box_model *t = reac_box_model_table(&nm);
+				fprintf(stderr, "reac-pw: unknown --box model '%s'; known:", spec);
+				for (size_t k = 0; k < nm; k++)
+					fprintf(stderr, " %s", t[k].token);
+				fprintf(stderr, "  (form: MODEL[:LABEL])\n");
+				return 2;
+			}
+			box_pin_spec = spec;
 		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
 			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
 		} else if (!strcmp(argv[i], "--headamp") && i + 1 < argc) {
@@ -344,15 +361,15 @@ int main(int argc, char **argv)
 		                "upstream return + handshake)\n");
 		return 2;
 	}
-	/* --box is retired. Say so ONCE, at startup, in both roles: it is the line that
-	 * tells an operator with an inherited reac.env why the flag they set no longer
-	 * appears to do anything. A slave's own width — a different fact, ours to
-	 * declare, with no wire to learn it from — is --box-channels / --box-model, and
-	 * both stay. */
-	if (retired_box_pin)
-		fprintf(stderr, "reac-pw: --box '%s' IGNORED — the box is learned from the "
-		                "wire, not configured. Drop it (and REAC_BOX from reac.env). "
-		                "A SLAVE's own width is --box-channels.\n", retired_box_pin);
+	/* --box declares the box a MASTER serves. As a SLAVE we ARE the box, and our own
+	 * width is a different fact with no wire to learn it from: --box-channels /
+	 * --box-model. Reject the mix rather than mislead about which one is in force. */
+	if (role == REAC_ROLE_SLAVE && pin_model) {
+		fprintf(stderr, "reac-pw: --box is a MASTER-role option (it pins the box this "
+		                "master serves); a SLAVE's own width is --box-channels or "
+		                "--box-model.\n");
+		return 2;
+	}
 	/* --headamp drives the box's preamps — only the MASTER commands them; as a slave
 	 * WE are the box and receive them (surfaced in the RX log). Reject the mix. */
 	if (role == REAC_ROLE_SLAVE && n_headamps > 0) {
@@ -539,7 +556,7 @@ int main(int argc, char **argv)
 		adc.src = &src;
 		adc.sink = sink;
 		adc.scfg = src_cfg;
-		adc.pin  = retired_box_pin;   /* reported once, if the wire disagrees */
+		adc.pin  = box_pin_spec;      /* reported once, if the wire disagrees */
 		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
 		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
 		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
@@ -550,8 +567,27 @@ int main(int argc, char **argv)
 			struct timespec interval = { 0, 200 * 1000000L };
 			pw_loop_update_timer(loop, ad_timer, &first, &interval, false);
 		}
-		fprintf(stderr, "reac-pw: MASTER autodetect — reac-capture / reac-playback "
-		        "appear sized to the box once it is recognized on the wire\n");
+		if (pin_model) {
+			/* The fixed-install pin: put the nodes on the graph NOW, at the pinned
+			 * width and name, so the patch exists before the box is powered. This
+			 * is the same pair of calls the autodetect watcher makes on
+			 * recognition, so a box that later declares something else simply
+			 * re-sizes them — no separate "pinned" code path to diverge. */
+			if (reac_source_node_ensure(&src, &src_cfg, pin_model->in_ch, pin_label) != 0 ||
+			    reac_sink_node_ensure(sink, pin_model->out_ch, pin_label) != 0) {
+				fprintf(stderr, "reac-pw: --box: could not size the nodes to %s\n",
+				        pin_model->display);
+				return 1;
+			}
+			fprintf(stderr, "reac-pw: MASTER pinned --box %s — reac-capture %d ch / "
+			        "reac-playback %d ch labelled '%s', present from boot. The pin names "
+			        "and sizes the ports; the WIRE still decides what is enrolled, and "
+			        "outranks the pin if a different box declares itself.\n",
+			        pin_model->token, pin_model->in_ch, pin_model->out_ch, pin_label);
+		} else {
+			fprintf(stderr, "reac-pw: MASTER autodetect — reac-capture / reac-playback "
+			        "appear sized to the box once it is recognized on the wire\n");
+		}
 	} else {
 		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
 		 * the full 40-slot fabric. With no recognizer there is nothing that could
