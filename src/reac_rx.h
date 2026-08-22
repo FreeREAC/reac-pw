@@ -170,6 +170,14 @@ void reac_rx_peer_reset(struct reac_rx *rx, const uint8_t mac[6], unsigned sessi
  * keep accepting the box while it re-joins. */
 void reac_rx_session_end(struct reac_rx *rx);
 
+/* True if `ifname` currently exists as a network interface (if_nametoindex()
+ * succeeds). Used at open() to refuse a --live NIC that is not there, and by
+ * the feeder loop to notice one that vanished mid-run (USB re-enumeration, a
+ * rename) — see the header note in reac_rx_open(). Not RT-safe (an ioctl/
+ * netlink syscall); never called from the audio path. Exposed for its own
+ * unit test, which needs no capability and no live traffic. */
+int reac_rx_iface_present(const char *ifname);
+
 int reac_rx_start(struct reac_rx *rx);
 
 /* Signal stop and join. */
