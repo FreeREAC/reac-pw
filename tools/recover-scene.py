@@ -26,14 +26,21 @@ def recover(path):
         pkt = f.read(incl)
         if len(pkt) < incl:
             break
+        # Mirror dedup by GEOMETRY, not by comparing bytes: reac.ksy fixes a real
+        # frame at 52 + n*36, and a switch mirror hands over the same frame again
+        # with two bytes of the capture's own FCS left on the end. The residue copy
+        # is the one whose length is not 52 + n*36, so it is decidable rather than
+        # heuristic -- a content compare would also drop a frame a desk repeated on
+        # purpose.
+        if len(pkt) < 52 or (len(pkt) - 52) % 36 != 0:
+            continue
         i = pkt.find(b'\xcd\xea')
         if i < 0:
             continue
         blk = pkt[i:i + 34]
         op = blk[2:4]
-        if op not in (b'\x01\x01', b'\x01\x00', b'\x01\x02') or blk == prev:
+        if op not in (b'\x01\x01', b'\x01\x00', b'\x01\x02'):
             continue
-        prev = blk
         if op == b'\x01\x01':
             total, = struct.unpack('>H', blk[7:9])
             scene, state, chunks = blk[9:9 + 24], 1, 0

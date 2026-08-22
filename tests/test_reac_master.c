@@ -47,11 +47,9 @@ static const uint8_t GOLD_CHANMAP[34] =
  * emits it with OUR MAC substituted + the checksum recomputed. */
 static const uint8_t GOLD_CFEA_M300[34] =
  { 0xcf,0xea,0xff,0xff,0x01,0x00,0x01,0x03,0x0d,0x01,0x04,0x00,0x40,0xab,0xc9,0xd8,0x5b,0x28,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xd4 };
-/* The PROBE is NOT a constant — it rotates (phase +6 mod 10, 2 emissions each,
- * sub 0x02 hunting / 0x03 established; #130, measured live off an M-200). This is
- * the block a freshly-init'd master seeds: phase 0, sub 0x02 (checksum 0xde). */
-static const uint8_t GOLD_PROBE[34] =
- { 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0xde };
+/* The header and the final chunk of the scene push, transcribed off a real desk
+ * LONG BEFORE the transfer was understood — which is what makes them an oracle
+ * here: the chunker must reproduce both from the recovered body alone. */
 static const uint8_t GOLD_SUB01[34] =
  { 0xcd,0xea,0x01,0x01,0x00,0x18,0x00,0x22,0xc8,0x31,0x32,0x33,0x34,0x01,0x00,0x00,0x00,0x04,0x00,0x01,0x80,0x02,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0xa7 };
 static const uint8_t GOLD_SUB02[34] =
@@ -103,6 +101,28 @@ static enum reac_master_emit slot(struct reac_master *m, int *idx,
 	return e;
 }
 
+/* Drive the cadence until one whole scene push has been delivered. A real master
+ * has been pushing its scene for cycles before a box ever answers; ours holds any
+ * forward edge until the transfer completes (reac_master.c), so a test that wants
+ * to reach GRANTING has to put the master in that state honestly. */
+static void deliver_scene(struct reac_master *m, uint16_t *expect_counter)
+{
+	uint16_t c;
+	int ix;
+	long guard = 0;
+	/* Not merely "one transfer done": the master must also be BETWEEN transfers.
+	 * A JOIN that lands mid-push is held until that push finishes, so a test
+	 * wanting an immediate grant has to stand in the quiet window the way a box
+	 * that joins between two transfers does. */
+	while ((m->scene_complete == 0 || m->scene_inflight) &&
+	       guard++ < 4L * m->cycle_len)
+		(void)reac_master_next(m, &c, &ix);
+	/* The counter free-runs one per slot; resync the caller's tracker to it so
+	 * slot()'s +1-per-slot invariant still holds across the transfer. */
+	if (expect_counter)
+		*expect_counter = m->counter;
+}
+
 /* Drive the master from a JOIN to ESTABLISHED the way a real box does: the JOIN
  * opens GRANTING, the emit loop delivers the FULL 32-frame grant burst, then the
  * box's unicast accept lands. The accept is gated on burst completion (#130 rig
@@ -110,6 +130,7 @@ static enum reac_master_emit slot(struct reac_master *m, int *idx,
  * the burst to ~1 frame, leaving the box's light blinking). */
 static void establish(struct reac_master *m, uint16_t *cnt, const uint8_t box[6])
 {
+	deliver_scene(m, cnt);   /* the push completes before the grant, as on the wire */
 	reac_master_rx(m, REAC_M_RX_BOX_JOIN, box, ZONEA_JOIN);
 	/* The box declares WHAT IT IS — its config-announce, which reac_pacer turns into
 	 * this call. Nothing can be enrolled before it: the cold-connect JOIN carries no
@@ -199,7 +220,25 @@ int main(void)
 		/* the re-stamp must not regress the box-count field: recognizing a NEW
 		 * box model while already GRANTING/ESTABLISHED (a warm relink) must keep
 		 * announcing count=1, not fall back to the idle count=0. */
-		CHK(reac_master_rx(&mw, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
+		/* THE PUSH RUNS TO COMPLETION BEFORE THE GRANT. A JOIN that lands before the
+		 * box has the whole scene is HELD — not dropped, not honoured — and taken on
+		 * the final chunk. Both halves of that law are asserted here, because it is
+		 * the whole fix: the box JOINs in milliseconds against a 2.694 s cycle, so
+		 * without the hold the transfer is cancelled on every establishment and the
+		 * box never leaves reassembly. */
+		CHK(reac_master_rx(&mw, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 0);
+		CHK(mw.state == REAC_M_PROBING);          /* held, not advanced */
+		CHK(mw.join_held == 1);
+		{
+			uint16_t c; int ix;
+			long guard = 0;
+			while (mw.scene_complete == 0 && guard++ < 4L * mw.cycle_len)
+				(void)reac_master_next(&mw, &c, &ix);
+			(void)0;
+			CHK(mw.scene_complete == 1);          /* one whole transfer delivered */
+			CHK(guard < 4L * mw.cycle_len);
+		}
+		CHK(mw.join_held == 0);                   /* released on the final chunk */
 		CHK(mw.state == REAC_M_GRANTING);
 		reac_master_set_box(&mw, 8, 8);              /* recognized mid-grant */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
@@ -217,6 +256,7 @@ int main(void)
 	 * NOT an echo of the box's JOIN (the echo model was falsified by
 	 * matrix-m200-s0808 2026-07-12 — a locked box gets the master's sweep). Block
 	 * 0 of the S-0808 burst is a 04030014 frame. */
+	deliver_scene(&m, NULL);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	build_and_stamp(&m, f, REAC_M_EMIT_GRANT, 0, planar);
@@ -271,14 +311,17 @@ int main(void)
 		CHK(mg.cfg.out_channels == cfea_before);
 	}
 
-	/* 4. PROBE / SUB01 / SUB02 are the fixed M-300 constants, byte-exact. */
-	build_and_stamp(&m, f, REAC_M_EMIT_PROBE, 0, planar);
-	CHK(memcmp(f + 16, GOLD_PROBE, 34) == 0);
-	CHK(reac_ctrl_checksum_verify(f) == 0);
-	build_and_stamp(&m, f, REAC_M_EMIT_SUB01, 0, planar);
+	/* 4. The chunker reproduces the two transcribed constants from the body: step 0
+	 * is the header (declaring 0x22c8 + the body's first 24 B) and the last step is
+	 * the final chunk. Neither is a canned block any more — both are derived, so a
+	 * body of the wrong length or a mis-sliced payload fails here. */
+	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene, 0) == 0);
+	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0, planar);
 	CHK(memcmp(f + 16, GOLD_SUB01, 34) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	build_and_stamp(&m, f, REAC_M_EMIT_SUB02, 0, planar);
+	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene,
+	                               REAC_SCENE_STEPS - 1) == 0);
+	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_TAIL, 0, planar);
 	CHK(memcmp(f + 16, GOLD_SUB02, 34) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
@@ -357,7 +400,7 @@ int main(void)
 		CHK((int)e >= 0);
 		switch (e) {
 		case REAC_M_EMIT_ENROLL: CHK(0); break;   /* GRANTING-only; never in PROBING */
-		case REAC_M_EMIT_PROBE:
+		case REAC_M_EMIT_SCENE_CHUNK:
 			n_probe++;
 			if (prev_probe >= 0) {
 				long d = i - prev_probe;
@@ -366,8 +409,8 @@ int main(void)
 			}
 			prev_probe = i;
 			break;
-		case REAC_M_EMIT_SUB01:    n_sub01++; break;
-		case REAC_M_EMIT_SUB02:    n_sub02++; break;
+		case REAC_M_EMIT_SCENE_HEAD: n_sub01++; break;
+		case REAC_M_EMIT_SCENE_TAIL: n_sub02++; break;
 		case REAC_M_EMIT_ANNOUNCE: n_ann++;   break;
 		case REAC_M_EMIT_CHANMAP:  n_cm++; CHK(idx >= 0 && idx < 49); cm_seen[idx] = 1; break;
 		case REAC_M_EMIT_GRANT:    n_grant++; break;
@@ -379,37 +422,41 @@ int main(void)
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
 	CHK(n_cm > 0);                              /* §4: chanmap advertised while unlinked */
-	CHK(n_probe >= 51L * 341 && n_probe <= 53L * 341);   /* 341 probes per burst-cycle */
+	CHK(n_probe >= 51L * 341 && n_probe <= 53L * 341);   /* 341 chunks per transfer */
 	CHK(n_sub01 >= 50 && n_sub01 <= 53);        /* sub01: once per cycle */
 	CHK(n_sub02 >= 50 && n_sub02 <= 53);        /* sub02: once per cycle */
 	CHK(n_cm    >= 50 && n_cm    <= 53);        /* chanmap: ONE window per cycle */
 	CHK(n_ann   >= 138 && n_ann  <= 141);       /* cfea free-runs at ~1/s */
 
-	/* ---- (a2) burst choreography: the 4 inventory specials + descriptor ----
-	 * A real burst carries the zeros/our-MAC/SYSP/SCEN specials at in-burst probe
-	 * indices 30..33 (measured 11/11 bursts on the M-300 establish capture), and
-	 * every probe — special or rotating — publishes its checksum as the FILLER
+	/* ---- (a2) transfer choreography: the four "specials" are just chunks -----
+	 * What an earlier RE transcribed as four one-off "inventory specials" at
+	 * in-burst indices 30..33 (measured 11/11 bursts on the M-300 establish
+	 * capture) are chunks 30..33 OF THE BODY — the zeros run, the desk MAC, the
+	 * SYSP token and the SCEN token all fall at those offsets. Asserting them here
+	 * keeps that identification honest: transcribed bytes on one side, the body
+	 * slice on the other. Every chunk also publishes its checksum as the FILLER
 	 * descriptor. */
 	reac_master_init(&m, SRC, &idle, FPS);
 	cnt = 0;
 	int specials_seen = 0;
 	for (long i = 0; i < 2L * m.cycle_len; i++) {
 		enum reac_master_emit e = slot(&m, &idx, &cnt);
-		if (e != REAC_M_EMIT_PROBE)
+		if (e != REAC_M_EMIT_SCENE_CHUNK)
 			continue;
 		build_and_stamp(&m, f, e, idx, planar);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
-		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY probe */
-		if (m.probe_idx == 30) {                  /* zeros special */
+		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY chunk */
+		int chunk = m.scene_step - 1;             /* 0-based index into the body */
+		if (chunk == 30) {                        /* the zeros run */
 			CHK(f[49] == 0xdd);
 			specials_seen++;
-		} else if (m.probe_idx == 31) {           /* MAC special: OUR identity */
+		} else if (chunk == 31) {                 /* carries a MAC: OURS, substituted */
 			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
 			specials_seen++;
-		} else if (m.probe_idx == 32) {           /* "SYSP" inventory token (M-200: block idx 23 -> frame 39) */
+		} else if (chunk == 32) {                 /* the "SYSP" token */
 			CHK(f[39] == 'S' && f[40] == 'Y' && f[41] == 'S' && f[42] == 'P');
 			specials_seen++;
-		} else if (m.probe_idx == 33) {           /* "SCEN" inventory token */
+		} else if (chunk == 33) {                 /* the "SCEN" token */
 			CHK(f[33] == 'S' && f[34] == 'C' && f[35] == 'E' && f[36] == 'N');
 			specials_seen++;
 		}
@@ -425,6 +472,7 @@ int main(void)
 	CHK(m.state == REAC_M_PROBING && m.box_seen == 1);
 
 	/* JOIN -> GRANTING on that exact event */
+	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	CHK(memcmp(m.box_mac, BOX, 6) == 0);
@@ -494,9 +542,9 @@ int main(void)
 				CHK(i - ann_slot == FPS);           /* cfea at exactly 1/s */
 			ann_slot = i;
 			break;
-		case REAC_M_EMIT_SUB01:    e_s1++; break;
-		case REAC_M_EMIT_SUB02:    e_s2++; break;
-		case REAC_M_EMIT_PROBE:    e_pr++; break;
+		case REAC_M_EMIT_SCENE_HEAD:  e_s1++; break;
+		case REAC_M_EMIT_SCENE_TAIL:  e_s2++; break;
+		case REAC_M_EMIT_SCENE_CHUNK: e_pr++; break;
 		case REAC_M_EMIT_FILLER:   break;
 		default: CHK(0);                            /* no grant while established */
 		}
@@ -520,6 +568,7 @@ int main(void)
 	reac_master_init(&m, SRC, &idle, FPS);
 	cnt = 0;
 	slot(&m, NULL, &cnt);                        /* IDLE -> PROBING on first slot */
+	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	reac_master_set_box(&m, 16, 8);              /* the box declares itself */
@@ -548,6 +597,7 @@ int main(void)
 
 	/* JOIN from a second MAC while established -> mac-change, re-grant the new */
 	establish(&m, &cnt, BOX);
+	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	CHK(m.drop_reason == REAC_M_DROP_MAC_CHANGE);
@@ -583,6 +633,7 @@ int main(void)
 
 	/* a DIFFERENT box's JOIN mid-dwell still restarts the window (new box). */
 	static const uint8_t BOX3[6] = { 0x00, 0x40, 0xab, 0x03, 0x03, 0x03 };
+	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX3, ZONEA_JOIN) == 1);
 	CHK(m.grant_ticks == 0 && m.state == REAC_M_GRANTING);
 	CHK(memcmp(m.box_mac, BOX3, 6) == 0);
@@ -704,6 +755,7 @@ int main(void)
 		 * ignores every head-amp record (reac_grant.h, live 2026-07-17). Drive the
 		 * ENTIRE dwell and assert what actually reaches the wire: nothing. */
 		slot(&mb, NULL, &bc);                       /* IDLE -> PROBING */
+		deliver_scene(&mb, &bc);
 		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 		CHK(mb.state == REAC_M_GRANTING);
 		CHK(reac_master_has_box(&mb) == 0);         /* the JOIN said nothing */
@@ -753,6 +805,7 @@ int main(void)
 		CHK(reac_master_has_box(&mb) == 0);
 		CHK(mb.alloc.width == 0 && mb.grant_burst_len == 0);
 		/* a DIFFERENT box joins and declares 16 inputs: base moves to 0x20 */
+		deliver_scene(&mb, &bc);
 		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
 		reac_master_set_box(&mb, 16, 8);
 		CHK(mb.alloc.base == 0x20 && mb.alloc.width == 16);
@@ -770,6 +823,7 @@ int main(void)
 		uint16_t uc = 0;
 		reac_master_init(&mu, SRC, &idle, FPS);
 		slot(&mu, NULL, &uc);
+		deliver_scene(&mu, &uc);
 		CHK(reac_master_rx(&mu, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 		int held_grants = 0;
 		for (int i = 0; i <= mu.grant_dwell; i++) {
@@ -790,6 +844,7 @@ int main(void)
 		uint16_t nc = 0;
 		reac_master_init(&mn, SRC, &idle, FPS);
 		slot(&mn, NULL, &nc);
+		deliver_scene(&mn, &nc);
 		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 		CHK(reac_master_rx(&mn, REAC_M_RX_BOX_UNICAST, BOX, NULL) == 0);
 		CHK(mn.state == REAC_M_GRANTING);           /* held, NOT established */

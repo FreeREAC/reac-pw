@@ -178,8 +178,23 @@ int main(void)
 		memcpy(join_blk, bf + 18, 32);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_joins == 1 && p3.rx_box_ctrl == 1);
+		/* The JOIN is HELD until the scene push completes (reac_master.c): the box
+		 * has only a partial scene until the final chunk, and granting into that is
+		 * what left it in reassembly for the life of the link. Drive the cadence to
+		 * the end of one transfer and the held edge is taken. */
+		CHK(p3.master.state == REAC_M_PROBING);
+		CHK(p3.master.join_held == 1);
+		{
+			uint16_t c; int ix;
+			long guard = 0;
+			while ((p3.master.scene_complete == 0 || p3.master.scene_inflight) &&
+			       guard++ < 4L * p3.master.cycle_len)
+				(void)reac_master_next(&p3.master, &c, &ix);
+			CHK(p3.master.scene_complete == 1);
+		}
+		p3.fsm_state = p3.master.state;
 		CHK(p3.fsm_state == REAC_M_GRANTING);
-		CHK(p3.grant_attempts == 1);
+		CHK(p3.master.grant_attempts == 1);
 
 		/* SELF-CONFIGURATION FROM THE WIRE, on the real ingest path (2026-08-05).
 		 * The cold-connect above carries no width, so at this instant the master

@@ -62,8 +62,8 @@ static int check_all_checksums(const struct reac_master *m)
 {
 	uint8_t f[REAC_FRAME_BYTES];
 	const enum reac_master_emit kinds[] = {
-		REAC_M_EMIT_PROBE, REAC_M_EMIT_SUB01, REAC_M_EMIT_SUB02,
-		REAC_M_EMIT_ANNOUNCE,
+		REAC_M_EMIT_SCENE_CHUNK, REAC_M_EMIT_SCENE_HEAD,
+		REAC_M_EMIT_SCENE_TAIL, REAC_M_EMIT_ANNOUNCE,
 	};
 	for (unsigned k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
 		stamp(m, f, kinds[k], 0);
@@ -84,13 +84,16 @@ static const uint8_t *gold_probe(int phase, uint8_t sub)
 	return NULL;
 }
 
-/* PROBE ROTATION + FILLER-descriptor tracking (#130) — the behaviour that decides
- * whether a real box will talk to us at all. Drive the master and assert:
- *   - the emitted probes follow the live M-200's rotation: phase 0,6,2,8,4
- *     (step +6 mod 10), each phase emitted TWICE, sub 0x02 while hunting;
- *   - each emitted probe is BYTE-EXACT vs the captured M-200 block;
- *   - every FILLER between probes carries 16x "00 <that probe's checksum>".
- * Our old code froze one probe phase forever, which froze the descriptor too. */
+/* SCENE-CHUNK SEQUENCE + FILLER-descriptor tracking — the behaviour that decides
+ * whether a real box will talk to us at all. The burst slots carry the body of
+ * the scene push, so the "rotation" an earlier RE described is just the body's
+ * own periodicity: 26 bytes is 6 mod 10, so each chunk steps the pattern by 6 and
+ * the walk is 6,2,8,4,0 — ONE per chunk, not two. The doubling was the mirrored
+ * capture repeating every frame. 336 of the 341 chunks are one of the ten blocks
+ * transcribed off the live M-200, so the goldens stay the oracle. Assert:
+ *   - the emitted chunks walk the body in order, byte-exact vs those captures;
+ *   - consecutive chunks are never identical (they were, under the old model);
+ *   - every FILLER between chunks carries 16x "00 <that chunk's checksum>". */
 static int test_probe_rotation(void)
 {
 	uint8_t f[REAC_FRAME_BYTES];
@@ -98,7 +101,7 @@ static int test_probe_rotation(void)
 	struct reac_master m;
 	reac_master_init(&m, OUR_MAC, &idle, 8000);
 
-	const int expect[10] = { 0, 0, 6, 6, 2, 2, 8, 8, 4, 4 };
+	const int expect[10] = { 6, 2, 8, 4, 0, 6, 2, 8, 4, 0 };
 	int np = 0, fillers_checked = 0;
 	uint8_t cur_desc = 0;
 	int have = 0;
@@ -110,7 +113,7 @@ static int test_probe_rotation(void)
 		reac_downstream_build(f, NULL, 0, REAC_SAMPLES_PER_PKT, cnt, OUR_MAC);
 		reac_master_stamp(&m, f, e, idx);
 
-		if (e == REAC_M_EMIT_PROBE) {
+		if (e == REAC_M_EMIT_SCENE_CHUNK) {
 			const uint8_t *g = gold_probe(expect[np], 0x02);
 			CHK(g != NULL);
 			CHK(memcmp(f + 16, g, 34) == 0);      /* byte-exact vs the live M-200 */

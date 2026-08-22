@@ -45,11 +45,6 @@
  *       reac_master_set_box re-allocates + rebuilds it on box recognition.
  * ------------------------------------------------------------------------- */
 
-/* The two fixed M-300 control constants (byte-exact, checksum-valid). The PROBE is
- * NOT a constant — it rotates; see gen_probe(). */
-static const uint8_t SUB01_BLK[34] = { 0xcd, 0xea, 0x01, 0x01, 0x00, 0x18, 0x00, 0x22, 0xc8, 0x31, 0x32, 0x33, 0x34, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x80, 0x02, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa7 };
-static const uint8_t SUB02_BLK[34] = { 0xcd, 0xea, 0x01, 0x02, 0x00, 0x0e, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe7 };
-
 /* The cfea master-MAC field sits at template idx 11..16 (block [9:15]). */
 #define ANNOUNCE_MAC_IDX 11
 
@@ -60,57 +55,6 @@ static void stamp_block_cksum(uint8_t blk[34])
 {
 	reac_ctrl_block_cksum_stamp(blk + 2);
 }
-
-/* ---- PROBE: the rotating hunt sequence (#130) -----------------------------
- * Measured live off an M-200 driving an S-1608 (2026-07-11): the cdea 01 00 001a
- * probe's 27-byte payload is a sliding window over the period-10 sequence
- *   [ 00 00 00 01 00 00 00 00 00 SUB ]
- * with SUB = 0x02 while hunting, 0x03 once established. The phase advances +6
- * (mod 10) after every 2 emissions, yielding the observed 0,6,2,8,4 rotation.
- * All 10 rotating probe blocks in the capture reproduce exactly under this model.
- * Our old code replayed ONE frozen phase (6/0x02, checksum 0xdd) forever. */
-#define REAC_PROBE_PERIOD     10
-#define REAC_PROBE_PHASE_STEP  6   /* phase += 6 (mod 10) -> 0,6,2,8,4 */
-#define REAC_PROBE_REPEAT      2   /* emissions per phase before advancing */
-#define REAC_PROBE_PAYLOAD    27   /* block[4:31] */
-
-static void gen_probe(uint8_t blk[34], int phase, uint8_t sub)
-{
-	const uint8_t per[REAC_PROBE_PERIOD] = { 0, 0, 0, 1, 0, 0, 0, 0, 0, sub };
-	memset(blk, 0, 34);
-	blk[0] = 0xcd; blk[1] = 0xea;
-	blk[2] = 0x01; blk[3] = 0x00;   /* cdea 01 00      */
-	blk[4] = 0x00; blk[5] = 0x1a;   /* BE len 0x001a   */
-	for (int i = 0; i < REAC_PROBE_PAYLOAD; i++)
-		blk[6 + i] = per[(phase + i) % REAC_PROBE_PERIOD];
-	stamp_block_cksum(blk);         /* -> blk[33] */
-}
-
-/* The 4 INVENTORY SPECIALS (#130): every probe burst carries, at in-burst probe
- * indices 30..33, four one-off probe variants — measured on the M-300/S-1608
- * establish capture at exactly those indices in EVERY burst (11/11), and present
- * in the M-200 corpora too. Bytes verbatim from the M-300 (checksum-valid); the
- * MAC special embeds the master's OWN MAC at block[7:13] (template [9:15]) — we
- * substitute OURS and re-checksum. A master that never sends these is another
- * tell of a dead downstream. */
-#define REAC_PROBE_SPECIAL_FIRST 30
-#define REAC_PROBE_SPECIAL_COUNT  4
-#define PROBE_SPECIAL_MAC_IDX     9   /* template idx of the 6-byte MAC */
-static const uint8_t PROBE_SPECIALS[REAC_PROBE_SPECIAL_COUNT][34] = {
-	/* zeros-tail variant (cksum dd) */
-	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,
-	  0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xdd },
-	/* our-MAC variant — M-200-exact template (c9:cc:03 at [9:15]); MAC_IDX=9
-	 * substitutes OUR MAC + recomputes the cksum, so [9:15]/[33] are placeholders. */
-	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x00,0x40,0xab,0xc9,0xcc,0x03,0x00,
-	  0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0x6c },
-	/* "SYSP" variant — M-200-exact (SYSP at block idx 23; was shifted +1) */
-	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x53,0x59,0x53,0x50,0x01,0x00,0x00,0x00,0x00,0x00,0x97 },
-	/* "SCEN" variant — M-200-exact (SCEN at block idx 17) */
-	{ 0xcd,0xea,0x01,0x00,0x00,0x1a,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-	  0x00,0x53,0x43,0x45,0x4e,0x01,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0xb7 },
-};
 
 /* The ENROLL / prepare-to-grant frame (cdea 01 03 000d), byte-exact from a real
  * M-200 (matrix-m200-s0808): emitted ONCE ~1.7 s before the grant burst, on the
@@ -223,34 +167,20 @@ int reac_mixer_resolve_rate(const struct reac_mixer_profile *mixer, int requeste
 	return requested;
 }
 
-/* Build the probe for the CURRENT burst position + link state, publish its
- * checksum as the FILLER descriptor (every FILLER until the next probe carries
- * it — byte-verified against the M-200: P:de -> F:de x16 -> P:dd -> F:dd x16 ...),
- * then advance the rotation. m->probe_idx (set by the cadence) selects the 4
- * inventory specials at in-burst indices 30..33; all other indices emit the
- * rotating hunt probe. Called when the cadence decides to emit a PROBE, BEFORE
- * reac_master_stamp reads m->probe_blk. */
-static void probe_prepare(struct reac_master *m)
+/* Build the scene step the cadence selected (m->scene_step) and publish its
+ * checksum as the FILLER descriptor — every FILLER until the next step carries it,
+ * byte-verified against the M-200 (C:de -> F:de x16 -> C:dd -> F:dd x16 ...).
+ * Called BEFORE reac_master_stamp reads m->scene_blk. A step that cannot be built
+ * leaves the previous block in place rather than putting a malformed one on the
+ * wire; the transfer's completion accounting is the cadence's job, not this. */
+static void scene_prepare(struct reac_master *m)
 {
-	int sp = m->probe_idx - REAC_PROBE_SPECIAL_FIRST;
-	if (sp >= 0 && sp < REAC_PROBE_SPECIAL_COUNT) {
-		memcpy(m->probe_blk, PROBE_SPECIALS[sp], 34);
-		if (sp == 1) {   /* the MAC special advertises OUR identity */
-			memcpy(m->probe_blk + PROBE_SPECIAL_MAC_IDX, m->src, 6);
-			stamp_block_cksum(m->probe_blk);
-		}
-		m->filler_desc = m->probe_blk[33];
-		return;          /* the rotation is not advanced by a special */
-	}
-
-	uint8_t sub = (m->state == REAC_M_ESTABLISHED) ? 0x03 : 0x02;
-	gen_probe(m->probe_blk, m->probe_phase, sub);
-	m->filler_desc = m->probe_blk[33];
-
-	if (++m->probe_repeat >= REAC_PROBE_REPEAT) {
-		m->probe_repeat = 0;
-		m->probe_phase = (m->probe_phase + REAC_PROBE_PHASE_STEP) % REAC_PROBE_PERIOD;
-	}
+	uint8_t blk[34];
+	if (reac_ctrl_build_scene_step(blk, m->scene, sizeof m->scene,
+	                               m->scene_step) != 0)
+		return;
+	memcpy(m->scene_blk, blk, 34);
+	m->filler_desc = m->scene_blk[33];
 }
 
 /* Generate the cfea master-announce from the console cfg + OUR src MAC.
@@ -544,12 +474,16 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	set_enroll_width(m->enroll_blk, REAC_ENROLL_DEFAULT_WIDTH);
 	m->enroll_pending = 0;
 
-	/* Seed the probe rotation at phase 0 / sub 0x02 (hunting) so FILLER frames
-	 * carry a valid descriptor from the very first slot, before any probe fires. */
-	m->probe_phase  = 0;
-	m->probe_repeat = 0;
-	gen_probe(m->probe_blk, m->probe_phase, 0x02);
-	m->filler_desc = m->probe_blk[33];
+	/* The body we push. The placeholder is another desk's scene (reac_scene.h);
+	 * OUR MAC replaces the capturing desk's inside it, because on-wire identity
+	 * must equal the L2 source everywhere else we advertise it. */
+	memcpy(m->scene, reac_scene_placeholder, REAC_SCENE_BYTES);
+	reac_ctrl_scene_set_mac(m->scene, sizeof m->scene, m->src);
+
+	/* Seed the descriptor from the header so FILLER frames carry a valid one from
+	 * the very first slot, before any step fires. */
+	m->scene_step = 0;
+	scene_prepare(m);
 }
 
 /* Allocate the fabric slots for the autodetected box (recognizer #137) and
@@ -659,13 +593,17 @@ void reac_master_set_headamp_src(struct reac_master *m,
 	rebuild_grant_sweep(m, m->alloc.width);
 }
 
-/* Restart the control cycle at slot 0 (the burst head — the first slot emits a
- * probe, exactly like a real master opening a hunt burst). cfea free-runs on its
- * own ~1/s tick, phase-offset so it lands in the pause region, never on a burst
- * probe slot. */
+/* Restart the control cycle AT THE HEADER SLOT, so a fresh courtship opens with
+ * step 0 and the burst that follows is the body of a transfer we actually
+ * started. The cycle's geometry puts sub01 five slots before the wrap and the
+ * chunks immediately after it, which is the desk's own order; starting at slot 0
+ * instead would put 341 chunks and a final on the wire with no header in front of
+ * them — bytes the box can only discard, and a transfer that could never be
+ * counted complete. cfea free-runs on its own ~1/s tick, phase-offset so it lands
+ * in the pause region, never on a chunk slot. */
 static void reset_control_cadence(struct reac_master *m)
 {
-	m->cycle_pos       = 0;
+	m->cycle_pos       = m->sub01_off;
 	m->announce_tick   = (3 * m->fps) / 4;
 	m->chanmap_cursor  = 0;
 	m->est_chanmap_tick = m->fps / 4;   /* offset ~0.5 s from cfea so the two
@@ -688,6 +626,11 @@ static void enter_probing(struct reac_master *m)
 	int backward = (m->state != REAC_M_IDLE);
 	m->state = REAC_M_PROBING;
 	reset_control_cadence(m);
+	/* A fresh courtship pushes a fresh scene: nothing delivered, nothing in
+	 * flight, no edge held over from the last one. */
+	m->scene_inflight = 0;
+	m->scene_complete = 0;
+	m->join_held      = 0;
 	if (backward)
 		reac_master_forget_box(m);
 	else
@@ -804,6 +747,33 @@ static int grant_delivered(const struct reac_master *m)
 	       m->grant_dwell + m->grant_burst_len * m->grant_stride + 1;
 }
 
+/* Is the scene push in a state where the box has the WHOLE scene? True only
+ * between a completed transfer and the next header. The box completes reassembly
+ * on the final chunk and runs its state-4 commit there; until then it is holding
+ * a partial scene and a grant lands on a box that has not committed anything. */
+static int scene_transfer_ready(const struct reac_master *m)
+{
+	return m->scene_complete > 0 && !m->scene_inflight;
+}
+
+/* Park a forward edge that arrived mid-transfer. The box JOINs in milliseconds
+ * against the 2.694 s cycle, so without this the transfer is cancelled on
+ * essentially every establishment and the box never leaves reassembly. A real
+ * desk holds here too: 5.15 s between the box's first cold-connect and the first
+ * grant block on handshake-ctrl-2026-07-11, with two whole transfers inside it.
+ * Only the LATEST held event survives — a box that retries its JOIN on its own
+ * grid is repeating itself, not queueing work. */
+static void hold_join(struct reac_master *m, enum reac_master_rx_event ev,
+                      const uint8_t box_src[6], const uint8_t blk32[32])
+{
+	m->join_held = 1;
+	m->join_ev   = ev;
+	memcpy(m->join_src, box_src, 6);
+	m->join_has_blk = blk32 != NULL;
+	if (blk32)
+		memcpy(m->join_hold_blk, blk32, 32);
+}
+
 /* Execute one edge of the decision table (reac_master_fsm_step): latch the
  * drop reason, then run the entry action for the target state. box_src/blk32
  * feed enter_granting only (the JOIN latch; NULL blk32 for the warm-relink
@@ -821,6 +791,28 @@ static void apply_edge(struct reac_master *m, const struct reac_master_edge *e,
 	case REAC_M_ESTABLISHED: enter_established(m);                  break;
 	case REAC_M_IDLE:        break;   /* never a transition target */
 	}
+}
+
+/* Take the edge that was held for the transfer, now that the final chunk has
+ * gone out. Re-derives the decision from the parked event rather than caching a
+ * verdict: the guards (same-box, grant-delivered) are read at the moment the edge
+ * is actually taken, so a box that changed underneath us is classified afresh. */
+static void release_held_join(struct reac_master *m)
+{
+	enum reac_master_rx_event ev = m->join_ev;
+	const uint8_t *blk = m->join_has_blk ? m->join_hold_blk : NULL;
+	uint8_t src[6];
+	memcpy(src, m->join_src, 6);
+	m->join_held = 0;
+
+	enum reac_master_ev dev =
+		reac_master_fsm_classify(ev, blk != NULL,
+		                         memcmp(src, m->box_mac, 6) == 0,
+		                         grant_delivered(m));
+	struct reac_master_edge e = reac_master_fsm_step(m->state, dev);
+	apply_edge(m, &e, src,
+	           (dev == REAC_M_EV_JOIN_NEW || dev == REAC_M_EV_JOIN_SAME)
+	               ? blk : NULL);
 }
 
 int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
@@ -853,9 +845,23 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 		                         memcmp(box_src, m->box_mac, 6) == 0,
 		                         grant_delivered(m));
 	struct reac_master_edge e = reac_master_fsm_step(m->state, dev);
-	apply_edge(m, &e, box_src,
-	           (dev == REAC_M_EV_JOIN_NEW || dev == REAC_M_EV_JOIN_SAME)
-	               ? blk32 : NULL);
+	const uint8_t *jblk = (dev == REAC_M_EV_JOIN_NEW || dev == REAC_M_EV_JOIN_SAME)
+	                          ? blk32 : NULL;
+
+	/* THE PUSH RUNS TO COMPLETION BEFORE WE PROCEED. A forward edge out of PROBING
+	 * that lands before the box has the whole scene is HELD, not dropped and not
+	 * honoured: reac_master_next takes it the slot after the final chunk. This is a
+	 * deferral of at most one cycle (~2.7 s at 48k), far inside the box's own JOIN
+	 * retry grid and an order of magnitude inside the ~27 s a real M-200 holds a
+	 * cold box ungranted. It is NOT an auto-advance — a JOIN is still required to
+	 * leave PROBING, so #130's "no forward timer" property is intact. */
+	if (e.transitioned && m->state == REAC_M_PROBING &&
+	    e.next == REAC_M_GRANTING && !scene_transfer_ready(m)) {
+		hold_join(m, ev, box_src, jblk);
+		return 0;
+	}
+
+	apply_edge(m, &e, box_src, jblk);
 	return e.transitioned;
 }
 
@@ -936,18 +942,24 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 	/* HUNT cadence (PROBING; byte-measured on the M-300/S-1608 establish capture):
 	 * the probe burst + sub02/chanmap/sub01 cycle events + cfea free-running. */
 	if (pos <= m->burst_end && pos % m->probe_stride == 0) {
-		m->probe_idx = pos / m->probe_stride;  /* specials key off this */
-		return REAC_M_EMIT_PROBE;
+		/* Chunk N of the push. Step 0 (the header) went out at sub01_off five
+		 * slots before this cycle opened, so the burst carries steps 1..341. */
+		m->scene_step = 1 + pos / m->probe_stride;
+		return REAC_M_EMIT_SCENE_CHUNK;
 	}
-	if (pos == m->sub02_off)
-		return REAC_M_EMIT_SUB02;
+	if (pos == m->sub02_off) {
+		m->scene_step = REAC_SCENE_STEPS - 1;   /* the final chunk */
+		return REAC_M_EMIT_SCENE_TAIL;
+	}
 	if (pos == m->chanmap_off) {
 		*idx = m->chanmap_cursor;
 		m->chanmap_cursor = (m->chanmap_cursor + 1) % m->chanmap_nframes;
 		return REAC_M_EMIT_CHANMAP;
 	}
-	if (pos == m->sub01_off)
-		return REAC_M_EMIT_SUB01;
+	if (pos == m->sub01_off) {
+		m->scene_step = 0;                      /* the header opens a transfer */
+		return REAC_M_EMIT_SCENE_HEAD;
+	}
 	if (m->announce_tick >= m->fps) {
 		m->announce_tick = 0;
 		return REAC_M_EMIT_ANNOUNCE;
@@ -1104,9 +1116,25 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 
 	/* Build this slot's probe (current phase + link-state sub) and publish its
 	 * checksum as the FILLER descriptor, then advance the rotation. Must run
-	 * BEFORE reac_master_stamp reads m->probe_blk / m->filler_desc. */
-	if (emit == REAC_M_EMIT_PROBE)
-		probe_prepare(m);
+	 * BEFORE reac_master_stamp reads m->scene_blk / m->filler_desc. */
+	if (emit == REAC_M_EMIT_SCENE_HEAD || emit == REAC_M_EMIT_SCENE_CHUNK ||
+	    emit == REAC_M_EMIT_SCENE_TAIL)
+		scene_prepare(m);
+
+	/* Transfer accounting, and the deferred forward edge. The header opens a
+	 * transfer and the final closes one; a forward transition that arrived
+	 * mid-transfer was HELD (reac_master_rx) and is taken here, the slot after the
+	 * box has the whole scene. Retry is implicit and is what the desk's own loop
+	 * does: an incomplete transfer is simply re-sent from the top by the next
+	 * cycle, because the header is what opens one. */
+	if (emit == REAC_M_EMIT_SCENE_HEAD) {
+		m->scene_inflight = 1;
+	} else if (emit == REAC_M_EMIT_SCENE_TAIL && m->scene_inflight) {
+		m->scene_inflight = 0;
+		m->scene_complete++;
+		if (m->join_held)
+			release_held_join(m);
+	}
 
 	if (tmpl_idx)
 		*tmpl_idx = idx;
@@ -1129,8 +1157,8 @@ static void apply_block(uint8_t *frame, const uint8_t blk[34])
  *
  * SOLVED 2026-07-11 (live M-200 + S-1608 on the rig, #130). `xx` is NOT telemetry
  * and NOT a per-console constant — it is the CHECKSUM OF THE CURRENT PROBE. The
- * probe rotates (gen_probe), and every FILLER emitted until the next probe carries
- * that probe's checksum, byte-verified on the wire:
+ * block that rotates is the SCENE CHUNK, and every FILLER emitted until the next
+ * chunk carries that chunk's checksum, byte-verified on the wire:
  *
  *   P:de P:de  F:de x16   P:dd P:dd  F:dd x16   P:dc P:dc  F:dc x10  ...
  *
@@ -1159,14 +1187,11 @@ int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
 		 * which is exactly what a real master repeats there (#130). */
 		stamp_filler_descriptor(frame, m->filler_desc);
 		return 0;
-	case REAC_M_EMIT_PROBE:
-		apply_block(frame, m->probe_blk); /* the ROTATING probe (probe_prepare) */
-		return 0;
-	case REAC_M_EMIT_SUB01:
-		apply_block(frame, SUB01_BLK);   /* the fixed M-300 cdea 01 01 */
-		return 0;
-	case REAC_M_EMIT_SUB02:
-		apply_block(frame, SUB02_BLK);   /* the fixed M-300 cdea 01 02 */
+	case REAC_M_EMIT_SCENE_HEAD:
+	case REAC_M_EMIT_SCENE_CHUNK:
+	case REAC_M_EMIT_SCENE_TAIL:
+		/* One step of the push, built by reac_ctrl for m->scene_step. */
+		apply_block(frame, m->scene_blk);
 		return 0;
 	case REAC_M_EMIT_GRANT:
 		/* One block of the GENERATED enrollment sweep (reac_grant_build_sweep over
