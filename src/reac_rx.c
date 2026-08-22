@@ -267,6 +267,7 @@ static void *rx_loop(void *arg)
 			rx->ppm_have_last = 0;
 			rx->ppm_win_frames = 0;
 			atomic_store_explicit(&rx->ppm_error_milli, 0, memory_order_relaxed);
+			reac_pace_watch_reset(&rx->pace, mono_ns());
 		}
 		if (have_counter) {
 			uint16_t gap = reac_counter_gap(last_counter, counter);
@@ -279,6 +280,27 @@ static void *rx_loop(void *arg)
 		uint64_t now = mono_ns();
 		update_ppm(rx, counter, now);
 		feed_frame(rx, mode, frame, (size_t)n);
+
+		/* THE PACE ALARM. Not gated on REAC_DEBUG: a stream labelled at twice the
+		 * rate it carries raises no xrun and no error — PipeWire believes the label
+		 * — so this is the only thing that will ever say it. Measured on the rig
+		 * 2026-08-22 with --rate 96000: a byte-perfect 7996 pps downstream and both
+		 * boxes answering 4000 pps, published as 96000 Hz over 48 000 samples/s
+		 * with gaps=0. Rate-limited inside the watcher. */
+		if (reac_pace_watch_frame(&rx->pace, now)) {
+			int obs = reac_pace_watch_observed(&rx->pace);
+			fprintf(stderr,
+			        "reac-pw: WIRE PACE MISMATCH — configured %d Hz (%d pps) but the "
+			        "segment is carrying %d Hz (%d pps) from "
+			        "%02x:%02x:%02x:%02x:%02x:%02x. The published node rate is a LIE "
+			        "at this point: audio is being labelled %.2gx its true rate. "
+			        "Set --rate %d, or find why the box did not follow.\n",
+			        rx->sample_rate, rx->sample_rate / REAC_SAMPLES_PER_PKT,
+			        obs, obs / REAC_SAMPLES_PER_PKT,
+			        rx->up_src[0], rx->up_src[1], rx->up_src[2],
+			        rx->up_src[3], rx->up_src[4], rx->up_src[5],
+			        (double)rx->sample_rate / (double)obs, obs);
+		}
 
 		/* Opt-in RX telemetry (REAC_DEBUG) — the decode is invisible otherwise;
 		 * this is how you tell "gate rejecting" (frames_other climbs) from
@@ -332,6 +354,12 @@ int reac_rx_open(struct reac_rx *rx, const struct reac_rx_cfg *cfg, struct reac_
 		 * would need timestamps; for pcap we accept forced_rate or default 48k. */
 		rx->sample_rate = 48000;
 	}
+
+	/* `--rate` arrives as cfg->forced_rate and SKIPS the detection above, so nothing
+	 * downstream ever compared the configured pace against the wire. The watcher is the
+	 * comparison, and it runs whichever way sample_rate was arrived at: a detected rate
+	 * can also go stale when a box is swapped for one that paces differently. */
+	reac_pace_watch_init(&rx->pace, rx->sample_rate);
 
 	/* ~250 ms of ring at the recovered rate, power-of-two rounded inside init */
 	uint32_t depth = (uint32_t)(rx->sample_rate / 4);
