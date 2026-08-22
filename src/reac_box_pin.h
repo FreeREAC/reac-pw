@@ -25,7 +25,8 @@
  * Where the two disagree, the WIRE WINS and says so exactly once
  * ({@link reac_box_pin_notice}, which survived the retirement for this purpose).
  *
- * THE DISAGREEMENT IS ALSO A TEST AFFORDANCE, deliberately (operator, 2026-08-22). Pinning
+ * THE DISAGREEMENT IS THE POINT, and it is what earns this flag its keep (operator,
+ * 2026-08-22). Pinning
  * a box that is NOT the one on the segment reproduces, on demand and without unplugging
  * anything, the case openmixer's REBIND has to survive: a patch was built expecting one box
  * and a different one turned up. `--box s0808` on a segment carrying an S-1608 starts the
