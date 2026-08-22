@@ -74,6 +74,18 @@
 #define REAC_PROP_DISCO_SEQ     "reac.discovery.seq"      /* change counter; frozen = wedged */
 #define REAC_PROP_DISCO_DEVICES "reac.discovery.devices"  /* JSON array snapshot */
 
+/* THE SEGMENT AGGREGATE (arbitration spec §1). Sightings say what was HEARD; these say what
+ * the segment IS, which is the thing a consumer actually needs and which every reader was
+ * otherwise re-deriving. They change together with reac.discovery.seq, so a reader that
+ * trusts the seq gets a consistent set. */
+#define REAC_PROP_MASTER_STATE  "reac.master.state"   /* us | foreign | none            */
+#define REAC_PROP_MASTER_MAC    "reac.master.mac"     /* the driving master, or "none"  */
+#define REAC_PROP_PACE_SOURCE   "reac.pace.source"    /* who owns the WIRE pace         */
+/* A foreign master is live while WE are established — reported, never acted on (spec §6 Q1:
+ * yielding drops a box mid-audio, holding breaks the one-master law, and the choice is the
+ * operator's). "1" or "0". */
+#define REAC_PROP_MASTER_CONFLICT "reac.master.conflict"
+
 /* reac-pw only ever LISTENS: it reports frames its promiscuous socket already receives
  * and transmits nothing to discover. There is deliberately no "probing" value — active
  * probing a live segment could disturb a joined box. */
