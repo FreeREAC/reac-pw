@@ -464,6 +464,36 @@ static int grant_dwell_override_s(void)
 	return cached;
 }
 
+/* TEST KNOB (default UNSET = today's behaviour, byte-identical): REACPW_NO_ENROLL=1
+ * suppresses the pre-grant ENROLL (cdea 01 03 000d) for a box whose width is
+ * already KNOWN — the frame `reac_master_next` emits once at GRANTING tick 0 and
+ * again mid-dwell if recognition lands after tick 0 (both below).
+ *
+ * Motivated by a wire differential across 82 captures (2026-08-22): no real desk
+ * ever sends this ENROLL to an S-1608 (0/11 sessions), while every S-0808 (9/10)
+ * and S-4000S (5/5) session gets one — reac-pw sends it to all three today.
+ *
+ * A SWITCH, not a new default: the rig's S-1608 bank 1 is currently ESTABLISHED
+ * with this ENROLL in flight, and a SUB-pair was previously proven harmful on the
+ * wire to this same box, so removing it unconditionally risks the one bank that
+ * already works. Setting this only ever REMOVES a frame that the has-box path
+ * would otherwise send — the surrounding cadence, ticks and dwell timing are
+ * unchanged either way, so the two runs differ by exactly this one frame's
+ * absence. Does not touch the wide-safe arm frame emitted before any box is
+ * recognized at all (a few lines below, gated on `!reac_master_has_box`): that
+ * frame runs before the box's model is known, so it is out of scope for a
+ * per-model question. Read once + cached like the file's other getenv knobs. */
+static int no_enroll(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_NO_ENROLL");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
 void reac_master_init(struct reac_master *m, const uint8_t src[6],
                       const struct reac_console_cfg *cfg, int fps)
 {
@@ -1025,7 +1055,8 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			break;
 		}
 		if (m->grant_ticks == 0) {
-			emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
+			if (!no_enroll())
+				emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
 		} else if (m->grant_ticks <= m->grant_dwell) {
 			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
 			 * config-announce is parsed ~1ms into GRANTING, see reac_pacer.c): deliver
@@ -1035,7 +1066,8 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			 * frame, taken from an announce/filler slot — the burst is unchanged. */
 			if (m->enroll_pending) {
 				m->enroll_pending = 0;
-				emit = REAC_M_EMIT_ENROLL;
+				if (!no_enroll())
+					emit = REAC_M_EMIT_ENROLL;
 			} else if (granting_chanmap_due(m, &idx)) {
 				emit = REAC_M_EMIT_CHANMAP;
 			} else
