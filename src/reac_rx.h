@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include "reac_ring.h"
+#include "reac_pace_watch.h"
 /* REAC_FRAME_BYTES_OHRCA + reac_frame_clean_len(): the OHRCA +2 length rule
  * moved to its one home in libreac (>= 0.3.0) — it applies to both directions,
  * not just this RX gate. What the 2 bytes are is still open (#80); the rule is
@@ -56,6 +57,13 @@ struct reac_rx {
 	struct reac_rx_cfg cfg;
 	struct reac_ring *ring;       /* shared with the source node */
 	int sample_rate;              /* recovered (snapped) REAC rate */
+
+	/* Does the wire carry the pace we CLAIM it does? `sample_rate` above is what we
+	 * CONFIGURED and what the source node publishes to PipeWire; this watches what
+	 * actually arrives and says so when they disagree. Fed at feed_frame — AFTER the
+	 * duplicate guard — so it measures the sample rate genuinely delivered to the
+	 * stream, which is what the published rate is a claim about. */
+	struct reac_pace_watch pace;
 
 	pthread_t thread;
 	_Atomic int running;

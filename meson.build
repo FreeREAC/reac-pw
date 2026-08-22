@@ -75,6 +75,7 @@ reac_pw_src = [
   'src/main.c',
   'src/reac_ring.c',
   'src/reac_rx.c',
+  'src/reac_pace_watch.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
@@ -142,7 +143,8 @@ test('reac_upstream', upstream_test)
 # Runs the real feeder thread over a temp pcap that interleaves both streams
 # (synthetic 40-ch broadcast + the captured box return + a second box).
 rx_gate_test = executable('test_reac_rx_gate',
-  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c'],
+  ['tests/test_reac_rx_gate.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_pace_watch.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
@@ -153,7 +155,8 @@ test('reac_rx_gate', rx_gate_test)
 # exactly one twin dropped per frame, single-cadence ring, and a negative —
 # distinct frames at doubled cadence pass untouched (dup == 0).
 rx_dup_test = executable('test_reac_rx_dup',
-  ['tests/test_reac_rx_dup.c', 'src/reac_rx.c', 'src/reac_ring.c'],
+  ['tests/test_reac_rx_dup.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_pace_watch.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_dup', rx_dup_test)
@@ -366,6 +369,17 @@ mac_test = executable('test_reac_mac',
   ['tests/test_reac_mac.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')])
 test('reac_mac', mac_test)
+
+# --- unit test: does the wire carry the pace we CLAIM it does? ----------------
+# Rig 2026-08-22: --rate 96000 gave a byte-perfect 7996 pps downstream (1492-byte frames,
+# 125.1 us mean) and BOTH boxes answered 4000 pps, while the capture node was published as
+# 96000 Hz over 48 000 samples/s with gaps=0 and PipeWire ERR 0. Needs libreac for
+# reac_rate_snap (pps -> pace), which until now had no callers anywhere.
+pace_watch_test = executable('test_reac_pace_watch',
+  ['tests/test_reac_pace_watch.c', 'src/reac_pace_watch.c'],
+  dependencies : [libreac_dep],
+  include_directories : [include_directories('src')])
+test('reac_pace_watch', pace_watch_test)
 
 # --- unit test: the MASTER head-amp DMX send scheduler (task #155, C.7) --------
 # Pure state table + edge/periodic-re-assert scheduler — no socket, no FSM. Pins
