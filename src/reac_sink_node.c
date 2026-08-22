@@ -30,6 +30,7 @@
 #include "reac_gain.h"
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_link_state.h"
+#include "reac_arbitration.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
 #include "reac_mac.h"
@@ -582,11 +583,34 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 	char seq[16];
 	snprintf(seq, sizeof seq, "%u", n->pacer.disco.seq);
 
+	/* THE SEGMENT AGGREGATE, computed from the same sightings and our own FSM state, and
+	 * published in the SAME update as them — the atomicity the spec asks for is simply that
+	 * they move together with the seq. Passive: reac_arbitrate decides nothing, and nothing
+	 * downstream acts on it yet.
+	 *
+	 * The pace source is what we ARE running on, not what we would prefer: with clock-follow
+	 * off (the config of record after the 2026-08-21 verdict) that is free-run, and saying
+	 * "graph-ref" because the code exists would be the same lie as a soft meter. */
+	struct reac_arbitration arb;
+	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
+	               REAC_PACE_FREE_RUN, reac_pacer_mono_ns(), &arb);
+
+	char master_mac[24];
+	if (arb.have_mac)
+		snprintf(master_mac, sizeof master_mac, "%02x:%02x:%02x:%02x:%02x:%02x",
+		         arb.mac[0], arb.mac[1], arb.mac[2], arb.mac[3], arb.mac[4], arb.mac[5]);
+	else
+		snprintf(master_mac, sizeof master_mac, "none");
+
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_DISCO_SCOPE,   n->disco_ifname ? n->disco_ifname : "",
 		REAC_PROP_DISCO_STATE,   REAC_DISCO_STATE_LISTENING,
 		REAC_PROP_DISCO_SEQ,     seq,
 		REAC_PROP_DISCO_DEVICES, devices,
+		REAC_PROP_MASTER_STATE,  reac_segment_master_name(arb.state),
+		REAC_PROP_MASTER_MAC,    master_mac,
+		REAC_PROP_PACE_SOURCE,   reac_pace_source_name(arb.pace),
+		REAC_PROP_MASTER_CONFLICT, arb.conflict ? "1" : "0",
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);

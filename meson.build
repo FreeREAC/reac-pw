@@ -77,6 +77,7 @@ reac_pw_src = [
   'src/reac_rx.c',
   'src/reac_pace_watch.c',
   'src/reac_box_pin.c',
+  'src/reac_arbitration.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c',
   'src/reac_fsm.c',
@@ -370,6 +371,16 @@ mac_test = executable('test_reac_mac',
   ['tests/test_reac_mac.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')])
 test('reac_mac', mac_test)
+
+# --- unit test: who drives this segment (arbitration increment 2) -------------
+# The S-4000S incident: a box in slave mode sighted as role `master`, and nothing anywhere
+# added the evidence up into a statement about the segment. Passive — decides nothing.
+arbitration_test = executable('test_reac_arbitration',
+  ['tests/test_reac_arbitration.c', 'src/reac_arbitration.c', 'src/reac_disco.c',
+   'src/reac_ctrl.c'],
+  dependencies : [libreac_dep],
+  include_directories : [include_directories('src')])
+test('reac_arbitration', arbitration_test)
 
 # --- unit test: --box MODEL[:LABEL], the fixed-installation pin ---------------
 # Restored 2026-08-22 (operator: reac-pw is a daemon, a permanent rig pins its patch;
