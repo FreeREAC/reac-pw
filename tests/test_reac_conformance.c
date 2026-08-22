@@ -104,10 +104,19 @@ int main(void)
 			CHK(memcmp(f + 16, GOLD_CHANMAP_SWEEP[w], 34) == 0);
 		}
 
-		/* ---- (b) console-INDEPENDENT probe seed: fresh-init phase 0 / sub 0x02 ---- */
-		build_and_stamp(&m, f, REAC_M_EMIT_PROBE, 0);
-		CHK(memcmp(f + 16, GOLD_PROBES[0].blk, 34) == 0);
+		/* ---- (b) console-INDEPENDENT scene push: the body is the DESK's, not the
+		 * console profile's, so every step is identical across all profiles. A
+		 * fresh init seeds the header (step 0); the first body chunk is the
+		 * phase-6/sub-0x02 block transcribed off the live M-200. */
+		build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0);
+		CHK(f[18] == 0x01 && f[19] == 0x01);          /* op-0101              */
+		CHK(f[23] == 0x22 && f[24] == 0xc8);          /* declares 0x22c8      */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
+		{
+			uint8_t blk[34];
+			CHK(reac_ctrl_build_scene_step(blk, m.scene, sizeof m.scene, 1) == 0);
+			CHK(memcmp(blk, GOLD_PROBES[6].blk, 34) == 0);   /* phase 6, sub 0x02 */
+		}
 
 		/* ---- (b) console-INDEPENDENT grant sweep: byte-identical to the real
 		 * M-200 x S-1608 golden (reac_grant_golden.inc), regardless of mixer

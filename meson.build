@@ -79,7 +79,7 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_arbitration.c',
   'src/reac_tx.c',
-  'src/reac_ctrl.c',
+  'src/reac_ctrl.c', 'src/reac_scene_body.c',
   'src/reac_fsm.c',
   'src/reac_grant.c',
   'src/reac_master.c',
@@ -128,7 +128,7 @@ test('reac_tx', tx_test)
 # tests/test_encode.c pins the same downstream constant from the other side of
 # the wrap. A mismatch is a wire-format regression — never update the constant.
 encode_golden_test = executable('test_reac_encode_golden',
-  ['tests/test_reac_encode_golden.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_encode_golden.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_encode_golden', encode_golden_test)
@@ -165,14 +165,14 @@ test('reac_rx_dup', rx_dup_test)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
-  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ctrl', ctrl_test)
 
 # --- unit test: head-amp source control (op 04 03 TAG 01 01, M-200-truthed) ---
 headamp_test = executable('test_reac_headamp',
-  ['tests/test_reac_headamp.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_headamp.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_headamp', headamp_test)
@@ -197,7 +197,7 @@ test('reac_fsm', fsm_test)
 # IDLE->...->ESTABLISHED with the continuous 5-message cadence in both states.
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
    'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
@@ -220,7 +220,7 @@ test('reac_master_fsm', master_fsm_test)
 # generated control block sums to 0 mod 256. The #130 hardware-verify gate.
 s1608_test = executable('test_reac_s1608',
   ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_s1608', s1608_test)
@@ -239,7 +239,7 @@ test('reac_lat', lat_test)
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
-   'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c',
+   'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -277,7 +277,7 @@ test('reac_clock', clock_test)
 pacer_clock_test = executable('test_reac_pacer_clock',
   ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_clock.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer_clock', pacer_clock_test)
@@ -292,7 +292,7 @@ test('reac_pacer_clock', pacer_clock_test)
 # exercised correct-by-construction against the capture-derived control kinds.
 slave_test = executable('test_reac_slave',
   ['tests/test_reac_slave.c', 'src/reac_slave.c', 'src/reac_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_mac.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_ring.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
@@ -303,7 +303,7 @@ test('reac_slave', slave_test)
 # mapping, and the RT multiply-only apply. Same link set as slave_test.
 vboxgain_test = executable('test_reac_vboxgain',
   ['tests/test_reac_vboxgain.c', 'src/reac_slave.c', 'src/reac_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_ring.c', 'src/reac_mac.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_ring.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_vboxgain', vboxgain_test)
@@ -317,7 +317,7 @@ test('reac_vboxgain', vboxgain_test)
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
 courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_slave.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_grant.c',
+   'src/reac_slave.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
    'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -350,7 +350,7 @@ test('reac_link_state', link_state_test)
 # and all-or-nothing JSON. Frames come from the reac_ctrl builders, so the test
 # runs on the same bytes the wire carries.
 disco_test = executable('test_reac_disco',
-  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_disco.c', 'src/reac_disco.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_disco', disco_test)
@@ -377,7 +377,7 @@ test('reac_mac', mac_test)
 # added the evidence up into a statement about the segment. Passive — decides nothing.
 arbitration_test = executable('test_reac_arbitration',
   ['tests/test_reac_arbitration.c', 'src/reac_arbitration.c', 'src/reac_disco.c',
-   'src/reac_ctrl.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   dependencies : [libreac_dep],
   include_directories : [include_directories('src')])
 test('reac_arbitration', arbitration_test)
@@ -389,7 +389,7 @@ test('reac_arbitration', arbitration_test)
 # head-amp enrollment from a guess, and a box granted slots it does not own links,
 # streams audio and silently ignores every head-amp record.
 box_pin_test = executable('test_reac_box_pin',
-  ['tests/test_reac_box_pin.c', 'src/reac_box_pin.c', 'src/reac_ctrl.c'],
+  ['tests/test_reac_box_pin.c', 'src/reac_box_pin.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   dependencies : [libreac_dep],
   include_directories : [include_directories('src')])
 test('reac_box_pin', box_pin_test)
@@ -431,7 +431,7 @@ test('reac_headamp_prop', headamp_prop_test)
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
   ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
-   'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
+   'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -448,7 +448,7 @@ test('reac_headamp_live', headamp_live_test)
 # S-1608 reaching CH 47) and ILLEGAL as audio (past the 40 slots the frame carries),
 # which is why reac_boxreg links in here. Pure — no socket.
 grant_test = executable('test_reac_grant',
-  ['tests/test_reac_grant.c', 'src/reac_grant.c', 'src/reac_ctrl.c',
+  ['tests/test_reac_grant.c', 'src/reac_grant.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_headamp_tx.c', 'src/reac_boxreg.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
@@ -465,7 +465,7 @@ test('reac_grant', grant_test)
 # profile. Pure — no socket.
 conformance_test = executable('test_reac_conformance',
   ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_conformance', conformance_test)

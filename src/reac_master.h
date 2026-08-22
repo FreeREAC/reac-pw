@@ -42,6 +42,7 @@
 
 #include "reac_slots.h"   /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_grant.h"   /* struct reac_grant_alloc, REAC_GRANT_SWEEP_MAX */
+#include "reac_scene.h"   /* REAC_SCENE_BYTES — the push body the master carries */
 
 struct reac_headamp_tx;   /* reac_headamp_tx.h — the head-amp state group A pushes */
 
@@ -84,9 +85,9 @@ enum reac_master_state {
  * CFEA (~1/s each). GRANT is the only event-driven emission (fires on a JOIN). */
 enum reac_master_emit {
 	REAC_M_EMIT_FILLER = 0, /* type 00 00, audio payload (the common case)      */
-	REAC_M_EMIT_PROBE,      /* cdea 01 00 — the fixed M-300 probe (~115/s)      */
-	REAC_M_EMIT_SUB01,      /* cdea 01 01 — the fixed M-300 sub-message (~1/s)  */
-	REAC_M_EMIT_SUB02,      /* cdea 01 02 — the fixed M-300 sub-message (~1/s)  */
+	REAC_M_EMIT_SCENE_CHUNK,/* cdea 01 00 — one 26-byte body chunk of the push  */
+	REAC_M_EMIT_SCENE_HEAD, /* cdea 01 01 — the header declaring the total      */
+	REAC_M_EMIT_SCENE_TAIL, /* cdea 01 02 — the final chunk; COMPLETES the push */
 	REAC_M_EMIT_GRANT,      /* cdea 04 03 — one block of the model grant burst  */
 	REAC_M_EMIT_ENROLL,     /* cdea 01 03 000d — the pre-grant enroll/arm frame */
 	REAC_M_EMIT_CHANMAP,    /* cdea 01 03 0019 generated channel-map (1 of N)   */
@@ -325,22 +326,47 @@ struct reac_master {
 	int      sub02_off;       /* cdea 01 02 slot: burst_end + probe_stride      */
 	int      chanmap_off;     /* chanmap slot: fps*5953/4000 (mid-pause)        */
 	int      sub01_off;       /* cdea 01 01 slot: cycle_len - 5                 */
-	int      probe_idx;       /* burst probe index (cycle_pos/stride) of the
-	                           * probe being emitted (set by the cadence)       */
+	int      scene_step;      /* step of the scene push being emitted, set by
+	                           * the cadence: 0 = header, 1..341 = chunk,
+	                           * REAC_SCENE_STEPS-1 = final                     */
 	int      announce_tick;   /* slots since the last cfea (~1/s, free-running) */
 
-	/* PROBE ROTATION (#130, measured live off an M-200 2026-07-11). The probe is
-	 * NOT a fixed constant: its 27-byte payload is a sliding window over the
-	 * period-10 sequence [00 00 00 01 00 00 00 00 00 SUB], where SUB = 0x02 while
-	 * hunting and 0x03 once established. The phase advances +6 (mod 10) after every
-	 * 2 emissions -> the observed 0,6,2,8,4 rotation. EVERY FILLER frame's [18:50]
-	 * descriptor is 16x "00 <cksum-of-the-current-probe>" — the descriptor tracks
-	 * the probe, which is why a real master's FILLER descriptor appears to "cycle".
-	 * A frozen probe (and hence a frozen descriptor) is what left real boxes mute. */
-	int      probe_phase;     /* current phase into the period-10 sequence      */
-	int      probe_repeat;    /* emissions done at this phase (2 per phase)     */
-	uint8_t  probe_blk[34];   /* the current probe [type|block], regenerated    */
-	uint8_t  filler_desc;     /* = current probe's checksum; stamped into FILLER */
+	/* THE SCENE PUSH (reac_ctrl.h). The burst slots do not carry a "rotating hunt
+	 * probe" — they carry the 341 body chunks of the desk's scene transfer, and the
+	 * cycle's sub01/sub02 slots are its header and final. What an earlier RE read as
+	 * a period-10 probe rotation is the body's own periodicity seen through a
+	 * MIRRORED capture: 26 bytes per chunk is 6 mod 10, so consecutive chunks step
+	 * the pattern by 6, and the mirror's duplicate of every frame made that look
+	 * like "each phase emitted twice". The real body never repeats a chunk
+	 * consecutively (0 of 340 pairs), so the transfer is one chunk per burst slot.
+	 *
+	 * The body is held per-master because our own MAC is substituted into it
+	 * (REAC_SCENE_MAC_OFF); everything else is the generated placeholder.
+	 *
+	 * EVERY FILLER frame's [18:50] descriptor is 16x "00 <cksum of the chunk last
+	 * emitted>" — byte-verified against the M-200 (C:de -> F:de x16 -> C:dd ...).
+	 * A frozen body meant a frozen descriptor, one more tell of a dead downstream. */
+	uint8_t  scene[REAC_SCENE_BYTES]; /* our body: placeholder + OUR MAC        */
+	uint8_t  scene_blk[34];   /* the step being emitted, built by reac_ctrl     */
+	uint8_t  filler_desc;     /* = last scene step's checksum; stamped in FILLER */
+
+	/* THE PUSH IS A BOUNDED PHASE, NOT A CADENCE. The box completes reassembly only
+	 * on the final chunk and runs its state-4 COMMIT there, so a transfer cut short
+	 * by the box's JOIN — which arrives in milliseconds against a 2.694 s cycle —
+	 * leaves it in reassembly for the life of the link. A real desk is not racing:
+	 * it finishes the transfer, the box answers 01 03 0010, and only then does the
+	 * grant window open (measured 9.31->9.99 transfer, 14.46 box reply, 16.18 grant
+	 * on handshake-ctrl-2026-07-11). So a forward transition out of PROBING is HELD
+	 * until the in-flight transfer completes and at least one has been delivered
+	 * whole since we entered PROBING. This is a DEFERRAL, never an auto-advance:
+	 * the JOIN is still required, so #130's anti-timer property is preserved. */
+	int      scene_inflight;  /* header emitted, final not yet                  */
+	unsigned scene_complete;  /* transfers delivered whole since enter_probing  */
+	int      join_held;       /* a forward edge is waiting on the transfer      */
+	enum reac_master_rx_event join_ev;    /* the held event                     */
+	uint8_t  join_src[6];                 /* and its box                        */
+	uint8_t  join_hold_blk[32];           /* and its cold-connect block         */
+	int      join_has_blk;                /* whether that block is present      */
 
 	/* GRANTING — hold for grant_dwell slots (ENROLL->grant DWELL, ~1.6 s,
 	 * fps-scaled at init) after the ENROLL arm frame, THEN emit the master's own

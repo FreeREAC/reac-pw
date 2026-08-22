@@ -881,3 +881,81 @@ uint8_t reac_headamp_sens_value(int db, int pad_on)
 		v = REAC_HEADAMP_SENS_MAX;
 	return (uint8_t)v;
 }
+
+/* ---- the scene push ------------------------------------------------------
+ * One transfer = header (op-0101) + REAC_SCENE_CHUNKS chunks (op-0100) + final
+ * (op-0102); see reac_ctrl.h for why completion is load-bearing. Every step is
+ * the same 34-byte [type|block] shape: cd ea, the 2-byte op, the BE payload
+ * length, one reserved 0x00, then the payload, checksum last.
+ *
+ * The length field a step declares is its PAYLOAD length, and the payload
+ * lengths are exactly what sum to the declared total — that is the identity the
+ * box checks its reassembly against, so the three constants and the total are
+ * one fact, not four. */
+#define SCENE_OP_OFF     2   /* [2:4]  the 2-byte op                */
+#define SCENE_LEN_OFF    4   /* [4:6]  BE payload length            */
+#define SCENE_PAY_OFF    7   /* [7:..] payload ([6] stays reserved) */
+#define SCENE_HEAD_TOTAL_OFF 7   /* header only: BE total, payload follows at [9] */
+
+static void scene_step_head(uint8_t blk[34], const uint8_t *body)
+{
+	blk[SCENE_OP_OFF] = 0x01; blk[SCENE_OP_OFF + 1] = 0x01;
+	blk[SCENE_LEN_OFF]     = (uint8_t)(REAC_SCENE_HEAD_BYTES >> 8);
+	blk[SCENE_LEN_OFF + 1] = (uint8_t)(REAC_SCENE_HEAD_BYTES & 0xff);
+	blk[SCENE_HEAD_TOTAL_OFF]     = (uint8_t)(REAC_SCENE_BYTES >> 8);
+	blk[SCENE_HEAD_TOTAL_OFF + 1] = (uint8_t)(REAC_SCENE_BYTES & 0xff);
+	memcpy(blk + SCENE_HEAD_TOTAL_OFF + 2, body, REAC_SCENE_HEAD_BYTES);
+}
+
+int reac_ctrl_build_scene_step(uint8_t blk[34], const uint8_t *body, size_t n,
+                               int step)
+{
+	if (!blk || !body || n != REAC_SCENE_BYTES)
+		return -1;
+	if (step < 0 || step >= REAC_SCENE_STEPS)
+		return -1;
+
+	memset(blk, 0, 34);
+	blk[0] = 0xcd; blk[1] = 0xea;
+
+	if (step == 0) {
+		scene_step_head(blk, body);
+	} else if (step <= REAC_SCENE_CHUNKS) {
+		size_t off = REAC_SCENE_HEAD_BYTES +
+		             (size_t)(step - 1) * REAC_SCENE_CHUNK_BYTES;
+		blk[SCENE_OP_OFF] = 0x01; blk[SCENE_OP_OFF + 1] = 0x00;
+		blk[SCENE_LEN_OFF]     = (uint8_t)(REAC_SCENE_CHUNK_BYTES >> 8);
+		blk[SCENE_LEN_OFF + 1] = (uint8_t)(REAC_SCENE_CHUNK_BYTES & 0xff);
+		memcpy(blk + SCENE_PAY_OFF, body + off, REAC_SCENE_CHUNK_BYTES);
+	} else {
+		/* The final chunk fills the SAME 26-byte payload slot as every other one,
+		 * but declares only REAC_SCENE_TAIL_BYTES of it as body — the transfer ends
+		 * mid-slot. The 12 bytes behind the body are a fixed trailer, not desk
+		 * state: identical in every op-0102 of both the M-200i and the M-300
+		 * establish captures (3/3 each), which is why they are reproduced rather
+		 * than zeroed. Zeroing them would still satisfy the declared length, but
+		 * this box has punished "functionally equivalent" before. */
+		static const uint8_t TAIL_TRAILER[12] = {
+			0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+			0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+		};
+		size_t off = REAC_SCENE_BYTES - REAC_SCENE_TAIL_BYTES;
+		blk[SCENE_OP_OFF] = 0x01; blk[SCENE_OP_OFF + 1] = 0x02;
+		blk[SCENE_LEN_OFF]     = (uint8_t)(REAC_SCENE_TAIL_BYTES >> 8);
+		blk[SCENE_LEN_OFF + 1] = (uint8_t)(REAC_SCENE_TAIL_BYTES & 0xff);
+		memcpy(blk + SCENE_PAY_OFF, body + off, REAC_SCENE_TAIL_BYTES);
+		memcpy(blk + SCENE_PAY_OFF + REAC_SCENE_TAIL_BYTES,
+		       TAIL_TRAILER, sizeof TAIL_TRAILER);
+	}
+
+	reac_ctrl_block_cksum_stamp(blk + 2);
+	return 0;
+}
+
+int reac_ctrl_scene_set_mac(uint8_t *body, size_t n, const uint8_t mac[6])
+{
+	if (!body || !mac || n != REAC_SCENE_BYTES)
+		return -1;
+	memcpy(body + REAC_SCENE_MAC_OFF, mac, 6);
+	return 0;
+}

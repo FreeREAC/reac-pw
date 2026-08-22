@@ -316,9 +316,83 @@ int main(void)
 		}
 	}
 
+	/* ---- the scene push: a body must survive the transfer whole -------------
+	 * The box completes reassembly only when the payload bytes it has stitched
+	 * together reach the total the header declared, and it runs its state-4 COMMIT
+	 * there and nowhere else. So the one property that matters is that walking
+	 * every step and concatenating the payloads gives back exactly the body, with
+	 * the declared total agreeing. This is the truncation class killed in a unit
+	 * test — no rig, no box, no timing. */
+	{
+		uint8_t body[REAC_SCENE_BYTES];
+		for (size_t i = 0; i < sizeof body; i++)
+			body[i] = (uint8_t)(i * 7 + (i >> 5));   /* not the placeholder */
+
+		uint8_t back[REAC_SCENE_BYTES];
+		size_t got = 0;
+		int chunks = 0, total = -1;
+
+		for (int step = 0; step < REAC_SCENE_STEPS; step++) {
+			uint8_t blk[34];
+			CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, step) == 0);
+			CHK(blk[0] == 0xcd && blk[1] == 0xea);
+			/* the block checksum rule holds for every step */
+			unsigned sum = 0;
+			for (int i = 2; i < 34; i++)
+				sum += blk[i];
+			CHK((sum & 0xff) == 0);
+
+			int len = (blk[4] << 8) | blk[5];
+			if (step == 0) {
+				CHK(blk[2] == 0x01 && blk[3] == 0x01);
+				CHK(len == REAC_SCENE_HEAD_BYTES);
+				total = (blk[7] << 8) | blk[8];
+				memcpy(back + got, blk + 9, REAC_SCENE_HEAD_BYTES);
+				got += REAC_SCENE_HEAD_BYTES;
+			} else if (step < REAC_SCENE_STEPS - 1) {
+				CHK(blk[2] == 0x01 && blk[3] == 0x00);
+				CHK(len == REAC_SCENE_CHUNK_BYTES);
+				memcpy(back + got, blk + 7, REAC_SCENE_CHUNK_BYTES);
+				got += REAC_SCENE_CHUNK_BYTES;
+				chunks++;
+			} else {
+				CHK(blk[2] == 0x01 && blk[3] == 0x02);
+				CHK(len == REAC_SCENE_TAIL_BYTES);
+				memcpy(back + got, blk + 7, REAC_SCENE_TAIL_BYTES);
+				got += REAC_SCENE_TAIL_BYTES;
+			}
+		}
+
+		CHK(chunks == REAC_SCENE_CHUNKS);          /* 341, not 174 */
+		CHK(got == REAC_SCENE_BYTES);              /* 8904 recovered */
+		CHK(total == REAC_SCENE_BYTES);            /* and that is what we declared */
+		CHK(memcmp(back, body, sizeof body) == 0); /* byte for byte */
+
+		/* The framing constants are ONE fact, not four: the payload lengths must
+		 * sum to the total the header declares, or a box that trusts the header
+		 * waits forever for bytes that are never coming. */
+		CHK(REAC_SCENE_HEAD_BYTES +
+		    REAC_SCENE_CHUNKS * REAC_SCENE_CHUNK_BYTES +
+		    REAC_SCENE_TAIL_BYTES == REAC_SCENE_BYTES);
+
+		/* A body that is not a whole transfer is refused, never half-sent. */
+		uint8_t blk[34];
+		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body - 1, 0) == -1);
+		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, -1) == -1);
+		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, REAC_SCENE_STEPS) == -1);
+
+		/* Our identity goes into the body, replacing the capturing desk's. */
+		uint8_t mine[REAC_SCENE_BYTES];
+		memcpy(mine, reac_scene_placeholder, sizeof mine);
+		CHK(reac_ctrl_scene_set_mac(mine, sizeof mine, SRC) == 0);
+		CHK(memcmp(mine + REAC_SCENE_MAC_OFF, SRC, 6) == 0);
+		CHK(reac_ctrl_scene_set_mac(mine, sizeof mine - 1, SRC) == -1);
+	}
+
 	printf("OK: reac_ctrl builders byte-faithful (box-hb checksum 0x7a matches wire), "
 	       "parser + descriptor + audio round-trip + box-frame classifier clean, "
 	       "DT1 record checksum stamped before the block checksum, "
-	       "retired --box pin disagreement reported exactly once\n");
+	       "retired --box pin disagreement reported exactly once, "
+	       "scene push round-trips 8904 B in 341 chunks\n");
 	return 0;
 }

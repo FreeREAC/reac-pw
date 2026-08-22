@@ -75,9 +75,9 @@ static int step(struct court *c)
 	reac_master_stamp(&c->m, mf, e, idx);
 
 	switch (e) {
-	case REAC_M_EMIT_PROBE:    c->m_probes++;    break;
-	case REAC_M_EMIT_SUB01:    c->m_subs++;      break;
-	case REAC_M_EMIT_SUB02:    c->m_subs++;      break;
+	case REAC_M_EMIT_SCENE_CHUNK: c->m_probes++;  break;
+	case REAC_M_EMIT_SCENE_HEAD:  c->m_subs++;    break;
+	case REAC_M_EMIT_SCENE_TAIL:  c->m_subs++;    break;
 	case REAC_M_EMIT_ANNOUNCE: c->m_announces++; break;
 	case REAC_M_EMIT_GRANT:
 		c->m_grants++;

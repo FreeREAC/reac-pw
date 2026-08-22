@@ -23,6 +23,7 @@
 
 #include "reac_slots.h"    /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_master.h"   /* enum reac_master_rx_event (the classifier's verdict) */
+#include "reac_scene.h"    /* the scene-push protocol constants + chunker */
 
 #define REAC_CTRL_BLOCK_OFF   18   /* control block / checksum region start */
 #define REAC_CTRL_BLOCK_END   50   /* one past end (= audio offset)         */
