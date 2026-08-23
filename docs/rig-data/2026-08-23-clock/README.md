@@ -197,3 +197,82 @@ the loop did nothing — and the loop is what stops it reaching there at all.
 
 The rig was RESTORED to `/usr/bin/reac-pw` on enp128s20f0u6 with the original
 command line after leg D; both segments re-established, exactly two masters.
+
+---
+
+## 7. The 30-minute soak, and the positive control that makes it mean anything
+
+The 300 s legs could not have failed. At the fixed drift the ring needs ~2 hours
+to walk one guard band, so "no trim in 300 s" was a test with no power. Two runs
+fix that: one that proves the instrument can SEE a discard, and one long enough
+that the old behaviour would have produced many.
+
+### 7a. Positive control — catch-up OFF, 420 s
+
+**A probe that reports absence must first prove it can detect presence.**
+`reac.health.discard-fps` had never once been observed non-zero, so until this run
+a reading of `0.000` was indistinguishable from a counter that does not work.
+
+    guard trims=6  dropped=1544 frames   = 386 ms of audio, in 8 minutes
+    discard 25.698 frames/s (6.425 ms/s) on 5 separate health windows
+    wire TX -818.9 ppm   ring 232-513 frames (58-128 ms)   tx_errors 0
+
+**The instrument fires.** Six trims in 8 minutes projects to ~22 in 30, which is
+the control the soak below is measured against.
+
+This run also **reconciles the 2693 ppm figure this lane could not reproduce.**
+Under load its drift reached **+2225 and +2520 ppm** in individual windows, against
+527–900 ppm at rest. The earlier number was not wrong; it was a loaded-host
+reading of the same fault. Drift here is load-dependent by a factor of four, which
+is worth knowing before anyone quotes a single figure for it.
+
+### 7b. The soak — both levers on, 1800 s
+
+    wire TX -4.8 ppm      RX +0.3 ppm        (the cleanest drift of the session)
+    guard trims 0         dropped 0 frames   across 194 health windows
+    discards              ZERO
+    tx_errors             0
+    ring depth            11-47 frames (2.75-11.75 ms); heartbeat min 6, max 53
+    late_wakes 1595       catchup 1589 (99.6% repaid)   dropped_slots 39
+
+**Against a control that trims ~22 times in the same window, the soak trimmed
+zero times.** That is now a claim with power behind it.
+
+### 7c. The tail, which is what the counter was added for
+
+`reac.health.slot-debt-max` per 10 s window, 194 windows:
+
+| worst single debt (slots) | 0 | 1 | 2 | 3 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| windows | 16 | 113 | 52 | 7 | 2 | 1 | 2 | 8 |
+
+**Six windows out of 194 (3%) saw a debt above the 4-slot budget; the worst was
+8.** So the budget covers 97% of what a half-hour throws at it, and the 39
+abandoned slots are the other 3%. Raising it to 8 would cover this distribution
+entirely at a cost of a 95 µs catch-up burst instead of 48 µs — **a defensible
+change, but it is a sweep nobody has run, and 4 is what was measured.**
+
+### 7d. One thing that is NOT clean, stated because it would be easy to omit
+
+**The rate-match loop held a standing POSITIVE correction of +1310 … +3810 ppm
+for the whole soak, and never went negative.** That is 26–76% of its ±5000 ppm
+authority consumed at rest.
+
+It is not a sign error — leg D settled that by watching the correction cross zero
+and reverse. It is a MEASUREMENT-PHASE error in this loop: the RT callback reads
+the ring depth BEFORE pushing the quantum's frames, so it reads about one quantum
+(21 frames) lower than the depth the ring actually settles at. The loop is
+therefore servoing honestly to a setpoint it is comparing against a
+phase-shifted measurement, and it holds a standing correction to sit there.
+
+Consequences, plainly:
+
+- **It did not cause a discard in 30 minutes and the drift is −4.8 ppm**, so it is
+  not hurting anything today.
+- **But it eats most of the loop's headroom**, and the whole reason the applied
+  correction is published is that a large steady correction is a fault report
+  rather than a success. This one is reporting a fault in itself.
+- The fix is to measure the depth after the push (or add the quantum to the
+  reading), which should bring the standing correction near zero and restore the
+  full ±5000 ppm of margin. **It has not been made and has not been measured, so
+  it is not claimed.**
