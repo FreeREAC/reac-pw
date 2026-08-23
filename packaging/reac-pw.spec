@@ -71,7 +71,7 @@ meson test -C _build
 # + SCHED_FIFO for the cadence pacer (cap_sys_nice). openmixer's packaged
 # reac-pw-master.service ExecStartPre getcap-guards on exactly these, and
 # scripts/deploy-live.sh refuses a live restart without them.
-%caps(cap_net_raw,cap_sys_nice=ep) %{_bindir}/reac-pw
+%caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
 * Sun Jun 14 2026 Pau Aliagas <linuxnow@gmail.com> - 0.1.0-1
