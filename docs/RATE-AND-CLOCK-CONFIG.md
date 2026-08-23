@@ -12,27 +12,28 @@ and the current rig contradicts it in three places at once.
 | `~/.config/openmixer/reac.env` | `REAC_RATE=96000` | `reac-pw-master.service` — **installed but disabled**, so: nobody |
 | `reac-pw --rate`'s own default | **96000** in the master role (was: auto-detect) | reac-pw, when nothing else speaks |
 
-**CORRECTION, and it is mine to own.** This file first read `REAC_RATE=96000` as a
-stale value and a loaded gun on a 48 kHz rig. That was wrong, and it was wrong in
-the most ordinary way: I found two numbers that disagreed and assumed the one
-matching the running system was the intended one. **Operator ruling, 2026-08-23:
-"96k is 96kHz and should be the default reac clock rate."** So the config file is
-RIGHT and the running masters are what disagrees with the intent. The hazard
-claim is withdrawn — `96000` in that file is now the same number as the code's
-default, and `reac-pw --rate`'s default has been changed to match it.
+**CORRECTION, and it is mine to own — TWICE.** This file first read
+`REAC_RATE=96000` as a stale value and a loaded gun on a 48 kHz rig. Wrong:
+**operator ruling, 2026-08-23, "96k is 96kHz and should be the default reac clock
+rate."** Then, having been corrected, it went on to recommend DELETING
+`~/.config/openmixer/reac.env` as a second ledger. Also wrong, and wrong for a
+more interesting reason.
 
-A disagreement between a config and a running system does not tell you which one
-is wrong. Only the person who chose the rate does.
+**Operator ruling, verbatim: "We had a layered config and this is the last
+resource. Useful for standalone install, but omx needs to override and give the
+config to the user."**
 
-What survives from the original reading is the SHAPE of the problem, and it
-survives intact: the unit is disabled because it cannot express the rig — there
-are TWO segments and it can start one — and a value nothing reads is a value
-nothing corrects, whichever way it happens to be pointing.
+Two files carrying one key is a second ledger only when they sit at the SAME
+level. These do not. `reac.env` is the BOTTOM LAYER — the last-resort default
+that makes reac-pw work on a standalone install with no console present, which
+openmixer then overrides and surfaces to the user. **A layer is not a duplicate.**
 
-There is a second, quieter problem. `reac.env` lives under
-`~/.config/openmixer/`. The console's configuration directory holds the REAC
-segment's sample rate, which is a property of the REAC rig and not of the desk
-drawn on top of it. That is the console owning a fact it does not own.
+The defect a layered config actually has is a different one, and this rig had it:
+**an override order nobody wrote down.** Then every reader infers a different one
+and they are all sure they are right — which is exactly how a morning went on
+three sources of one number. So the order is declared below, declared again in
+`src/reac_conf.h` where it is implemented, and pinned by `tests/test_reac_conf.c`
+so the declaration and the code cannot drift apart.
 
 ## The law
 
@@ -53,34 +54,62 @@ drawn on top of it. That is the console owning a fact it does not own.
    and any shape that cannot say that is the shape that ends up hand-started in
    tmux — which is exactly where the rig is now.
 
-4. **It does not live under `~/.config/openmixer/`.** `~/.config/reac-pw/<iface>.env`
-   (or `/etc/reac-pw/<iface>.env` for a fixed install). The console reads the
-   segment's rate FROM the daemon — it is already published on the node — and
-   never declares it.
+4. **THE PRECEDENCE, HIGHEST FIRST. This is the law.**
+
+   | # | layer | what it is for |
+   |---|---|---|
+   | 1 | **the command line** (`--rate`, `--live`, ...) | an explicit argument. **This is the layer openmixer uses** — the console owns the desk's configuration and hands it over when it launches us, which is what "omx needs to override" means in practice |
+   | 2 | **the process environment** (`REAC_RATE`, `REACPW_*`) | an operator's ad-hoc override for one run, and the channel systemd's `EnvironmentFile=` delivers on. Above the files because a variable set for THIS invocation is more specific than a file describing every one |
+   | 3 | **`~/.config/reac-pw/<iface>.env`** | **per-segment.** The rig has two segments and they are not interchangeable — different boxes, different NICs, potentially different rates. This is the layer that can say so |
+   | 4 | **`~/.config/reac-pw/reac-pw.env`** | per-host: what every segment on this host shares |
+   | 5 | **`~/.config/openmixer/reac.env`** | **the last resort, and it STAYS.** What makes a standalone install work with no console present. openmixer overrides it from above and shows the user the result |
+   | 6 | **the built-in default** (`REAC_MASTER_DEFAULT_RATE` = 96000) | compiled in; reached only when all five above are silent |
+
+   **An empty value is not an answer.** `REAC_RATE=` sets nothing and falls
+   through to the next layer, because a key someone blanked out is a key they
+   turned off, not a key they set to the empty string.
+
+   **A layer that answers with nonsense is named and skipped**, not silently
+   dropped: `ignoring REAC_RATE='999' from the process environment`. Otherwise a
+   config file gets blamed for working and a default gets blamed for not.
 
 5. **Auto-detect is a SLAVE's default and is wrong for a master.** A slave joins a
    segment somebody else is already driving, so detecting the rate is the only
    thing it can do. A master DEFINES the rate: on a silent segment there is
-   nothing to detect, and "auto" resolved to whatever the code's fallback happened
-   to be, with nothing on screen saying which. **Fixed:** a master with no `--rate`
-   now takes `REAC_MASTER_DEFAULT_RATE` = **96000**, and reac-pw prints the rate
-   WITH ITS PROVENANCE at startup — the command line, or the master default — so
-   a 96 k master pointed at a 48 k segment says so in its first two lines instead
-   of on the wire.
+   nothing to detect, and "auto" resolved to whatever the fallback happened to be
+   with nothing on screen saying which.
 
-6. **THE DOORWAY IS `~/.config/reac-pw/<iface>.env`, AND `~/.config/openmixer/reac.env`
-   SHOULD BE DELETED.** This is the one-store-one-writer question and it has a
-   plain answer. Two files declaring one fact is the defect, regardless of whether
-   they currently agree — and today they do not, which is only how it became
-   visible. `reac.env` sits in the CONSOLE's configuration directory and declares
-   a property of the REAC segment, which is a fact the console does not own; and
-   it is read by exactly one unit, which is disabled. Move `REAC_RATE`,
-   `REAC_LIVE_IFACE`, `REAC_TX_IFACE`, `REAC_MIXER`, `REAC_ROLE` and the clock
-   knobs into the per-interface file, repoint the unit's `EnvironmentFile`, and
-   **delete `~/.config/openmixer/reac.env` — do not leave it as a copy.** A second
-   ledger that agrees today is a second ledger that will disagree later, and
-   neither door announces the other. The console reads the segment's rate FROM
-   the daemon; it is already published on the node.
+6. **THE STARTUP LINE NAMES THE LAYER THAT WON, not just the value.** A layered
+   config that cannot tell you which layer answered is a debugging trap. Measured
+   on this host, every layer, in one sitting:
+
+   ```
+   reac-pw: REAC rate = 48000 Hz (4000 pps), from the command line
+   reac-pw: REAC rate = 44100 Hz (3675 pps), from the process environment
+   reac-pw: REAC rate = 48000 Hz (4000 pps), from ~/.config/reac-pw/<iface>.env (per-segment)
+   reac-pw: REAC rate = 96000 Hz (8000 pps), from ~/.config/openmixer/reac.env (last resort)
+   reac-pw: REAC rate = 96000 Hz (8000 pps), from the built-in default
+   ```
+
+## Does the code implement the law? IT DOES NOW — IT DID NOT BEFORE
+
+Asked to verify rather than assume, and the answer was no, in three places:
+
+- **reac-pw read no configuration file at all.** It consulted `argv` and a handful
+  of `REACPW_*` environment variables and nothing else. There was no `REAC_RATE`
+  reader in the daemon.
+- **`~/.config/reac-pw/<iface>.env` was read by nothing.** The per-segment layer
+  did not exist; the directory did not exist.
+- **`~/.config/openmixer/reac.env` was reachable only through
+  `reac-pw-master.service`'s `EnvironmentFile=`** — a unit that is installed and
+  **disabled**. So the last-resort layer, whose entire purpose is the STANDALONE
+  case, could not be reached standalone. A standalone `reac-pw --live ...` got
+  nothing from it.
+
+So the layering was real as an intention and absent as an implementation. It is
+now in `src/reac_conf.{h,c}`, consulted by `main.c`, and pinned by
+`tests/test_reac_conf.c` — which is sabotage-verified: swapping two layers and
+accepting an empty value each turn the test red, and restoring turns it green.
 
 ## What to do, smallest first
 
@@ -93,14 +122,13 @@ drawn on top of it. That is the console owning a fact it does not own.
   `docs/96K-SWITCH-ASSESSMENT.md` — but it is a dropout, and the startup
   provenance line is what makes it visible immediately.
 - **Next:** move the two masters' invocations into `~/.config/reac-pw/<iface>.env`
-  and a templated `reac-pw@<iface>.service`, replacing the single-segment unit and
-  the tmux scope. The tmux scope is not a workaround anyone chose; it is what is
-  left when the unit cannot describe the rig.
-- **Then:** make reac-pw print the rate WITH ITS PROVENANCE at startup — given on
-  the command line, from the environment, or auto-detected — so a disagreement
-  between three sources appears in the journal instead of on the wire. A
-  mechanical gate beats a rule anyone has to remember, and this file is currently
-  a rule anyone has to remember.
+  — layer 3, which now exists and is read — and a templated
+  `reac-pw@<iface>.service`, replacing the single-segment unit and the tmux
+  scope. The tmux scope is not a workaround anyone chose; it is what is left when
+  the unit cannot describe the rig. **`~/.config/openmixer/reac.env` stays where
+  it is and keeps what it has**; it is the floor, not a stray.
+- **Done:** reac-pw prints the rate with the LAYER that produced it, so a
+  disagreement between sources appears in the journal instead of on the wire.
 
 ## Clock configuration, same shape
 
