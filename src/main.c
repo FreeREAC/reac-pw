@@ -315,7 +315,10 @@ static void usage(const char *p)
 	  "  REACPW_CATCHUP_MAX_SLOTS=<n>  master role: how many OVERSLEPT slots the\n"
 	  "                pacer repays by staying on its deadline grid instead of\n"
 	  "                re-basing the phase and losing them. Unset = 4 (measured);\n"
-	  "                -1 = never repay, the pre-2026-08-23 behaviour.\n", p);
+	  "                -1 = never repay, the pre-2026-08-23 behaviour.\n"
+	  "  REACPW_RATE_MATCH=0  master role: publish NO io_rate_match on the sink,\n"
+	  "                so the graph/wire difference has nowhere to go but the\n"
+	  "                depth guard's discard. For A/B measurement only.\n", p);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
@@ -650,7 +653,14 @@ int main(int argc, char **argv)
 		                               * default; see reac_pacer.h. */
 		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
 		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
-		                                  : 0 };
+		                                  : 0,
+		                              /* Rate matching is ON unless explicitly
+		                               * disabled; the off case exists to measure
+		                               * the two levers apart, not to be run. */
+		                              .rate_match_off =
+		                                  (getenv("REACPW_RATE_MATCH") &&
+		                                   atoi(getenv("REACPW_RATE_MATCH")) == 0)
+		                                  ? -1 : 0 };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */

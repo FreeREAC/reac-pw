@@ -169,6 +169,7 @@ struct reac_sink_node {
 	 * reads; NULL until the graph gives us one (and forever if the link needs no
 	 * resampler). Written on the RT process() thread, read there too. */
 	struct spa_io_rate_match *rate_match;
+	int rate_match_off;              /* const after open; REACPW_RATE_MATCH=0 */
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -231,11 +232,24 @@ static void on_process(void *data)
 	 * upstream is losing frames and this loop is the only reason it is inaudible.
 	 * That is why the pacer's own transmit deficit is fixed at source as well —
 	 * see the slot-debt branch in reac_pacer.c. */
-	if (n->rate_match) {
+	if (n->rate_match && !n->rate_match_off) {
 		uint32_t depth  = reac_frame_ring_readable(&n->pacer.ring);
 		uint32_t qf     = nframes / (uint32_t)REAC_SAMPLES_PER_PKT;
-		uint32_t target = reac_pacer_guard_high(qf) / 2;
-		double err = target ? ((double)depth - (double)target) / (double)target : 0.0;
+		/* THE SETPOINT IS NOT THE GUARD'S TARGET, and getting that wrong would have
+		 * cost most of what the slot-debt fix just won. The guard's TARGET is 256
+		 * frames — 64 ms — because it is a place to drain TO after a pathological
+		 * excursion, not a depth the ring should sit at. With the pacer keeping up
+		 * (measured: 22-62 frames, 5.5-15.5 ms) a loop that servoed to 256 would
+		 * deliberately ADD 50 ms of latency to make room for itself.
+		 *
+		 * So the setpoint is what the ring actually needs: two producer bursts. The
+		 * graph pushes up to one quantum of frames per callback, so two covers a
+		 * burst plus the one behind it, and the guard's HIGH stays a ceiling nobody
+		 * approaches. On this rig that is 2 x 21 = 42 frames = 10.5 ms — the middle
+		 * of where the ring already settles on its own, which is the point: the
+		 * matcher's job is to HOLD the ring where the pacer put it, not to fill it. */
+		uint32_t target = qf * 2 > 8 ? qf * 2 : 8;
+		double err = ((double)depth - (double)target) / (double)target;
 		if (err >  1.0) err =  1.0;
 		if (err < -1.0) err = -1.0;
 		/* depth ABOVE target => we are consuming too slowly => ask the resampler
@@ -1089,6 +1103,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.n_headamps = cfg->n_headamps;
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
 	pcfg.catchup_max_slots = cfg->catchup_max_slots;  /* 0 = the measured default */
+	n->rate_match_off = cfg->rate_match_off != 0;
 	if (cfg->clock_ref) {                    /* #77; "" = designate nothing */
 		strncpy(n->clock_ref, cfg->clock_ref, sizeof n->clock_ref - 1);
 		n->clock_ref[sizeof n->clock_ref - 1] = '\0';
