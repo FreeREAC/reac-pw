@@ -137,48 +137,11 @@ uint8_t reac_grant_headamp_value(const struct reac_headamp_tx *tx,
  * reac_master_stamp's checksum re-stamp is a no-op and the on-wire bytes equal a
  * real M-200's. */
 
-/* cdea 04 03 0014, record 12 12 01 00: the master's ACK of the box's join params. */
-static const uint8_t GRANT_HEAD_ACK[34] = {
-	0xcd, 0xea, 0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe, 0x0f, 0xf0,
-	0x41, 0x0a, 0x00, 0x00, 0x12, 0x12, 0x01, 0x00, 0x06, 0x00, 0x01, 0x00,
-	0x78, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-/* cdea 04 03 0014, record 12 12 00 00: the marker that separates the first
- * channel's group-A records from the group-B block. */
-static const uint8_t GRANT_HEAD_MARK[34] = {
-	0xcd, 0xea, 0x04, 0x03, 0x00, 0x14, 0x00, 0x02, 0x00, 0xfe, 0x0f, 0xf0,
-	0x41, 0x0a, 0x00, 0x00, 0x12, 0x12, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
-	0x7d, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-/* GROUP B — the fixed 6-record constant (marker 12 11, TAG 05 00), byte-identical
- * across 8/16/32-input boxes: (ch,sub,val) = (00,00,04) (06,00,08) (10,00,11)
- * (10,11,09) (11,00,11) (11,11,09). Unchanged from the tables it replaces. */
-#define REAC_GRANT_GROUPB_LEN 6
-static const uint8_t GRANT_GROUPB[REAC_GRANT_GROUPB_LEN][34] = {
-	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe, 0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x11, 0x05, 0x00, 0x00, 0x00, 0x04, 0x77, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 },
-	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe, 0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x11, 0x05, 0x00, 0x06, 0x00, 0x08, 0x6d, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 },
-	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe, 0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x11, 0x05, 0x00, 0x10, 0x00, 0x11, 0x5a, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 },
-	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe, 0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x11, 0x05, 0x00, 0x10, 0x11, 0x09, 0x51, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 },
-	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe, 0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x11, 0x05, 0x00, 0x11, 0x00, 0x11, 0x59, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 },
-	{ 0xcd, 0xea, 0x04, 0x03, 0x00, 0x13, 0x00, 0x02, 0x00, 0xfe, 0x0e, 0xf0, 0x41, 0x0a, 0x00, 0x00, 0x12, 0x11, 0x05, 0x00, 0x11, 0x11, 0x09, 0x50, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 },
-};
-
-/* Emit ONE group-A record via the proven head-amp builder. We build into a scratch
- * frame and lift its [16:50] rather than re-deriving the record bytes: that keeps
- * reac_ctrl_stamp_headamp — the function already byte-verified against a real
- * M-200, including BOTH nested checksums — as the single source of these bytes. */
-static int put_groupa(uint8_t row[34], uint8_t ch, uint8_t param, uint8_t value)
-{
-	uint8_t scratch[REAC_FRAME_BYTES];
-	memset(scratch, 0, sizeof scratch);
-	if (reac_ctrl_stamp_headamp(scratch, ch, param, value) != 0)
-		return -1;
-	memcpy(row, scratch + 16, 34);   /* [16:50] = type[2] + control block[32] */
-	return 0;
-}
-
+/* The sweep's SHAPE — which records, in which order, with which markers — is
+ * protocol and lives in libreac (reac_ctrl_build_grant_sweep). What stays here is
+ * the POLICY this file has always been the seam for: which slots a box is given,
+ * and what value each cell should carry. We gather the values and hand them over.
+ */
 int reac_grant_build_sweep(uint8_t sweep[][34], int max,
                            const struct reac_grant_alloc *alloc,
                            const struct reac_headamp_tx *tx)
@@ -188,53 +151,18 @@ int reac_grant_build_sweep(uint8_t sweep[][34], int max,
 	int w = alloc->width;
 	if (!reac_grant_alloc_fits(alloc->base, w))
 		return -1;
-	/* Every slot we are about to address must be a real head-amp channel — the
-	 * fits() ceiling already guarantees this, but assert it against reac_ctrl's
-	 * own bound too so the two can never drift apart unnoticed. */
-	if (alloc->base + w > REAC_HEADAMP_MAX_CH)
-		return -1;
-	int n = REAC_GRANT_SWEEP_LEN(w);
-	if (max < n)
-		return -1;
 
-	/* THE ORDER, measured on both real M-200 goldens (deduped by frame counter):
-	 *
-	 *   HEAD_ACK | A[base].0 A[base].1 A[base].2 | HEAD_MARK | B x6 |
-	 *   A[base+1].0..2 | A[base+2].0..2 | ... | A[base+w-1].0..2
-	 *
-	 * i.e. the FIRST allocated channel's three head-amp records ride up front,
-	 * bracketed by the two 0014 head frames, with group B wedged between them and
-	 * the rest of group A. 8 + w*3 frames: 32 for an S-0808, 56 for an S-1608 —
-	 * frame-for-frame the shape of the tables this replaces.
-	 *
-	 * ONE-SHOT BURST, not a periodic stream (GRANT-SWEEP.md: "MEASURED SHAPE — do
-	 * not 'correct' to a periodic stream"). The caller (reac_master) spaces these
-	 * rows one per grant_stride slots and then goes calm.
-	 *
-	 * NOT x2 REPEATS. The captures show 96 group-A frames for a 16-input box, and
-	 * the RE notes read that as "16 x 3 x 2 repeats". It is not: the pairs carry an
-	 * IDENTICAL frame counter (bytes 14-15, which a real master increments every
-	 * slot) and differ only in captured length (1494 vs 1492 = the +2 FCS). They are
-	 * ONE frame seen twice by the switch mirror — the same mirror artifact this repo
-	 * already documents for the "1494 B OHRCA frame" (reac_tx.h, #156). Deduped by
-	 * counter, both goldens hold exactly 48 unique group-A records, one each. Emitting
-	 * each record twice would be reproducing a capture artifact.
-	 */
-	int k = 0;
-	memcpy(sweep[k++], GRANT_HEAD_ACK, 34);
-	for (uint8_t p = 0; p < REAC_HEADAMP_NPARAMS; p++)
-		if (put_groupa(sweep[k++], alloc->base, p,
-		               reac_grant_headamp_value(tx, alloc->base, p)) != 0)
-			return -1;
-	memcpy(sweep[k++], GRANT_HEAD_MARK, 34);
-	for (int i = 0; i < REAC_GRANT_GROUPB_LEN; i++)
-		memcpy(sweep[k++], GRANT_GROUPB[i], 34);
-	for (int c = 1; c < w; c++) {
+	/* One cell per (allocated channel, parameter), in the order the sweep wants
+	 * them. reac_grant_headamp_value is the policy: the operator's setting where
+	 * there is one, the enrolling default where there is not. */
+	uint8_t values[REAC_GRANT_MAX_WIDTH * REAC_HEADAMP_NPARAMS];
+	if (w <= 0 || w > REAC_GRANT_MAX_WIDTH)
+		return -1;
+	for (int c = 0; c < w; c++) {
 		uint8_t ch = (uint8_t)(alloc->base + c);
 		for (uint8_t p = 0; p < REAC_HEADAMP_NPARAMS; p++)
-			if (put_groupa(sweep[k++], ch, p,
-			               reac_grant_headamp_value(tx, ch, p)) != 0)
-				return -1;
+			values[c * REAC_HEADAMP_NPARAMS + p] =
+				reac_grant_headamp_value(tx, ch, p);
 	}
-	return k;
+	return reac_ctrl_build_grant_sweep(sweep, max, alloc->base, w, values);
 }
