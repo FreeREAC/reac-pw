@@ -80,8 +80,10 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
  * <reac/reac_ctrlblk.h>: they are the wire format, one copy, in the library. */
 
 
-/* SENS VALUE <-> dB (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).
- * pad off: 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on: 0x00 = +10 .. 0x37 = -45.
- * sens_value clamps into 0x00..0x37. */
+/* The SENS step -> dBu curve lives in <reac/reac_ctrlblk.h> with the sweep it
+ * rests on (reac_headamp_sens_cdb and its inverse). It was spelled out here as
+ * well, and a law with two homes is a law that can drift: this copy and the ksy's
+ * agreed on 1 dB per step while libreac's table said otherwise, and two of three
+ * agreeing is exactly how a number looks confirmed when nobody has measured it. */
 
 #endif /* REAC_CTRL_H */

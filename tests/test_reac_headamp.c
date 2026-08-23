@@ -171,85 +171,88 @@ int main(void)
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_PAD, 0x02) == 0);
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_SENS, 0x38) == 0);
 
-	/* 6. SENS dB codec at all anchors (dB = -10 - value + (pad ? 20 : 0)):
-	 * pad off 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on 0x00 = +10 .. 0x37 = -45. */
-	/* THE SENS CURVE IS A TABLE, NOT A CONSTANT — and not the 1.235 dB/step I
-	 * reported from a microphone either. That figure came from an acoustic source
-	 * that is not stable enough for the job: the identical 32->12 command measured
-	 * 24.7 dB in one session and 18.9 dB in another, while the noise floor gave
-	 * -91.4 and -102.7 both times, to 0.1 dB.
+	/* 6. SENS dB codec at all anchors: dB = -10 - value + (pad ? 20 : 0).
+	 * Pad off 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on 0x00 = +10 .. 0x37 = -45.
 	 *
-	 * The authority is the box's own 56-entry table at 0x0c0327a0, and the scale
-	 * comes from the floor, which tracks gain exactly inside a stage and
-	 * reproduces to 0.03 dB. Measured on an S-0808:
+	 * ONE DECIBEL PER STEP, MEASURED — and this block is where two earlier
+	 * answers were buried, so neither comes back.
 	 *
-	 *   stage 2 (idx  8..23)  0.90 dB/step      break 8   no gain step
-	 *   stage 1 (idx 24..39)  0.95 dB/step      break 24  no gain step
-	 *   stage 0 (idx 40..55)  0.98 dB/step      break 40  no gain step
-	 *   stage 3 (idx  0.. 7)  unmeasured, assumed 0.90 (its floor is under the
-	 *                         converter's, so it cannot be read this way)
+	 * The first was 1.235 dB/step from a microphone. That source is not stable
+	 * enough for the job: the identical 32->12 command measured 24.7 dB in one
+	 * session and 18.9 dB in another.
 	 *
-	 * Span 48.75 dB, not 55. The breaks were confirmed at exactly the indices the
-	 * firmware table predicts, and they carry no gain step: across 23->24 the
-	 * signal is flat while the floor drops 6.06 dB, so what changes there is the
-	 * noise figure, not the gain.
+	 * The second was the box's own 56-entry table at 0x0c0327a0, scaled by the
+	 * preamp's NOISE FLOOR — 0.90/0.95/0.98 dB per step inside three stages and
+	 * no gain step at all across the breaks at 8, 24 and 40, for a span of 48.75
+	 * dB and a curve that is not injective. The floor reproduces beautifully
+	 * (0.03 dB) and is still the wrong probe: it measures gain x input-referred
+	 * noise PLUS the noise added after the gain, and that second term does not
+	 * scale, so its slope is always shallower than the gain's.
+	 *
+	 * What settled it (2026-08-23, S-0808, output 1 cabled to input 1, so the
+	 * source is an electrical loopback of a level we generated): all 56 steps
+	 * swept at three generator levels, span 54.60 dB, least-squares slope 0.988
+	 * dB/step with a maximum residual of 0.44 dB — the size of the measurement's
+	 * own scatter, so the law is the round 1 dB. The pad measured 20.12 and 20.20
+	 * dB at two different steps, which is the check that this dB axis is the
+	 * box's. Raw data: docs/measurements/sens-sweep-2026-08-23-*.csv.
 	 *
 	 * Changing the scale is a contract change — the conversion runs both ways,
 	 * reac_slave.c derives virtual preamp gain from it, and openmixer publishes
 	 * sensDbu — so these assertions exist to make the next change deliberate. */
-	/* Endpoints. The span is 48.75 dB across the 56 steps, not the 55 dB a flat
-	 * 1 dB per step implies — see the header for how each stage was measured. */
 	CHK(reac_headamp_sens_cdb(0x00, 0) == -1000);
-	CHK(reac_headamp_sens_cdb(0x37, 0) == -1000 - 4875);
+	CHK(reac_headamp_sens_cdb(0x37, 0) == -6500);
 	CHK(reac_headamp_sens_cdb(0x00, 1) ==  1000);
-	CHK(reac_headamp_sens_cdb(0x37, 1) ==  1000 - 4875);
+	CHK(reac_headamp_sens_cdb(0x37, 1) == -4500);
 	CHK(reac_headamp_sens_db(0x00, 0) == -10);
-	CHK(reac_headamp_sens_db(0x37, 0) == -59);   /* -58.75, rounded */
+	CHK(reac_headamp_sens_db(0x37, 0) == -65);
 	CHK(reac_headamp_sens_value_cdb(-1000, 0) == 0x00);
-	CHK(reac_headamp_sens_value_cdb(-1000 - 4875, 0) == 0x37);
+	CHK(reac_headamp_sens_value_cdb(-6500, 0) == 0x37);
 
-	/* THE CURVE IS NOT A LINE, and this is where that is pinned. Steps inside a
-	 * stage differ by stage, and the three stage breaks carry NO gain step at
-	 * all. A single constant cannot express this, which is the entire reason the
-	 * conversion is a table. */
-	CHK(reac_headamp_sens_cdb(9, 0)  - reac_headamp_sens_cdb(10, 0) == 90);  /* stage 2 */
-	CHK(reac_headamp_sens_cdb(25, 0) - reac_headamp_sens_cdb(26, 0) == 95);  /* stage 1 */
-	CHK(reac_headamp_sens_cdb(41, 0) - reac_headamp_sens_cdb(42, 0) == 98);  /* stage 0 */
-	CHK(reac_headamp_sens_cdb(7, 0)  == reac_headamp_sens_cdb(8, 0));        /* break */
-	CHK(reac_headamp_sens_cdb(23, 0) == reac_headamp_sens_cdb(24, 0));       /* break */
-	CHK(reac_headamp_sens_cdb(39, 0) == reac_headamp_sens_cdb(40, 0));       /* break */
+	/* EVERY step is 100 cdB, including the three the firmware's stage breaks sit
+	 * on. Those breaks were put to a rapid A/B/A alternation twice each, at two
+	 * generator levels, and every pair moved about a decibel against a drift
+	 * control an order of magnitude smaller:
+	 *
+	 *    7 -> 8    +0.92 / +1.12 dB   (control 0.08 / 0.10)
+	 *   23 -> 24   +1.36 / +1.31 dB   (control 0.34 / 0.15)
+	 *   39 -> 40   +0.97 / +0.84 dB   (control 0.26 / 0.08)
+	 *
+	 * The 6.06 dB floor drop at 23->24 is real and unchanged; it is a
+	 * noise-figure step sitting on top of an ordinary gain step, not instead of
+	 * one. Asserting every step, not a sample, because the claim being refuted
+	 * was specifically about three of them. */
+	for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++)
+		CHK(reac_headamp_sens_cdb((uint8_t)v, 0) -
+		    reac_headamp_sens_cdb((uint8_t)(v + 1), 0) == 100);
 
-	/* ROUND TRIP, in centi-dB where it is exact: step -> dB -> step is the
-	 * identity everywhere except the three lower twins of a break, which the
-	 * reverse lookup deliberately promotes to their quieter partner (same gain,
-	 * 6.06 dB less noise). Asserting the exception rather than excusing it. */
+	/* ROUND TRIP, both units, no exceptions. The map is injective now that the
+	 * three twins are gone, so step -> dB -> step is the identity for all 56
+	 * values with the pad either way — and the whole-dB pair round-trips too,
+	 * which the table's sub-dB steps made impossible. */
 	for (int pad = 0; pad <= 1; pad++) {
 		for (int v = 0; v <= REAC_HEADAMP_SENS_MAX; v++) {
-			int back = reac_headamp_sens_value_cdb(
-				reac_headamp_sens_cdb((uint8_t)v, pad), pad);
-			int expect = (v == 7 || v == 23 || v == 39) ? v + 1 : v;
-			CHK(back == expect);
+			CHK(reac_headamp_sens_value_cdb(
+				reac_headamp_sens_cdb((uint8_t)v, pad), pad) == v);
+			CHK(reac_headamp_sens_value(
+				reac_headamp_sens_db((uint8_t)v, pad), pad) == v);
 		}
 	}
-
-	/* The whole-dB pair is LOSSY and must not be trusted to round-trip: the
-	 * device's steps are all under 1 dB, so neighbouring steps collide on one
-	 * integer. Pinned as a known limitation so nobody re-derives it as a bug. */
 	{
 		int collisions = 0;
 		for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++)
 			if (reac_headamp_sens_db((uint8_t)v, 0) ==
 			    reac_headamp_sens_db((uint8_t)(v + 1), 0))
 				collisions++;
-		CHK(collisions > 0);
+		CHK(collisions == 0);
 	}
 
 	CHK(reac_headamp_sens_value(99, 0) == 0x00);      /* hotter than min gain */
-	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */     /* below max gain */
+	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */
 
 	printf("OK: head-amp record byte-exact vs the M-200 capture (inner 0x80 / "
-	       "outer sum-0), TAG dispatch grant-safe, SENS codec is the firmware's\n"
-	       "56-entry table: per-stage steps, no gain at the three breaks, and a\n"
-	       "centi-dB round trip that is the identity bar the promoted twins\n");
+	       "outer sum-0), TAG dispatch grant-safe, SENS codec is one dB per step\n"
+	       "across all 56 — no gain twins at the firmware's stage breaks — and the\n"
+	       "round trip is the identity in both units\n");
 	return 0;
 }
