@@ -114,7 +114,7 @@ reac_pw_src = [
   'src/reac_clock.c',
 ]
 
-executable('reac-pw',
+reac_pw_exe = executable('reac-pw',
   reac_pw_src,
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep],
   install : true)
@@ -534,3 +534,12 @@ bench_hotpath = executable('bench_hotpath',
   include_directories : [include_directories('src'), include_directories('tests')],
   dependencies : [libreac_dep, threads_dep, m_dep],
   build_by_default : true)
+
+# --- CLI text: --headamp's advertised CH bound must match the head-amp space ---
+# (REAC_HEADAMP_MAX_CH, 48 slots — an S-1608 at base 0x20 occupies 32..47) rather
+# than the audio-fabric width (40, wire channels 0..39). Runs the built binary
+# with no args (usage()) and reads its own stderr, so a future edit of the help
+# string is caught the same way an operator misreading it would be.
+usage_test = executable('test_reac_headamp_usage',
+  ['tests/test_reac_headamp_usage.c'])
+test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
