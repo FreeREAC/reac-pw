@@ -37,9 +37,9 @@
 
 #include "reac_ctrl.h"   /* REAC_HEADAMP_MAX_CH, enum reac_headamp_param */
 
-/* The three head-amp params (indices into the per-channel row), aligned with
- * enum reac_headamp_param (PHANTOM=0, PAD=1, SENS=2). */
-#define REAC_HEADAMP_NPARAMS 3
+/* REAC_HEADAMP_NPARAMS (3, aligned with enum reac_headamp_param: PHANTOM=0,
+ * PAD=1, SENS=2) comes from <reac/reac_ctrlblk.h> — it is a bound on the records
+ * themselves, so it is declared once, with them. */
 
 /* Slots between consecutive records DURING a complete-scene replay. Matches the
  * grant burst's stride so the head-amp overlay never bunches records onto
