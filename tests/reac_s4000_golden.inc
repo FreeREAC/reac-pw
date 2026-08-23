@@ -41,7 +41,7 @@
  *
  * Regenerate: dump frame[0:50] of the named packets with
  * reac-captures/analysis/reac_pcap.py (offsets per reac_ctrl.c: counter@14,
- * type@16, op@18/19, op_len@20-21 BE, sel/sel2@22/23). */
+ * type@16, link@18, seg@19, len@20-21 BE, opcode@22). */
 
 struct s4000_gold {
 	uint16_t    len;         /* real wire length (frames carry the OHRCA +2) */

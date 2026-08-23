@@ -52,8 +52,11 @@ int main(void)
 	o = reac_fsm_step(&fsm, FSM_EV_TICK, NULL);
 	CHK(o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);
 
-	/* learn the master from its L2 source (a probe): still flooding, still no join */
-	struct reac_ctrl_parsed probe = mk(REAC_CTRL_PROBE, M);
+	/* learn the master from its L2 source (its scene push): still flooding, still no
+	 * join. This used to be spelled PROBE — the parser's link-1 catch-all. Link 1
+	 * opcode 0x00 is the master's enrolment transfer, and its FIRST/MIDDLE/LAST
+	 * segment states are what the catch-all was reading as separate "sub-states". */
+	struct reac_ctrl_parsed probe = mk(REAC_CTRL_SCENE_TRANSFER, M);
 	o = reac_fsm_step(&fsm, FSM_EV_RX, &probe);
 	CHK(o.state == FSM_FLOOD_ANNOUNCE && o.action == FSM_ACT_FLOOD_BCAST && !o.emit_join);
 	CHK(fsm.have_master && memcmp(fsm.master_mac, M, 6) == 0);
@@ -139,7 +142,7 @@ int main(void)
 	CHK(fsm.state == FSM_ESTABLISHED && memcmp(fsm.master_mac, M, 6) == 0);
 	{
 		struct reac_ctrl_parsed hb2b = mk(REAC_CTRL_MASTER_HB, M2);
-		struct reac_ctrl_parsed p2   = mk(REAC_CTRL_PROBE, M2);
+		struct reac_ctrl_parsed p2   = mk(REAC_CTRL_SCENE_TRANSFER, M2);
 		struct reac_ctrl_parsed g2   = mk(REAC_CTRL_GRANT, M2);
 		o = reac_fsm_step(&fsm, FSM_EV_RX, &hb2b);          /* new MAC -> DROP */
 		CHK(o.state == FSM_DROP && fsm.drop_reason == FSM_DROP_MAC_CHANGE);

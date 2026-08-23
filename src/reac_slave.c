@@ -305,11 +305,13 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 				          s->box_channels);
 				break;
 			case 6:
-				/* ANNOUNCE OUR EXACT MODEL — the ASCII name frame. Required for the
-				 * 0x84 family (S-0808 etc.) so the desk shows the real model, not the
-				 * generic family name (live M-200, 2026-07-11). Returns 0 for the 0x82
-				 * family (named by selector) -> emit a plain upstream filler instead. */
-				len = reac_ctrl_build_name_frame(frame, s->fsm.master_mac, s->src,
+				/* ANNOUNCE OUR EXACT MODEL — the FIRST half of the identity record:
+				 * the DT1 preamble, TAG 0x0500 and the ASCII model name. Required for
+				 * the 0x84 family (S-0808 etc.) so the desk shows the real model, not
+				 * the generic family name (live M-200, 2026-07-11). Returns 0 for the
+				 * 0x82 family (named by selector) -> emit a plain upstream filler
+				 * instead. Case 7 carries the other half and MUST follow it. */
+				len = reac_ctrl_build_identity_first(frame, s->fsm.master_mac, s->src,
 				          counter, s->box_channels);
 				if (len == 0)
 					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
@@ -317,10 +319,14 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					          REAC_SAMPLES_PER_PKT);
 				break;
 			case 7:
-				/* The extra inventory frame (cdea 04 02 000d) some models send — the
-				 * mixer reads it WITH the 0016/001a inventory to name the exact model.
-				 * Returns 0 for models without it -> plain upstream filler. */
-				len = reac_ctrl_build_extra_frame(frame, s->fsm.master_mac, s->src,
+				/* THE OTHER HALF OF THE SAME MESSAGE. The identity record is one
+				 * Roland SysEx that arrives as two link-4 fragments, and its inner
+				 * checksum closes only ACROSS BOTH: this one carries that closing
+				 * byte and the f7 that ends it. Sending case 6 without this puts a
+				 * record on the wire nothing can verify, which is why one flag in
+				 * the model row gates both and both return 0 for the same models.
+				 * It rides the very next grid slot, so the pair stays in order. */
+				len = reac_ctrl_build_identity_last(frame, s->fsm.master_mac, s->src,
 				          counter, s->box_channels);
 				if (len == 0)
 					len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,

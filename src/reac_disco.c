@@ -21,27 +21,27 @@ const char *reac_disco_role_name(enum reac_disco_role r)
  * JOIN's full signature can. This matcher covers the FULL escalation a real box
  * walks — 0014 -> 0013 -> 0016 -> 001a, sel 00 02 — box-only in every golden
  * (S-1608 2026-07-11; S-4000S on M-200, M-5000 and coldboot: reac_s4000_golden.inc).
- * It deliberately ACCEPTS MORE than the FSM's action matcher (reac_ctrl.c:~160),
- * which grants only on 0013/0014: a 0016/001a is evidence a box is out there even
- * while the FSM rightly refuses to treat it as the grant trigger.
+ * It deliberately ACCEPTS MORE than the FSM's action matcher in reac_ctrl.c, which
+ * grants only on the join and box-ready tags: an IDENTITY record is evidence a box
+ * is out there even while the FSM rightly refuses to treat it as the grant
+ * trigger.
  *
- * Known residue: the master's grant ECHO (0014, TAG 01 00) is byte-identical to the
- * box's 0014 join, so those few frames misfile as BOX (4 in 70913 in the M-200
- * golden); no per-frame signature can split them — direction resolution is the
- * sighting table's corroboration job (arbitration spec §4, issue #90). */
+ * Known residue: the master's grant ECHO (TAG 01 00) is byte-identical to the box's
+ * join, so those few frames misfile as BOX (4 in 70913 in the M-200 golden); no
+ * per-frame signature can split them — direction resolution is the sighting table's
+ * corroboration job (arbitration spec §4, issue #90).
+ *
+ * THE MATCHER IS ON THE DT1 TAG, NOT THE LENGTH. It used to accept block[2:4] in
+ * { 0x0013, 0x0014, 0x0016, 0x001a }, which is the same four containers by their
+ * lengths; the tags they carry are the join grant, box-ready and the two identity
+ * records. A length test is what the old two-byte "opcode" reading forced, and it
+ * survives only while every container happens to be full. */
 static int is_box_join(const struct reac_ctrl_parsed *p)
 {
-	return (p->op_len == 0x0013 || p->op_len == 0x0014 ||
-	        p->op_len == 0x0016 || p->op_len == 0x001a) &&
-	       p->sel == 0x00 && p->sel2 == 0x02;
-}
-
-/* The box's config-announce is cdea 01 03 0010 — op0 == 0x01, so reac_ctrl_parse files
- * it under REAC_CTRL_PROBE (reac_ctrl.c:87), a MASTER kind. Keying role off the kind
- * would file every self-declaring box as a rival master. */
-static int is_box_config(const struct reac_ctrl_parsed *p)
-{
-	return p->op0 == 0x01 && p->op1 == 0x03 && p->op_len == 0x0010;
+	return p->opcode == 0x00 &&           /* the DT1 container's own header byte */
+	       (p->dt1_tag == REAC_DT1_TAG_JOIN ||
+	        p->dt1_tag == REAC_DT1_TAG_BOX_READY ||
+	        p->dt1_tag == REAC_DT1_TAG_IDENTITY);
 }
 
 static enum reac_disco_role role_of(const struct reac_ctrl_parsed *p)
@@ -64,27 +64,32 @@ static enum reac_disco_role role_of(const struct reac_ctrl_parsed *p)
 		                           * preamp records (m200-headamp-re/DECODE.md;
 		                           * x204 in the S-4000 M-200 golden) */
 		return REAC_DISCO_ROLE_MASTER;
-	case REAC_CTRL_GRANT:             /* cdea 04 03 — BOTH directions use it */
+	case REAC_CTRL_GRANT:             /* a link-4 record — BOTH directions use it */
 		return is_box_join(p) ? REAC_DISCO_ROLE_BOX : REAC_DISCO_ROLE_MASTER;
-	case REAC_CTRL_PROBE:
-		/* cdea 01, the parser's catch-all. Arbitration makes this verdict
-		 * load-bearing, so only CAPTURED signatures name a role:
-		 *   - op1 00/01/02 = the master hunt + sub-state families (M-300 RE
-		 *     #130; M-200 and M-5000 goldens: 01 00 001a, 01 01 0018,
-		 *     01 02 000e) -> MASTER;
-		 *   - 01 03 is a DECLARATION family BOTH sides use (0019 master HB,
-		 *     0001 box HB — their own kinds above — and 0010 the box config);
-		 *     beyond those three, and for any other op1, nobody has captured
-		 *     the frame, and a frame nobody has captured must not be able to
-		 *     flip the segment's topology (arbitration spec §4) -> UNKNOWN,
-		 *     still a visible sighting. */
-		if (is_box_config(p))
-			return REAC_DISCO_ROLE_BOX;
-		if (p->op1 <= 0x02)
-			return REAC_DISCO_ROLE_MASTER;
-		return REAC_DISCO_ROLE_UNKNOWN;
-	default:                          /* incl. SPLIT_ANNOUNCE: real gear, role
-		                           * unproven until one is captured (§14.1) */
+	case REAC_CTRL_CONFIG_ANNOUNCE:
+		/* The box's own declaration (link 1, opcode 0x80/0x82/0x84). It used to
+		 * land in the parser's link-1 catch-all and had to be dug back out by
+		 * hand, or every self-declaring box filed as a rival master. */
+		return REAC_DISCO_ROLE_BOX;
+	case REAC_CTRL_SCENE_TRANSFER:
+		/* Link 1, opcode 0x00, in any of its four segment states — the master's
+		 * enrolment push. This is what the old code saw as "the master hunt
+		 * sub-state families 01 00 001a / 01 01 0018 / 01 02 000e" and named
+		 * MASTER off block[1] <= 2: three segment states of one transfer read as
+		 * three opcodes. Master-only, and now for the reason rather than the
+		 * pattern. */
+		return REAC_DISCO_ROLE_MASTER;
+	default:
+		/* Arbitration makes this verdict load-bearing, so only CAPTURED
+		 * signatures name a role and everything else stays a visible sighting
+		 * with no role. That now covers GROUP_MAP (link 1, opcode 0x10, which
+		 * only the S-4000S image even handles), RECORD_FRAGMENT (half a record:
+		 * its tag and checksum are not readable until the other half arrives),
+		 * LINK2, SPLIT_ANNOUNCE (real gear, none captured, §14.1) and
+		 * UNKNOWN_CTRL. The old code answered MASTER for anything on link 1
+		 * whose block[1] was <= 2 whatever its opcode; a frame nobody has
+		 * captured must not be able to flip the segment's topology
+		 * (arbitration spec §4). */
 		return REAC_DISCO_ROLE_UNKNOWN;
 	}
 }
