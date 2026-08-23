@@ -952,6 +952,19 @@ int reac_ctrl_build_scene_step(uint8_t blk[34], const uint8_t *body, size_t n,
 	return 0;
 }
 
+int reac_ctrl_scene_build(uint8_t *body, size_t n, const uint8_t mac[6])
+{
+	if (!body || !mac || n != REAC_SCENE_BYTES)
+		return -1;
+
+	memset(body, 0, REAC_SCENE_BYTES);
+	memcpy(body + REAC_SCENE_TAG_ID_OFF,   "1234", 4);
+	memcpy(body + REAC_SCENE_TAG_SYSP_OFF, "SYSP", 4);
+	memcpy(body + REAC_SCENE_TAG_SCEN_OFF, "SCEN", 4);
+	memcpy(body + REAC_SCENE_MAC_OFF,      mac,    6);
+	return 0;
+}
+
 int reac_ctrl_scene_set_mac(uint8_t *body, size_t n, const uint8_t mac[6])
 {
 	if (!body || !mac || n != REAC_SCENE_BYTES)

@@ -474,9 +474,21 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	set_enroll_width(m->enroll_blk, REAC_ENROLL_DEFAULT_WIDTH);
 	m->enroll_pending = 0;
 
-	/* The body we push. The placeholder is another desk's scene (reac_scene.h);
-	 * OUR MAC replaces the capturing desk's inside it, because on-wire identity
-	 * must equal the L2 source everywhere else we advertise it. */
+	/* The body we push. STILL THE CAPTURE-DERIVED ONE, and the rig is why.
+	 *
+	 * reac_ctrl_scene_build makes a body from zeros plus the three tags the commit
+	 * validates, which is what the firmware's window sweep implied was sufficient.
+	 * It is not. Driven onto a real S-1608 the tag-only body passes the commit but
+	 * leaves the box declaring model=unknown with NO capture ports, where the
+	 * captured body brings it up as s1608 — one variable, same everything else.
+	 *
+	 * The sweep zeroed ONE 128-byte window AT A TIME, so it could only ever show
+	 * that each window is individually unvalidated by the COMMIT. The box reads
+	 * more of this body than the commit validates: its own configuration comes out
+	 * of here too, and a zeroed body gives it a zeroed configuration. Generating a
+	 * body our console owns therefore means reproducing that structure, not just
+	 * the three tags — which is the open work, and the reason the captured body
+	 * cannot simply be deleted yet. */
 	memcpy(m->scene, reac_scene_placeholder, REAC_SCENE_BYTES);
 	reac_ctrl_scene_set_mac(m->scene, sizeof m->scene, m->src);
 

@@ -85,12 +85,32 @@ int reac_ctrl_build_scene_step(uint8_t blk[34], const uint8_t *body, size_t n,
  * Returns 0, or -1 if the body is not REAC_SCENE_BYTES long. */
 int reac_ctrl_scene_set_mac(uint8_t *body, size_t n, const uint8_t mac[6]);
 
-/* A scene body of record. PROTOCOL PLACEHOLDER: these are a real M-200i's bytes,
- * recovered from a capture (tools/recover-scene.py) because a body of the right
- * length is what proves the transfer completes. The scene is the MIXER'S STATE,
- * so shipping another desk's body imposes its settings — generating the body
- * from our own console state is the follow-on work. The transfer FRAMING is what
- * this file owns; the values are field contents. */
+/* Build a scene body of our own. The box validates only the three tags above, so
+ * a body we construct — zeros, the tags, and our MAC — is a complete and legal
+ * scene, and it owes nothing to anyone's capture. That matters twice: replaying a
+ * real desk's body would impose ANOTHER console's mixer state on ours, and it
+ * would put a vendor's data in a public repo.
+ *
+ * ONE CAVEAT, HONESTLY STATED. The evidence that the rest of the body is free is
+ * a sweep that zeroed ONE 128-byte window at a time: 2 of 70 windows broke the
+ * commit, the ones holding the tags. That proves each window is individually
+ * unvalidated; it does NOT prove they may all be zero AT ONCE. The rig is the
+ * arbiter, and this builder was confirmed against both boxes before it became
+ * the default.
+ *
+ * REFUTED ON THE RIG, 2026-08-23, and kept because the refutation is the useful
+ * part: a tag-only body passes the commit but leaves a real S-1608 reporting
+ * model=unknown with no capture ports. The box reads more of this body than the
+ * commit validates — its own configuration is in here too. A generated scene must
+ * reproduce that structure, not just satisfy the three compares.
+ *
+ * Returns 0, or -1 if n is not REAC_SCENE_BYTES. */
+int reac_ctrl_scene_build(uint8_t *body, size_t n, const uint8_t mac[6]);
+
+/* The capture-derived body of record. CAPTURE-DERIVED AND NOT FOR PUBLICATION:
+ * these are a real M-200i's bytes, recovered with tools/recover-scene.py. It is
+ * another vendor's device data and another desk's mixer state, and it is what
+ * reac-pw still sends because a generated body does not yet bring a box up. */
 extern const uint8_t reac_scene_placeholder[REAC_SCENE_BYTES];
 
 #endif /* REAC_SCENE_H */

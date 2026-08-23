@@ -317,12 +317,19 @@ int main(void)
 	 * body of the wrong length or a mis-sliced payload fails here. */
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene, 0) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0, planar);
-	CHK(memcmp(f + 16, GOLD_SUB01, 34) == 0);
+	CHK(f[16] == 0xcd && f[17] == 0xea);
+	CHK(f[18] == 0x01 && f[19] == 0x01);              /* op-0101              */
+	CHK(f[20] == 0x00 && f[21] == 0x18);              /* 24-byte payload      */
+	CHK(f[23] == 0x22 && f[24] == 0xc8);              /* declares the total   */
+	CHK(memcmp(f + 25, m.scene, REAC_SCENE_HEAD_BYTES) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene,
 	                               REAC_SCENE_STEPS - 1) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_TAIL, 0, planar);
-	CHK(memcmp(f + 16, GOLD_SUB02, 34) == 0);
+	CHK(f[18] == 0x01 && f[19] == 0x02);              /* op-0102              */
+	CHK(f[20] == 0x00 && f[21] == 0x0e);              /* 14-byte payload      */
+	CHK(memcmp(f + 23, m.scene + REAC_SCENE_BYTES - REAC_SCENE_TAIL_BYTES,
+	           REAC_SCENE_TAIL_BYTES) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* 5. chanmap window 0 (the fe frame) lists the marker + channels 0x00..0x06. */
@@ -428,14 +435,14 @@ int main(void)
 	CHK(n_cm    >= 50 && n_cm    <= 53);        /* chanmap: ONE window per cycle */
 	CHK(n_ann   >= 138 && n_ann  <= 141);       /* cfea free-runs at ~1/s */
 
-	/* ---- (a2) transfer choreography: the four "specials" are just chunks -----
-	 * What an earlier RE transcribed as four one-off "inventory specials" at
-	 * in-burst indices 30..33 (measured 11/11 bursts on the M-300 establish
-	 * capture) are chunks 30..33 OF THE BODY — the zeros run, the desk MAC, the
-	 * SYSP token and the SCEN token all fall at those offsets. Asserting them here
-	 * keeps that identification honest: transcribed bytes on one side, the body
-	 * slice on the other. Every chunk also publishes its checksum as the FILLER
-	 * descriptor. */
+	/* ---- (a2) transfer choreography: the "specials" are the VALIDATED tags -----
+	 * What an earlier RE transcribed as one-off "inventory specials" at in-burst
+	 * indices 31..33 are chunks 31..33 of the body: our MAC at +0x340, "SYSP" at
+	 * +0x368 and "SCEN" at +0x37c. Two of those three are exactly what the box's
+	 * state-4 commit validates before promoting any head-amp, so this asserts they
+	 * reach the WIRE on the right chunks — the body holding them is not enough
+	 * when the failure mode is a middle chunk being overwritten. Every chunk also
+	 * publishes its checksum as the FILLER descriptor. */
 	reac_master_init(&m, SRC, &idle, FPS);
 	cnt = 0;
 	int specials_seen = 0;
@@ -447,10 +454,7 @@ int main(void)
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY chunk */
 		int chunk = m.scene_step - 1;             /* 0-based index into the body */
-		if (chunk == 30) {                        /* the zeros run */
-			CHK(f[49] == 0xdd);
-			specials_seen++;
-		} else if (chunk == 31) {                 /* carries a MAC: OURS, substituted */
+		if (chunk == 31) {                        /* carries a MAC: OURS */
 			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
 			specials_seen++;
 		} else if (chunk == 32) {                 /* the "SYSP" token */
@@ -461,7 +465,7 @@ int main(void)
 			specials_seen++;
 		}
 	}
-	CHK(specials_seen == 2 * 4);                  /* all 4 specials, EVERY burst */
+	CHK(specials_seen == 2 * 3);                  /* MAC + SYSP + SCEN, EVERY transfer */
 
 	/* ---- (b) the golden response sequence -------------------------------- */
 	/* presence-flood alone must NOT grant (the golden rule) */
