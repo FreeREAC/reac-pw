@@ -39,6 +39,7 @@
 #include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
+#include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
 #include "reac_seglock.h"    /* one master per segment, across processes */
 
 #include <pipewire/pipewire.h>
@@ -381,7 +382,7 @@ int main(int argc, char **argv)
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();
 
-	const char *rate_provenance = "auto-detect from the wire cadence";
+	enum reac_conf_layer rate_layer = REAC_CONF_NONE;
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
@@ -429,7 +430,7 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			rxcfg.forced_rate = rate;
-			rate_provenance = "--rate on the command line";
+			rate_layer = REAC_CONF_ARGV;
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
 		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
@@ -594,12 +595,43 @@ int main(int argc, char **argv)
 	 * to remember: the journal now carries the provenance beside the value, so a
 	 * 96 k master pointed at a 48 k segment says so in its first two lines. */
 	if (role == REAC_ROLE_MASTER && rxcfg.forced_rate == 0) {
-		rxcfg.forced_rate = REAC_MASTER_DEFAULT_RATE;
-		rate_provenance = "the master default (nothing else said otherwise)";
+		/* Walk the LAYERS before falling back to the compiled-in default. The
+		 * order is declared in reac_conf.h and pinned by test_reac_conf; this
+		 * call is the only place it is implemented, so there is one order and
+		 * not one per reader. */
+		char v[64];
+		const char *seg = (rxcfg.kind == REAC_RX_LIVE) ? rxcfg.source : NULL;
+		enum reac_conf_layer got = reac_conf_lookup("REAC_RATE", seg, NULL,
+		                                           v, sizeof v);
+		if (got != REAC_CONF_NONE) {
+			int r = atoi(v);
+			if (r == 44100 || r == 48000 || r == 96000) {
+				rxcfg.forced_rate = r;
+				rate_layer = got;
+			} else {
+				/* A layer that answered with nonsense must SAY so and be
+				 * skipped, not silently drop us to the built-in with no
+				 * explanation — that is how a config file gets blamed for
+				 * working and a default gets blamed for not. */
+				fprintf(stderr, "reac-pw: ignoring REAC_RATE='%s' from %s — REAC "
+				        "runs at 44100, 48000 or 96000 Hz and nothing else\n",
+				        v, reac_conf_layer_name(got));
+			}
+		}
+		if (rxcfg.forced_rate == 0) {
+			rxcfg.forced_rate = REAC_MASTER_DEFAULT_RATE;
+			rate_layer = REAC_CONF_BUILTIN;
+		}
 	}
-	fprintf(stderr, "reac-pw: REAC rate = %d Hz (%d pps) from %s\n",
+	/* NAME THE LAYER THAT ANSWERED, not merely the value. A layered config that
+	 * cannot tell you which layer won is a debugging trap, and this rig has
+	 * already spent a morning on exactly that class of confusion: three sources
+	 * disagreed about the rate at once and the startup line printed only the
+	 * number. */
+	fprintf(stderr, "reac-pw: REAC rate = %d Hz (%d pps), from %s\n",
 	        rxcfg.forced_rate, rxcfg.forced_rate / REAC_SAMPLES_PER_PKT,
-	        rate_provenance);
+	        rate_layer == REAC_CONF_NONE ? "auto-detect from the wire cadence"
+	                                     : reac_conf_layer_name(rate_layer));
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
