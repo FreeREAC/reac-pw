@@ -49,12 +49,30 @@
  * 1..REAC_SCENE_CHUNKS the chunks, the last step the final. */
 #define REAC_SCENE_STEPS   (1 + REAC_SCENE_CHUNKS + 1)
 
+/* WHAT THE BOX ACTUALLY VALIDATES. The state-4 commit does three four-byte
+ * compares before it promotes anything, and fails ALL promotion if any one of
+ * them misses — while the transfer still looks complete from outside. Found by
+ * executing the S-1608's own task loop over captured control blocks: zeroing the
+ * body 128 bytes at a time, exactly 2 of 70 windows break the commit, and they
+ * are the ones holding these tags. Everything else in the 8904 bytes can be zero.
+ *
+ * This is why byte-perfect head-amp records never lit a 48 V LED. "1234" rides
+ * the header, but SYSP and SCEN ride op-0100 chunks 32 and 33 — middle chunks,
+ * which the old synthetic pattern overwrote. We had never sent two of the three,
+ * so the commit refused the body and nothing was ever promoted out of staging.
+ *
+ * A GENERATED scene must carry all three at these offsets or it will be refused
+ * in exactly the same silent way. */
+#define REAC_SCENE_TAG_ID_OFF    0x000   /* "1234" — rides the op-0101 header  */
+#define REAC_SCENE_TAG_SYSP_OFF  0x368   /* "SYSP" — rides op-0100 chunk 32    */
+#define REAC_SCENE_TAG_SCEN_OFF  0x37c   /* "SCEN" — rides op-0100 chunk 33    */
+
 /* The master's own MAC sits INSIDE the body, 6 bytes at this offset — it is the
  * L2 source of the desk that sent the capture the body came from, so a master
  * replaying a recovered body must substitute its own (reac_ctrl_scene_set_mac).
  * On-wire identity must equal the L2 source; a cloned desk MAC is a
  * slave-disconnect trigger, exactly as for the cfea announce. */
-#define REAC_SCENE_MAC_OFF       832
+#define REAC_SCENE_MAC_OFF     0x340   /* = 832; the desk writes its own here */
 
 /* Build one step of the transfer into a 34-byte [type|block] template (the shape
  * the master stamps into frame [16:50]), checksum applied. `body` is the scene

@@ -47,6 +47,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <linux/if_packet.h>
 
 static struct pw_main_loop *g_loop;
 
@@ -66,6 +70,43 @@ static int parse_mac(const char *s, uint8_t out[6])
 	for (int i = 0; i < 6; i++)
 		out[i] = (uint8_t)b[i];
 	return 0;
+}
+
+/* Why the AF_PACKET TX could not open, said in words the operator can act on.
+ *
+ * FILE CAPABILITIES LIVE ON THE INODE, AND EVERY RELINK MAKES A NEW ONE — so a
+ * plain `meson compile` silently drops cap_net_raw, and a reac-pw without it
+ * cannot open a raw socket. It used to carry on from there: PipeWire nodes
+ * appeared, the log looked ordinary, and the box simply never synced. That is
+ * the failure this refusal exists to convert into a named one. A probe socket
+ * separates the two causes, because "needs CAP_NET_RAW?" with a question mark
+ * made every reader check the interface first.
+ *
+ * Same class as the vanished-interface alarm: a daemon that cannot do its one
+ * job must say so and stop, not run deaf. */
+static void explain_tx_failure(const char *ifname)
+{
+	int s = socket(AF_PACKET, SOCK_RAW, 0);
+	int no_cap = (s < 0 && errno == EPERM);
+	if (s >= 0)
+		close(s);
+
+	if (no_cap) {
+		fprintf(stderr,
+		    "reac-pw: FATAL — no CAP_NET_RAW, so the REAC TX socket cannot open and\n"
+		    "         this master would never put a frame on the wire. The binary\n"
+		    "         loses its capabilities on EVERY relink; re-apply them:\n"
+		    "\n"
+		    "           sudo setcap cap_net_raw,cap_sys_nice=ep <path-to>/reac-pw\n"
+		    "\n"
+		    "         tools/build.sh does this and verifies it. Refusing to start.\n");
+	} else {
+		fprintf(stderr,
+		    "reac-pw: FATAL — the REAC TX socket on '%s' could not open, and it is\n"
+		    "         not a capability problem (a raw socket opened fine). Check the\n"
+		    "         interface exists and is up: ip link show %s\n"
+		    "         Refusing to start.\n", ifname, ifname);
+	}
 }
 
 /* Parse "CH:PARAM:VALUE" (a master-role --headamp arg) into *out. CH is the WIRE
@@ -482,10 +523,13 @@ int main(int argc, char **argv)
 		                               * name heuristic alone grades the reference. */
 		                              .clock_ref = getenv("REACPW_CLOCK_REF") };
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
-		if (!sink)
-			fprintf(stderr, "reac-pw: reac:playback sink not created "
-			        "(TX socket on '%s' failed — need CAP_NET_RAW?)\n", tx_if);
-		else {
+		if (!sink) {
+			/* A master with no TX is not a degraded master, it is a silent one:
+			 * it probes nothing, grants nothing and syncs no box, while every
+			 * other sign of health stays green. Refuse instead. */
+			explain_tx_failure(tx_if);
+			exit(1);   /* a refusal, before the loop ever runs */
+		} else {
 			fprintf(stderr, "reac-pw: MASTER role (%s profile) on '%s' — "
 			        "event-driven establishment: probing until the box's "
 			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
