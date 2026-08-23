@@ -50,10 +50,17 @@ lost to `sendto()` EAGAIN leaves a counter GAP; a slot the loop never ran leaves
 the counter CONTIGUOUS across a hole in time. All 357 968 consecutive deltas are
 exactly 1.
 
-**`tx_errors` during established audio is ZERO** — confirmed independently by the
-daemon's own counter across both A/B legs (`tx_errors=0` on every heartbeat, 8
-minutes of established audio). The EAGAIN percentages in the shutdown summaries
-are teardown, not steady state, and the open question is closed.
+**READ THIS SENTENCE IF YOU READ NOTHING ELSE HERE: 357 968 consecutive frames
+left the NIC with a sequence-counter delta of exactly 1, across 356 holes in
+time — so not one frame was built and lost, and every hole is a slot the pacer
+never ran. We did not drop packets. We overslept and threw the work away.**
+
+**`tx_errors` during established audio is ZERO.** Confirmed independently by the
+daemon's own counter across all three A/B legs — `tx_errors=0` on every single
+heartbeat through **thirteen minutes** of established audio. **The 26.5% and
+84.6% EAGAIN figures in the shutdown summaries describe TEARDOWN, not running
+audio, and must not be quoted as if they described running audio.** Both runs
+that produced them ended in PROBING; the open question is closed.
 
 So the deficit is **overslept slots being abandoned**: `deadline = now + period`
 re-bases the grid onto the hiccup and the slots are gone for good.
@@ -81,6 +88,7 @@ build emits `reac-health:` lines at all.
 |---|---|---|---|---|---|---|---|
 | **A** | off (`-1`) | off | **−526.7 ppm** | +51 … +1273 ppm | **176–378 frames, 44–94 ms** | 0 | 0 |
 | **B** | 4 slots | off | **−8.7 ppm** | −15 … +6 ppm (one +234 outlier) | **22–62 frames, 5.5–15.5 ms** | 0 | 0 |
+| **D** | 4 slots | on | **−55.7 ppm** (300 s, under a parallel `pnpm build`) | −15 … +15 ppm at rest | **15–72 frames, 3.75–18 ms** | 0 | 0 |
 
 Leg B, cumulative over the run: `late_wakes=423`, of which **`catchup=417`
 repaid on the grid** and only **48 slots abandoned** — against leg A's
@@ -95,9 +103,67 @@ graph→wire buffering **falls from 44–94 ms to 5.5–15.5 ms** — a 66 ms la
 reduction that no other item in the fast-path spec comes close to, taken by
 deleting one line that threw frames away.
 
-Neither leg trimmed, because a freshly started daemon begins with an empty ring
+## 5. Leg D — the SIGN of the rate-match loop, settled on live hardware
+
+A rate matcher whose feedback sign has never been observed on hardware is an
+unverified guard, and an unverified guard is decoration. The sign was therefore
+tested **directionally**, not by watching a number improve — a wrong-sign loop can
+improve a number transiently before it runs away, so "the drift got better" proves
+nothing.
+
+The test: the loop servos the TX ring depth to a setpoint of two producer bursts
+(2 x 21 = 42 frames). Leg B leaves the ring at ~22 frames, i.e. **below** the
+setpoint. A correctly-signed loop must then apply a **POSITIVE** correction (ask
+the resampler for MORE samples) and the depth must rise. An inverted loop applies
+a negative correction, the ring empties to zero and the pacer emits FILLER, which
+is audible.
+
+Observed, from the daemon's own `reac.health.rate-match-ppm` against its own ring
+depth over 300 s:
+
+| ring depth (frames) | correction applied (ppm) |
+|---|---|
+| 15 | **+3571** |
+| 17–20 | +3214 … +3452 |
+| 25 | +2500 … +2857 |
+| 34 | +2381 |
+| 40 | +2024 … +2143 |
+| 47 | +238 … +357 |
+| 55 | **−238** |
+| 72 | **−1548, −1071** |
+
+**The correction is monotonically anti-correlated with the depth error, and it
+CROSSES ZERO at ~50 frames and REVERSES above it.** Crossing zero and changing
+sign is something only negative feedback does; positive feedback drives the
+correction in the same direction as the error and pins it to a rail. It never
+approached either rail (range −1548 … +3571 of ±5000), it never trimmed, and it
+never emptied. **The sign is correct and the loop converges. This is not
+ambiguous.**
+
+The run also produced the answer to whether one lever makes the other
+unnecessary, by accident: a `pnpm build` ran on the same host through the second
+half. The late-wake rate climbed 0.6/s → 7.8/s, the pacer's drift rose to
++170…+200 ppm, the ring started climbing — **and the rate matcher took up the
+slack, swinging to −1548 ppm and holding the depth.** Lever 1 alone would have
+left ~200 ppm under that load and walked the ring to a trim. So:
+
+- **Lever 1 removes the cause** (527 → 8.7 ppm) and is the one that must ship.
+- **Lever 2 catches the residual under load** and is not redundant.
+- Neither on its own is the whole answer, and lever 2 on its own would have been
+  the wrong answer: it would have made a structural 527 ppm loss inaudible
+  instead of absent.
+
+## 6. What was not reached
+
+Leg C (rate match alone) was dropped to spend the window on the configuration
+that actually ships. Legs A and B did not trim, because a freshly started daemon
+begins with an empty ring
 and needs ~11 minutes at leg A's drift to walk from TARGET to HIGH. The discard
 rate is a deterministic consequence of the drift — `discard_fps = drift_ppm ×
 fps / 1e6` — and §3 is the measurement of it on a daemon that had been up for
-hours. Legs C (rate match alone) and D (both) were not reached before the deploy
-window; the harness re-runs them unchanged.
+hours. Leg D ran 300 s and did not trim either, which at its measured drift is
+what should happen: 55.7 ppm is 0.22 frames/s, i.e. one trim every 19 minutes if
+the loop did nothing — and the loop is what stops it reaching there at all.
+
+The rig was RESTORED to `/usr/bin/reac-pw` on enp128s20f0u6 with the original
+command line after leg D; both segments re-established, exactly two masters.
