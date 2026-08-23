@@ -43,6 +43,29 @@ static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 
 #define FPS 8000
 
+/* The S-1608's head-amp base: the chassis strap the box ANNOUNCES (config
+ * announce block[7]) times 0x10. It is a required argument now — the per-width
+ * table it used to be inferred from is deleted, and a box that has not announced
+ * is not a box. Same value the sibling master tests use. */
+#define S1608_BASE 0x20
+
+/* Stand in the quiet window between scene transfers, the way a box that joins
+ * between two pushes does. A JOIN landing mid-push is HELD (reac_master_rx
+ * returns 0) until the push finishes, so without this the JOIN below never opens
+ * GRANTING. Mirrors test_reac_master's helper of the same name; the counter
+ * free-runs one per slot, so the caller's tracker is resynced to it. */
+static void deliver_scene(struct reac_master *m, uint16_t *expect_counter)
+{
+	uint16_t c;
+	int ix;
+	long guard = 0;
+	while ((m->scene_complete == 0 || m->scene_inflight) &&
+	       guard++ < 4L * m->cycle_len)
+		(void)reac_master_next(m, &c, &ix);
+	if (expect_counter)
+		*expect_counter = m->counter;
+}
+
 static enum reac_master_emit slot(struct reac_master *m, int *idx, uint16_t *expect_counter)
 {
 	uint16_t c;
@@ -68,9 +91,15 @@ int main(void)
 	uint16_t cnt = 0;
 	reac_master_init(&m, SRC, &idle, FPS);
 
+	/* The box declares itself FIRST — this is what reac_pacer does on the
+	 * config-announce. There is no fabricated box to fall back to any more, so a
+	 * JOIN arriving with no declaration in force has no enrollment to grant. */
+	reac_master_set_box(&m, 16, 8, S1608_BASE);  /* S-1608: 16 in / 8 out */
+	CHK(reac_master_has_box(&m) == 1);
+
+	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
-	reac_master_set_box(&m, 16, 8);            /* S-1608: 16 in / 8 out */
 	CHK(m.grant_burst_len == 56);
 
 	int grants = 0, last_grant_slot = -1, saw_enroll = 0;
