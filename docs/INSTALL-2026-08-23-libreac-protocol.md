@@ -89,8 +89,17 @@ Expected now: `cap_net_admin,cap_net_raw,cap_sys_nice=ep` and `0`.
 77 without `CAP_NET_RAW`; note that it still runs its earlier assertions before
 skipping, so a red there is real.
 
-`make corpus` in libreac is the capture-corpus gate. **It is currently RED for a
-reason that is not libreac** — see §12.
+libreac's capture-corpus gate must also be green, and its two self-tests must
+each go red under their own sabotage — a checker that cannot fail reports success
+over any library:
+
+    cd ~/Devel/audio/libreac
+    make corpus
+    tools/run-corpus.sh --self-test
+    tools/run-corpus.sh --self-test-audio
+
+Expect `85 captures decode exactly as the baseline records`, then both self-tests
+reporting OK.
 
 ## 4. Back up the binary. On its own. (root)
 
@@ -204,14 +213,13 @@ their §2 command lines.
 
 ## 12. Known-open, before you start
 
-* **libreac's `make corpus` gate is RED, and not because of libreac.** The
-  committed baseline was recorded against a different state of the capture
-  corpus: 70 of 85 lines move, and every one of them moves ONLY in
-  `records=` / `reac=` / `trunc=` / `filler=`. Strip those four fields and the
-  file is byte-identical to the baseline — every classification, checksum, port
-  and declaration count holds. `~/Devel/audio/reac-captures` also has 91 dirty
-  paths and pcaps rewritten the same evening. The gate goes green again by
-  re-recording the baseline once the corpus stops moving, in its own commit; do
-  not re-record it as part of this install.
 * **The version floor cannot see this change** (§1). Until libreac's version
-  moves, the symbol-table check is the only mechanical guard.
+  moves, the symbol-table check is the only mechanical guard. Under libreac's own
+  rule — the minor is what the control-plane extraction takes — a further API
+  break inside 0.6.0 has spent a version number it did not take, and every
+  consumer's floor is blind to it until someone bumps it.
+* **The corpus gate depends on `~/Devel/audio/reac-captures` being at the
+  distilled set** (a265d8e or later). An older checkout moves 70 of the 85 lines,
+  in `records=` / `reac=` / `trunc=` / `filler=` only — every classification,
+  checksum, port and declaration count holds. If the gate goes red that way, the
+  captures are stale; do not re-record the baseline to make it pass.
