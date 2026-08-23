@@ -240,7 +240,18 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 	 *
 	 * The invariant is checked, not assumed: if the ordering is ever broken by a
 	 * later edit, this says so instead of failing as silent staging again. */
-	if (to == REAC_M_ESTABLISHED && from != REAC_M_ESTABLISHED) {
+	/* REACPW_NO_HEADAMP=1 suppresses our own head-amp push entirely, so what the
+	 * box ends up holding is whatever ITS OWN state-4 commit promoted out of the
+	 * scene body and nothing else. Without this there is no way to see the commit's
+	 * promotion at all: we overwrite it ~1.7 s later with our own records, which is
+	 * correct in service and blinding in an experiment. A diagnostic affordance,
+	 * off by default, never a service mode — a master that pushes no head-amp
+	 * leaves the operator's phantom and gain unasserted. */
+	if (to == REAC_M_ESTABLISHED && from != REAC_M_ESTABLISHED &&
+	    getenv("REACPW_NO_HEADAMP")) {
+		fprintf(stderr, "reac-pw: REACPW_NO_HEADAMP — not arming the head-amp "
+		        "scene; the box keeps whatever its own commit promoted\n");
+	} else if (to == REAC_M_ESTABLISHED && from != REAC_M_ESTABLISHED) {
 		if (!p->master.commit_seen)
 			fprintf(stderr, "reac-pw: head-amp armed with NO commit report seen "
 			        "(cdea 01 03 0010) — the box has not run its state-4 commit, "
