@@ -30,6 +30,13 @@ int reac_ring_init(struct reac_ring *r, uint32_t channels, uint32_t capacity_fra
 	r->capacity = cap;
 	r->mask = cap - 1;
 	r->channels = channels;
+	/* ZERO, not `channels`. This is what makes the calloc above load-bearing: a
+	 * ring whose first write is narrow retires nothing, so the silence in the rows
+	 * above that width is the allocator's, and a malloc here would put heap junk
+	 * into the graph. Initialising this to `channels` instead would paper over
+	 * that by memsetting the whole buffer on the first write -- pointless work,
+	 * and it would hide the malloc bug from the test that looks for it. */
+	r->wrote_channels = 0;
 	atomic_store_explicit(&r->head, 0, memory_order_relaxed);
 	atomic_store_explicit(&r->tail, 0, memory_order_relaxed);
 	atomic_store_explicit(&r->underruns, 0, memory_order_relaxed);
@@ -56,8 +63,22 @@ uint32_t reac_ring_writable(const struct reac_ring *r)
 	return r->mask - reac_ring_readable(r);
 }
 
-uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n)
+uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n,
+                         uint32_t src_channels)
 {
+	if (src_channels > r->channels)
+		src_channels = r->channels;
+	if (src_channels < r->wrote_channels) {
+		/* The source narrowed. Rows [src_channels, wrote_channels) will no longer
+		 * be written, so retire their contents now -- otherwise the previous box's
+		 * audio loops in them for as long as the ring lives. Off the sample path:
+		 * this runs on a width change, not per frame. */
+		for (uint32_t c = src_channels; c < r->wrote_channels; c++)
+			memset(r->buf + (size_t)c * r->capacity, 0,
+			       (size_t)r->capacity * sizeof(float));
+	}
+	r->wrote_channels = src_channels;
+
 	/* `n` is BOTH the count to write AND the per-channel stride of the source:
 	 * planar[c*n + s]. The two must never diverge — clamping `n` to fit the ring
 	 * would shrink the stride too and make every channel c>0 read the wrong source
@@ -85,7 +106,7 @@ uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n)
 	}
 
 	uint32_t h = atomic_load_explicit(&r->head, memory_order_relaxed);
-	for (uint32_t c = 0; c < r->channels; c++) {
+	for (uint32_t c = 0; c < src_channels; c++) {
 		float *slot = r->buf + (size_t)c * r->capacity;
 		const float *src = planar + (size_t)c * stride;
 		uint32_t pos = h;
