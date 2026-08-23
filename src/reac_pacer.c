@@ -222,9 +222,33 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 	 * enough: a fast lock (box heartbeat accept) cuts it off mid-burst, and a
 	 * partial scene mutes the unconfigured channels. Same thread as the table's
 	 * emitter, so no synchronisation is needed. */
-	if (to == REAC_M_ESTABLISHED && from != REAC_M_ESTABLISHED)
+	/* HEAD-AMP MUST FOLLOW THE COMMIT, and that is now structural rather than a
+	 * race we happen to win. The box's state-4 commit rewrites the ACTIVE head-amp
+	 * table for every slot out of the scene body, so a record delivered before it
+	 * is erased — which is what "byte-perfect records, 48 V never lit" was.
+	 *
+	 * Arming here, on entry to ESTABLISHED, is provably after the commit: leaving
+	 * PROBING now REQUIRES a completed scene push (reac_master.c holds the forward
+	 * edge until the final chunk), and GRANTING runs enroll + dwell + the full
+	 * sweep after that. Measured: transfer completes 14.02, box commit report
+	 * 15.81, grant burst 17.42, ESTABLISHED 17.6.
+	 *
+	 * It is deliberately NOT armed on the commit report itself. That fires 1.6 s
+	 * BEFORE the grant burst, and a head-amp record for a slot our sweep has not
+	 * yet enrolled is silently discarded by the box (reac_grant.h, live
+	 * 2026-07-17). The correct window is after BOTH, which is exactly here.
+	 *
+	 * The invariant is checked, not assumed: if the ordering is ever broken by a
+	 * later edit, this says so instead of failing as silent staging again. */
+	if (to == REAC_M_ESTABLISHED && from != REAC_M_ESTABLISHED) {
+		if (!p->master.commit_seen)
+			fprintf(stderr, "reac-pw: head-amp armed with NO commit report seen "
+			        "(cdea 01 03 0010) — the box has not run its state-4 commit, "
+			        "so these records will be written to STAGING and erased. The "
+			        "scene push did not complete.\n");
 		reac_headamp_tx_arm_scene(&p->headamp, p->master.alloc.base,
 		                          p->master.alloc.width);
+	}
 
 	if (from == REAC_M_GRANTING && to == REAC_M_PROBING &&
 	    p->master.drop_reason == REAC_M_DROP_GRANT_TIMEOUT) {
