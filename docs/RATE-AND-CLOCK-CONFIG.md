@@ -10,13 +10,24 @@ and the current rig contradicts it in three places at once.
 |---|---|---|
 | the running masters (hand-started in a tmux scope) | `--rate 48000` | the kernel, twice |
 | `~/.config/openmixer/reac.env` | `REAC_RATE=96000` | `reac-pw-master.service` — **installed but disabled**, so: nobody |
-| `reac-pw --rate`'s own default | auto-detect on `--live` | reac-pw, when nothing else speaks |
+| `reac-pw --rate`'s own default | **96000** in the master role (was: auto-detect) | reac-pw, when nothing else speaks |
 
-**Enabling that unit today would put a 96 kHz master onto a 48 kHz rig.** It is
-only harmless because it is disabled, and it is disabled because it cannot
-express the rig: there are TWO segments and the unit can start one. The rate in
-it is stale for exactly the reason a stale value always survives — nothing reads
-it, so nothing corrects it.
+**CORRECTION, and it is mine to own.** This file first read `REAC_RATE=96000` as a
+stale value and a loaded gun on a 48 kHz rig. That was wrong, and it was wrong in
+the most ordinary way: I found two numbers that disagreed and assumed the one
+matching the running system was the intended one. **Operator ruling, 2026-08-23:
+"96k is 96kHz and should be the default reac clock rate."** So the config file is
+RIGHT and the running masters are what disagrees with the intent. The hazard
+claim is withdrawn — `96000` in that file is now the same number as the code's
+default, and `reac-pw --rate`'s default has been changed to match it.
+
+A disagreement between a config and a running system does not tell you which one
+is wrong. Only the person who chose the rate does.
+
+What survives from the original reading is the SHAPE of the problem, and it
+survives intact: the unit is disabled because it cannot express the rig — there
+are TWO segments and it can start one — and a value nothing reads is a value
+nothing corrects, whichever way it happens to be pointing.
 
 There is a second, quieter problem. `reac.env` lives under
 `~/.config/openmixer/`. The console's configuration directory holds the REAC
@@ -50,15 +61,37 @@ drawn on top of it. That is the console owning a fact it does not own.
 5. **Auto-detect is a SLAVE's default and is wrong for a master.** A slave joins a
    segment somebody else is already driving, so detecting the rate is the only
    thing it can do. A master DEFINES the rate: on a silent segment there is
-   nothing to detect, and "auto" resolves to whatever the code's fallback happens
-   to be. A master should be given its rate explicitly.
+   nothing to detect, and "auto" resolved to whatever the code's fallback happened
+   to be, with nothing on screen saying which. **Fixed:** a master with no `--rate`
+   now takes `REAC_MASTER_DEFAULT_RATE` = **96000**, and reac-pw prints the rate
+   WITH ITS PROVENANCE at startup — the command line, or the master default — so
+   a 96 k master pointed at a 48 k segment says so in its first two lines instead
+   of on the wire.
+
+6. **THE DOORWAY IS `~/.config/reac-pw/<iface>.env`, AND `~/.config/openmixer/reac.env`
+   SHOULD BE DELETED.** This is the one-store-one-writer question and it has a
+   plain answer. Two files declaring one fact is the defect, regardless of whether
+   they currently agree — and today they do not, which is only how it became
+   visible. `reac.env` sits in the CONSOLE's configuration directory and declares
+   a property of the REAC segment, which is a fact the console does not own; and
+   it is read by exactly one unit, which is disabled. Move `REAC_RATE`,
+   `REAC_LIVE_IFACE`, `REAC_TX_IFACE`, `REAC_MIXER`, `REAC_ROLE` and the clock
+   knobs into the per-interface file, repoint the unit's `EnvironmentFile`, and
+   **delete `~/.config/openmixer/reac.env` — do not leave it as a copy.** A second
+   ledger that agrees today is a second ledger that will disagree later, and
+   neither door announces the other. The console reads the segment's rate FROM
+   the daemon; it is already published on the node.
 
 ## What to do, smallest first
 
-- **Now, no code:** delete `REAC_RATE=96000` from `~/.config/openmixer/reac.env`,
-  or correct it to `48000`, so the disabled unit stops being a loaded gun. This
-  is the only item that is urgent, because it is the only one that can put a
-  96 kHz master on a 48 kHz rig by accident.
+- **Now, no code:** nothing urgent. The former "urgent" item was my misreading and
+  is withdrawn. `REAC_RATE=96000` is correct and now agrees with the code default.
+- **BUT NOTE, while this rig still runs 48 kHz:** every master invocation must
+  keep `--rate 48000` EXPLICIT. The default is now 96000, so an invocation that
+  omits `--rate` will bring up a 96 kHz master on a 48 kHz segment. That is a
+  few-second re-handshake rather than a broken rig — see
+  `docs/96K-SWITCH-ASSESSMENT.md` — but it is a dropout, and the startup
+  provenance line is what makes it visible immediately.
 - **Next:** move the two masters' invocations into `~/.config/reac-pw/<iface>.env`
   and a templated `reac-pw@<iface>.service`, replacing the single-segment unit and
   the tmux scope. The tmux scope is not a workaround anyone chose; it is what is
