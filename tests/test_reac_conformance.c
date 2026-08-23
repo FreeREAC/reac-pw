@@ -42,6 +42,15 @@
 #include "reac_grant_golden.inc"       /* GOLD_S1608_SWEEP[56], GOLD_S1608_CELLS[48] (console-independent) */
 #include "reac_conformance_golden.inc" /* CONF_CONSOLES[] — the new per-console cfea goldens */
 
+/* THE BASE A BOX ANNOUNCES, not one derived from its width. These are the
+ * straps the real chassis carry in their config announce (block[7] * 0x10,
+ * libreac reac_ports.h): an S-1608 straps 2, an S-0808 straps 0. They are
+ * written out here rather than computed from in_ch on purpose — a helper
+ * mapping width to base is the very table this law retired, and it would agree
+ * with the wire on exactly the chassis we own. */
+#define S1608_BASE 0x20
+#define S0808_BASE 0x00
+
 #define FPS 4000   /* irrelevant to the assertions below: we stamp directly,
                     * never drive the pacer/cadence, so no cycle timing is
                     * exercised here (that is test_reac_master.c's job). */
@@ -79,14 +88,14 @@ int main(void)
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* ---- (a) recognized S-1608 (w=0x10) / S-0808 (w=0x08), GRANTED (count=1) ---- */
-		reac_master_set_box(&m, 16, 8);         /* recognized while still un-granted (count stays 0) */
+		reac_master_set_box(&m, 16, 8, S1608_BASE);         /* recognized while still un-granted (count stays 0) */
 		m.state = REAC_M_ESTABLISHED;           /* force the granted branch (mirrors enter_established) */
-		reac_master_set_box(&m, 16, 8);         /* re-stamp now that we're "granted": count -> 1 */
+		reac_master_set_box(&m, 16, 8, S1608_BASE);         /* re-stamp now that we're "granted": count -> 1 */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
 		CHK(memcmp(f + 16, cc->cfea_s1608, 34) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
-		reac_master_set_box(&m, 8, 8);          /* an S-0808 instead, still granted */
+		reac_master_set_box(&m, 8, 8, S0808_BASE);          /* an S-0808 instead, still granted */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
 		CHK(memcmp(f + 16, cc->cfea_s0808, 34) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
@@ -149,7 +158,7 @@ int main(void)
 				                        GOLD_S1608_CELLS[i][2]) == 0);
 
 			struct reac_grant_alloc a;
-			CHK(reac_grant_allocate(&a, 16) == 0);
+			CHK(reac_grant_allocate(&a, 0x20, 16) == 0);
 			CHK(a.base == 0x20 && a.width == 16);
 
 			uint8_t sw[REAC_GRANT_SWEEP_MAX][34];

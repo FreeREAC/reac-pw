@@ -360,9 +360,16 @@ static void sync_published_box(struct reac_pacer *p)
 	if (!reac_master_has_box(&p->master)) {
 		if (atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
 			atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
+		atomic_store_explicit(&p->recognized_headamp_base, -1,
+		                      memory_order_release);
 		/* Forget the declared geometry with the box, so a re-declaration after
 		 * a drop re-fires set_box instead of deduping into silence. */
 		p->declared_in = p->declared_out = 0;
+	} else {
+		/* The base the master is actually granting with, which is the one the
+		 * box announced. Mirrored, never recomputed downstream. */
+		atomic_store_explicit(&p->recognized_headamp_base,
+		                      p->master.alloc.base, memory_order_release);
 	}
 }
 
@@ -415,7 +422,8 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 			atomic_store_explicit(&p->recognized_box, bm, memory_order_release);
 		if (ports.in_ch != p->declared_in || ports.out_ch != p->declared_out) {
 			int prev_w = p->master.alloc.width;   /* the width ALREADY granted */
-			reac_master_set_box(&p->master, ports.in_ch, ports.out_ch);
+			reac_master_set_box(&p->master, ports.in_ch, ports.out_ch,
+			                    ports.headamp_base);
 			/* set_box refuses a width it cannot place (it must not half-apply);
 			 * record the declaration ONLY once it actually holds, so the box's
 			 * next announce retries instead of being deduped into silence. */
@@ -1301,6 +1309,9 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 {
 	memset(p, 0, sizeof *p);
 	p->fd = -1;
+	/* No box yet, and 0 is a REAL base (the S-0808's), so the zeroed struct
+	 * would otherwise publish a base for a box that is not there. */
+	atomic_store_explicit(&p->recognized_headamp_base, -1, memory_order_relaxed);
 	p->prio = cfg->prio > 0 ? cfg->prio : 79;
 	p->cpu  = cfg->cpu;
 	p->fps  = cfg->fps > 0 ? cfg->fps : 8000;

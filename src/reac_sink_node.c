@@ -604,18 +604,22 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	char ha_channels[16];
 	snprintf(ha_channels, sizeof ha_channels, "%d", bm ? bm->in_ch : 0);
 
-	/* The head-amp BASE, from the same allocator the master granted with. Derived
-	 * here rather than shipped across a second atomic on purpose: reac_grant_allocate
-	 * is pure and total for a matrix width, so calling it is reading the master's
-	 * decision, not re-deciding it. Publishing it at all is what lets a consumer stop
-	 * re-deriving the base from the width against its own placement table. */
+	/* The head-amp BASE, read from what the master published. It USED to be
+	 * derived here by running the grant allocator over the recognized model's
+	 * width, on the reasoning that the allocator was pure and total for a matrix
+	 * width — so calling it was "reading the master's decision, not re-deciding
+	 * it". That reasoning is retired: the base was never the master's decision.
+	 * It is the box's own chassis strap, announced on the wire, and no function
+	 * of the width can return it for a chassis whose strap and width are not
+	 * collinear. It now crosses on its own atomic because it genuinely cannot be
+	 * recomputed from anything else on this side. -1 means no box. */
 	char ha_base[16];
-	snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
-	if (bm) {
-		struct reac_grant_alloc a;
-		if (reac_grant_allocate(&a, bm->in_ch) == 0)
-			snprintf(ha_base, sizeof ha_base, "%u", a.base);
-	}
+	int base = atomic_load_explicit(&n->pacer.recognized_headamp_base,
+	                                memory_order_acquire);
+	if (base >= 0)
+		snprintf(ha_base, sizeof ha_base, "%d", base);
+	else
+		snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
 
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),

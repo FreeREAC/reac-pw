@@ -42,20 +42,35 @@ static uint8_t row_value(const uint8_t r[34]) { return r[ROW(38)]; }
 int main(void)
 {
 	/* ---------------------------------------------------------------- *
-	 * 1. THE ALLOCATOR — the observed placements, byte-decoded off real desks
-	 *    (GRANT-SWEEP.md): S-0808 8 in -> 0x00, S-1608 16 in -> 0x20,
-	 *    S-4000S 32 in -> 0x00.
+	 * 1. ADMISSION, NOT ALLOCATION. The base is the box's own chassis strap,
+	 *    announced in its config announce (block[7] * 0x10 — libreac
+	 *    reac_ports.h). This function does not choose it; it admits the slots
+	 *    the box claims when they fit the head-amp space. The three real
+	 *    chassis: S-0808 straps 0 -> 0x00, S-1608 straps 2 -> 0x20, S-4000S
+	 *    straps 0 -> 0x00.
 	 * ---------------------------------------------------------------- */
 	struct reac_grant_alloc a;
 
-	CHK(reac_grant_allocate(&a, 16) == 0);
+	CHK(reac_grant_allocate(&a, 0x20, 16) == 0);
 	CHK(a.base == 0x20 && a.width == 16);   /* S-1608 */
 
-	CHK(reac_grant_allocate(&a, 8) == 0);
+	CHK(reac_grant_allocate(&a, 0x00, 8) == 0);
 	CHK(a.base == 0x00 && a.width == 8);    /* S-0808 */
 
-	CHK(reac_grant_allocate(&a, 32) == 0);
-	CHK(a.base == 0x00 && a.width == 32);   /* S-4000S — 0x20 would overrun */
+	CHK(reac_grant_allocate(&a, 0x00, 32) == 0);
+	CHK(a.base == 0x00 && a.width == 32);   /* S-4000S */
+
+	/* 1a. THE BASE IS NOT A FUNCTION OF THE WIDTH, and these are the cases the
+	 * retired per-width table could not express. A 16-wide box that straps 1 is
+	 * admitted at 0x10 — the table said every 16-wide box sits at 0x20. And two
+	 * boxes of different widths on the same strap land on the same base, which
+	 * is the observation that rules out an allocation keyed on width. */
+	CHK(reac_grant_allocate(&a, 0x10, 16) == 0);
+	CHK(a.base == 0x10);
+	CHK(reac_grant_allocate(&a, 0x00, 8) == 0);
+	uint8_t base_8 = a.base;
+	CHK(reac_grant_allocate(&a, 0x00, 32) == 0);
+	CHK(a.base == base_8);
 
 	/* 1b. The 0x2f HEAD-AMP CEILING (REAC_HEADAMP_CEILING, reac_slots.h — NOT the
 	 * 40-slot audio fabric). This is the rule that FORCES a 32-wide box to base at
@@ -71,13 +86,23 @@ int main(void)
 	CHK(reac_grant_alloc_fits(0, 0)     == 0);
 
 	/* 1c. Unplaceable widths are refused rather than silently truncated. */
-	CHK(reac_grant_allocate(&a, 0) == -1);
-	CHK(reac_grant_allocate(&a, REAC_GRANT_MAX_WIDTH + 1) == -1);
-	CHK(reac_grant_allocate(NULL, 8) == -1);
+	CHK(reac_grant_allocate(&a, 0x00, 0) == -1);
+	CHK(reac_grant_allocate(&a, 0x00, REAC_GRANT_MAX_WIDTH + 1) == -1);
+	CHK(reac_grant_allocate(NULL, 0x00, 8) == -1);
 
-	/* 1d. A width with no observed placement falls back to the lowest base that
-	 * fits — "width-many contiguous slots wherever they fit". */
-	CHK(reac_grant_allocate(&a, 4) == 0);
+	/* 1d. A BOX WHOSE ANNOUNCED BASE DOES NOT FIT IS REFUSED, never quietly
+	 * moved to one that does. The old allocator fell back to "the lowest base
+	 * that fits", which sounds accommodating and is wrong: the box's preamps
+	 * read the slots it strapped for, so a grant at any other base writes
+	 * head-amp records nothing will ever apply. Refusing is the only honest
+	 * answer, and the caller logs it. */
+	CHK(reac_grant_allocate(&a, 0x20, 32) == -1);   /* 0x20..0x3f, past 0x2f */
+	CHK(reac_grant_allocate(&a, 0x30, 1)  == -1);   /* one past the ceiling */
+	CHK(reac_grant_allocate(&a, -1,   8)  == -1);   /* not a base at all */
+
+	/* A width nobody has captured is still admitted at the base it announces —
+	 * geometry comes from the declaration, not from a model list. */
+	CHK(reac_grant_allocate(&a, 0x00, 4) == 0);
 	CHK(a.base == 0x00 && a.width == 4);
 
 	/* ---------------------------------------------------------------- *
@@ -300,7 +325,7 @@ int main(void)
 			                        GOLD_S1608_CELLS[i][2]) == 0);
 
 		struct reac_grant_alloc ga;
-		CHK(reac_grant_allocate(&ga, 16) == 0);   /* the desk chose base 0x20 */
+		CHK(reac_grant_allocate(&ga, 0x20, 16) == 0);  /* the box announced strap 2 */
 
 		uint8_t gen[REAC_GRANT_SWEEP_MAX][34];
 		int gn = reac_grant_build_sweep(gen, REAC_GRANT_SWEEP_MAX, &ga, &gtx);

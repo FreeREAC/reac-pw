@@ -488,7 +488,8 @@ int reac_master_has_box(const struct reac_master *m);
  * identity untouched — including the enroll/cfea width bytes, which used to be
  * stamped from the bad width even as the allocation was refused. Call from the
  * FSM-owning thread on a box recognition. */
-void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch);
+void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch,
+                         int headamp_base);
 
 /* Forget the box: no allocation, no sweep, the wide-safe ENROLL and the idle
  * cfea back. Called on EVERY backward transition to PROBING (enter_probing), so

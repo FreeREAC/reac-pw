@@ -24,6 +24,7 @@
  *
  * This also pins the master's JOIN matcher and the slave's cold-connect
  * builder to stay mutually compatible. */
+#include <reac/reac_ports.h>
 #include "reac_master.h"
 #include "reac_slave.h"
 #include "reac_ctrl.h"
@@ -163,9 +164,13 @@ static int step(struct court *c)
 		 * nothing to enroll and no grant to emit. Modelling the courtship without
 		 * it would be testing a master that cannot court anything. */
 		const struct reac_box_model *bm = reac_ctrl_identify_box(sf, n);
-		if (bm) {
+		struct reac_box_ports cports;
+		if (bm && reac_ports_parse(sf + REAC_CTRL_BLOCK_OFF, &cports) == 0) {
 			c->s_configs_fed++;
-			reac_master_set_box(&c->m, bm->in_ch, bm->out_ch);
+			/* The base comes off the announce in the very frame we just built,
+			 * exactly as reac_pacer_rx_ingest takes it — not from bm->in_ch. */
+			reac_master_set_box(&c->m, bm->in_ch, bm->out_ch,
+			                    cports.headamp_base);
 		}
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
