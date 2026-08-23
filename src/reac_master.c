@@ -643,6 +643,7 @@ static void enter_probing(struct reac_master *m)
 	m->scene_inflight = 0;
 	m->scene_complete = 0;
 	m->join_held      = 0;
+	m->commit_seen    = 0;   /* a new courtship re-pushes and re-commits */
 	if (backward)
 		reac_master_forget_box(m);
 	else
@@ -841,6 +842,13 @@ int reac_master_rx(struct reac_master *m, enum reac_master_rx_event ev,
 			reac_master_fsm_step(m->state, REAC_M_EV_START);
 		apply_edge(m, &s, NULL, NULL);
 	}
+
+	/* The box's config-announce IS its commit report: it is emitted once the
+	 * transfer has reassembled and the state-4 commit has run. Latch it — the
+	 * head-amp push is gated on it, because the commit rewrites every ACTIVE
+	 * head-amp slot from the body and would erase anything sent earlier. */
+	if (ev == REAC_M_RX_BOX_CONFIG)
+		m->commit_seen = 1;
 
 	/* Every box RX event while established reloads the link-check budget
 	 * (budget mechanics, not a transition decision — including an event that

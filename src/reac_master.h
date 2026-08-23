@@ -360,6 +360,11 @@ struct reac_master {
 	 * until the in-flight transfer completes and at least one has been delivered
 	 * whole since we entered PROBING. This is a DEFERRAL, never an auto-advance:
 	 * the JOIN is still required, so #130's anti-timer property is preserved. */
+	/* The box's COMMIT REPORT (cdea 01 03 0010), latched. The commit overwrites
+	 * the ACTIVE head-amp table for every slot out of the scene body, so a
+	 * head-amp record delivered BEFORE it is erased. Nothing may push head-amp
+	 * until this is set; reac_pacer checks it rather than assuming the ordering. */
+	int      commit_seen;
 	int      scene_inflight;  /* header emitted, final not yet                  */
 	unsigned scene_complete;  /* transfers delivered whole since enter_probing  */
 	int      join_held;       /* a forward edge is waiting on the transfer      */
