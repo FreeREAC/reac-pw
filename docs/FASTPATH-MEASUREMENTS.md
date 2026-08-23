@@ -103,13 +103,13 @@ are the strongest argument by *count* and a weak one by *cost*. I3, before and a
 
 | copy | as shipped | with the copy removed | saved | verdict |
 |---|---|---|---|---|
-| ring write, 40 rows for an 8-ch box | 343.9 | 133.4 | **−210.5 ns (−61%)** | **taken** |
-| the pacer's popbuf→frame memcpy | 42.9 | 32.1 | −10.8 ns (−25%) | **taken** |
+| ring write, 40 rows for an 8-ch box | 343.9 | **121–127 (measured after)** | **−218 ns (−64%)** | **taken** |
+| the pacer's popbuf→frame memcpy | 42.9 | 30.6 | −12.3 ns (−29%) | **taken** |
 | the dup guard's 1492 B memcpy | 13.1 | — | — | **refused, see below** |
 
-(The middle column is the same shipping functions called the way the change calls them —
-`bench_hotpath` runs both shapes side by side so the comparison is one process, one cache
-state, one pass. §D re-reads it after each change has actually landed.)
+(The middle column is the shipping code after the change landed, re-run by `bench_hotpath`. The
+ring row beat its own prediction of 133 ns because deleting the 1920-byte per-frame zero-fill —
+which only existed to hand those 32 rows over as silence — came free with it.)
 
 **The ring write is the whole prize and the other two are rounding error.** Writing 32 rows of
 guaranteed silence into the ring, every frame, costs more than the decode, the zero-fill and
@@ -123,9 +123,83 @@ to recover a twentieth of a microsecond per second. Refused. **This is a case wh
 work would have been the mistake, and only the measurement says so.**
 
 
-## D. Change log — each change, its before and its after
+## D. What the jitter instrument can and cannot resolve
 
-Every row's jitter column is I1 re-measured after the change. A row that could not beat its own
-noise was reverted; see §G.
+Before grading anything on I1, the instrument had to be graded. **Nine captures were taken, and
+five of them turned out to be the same binary** — reac-pw's segment lock refuses a second master
+on the same `(netns, ifindex)`, so a restart that was refused left the *previous* binary emitting
+and the capture succeeded anyway. The numbers were real and belonged to the wrong build. That
+accident produced the most useful number here:
 
-(filled in per commit below)
+| trimmed stddev on **identical code**, µs | 0.98 · 1.30 · 1.80 · 1.92 · 2.20 · 2.75 · 3.38 · 3.58 · 8.16 |
+|---|---|
+
+**The run-to-run spread of the pacer on unchanged code is 0.98 to 8.16 µs.** Nothing in this
+document changes the pacer's timing by anything approaching that, and no claim below rests on a
+difference smaller than it. The runner now refuses to report a run whose log shows the lock
+refusal, and `tools/pacer-jitter.py` rejects a capture that is out of order or has lost more than
+2% of its frames — both of which had already produced a plausible-looking wrong answer once.
+
+
+## E. Change log
+
+| # | change | before | after | jitter after |
+|---|---|---|---|---|
+| 1 | ring writes the source's width, not the ring's; per-frame 1920 B zero-fill deleted with it | 343.9 ns | **121–127 ns** | inside the noise band |
+| 2 | pacer pops straight into the frame it sends | 42.9 ns | 30.6 ns | inside the noise band |
+| 3 | sustained-discard detector rewritten; `tx_errors`/`late_wakes` in the heartbeat; `REACPW_GUARD_FLOOR_FRAMES` | — | — | inside the noise band |
+
+Full A/B of the whole change set against the baseline commit, alternating, 18 s each:
+before 0.98 and 8.16; after 3.38 and 1.80. **The after values sit inside the before range. Nothing
+regressed and nothing improved, on the wire.** Change 2 is kept because it is less code and one
+less 2 KB buffer in the `SCHED_FIFO` loop — not because it is faster; 10.8 ns per frame is 43 µs
+per second, and saying otherwise would be dressing up a rounding error.
+
+**Change 3 is the one that matters and it is not an optimisation.** The daemon already carried a
+diagnostic for exactly the fault that is happening, and it could not fire: it needed twenty
+*consecutive* trimming drains against a 200 ms drain cadence, and this fault trims once every
+24 s. 356 trims, 0 warnings, positive control on the same log. It now measures discarded frames
+per second over three consecutive 30 s windows, and reports the drift in ppm.
+
+
+## F. Not attempted, and why
+
+**`PACKET_RX_RING` and the BPF filter (spec step 1's last two items).** Both live in
+`libreac/src/reac_capture.c`, which this lane is not permitted to edit. **Left as a request to
+the libreac lane**, with the caveat that the case for them is weaker than it reads: RX measures
+0.7 ms of ring fill against the TX side's 57–129 ms, and the whole per-frame receive path now
+costs 121 ns. `SO_ATTACH_FILTER` is still worth building, but for the trunk spec's topology
+detector (which is specified as `ETH_P_ALL` + a filter and cannot be written without it), not for
+throughput.
+
+**`SO_RCVBUFFORCE` on the capture socket.** Reachable from reac-pw without touching libreac —
+`reac_rx.c` already sets `SO_RCVTIMEO` on `cap.fd` from outside. Not done because **it could not
+be measured**: demonstrating a receive-buffer win needs induced burst load on a rig held by
+another lane, and adding a 32 MB buffer on the strength of "the repacer needed one" is the kind
+of unmeasured change this document exists to avoid. It is cheap and it is a one-liner when the
+rig frees up.
+
+**Lowering the guard floor.** The knob is in; the sweep is not. Choosing a number needs M5 on the
+rig, and §B.3 is the reason not to guess: a lower floor buys latency and pays for it in *more
+frequent* dropouts of proportionally smaller size. The audio lost per second does not change,
+because the drift sets it.
+
+**AF_XDP and the kernel module.** Off by instruction (spec §9 steps 5 and 6).
+
+
+## G. The thing to fix next, and it is not on the spec's list
+
+**Give the sink node rate matching.** The 2 693 ppm the graph runs over the wire is the whole
+story of §B: at that rate the ring must either grow without bound or discard audio, and the
+guard's job is only to choose which. reac-pw has no TX resampler at all — the source node
+publishes `io_rate_match` from the counter-slope estimator and the sink node publishes nothing —
+so the drift has nowhere to go but a dropout. Every other number in this document is smaller than
+this one by three orders of magnitude.
+
+Two things must be measured on the rig before anyone builds it, and neither needs new code now:
+
+- **Where the 2 693 ppm comes from.** A crystal is fifty. This is structural — a resampler ratio,
+  a driver rate, or a quantum accounting error — and the fix depends on which.
+- **`tx_errors` during established audio** (spec §12 Q2). The heartbeat carries it now, so it is a
+  subtraction of two log lines on a running daemon.
+
