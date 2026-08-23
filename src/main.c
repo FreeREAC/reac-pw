@@ -320,9 +320,12 @@ static void usage(const char *p)
 	  "                pacer repays by staying on its deadline grid instead of\n"
 	  "                re-basing the phase and losing them. Unset = 4 (measured);\n"
 	  "                -1 = never repay, the pre-2026-08-23 behaviour.\n"
-	  "  REACPW_RATE_MATCH=0  master role: publish NO io_rate_match on the sink,\n"
-	  "                so the graph/wire difference has nowhere to go but the\n"
-	  "                depth guard's discard. For A/B measurement only.\n", p);
+	  "  REACPW_RATE_MATCH=1  master role: OPT IN to publishing io_rate_match on\n"
+	  "                the sink, so PipeWire's resampler absorbs the residual\n"
+	  "                graph/wire difference instead of the depth guard discarding\n"
+	  "                it. Default OFF: the loop's sign is verified but its\n"
+	  "                measurement phase is not, so it spends most of its\n"
+	  "                authority on a standing correction. See ENV-KNOBS.md.\n", p);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
@@ -719,13 +722,42 @@ int main(int argc, char **argv)
 		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
 		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
 		                                  : 0,
-		                              /* Rate matching is ON unless explicitly
-		                               * disabled; the off case exists to measure
-		                               * the two levers apart, not to be run. */
+		                              /* RATE MATCHING SHIPS OFF. OPT IN WITH
+		                               * REACPW_RATE_MATCH=1.
+		                               *
+		                               * NOT because the loop is wrong. Its SIGN is
+		                               * verified on hardware — the correction
+		                               * crosses zero at ~50 frames and reverses,
+		                               * which positive feedback cannot do — and it
+		                               * caused no discard in a 30-minute soak.
+		                               *
+		                               * It is off because its MEASUREMENT PHASE is
+		                               * wrong: the RT callback samples the ring
+		                               * depth BEFORE pushing the quantum's frames,
+		                               * so it reads about one quantum low and the
+		                               * loop holds a standing correction to sit
+		                               * there — +1310..+3810 ppm across the whole
+		                               * soak, 26-76% of its authority spent at
+		                               * rest. The entire reason the applied
+		                               * correction is published is that a large
+		                               * steady one is a fault report; this one is
+		                               * reporting a fault in itself.
+		                               *
+		                               * A default is a mechanical gate; an env var
+		                               * you have to remember to set is a rule you
+		                               * have to remember. Lever 1 removes the
+		                               * cause and is fully measured, so the
+		                               * conservative default costs nothing.
+		                               *
+		                               * QUEUED, NOT CANCELLED: measure the depth
+		                               * AFTER the push, then re-soak with a
+		                               * before/after on the standing correction —
+		                               * "near zero at rest" is the whole claim and
+		                               * it has not been made yet. */
 		                              .rate_match_off =
 		                                  (getenv("REACPW_RATE_MATCH") &&
-		                                   atoi(getenv("REACPW_RATE_MATCH")) == 0)
-		                                  ? -1 : 0 };
+		                                   atoi(getenv("REACPW_RATE_MATCH")) != 0)
+		                                  ? 0 : -1 };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */

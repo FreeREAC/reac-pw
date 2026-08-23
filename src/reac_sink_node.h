@@ -58,11 +58,12 @@ struct reac_sink_cfg {
 	/* Slot-debt catch-up budget, passed straight through to the pacer. 0 = the
 	 * measured default, -1 = off. See reac_pacer.h. */
 	int catchup_max_slots;
-	/* TX rate matching. 0 = on (the default: a zero-initialised cfg gets the
-	 * behaviour that does not drop audio), -1 = off, which restores a sink that
-	 * publishes no io_rate_match at all. The off case exists so the two levers can
-	 * be measured SEPARATELY on the rig; it is not a configuration anyone should
-	 * run. Set from REACPW_RATE_MATCH=0. */
+	/* TX rate matching. Nonzero = OFF, which is the shipping default and the
+	 * state a zero-initialised cfg does NOT get — callers must say what they
+	 * want, because this one is not a safe-by-omission choice in either
+	 * direction. main.c sets it from REACPW_RATE_MATCH (=1 opts in). The reason
+	 * the default is off is written where it is set, in main.c: the loop's sign
+	 * is verified on hardware and its measurement phase is not. */
 	int rate_match_off;
 };
 
