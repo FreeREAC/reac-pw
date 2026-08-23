@@ -88,7 +88,21 @@ build emits `reac-health:` lines at all.
 |---|---|---|---|---|---|---|---|
 | **A** | off (`-1`) | off | **−526.7 ppm** | +51 … +1273 ppm | **176–378 frames, 44–94 ms** | 0 | 0 |
 | **B** | 4 slots | off | **−8.7 ppm** | −15 … +6 ppm (one +234 outlier) | **22–62 frames, 5.5–15.5 ms** | 0 | 0 |
-| **D** | 4 slots | on | **−55.7 ppm** (300 s, under a parallel `pnpm build`) | −15 … +15 ppm at rest | **15–72 frames, 3.75–18 ms** | 0 | 0 |
+| **D** | 4 slots | on | −55.7 ppm — **CONTAMINATED, see below; do not quote this as leg D's result** | −15 … +15 ppm at rest | **15–72 frames, 3.75–18 ms** | 0 | 0 |
+
+**Leg D is not a clean measurement of leg D.** A `pnpm build` was running on the
+same host through its second half — started by the run's own coordinator, not by
+the leg, and not known to this lane until afterwards. So:
+
+- **The clean drift claim is leg B's −8.7 ppm.** Leg D's −55.7 ppm measures a
+  loaded host and must not be quoted as what rate matching costs or as a
+  regression against B.
+- **Leg D's SIGN result is unaffected and stands**, because the sign was read from
+  the correction's response to the ring depth, not from the drift figure. Load
+  moves the depth around; it cannot make a negative-feedback loop cross zero the
+  wrong way.
+- **The contamination is itself good evidence, and it is kept for that reason** —
+  as an unplanned load test, labelled as one. See §5.
 
 Leg B, cumulative over the run: `late_wakes=423`, of which **`catchup=417`
 repaid on the grid** and only **48 slots abandoned** — against leg A's
@@ -110,6 +124,17 @@ unverified guard, and an unverified guard is decoration. The sign was therefore
 tested **directionally**, not by watching a number improve — a wrong-sign loop can
 improve a number transiently before it runs away, so "the drift got better" proves
 nothing.
+
+**THE TRAP THAT NEARLY SHIPPED, recorded so the next person does not re-make it:
+a guard's TARGET and a controller's SETPOINT are different quantities that happen
+to share a variable name.** The first version of this loop servoed to the depth
+guard's `TARGET` — 256 frames, 64 ms — because that is the depth constant sitting
+right there in the pacer. But TARGET is a place to drain TO after a pathological
+excursion; it is not a depth the ring should sit at. Servoing to it would have
+spent ~50 ms of latency making room for the loop and handed back most of what the
+slot-debt fix had just won. The setpoint is what the ring NEEDS (two producer
+bursts, 42 frames, 10.5 ms), which is a different question from what the guard
+drains to, and nothing but asking that question separately catches it.
 
 The test: the loop servos the TX ring depth to a setpoint of two producer bursts
 (2 x 21 = 42 frames). Leg B leaves the ring at ~22 frames, i.e. **below** the
@@ -140,9 +165,14 @@ approached either rail (range −1548 … +3571 of ±5000), it never trimmed, an
 never emptied. **The sign is correct and the loop converges. This is not
 ambiguous.**
 
+### The unplanned load test (not leg D's result)
+
 The run also produced the answer to whether one lever makes the other
-unnecessary, by accident: a `pnpm build` ran on the same host through the second
-half. The late-wake rate climbed 0.6/s → 7.8/s, the pacer's drift rose to
+unnecessary, by accident. **A `pnpm build` was running on the same host through
+leg D's second half. It was started by the run's coordinator, not by this lane,
+and this lane did not know about it until after the leg finished** — which is why
+leg D's drift figure is labelled contaminated above. Treat what follows as a load
+test that happened to be run, not as leg D: The late-wake rate climbed 0.6/s → 7.8/s, the pacer's drift rose to
 +170…+200 ppm, the ring started climbing — **and the rate matcher took up the
 slack, swinging to −1548 ppm and holding the depth.** Lever 1 alone would have
 left ~200 ppm under that load and walked the ring to a trim. So:
