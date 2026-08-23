@@ -24,8 +24,13 @@ static int is_master_frame(const struct reac_ctrl_parsed *rx)
 {
 	/* HEADAMP is master EVIDENCE (only a console emits preamp records) but it
 	 * is never a grant — the grant checks below stay on REAC_CTRL_GRANT. */
+	/* SCENE_TRANSFER replaces the old PROBE catch-all: link 1, opcode 0x00 is the
+	 * master's enrolment push, which is the frame family the catch-all was
+	 * actually seeing (its "01 00 / 01 01 / 01 02" families are three SEGMENT
+	 * states of that one transfer, not three opcodes). Nothing else that used to
+	 * fall into PROBE is master evidence. */
 	return rx->kind == REAC_CTRL_MASTER_HB || rx->kind == REAC_CTRL_MASTER_ANNOUNCE ||
-	       rx->kind == REAC_CTRL_PROBE || rx->kind == REAC_CTRL_GRANT ||
+	       rx->kind == REAC_CTRL_SCENE_TRANSFER || rx->kind == REAC_CTRL_GRANT ||
 	       rx->kind == REAC_CTRL_HEADAMP;
 }
 

@@ -72,13 +72,15 @@ int main(void)
 	 * 16-channel width (reac_box_model_by_channels would happily answer "s1608"). */
 	CHK(s.model == NULL);
 
-	/* The box config-announce (cdea 01 03 0010) parses as kind PROBE — a MASTER kind.
-	 * Role must come from op_len, or every box that declares itself is filed as a rival
-	 * master. */
+	/* The box config-announce (link 1, opcode 0x82/0x84) is its OWN kind now. It used
+	 * to land in the parser's link-1 catch-all, a MASTER kind, and the role had to be
+	 * dug back out of the length by hand — or every box that declares itself filed as
+	 * a rival master. */
 	struct reac_ctrl_parsed p;
 	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, 8);   /* 8 in_ch = the S-0808 row */
 	CHK(n > 0);
-	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_PROBE);   /* the trap */
+	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_CONFIG_ANNOUNCE);
+	CHK(p.link == REAC_LINK_CTRL && p.opcode == 0x84);   /* the 0x84 family */
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);                  /* not master */
 

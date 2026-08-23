@@ -68,7 +68,11 @@ int main(void)
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
 	CHK(p.ch == 0x00 && p.param == REAC_HEADAMP_PHANTOM && p.value == 0x01);
 	CHK(p.counter == 0x1234 && p.is_broadcast);
-	CHK(p.op0 == 0x04 && p.op1 == 0x03 && p.op_len == 0x0013);
+	/* The header, field for field: link 4, SINGLE, and the DT1 tag that makes it a
+	 * head-amp record rather than a grant. The length is carried too, but nothing
+	 * decides anything on it. */
+	CHK(p.link == REAC_LINK_RECORD && p.seg == REAC_SEG_SINGLE);
+	CHK(p.dt1_tag == REAC_DT1_TAG_HEADAMP && p.blk_len == 0x0013);
 
 	/* 3. BYTE-COMPARE vs the real M-200 record: same ch/param/value must
 	 * reproduce the captured control block [18:50] exactly. */

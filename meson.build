@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version : '0.2.0',
+  version : '0.3.0',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -44,7 +44,17 @@ m_dep        = cc.find_library('m', required : false)
 # while decoding the downstream as plain LE, so the RX path would silently
 # disagree with the TX path about the wire layout (#80). Building quietly
 # against an older system libreac is exactly what this floor exists to stop.
-libreac_dep = dependency('libreac', version : '>=0.6.0',
+#
+# >=0.7.0 IS THE FLOOR THAT MATTERS NOW, and the one that had to be raised by
+# hand because the previous one could not fail. libreac 0.7.0 removed
+# reac_ctrl_build_name_frame() and reac_ctrl_build_extra_frame() in favour of
+# reac_ctrl_build_identity_first(), which is what src/ calls. That break first
+# shipped from libreac as 0.6.0 with soname 0 unchanged, so this floor read
+# `libreac found: YES 0.6.0` for a library with and without the symbols alike,
+# and the mismatch surfaced only when the installed binary hit `undefined
+# symbol` at exec. A floor that accepts both sides of an API break is not a
+# floor. Raising it to 0.7.0 makes the wrong library fail at CONFIGURE.
+libreac_dep = dependency('libreac', version : '>=0.7.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -55,7 +65,10 @@ libreac_dep = dependency('libreac', version : '>=0.6.0',
 #     old checkout reports its own old version. `meson subprojects update`, or
 #     just remove subprojects/libreac and reconfigure.
 # The RPM (--wrap-mode=nofallback) has no fallback to take, so its floor is the
-# spec's BuildRequires: pkgconfig(libreac) >= 0.5.0 — keep the two in step.
+# spec's BuildRequires: pkgconfig(libreac) >= 0.7.0 — keep the two in step.
+# (That line said 0.5.0 while the spec said 0.6.0: the reminder to keep them in
+# step was itself out of step, which is why the number now appears in a comment
+# that is checked against the spec whenever either moves.)
 
 # The REAC decode / capture / pcap core comes from libreac via
 # <reac/reac_decode.h> etc., and since 0.3.0 so do the braid codec
