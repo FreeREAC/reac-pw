@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* Unit test for the SPSC ring: capacity rounding, planar round-trip, underrun
- * zero-fill, and overrun drop-oldest. No PipeWire / libreac needed. */
+ * zero-fill, overrun drop-oldest, and the NARROW-SOURCE contract. No PipeWire /
+ * libreac needed. */
 
 #include "../src/reac_ring.h"
 #include <assert.h>
@@ -32,7 +33,7 @@ int main(void)
 	for (int c = 0; c < CH; c++)
 		for (int s = 0; s < 12; s++)
 			src[c * 12 + s] = (float)(c * 100 + s);
-	assert(reac_ring_write(&r, src, 12) == 12);
+	assert(reac_ring_write(&r, src, 12, CH) == 12);
 	assert(reac_ring_readable(&r) == 12);
 
 	/* read 8 frames/ch back into planar dst, check values. dst buffers are sized
@@ -68,7 +69,7 @@ int main(void)
 		for (int s = 0; s < 200; s++)
 			big[c * 200 + s] = (float)(c * 1000 + s);
 	uint64_t ovbig = atomic_load(&r.overruns);
-	uint32_t w = reac_ring_write(&r, big, 200);
+	uint32_t w = reac_ring_write(&r, big, 200, CH);
 	assert(w == r.mask);                /* wrote one ring's worth (127) */
 	assert(reac_ring_readable(&r) == r.mask);
 	assert(atomic_load(&r.overruns) == ovbig + (200 - r.mask)); /* 73 dropped */
@@ -86,7 +87,7 @@ int main(void)
 	for (int c = 0; c < CH; c++)
 		for (int s = 0; s < 200; s++)
 			big[c * 200 + s] = (float)s;
-	w = reac_ring_write(&r, big, 200);
+	w = reac_ring_write(&r, big, 200, CH);
 	assert(w == r.mask);                /* fills the empty ring back to full */
 	assert(reac_ring_readable(&r) == r.mask);
 
@@ -98,12 +99,87 @@ int main(void)
 	for (int c = 0; c < CH; c++)
 		for (int s = 0; s < 4; s++)
 			more[c * 4 + s] = -1.0f;
-	uint32_t w2 = reac_ring_write(&r, more, 4);
+	uint32_t w2 = reac_ring_write(&r, more, 4, CH);
 	assert(w2 == 0);
 	assert(reac_ring_readable(&r) == r.mask);
 	assert(atomic_load(&r.overruns) == ov0 + 4);
 
 	reac_ring_free(&r);
+
+	/* ---- the narrow-source contract ------------------------------------- *
+	 * The producer writes only `src_channels` rows so an 8-channel box stops
+	 * paying for 32 rows of silence. Two separate mechanisms keep the rows above
+	 * that width silent, and each has its own case below because each has its own
+	 * failure. Both are asserted on the DATA a consumer reads, never on a return
+	 * count -- a short write and a stale row look identical from the count.
+	 *
+	 * The first version of this test asserted both and caught NEITHER sabotage,
+	 * because it read back only the slots just written: a stale row's stale data
+	 * sits at the ring positions the head has already moved past, so it stays
+	 * invisible until the head WRAPS onto it. Any test of this contract has to
+	 * cycle the ring further than its capacity. That is what CYCLES is for. */
+#define CYCLES 8                    /* 8 x 12 = 96 frames through a 64-slot ring */
+	struct reac_ring nr;
+	assert(reac_ring_init(&nr, CH, 64) == 0);
+	float nbuf[CH * 12];
+	float n0[12], n1[12], n2[12], n3[12];
+	float *ndst[CH] = { n0, n1, n2, n3 };
+
+	/* 1. AN UNTOUCHED ROW READS AS SILENCE -- the allocator's guarantee.
+	 *    A fresh ring written narrow from the very first frame retires nothing
+	 *    (wrote_channels starts at 0), so rows 2..3 are silent only because
+	 *    reac_ring_init used calloc. Sabotage: swap that calloc for a malloc and
+	 *    this case is the one that fails. */
+	for (int c = 0; c < CH; c++)
+		for (int s = 0; s < 12; s++)
+			nbuf[c * 12 + s] = (float)(c + 1) * 10.0f;
+	for (int k = 0; k < CYCLES; k++) {
+		assert(reac_ring_write(&nr, nbuf, 12, 2) == 12);
+		assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
+		for (int s = 0; s < 12; s++) {
+			assert(fabsf(n0[s] - 10.0f) < 1e-6f);
+			assert(fabsf(n1[s] - 20.0f) < 1e-6f);
+			assert(n2[s] == 0.0f);          /* never written -- allocator silence */
+			assert(n3[s] == 0.0f);
+		}
+	}
+
+	/* 2. A SHRINKING SOURCE RETIRES THE ROWS IT ABANDONS -- the write's guarantee.
+	 *    Fill EVERY slot of rows 2..3 by cycling a wide source past the ring's
+	 *    capacity, then narrow. Without the retire, rows 2..3 keep replaying the
+	 *    wide source as the head wraps back onto the slots it left behind: a box
+	 *    swap would leave the previous box's microphones live on channels the new
+	 *    box does not have, fading in as the ring came round. Sabotage: delete the
+	 *    memset loop in reac_ring_write and this case fails. */
+	for (int c = 0; c < CH; c++)
+		for (int s = 0; s < 12; s++)
+			nbuf[c * 12 + s] = 77.0f;
+	for (int k = 0; k < CYCLES; k++) {
+		assert(reac_ring_write(&nr, nbuf, 12, CH) == 12);
+		assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
+	}
+	for (int s = 0; s < 12; s++)
+		assert(fabsf(n3[s] - 77.0f) < 1e-6f);   /* the wide source really landed */
+
+	for (int k = 0; k < CYCLES; k++) {
+		assert(reac_ring_write(&nr, nbuf, 12, 2) == 12);
+		assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
+		for (int s = 0; s < 12; s++) {
+			assert(fabsf(n0[s] - 77.0f) < 1e-6f);  /* rows still written */
+			assert(n2[s] == 0.0f);                 /* retired on the shrink */
+			assert(n3[s] == 0.0f);
+		}
+	}
+
+	/* 3. A source claiming more rows than the ring holds is CLAMPED, not an
+	 *    overflow. reac_upstream_channels is contract-bound below 40, but the ring
+	 *    is the last line and must not lean on that. */
+	assert(reac_ring_write(&nr, nbuf, 12, CH + 99) == 12);
+	assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
+	for (int s = 0; s < 12; s++)
+		assert(fabsf(n3[s] - 77.0f) < 1e-6f);
+
+	reac_ring_free(&nr);
 	printf("test_reac_ring: OK\n");
 	return 0;
 }
