@@ -482,3 +482,17 @@ conformance_test = executable('test_reac_conformance',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_conformance', conformance_test)
+
+# --- benchmark (not a test): per-frame CPU cost of the two hot paths ----------
+# Built always so it cannot rot, run by hand — it is a measurement, not a gate.
+# It `#include`s src/reac_rx.c to reach the static feed_frame, which is the only
+# way to benchmark the SHIPPING decode path instead of a copy of it that would
+# drift the moment either one changed.
+bench_hotpath = executable('bench_hotpath',
+  ['tools/bench_hotpath.c', 'src/reac_ring.c', 'src/reac_pace_watch.c',
+   'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
+   'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
+   'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
+  include_directories : [include_directories('src'), include_directories('tests')],
+  dependencies : [libreac_dep, threads_dep, m_dep],
+  build_by_default : true)
