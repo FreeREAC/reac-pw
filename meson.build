@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version : '0.1.0',
+  version : '0.2.0',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -79,6 +79,7 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_seglock.c',
   'src/reac_arbitration.c',
+  'src/reac_conf.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c', 'src/reac_scene_body.c',
   'src/reac_fsm.c',
@@ -104,6 +105,16 @@ executable('reac-pw',
   reac_pw_src,
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep],
   install : true)
+
+# --- unit test: the layered-config PRECEDENCE law ----------------------------
+# Pins the override order declared in docs/RATE-AND-CLOCK-CONFIG.md against the
+# code that implements it. The two drifting apart is the failure this file exists
+# to make impossible: a chain whose order lives only in prose is a chain every
+# reader infers differently, and they are all sure they are right.
+conf_test = executable('test_reac_conf',
+  ['tests/test_reac_conf.c', 'src/reac_conf.c'],
+  include_directories : [include_directories('src')])
+test('reac_conf', conf_test)
 
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',

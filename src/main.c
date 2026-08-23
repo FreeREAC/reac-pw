@@ -39,6 +39,7 @@
 #include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
+#include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
 #include "reac_seglock.h"    /* one master per segment, across processes */
 
 #include <pipewire/pipewire.h>
@@ -268,7 +269,10 @@ static void usage(const char *p)
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
 	  "                slaves to us) | slave (an external master drives; we lock to its\n"
 	  "                cadence + return our inputs upstream)\n"
-	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
+	  "  --rate R      the REAC sample rate: 44100, 48000 or 96000.\n"
+	  "                Default 96000 in the MASTER role (a master DEFINES the rate;\n"
+	  "                there is nothing to detect on a segment nobody is driving).\n"
+	  "                As a SLAVE, auto-detected from the wire cadence.\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
@@ -311,7 +315,17 @@ static void usage(const char *p)
 	  "                A designated device outranks the name heuristic; it does NOT\n"
 	  "                rescue a structurally unusable one (HDMI/DisplayPort sinks,\n"
 	  "                software timers) and it does NOT outrank measured instability.\n"
-	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n", p);
+	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n"
+	  "  REACPW_CATCHUP_MAX_SLOTS=<n>  master role: how many OVERSLEPT slots the\n"
+	  "                pacer repays by staying on its deadline grid instead of\n"
+	  "                re-basing the phase and losing them. Unset = 4 (measured);\n"
+	  "                -1 = never repay, the pre-2026-08-23 behaviour.\n"
+	  "  REACPW_RATE_MATCH=1  master role: OPT IN to publishing io_rate_match on\n"
+	  "                the sink, so PipeWire's resampler absorbs the residual\n"
+	  "                graph/wire difference instead of the depth guard discarding\n"
+	  "                it. Default OFF: the loop's sign is verified but its\n"
+	  "                measurement phase is not, so it spends most of its\n"
+	  "                authority on a standing correction. See ENV-KNOBS.md.\n", p);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
@@ -371,6 +385,7 @@ int main(int argc, char **argv)
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();
 
+	enum reac_conf_layer rate_layer = REAC_CONF_NONE;
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
@@ -418,6 +433,7 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			rxcfg.forced_rate = rate;
+			rate_layer = REAC_CONF_ARGV;
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
 		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
@@ -561,6 +577,65 @@ int main(int argc, char **argv)
 	 * Cadence is fps = rate/12 at every rate — 12 samples per frame is invariant,
 	 * so a higher rate sends the same frames more often, nothing else changes. */
 
+	/* THE MASTER'S RATE DEFAULT, and the provenance of whatever it ends up being.
+	 *
+	 * A MASTER DEFINES THE RATE; THERE IS NOTHING TO DETECT. Auto-detect is a
+	 * slave's default and it is the right one there — a slave joins a segment
+	 * somebody else is already driving, so reading the cadence off the wire is the
+	 * only honest thing it can do. A master drives a segment that is SILENT until
+	 * it speaks, so "auto" does not resolve to the operator's intent, it resolves
+	 * to whatever the fallback happens to be, and nothing on screen says which.
+	 *
+	 * The default is 96 kHz by the operator's ruling (2026-08-23): "96k is 96kHz
+	 * and should be the default reac clock rate." A Roland desk offers 44.1/48/96
+	 * and drives the segment at the one chosen; this is that menu's default
+	 * position, not a detection result.
+	 *
+	 * AND THE RATE IS PRINTED WITH WHERE IT CAME FROM. Three sources have
+	 * disagreed on this rig at once — a command line, an environment file nothing
+	 * read, and this default — and the disagreement was invisible because the
+	 * startup line said only the number. A mechanical gate beats a rule anyone has
+	 * to remember: the journal now carries the provenance beside the value, so a
+	 * 96 k master pointed at a 48 k segment says so in its first two lines. */
+	if (role == REAC_ROLE_MASTER && rxcfg.forced_rate == 0) {
+		/* Walk the LAYERS before falling back to the compiled-in default. The
+		 * order is declared in reac_conf.h and pinned by test_reac_conf; this
+		 * call is the only place it is implemented, so there is one order and
+		 * not one per reader. */
+		char v[64];
+		const char *seg = (rxcfg.kind == REAC_RX_LIVE) ? rxcfg.source : NULL;
+		enum reac_conf_layer got = reac_conf_lookup("REAC_RATE", seg, NULL,
+		                                           v, sizeof v);
+		if (got != REAC_CONF_NONE) {
+			int r = atoi(v);
+			if (r == 44100 || r == 48000 || r == 96000) {
+				rxcfg.forced_rate = r;
+				rate_layer = got;
+			} else {
+				/* A layer that answered with nonsense must SAY so and be
+				 * skipped, not silently drop us to the built-in with no
+				 * explanation — that is how a config file gets blamed for
+				 * working and a default gets blamed for not. */
+				fprintf(stderr, "reac-pw: ignoring REAC_RATE='%s' from %s — REAC "
+				        "runs at 44100, 48000 or 96000 Hz and nothing else\n",
+				        v, reac_conf_layer_name(got));
+			}
+		}
+		if (rxcfg.forced_rate == 0) {
+			rxcfg.forced_rate = REAC_MASTER_DEFAULT_RATE;
+			rate_layer = REAC_CONF_BUILTIN;
+		}
+	}
+	/* NAME THE LAYER THAT ANSWERED, not merely the value. A layered config that
+	 * cannot tell you which layer won is a debugging trap, and this rig has
+	 * already spent a morning on exactly that class of confusion: three sources
+	 * disagreed about the rate at once and the startup line printed only the
+	 * number. */
+	fprintf(stderr, "reac-pw: REAC rate = %d Hz (%d pps), from %s\n",
+	        rxcfg.forced_rate, rxcfg.forced_rate / REAC_SAMPLES_PER_PKT,
+	        rate_layer == REAC_CONF_NONE ? "auto-detect from the wire cadence"
+	                                     : reac_conf_layer_name(rate_layer));
+
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
 	 * box-width braided frames); as SLAVE it is the master's 40-ch downstream
@@ -641,7 +716,48 @@ int main(int argc, char **argv)
 		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
 		                              /* #77: unset -> nothing is designated and the
 		                               * name heuristic alone grades the reference. */
-		                              .clock_ref = getenv("REACPW_CLOCK_REF") };
+		                              .clock_ref = getenv("REACPW_CLOCK_REF"),
+		                              /* Slot-debt budget. Unset -> the measured
+		                               * default; see reac_pacer.h. */
+		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
+		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
+		                                  : 0,
+		                              /* RATE MATCHING SHIPS OFF. OPT IN WITH
+		                               * REACPW_RATE_MATCH=1.
+		                               *
+		                               * NOT because the loop is wrong. Its SIGN is
+		                               * verified on hardware — the correction
+		                               * crosses zero at ~50 frames and reverses,
+		                               * which positive feedback cannot do — and it
+		                               * caused no discard in a 30-minute soak.
+		                               *
+		                               * It is off because its MEASUREMENT PHASE is
+		                               * wrong: the RT callback samples the ring
+		                               * depth BEFORE pushing the quantum's frames,
+		                               * so it reads about one quantum low and the
+		                               * loop holds a standing correction to sit
+		                               * there — +1310..+3810 ppm across the whole
+		                               * soak, 26-76% of its authority spent at
+		                               * rest. The entire reason the applied
+		                               * correction is published is that a large
+		                               * steady one is a fault report; this one is
+		                               * reporting a fault in itself.
+		                               *
+		                               * A default is a mechanical gate; an env var
+		                               * you have to remember to set is a rule you
+		                               * have to remember. Lever 1 removes the
+		                               * cause and is fully measured, so the
+		                               * conservative default costs nothing.
+		                               *
+		                               * QUEUED, NOT CANCELLED: measure the depth
+		                               * AFTER the push, then re-soak with a
+		                               * before/after on the standing correction —
+		                               * "near zero at rest" is the whole claim and
+		                               * it has not been made yet. */
+		                              .rate_match_off =
+		                                  (getenv("REACPW_RATE_MATCH") &&
+		                                   atoi(getenv("REACPW_RATE_MATCH")) != 0)
+		                                  ? 0 : -1 };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */

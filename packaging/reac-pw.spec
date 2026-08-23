@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.1.0}
+Version:        %{?version_override}%{!?version_override:0.2.0}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,7 +17,7 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 0.5.0
+BuildRequires:  pkgconfig(libreac) >= 0.6.0
 Requires:       pipewire
 
 %description
@@ -28,14 +28,20 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-Links dynamically against the system libreac (>= 0.5.0), which carries the
+Links dynamically against the system libreac (>= 0.6.0), which carries the
 shared REAC byte-layout core: frame validation, 24-bit decode of the braid in
 both directions (downstream and box upstream), the braided encode, the
 f32<->s24 sample pair, the OHRCA +2 length rule, capture and pcap replay.
-Nothing is vendored. The floor is 0.5.0 because that is the release whose
-downstream decode reads the same braid its encoder writes; an RPM built with
---wrap-mode=nofallback against a 0.4.x libreac-devel would link happily and
-mis-decode every downstream frame.
+Nothing is vendored. The floor is 0.6.0: that is the release that actually
+SHIPS the control-block core in the shared object (reac_ctrl_*, reac_headamp_*,
+reac_ports_parse). Up to 0.5.0 the spec's hand-kept object list left
+reac_ctrlblk.o and reac_ports.o out of libreac.so while -devel installed the
+headers declaring them, so a build resolved every include and then failed at
+link -- or, worse, linked against a stale subproject and never touched the
+system library at all. 0.5.0 remains the floor for the decode side (the release
+whose downstream decode reads the same braid its encoder writes; a 0.4.x
+libreac-devel links happily and mis-decodes every downstream frame), and 0.6.0
+subsumes it. Keep this in step with meson.build's dependency() floor.
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -74,5 +80,16 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Sat Aug 22 2026 Pau Aliagas <linuxnow@gmail.com> - 0.2.0-1
+- Builds against the SYSTEM libreac >= 0.6.0, the first release whose shared
+  object actually contains the control-block core. The floor is checked twice
+  over on purpose: pkg-config refuses an honestly-old library at configure time,
+  and the 25 reac_ctrl_*/reac_headamp_*/reac_ports_parse imports refuse a
+  library that merely CLAIMS the version at link time. The second check is the
+  load-bearing one -- the version string in the subproject shim is hardcoded, so
+  a stale checkout reports the right number and links nothing.
+- subprojects/ is still absent from the tarball, so the RPM has no fallback to
+  take and cannot quietly vendor.
+
 * Sun Jun 14 2026 Pau Aliagas <linuxnow@gmail.com> - 0.1.0-1
 - Initial package: PipeWire-native REAC endpoint for the Fedora MiniPC.
