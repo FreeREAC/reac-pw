@@ -334,6 +334,90 @@ int main(void)
 		reac_frame_ring_free(&p5.ring);
 	}
 
+	/* ---- the sustained-discard detector --------------------------------- *
+	 * Its predecessor counted CONSECUTIVE trimming drains and needed twenty. On
+	 * the rig the guard trims once every ~24 s against a 200 ms drain cadence, so
+	 * the run reset to zero between every trim and the warning NEVER FIRED while
+	 * 64 ms of audio went missing every 24 seconds -- 356 trims, 0 warnings,
+	 * confirmed with a positive control on the same log. The first case below is
+	 * that exact cadence, and it is the case the old detector failed.
+	 *
+	 * Time and the trim counter are both parameters, so this runs in microseconds
+	 * and needs no pacer, no socket and no sleeping. */
+	{
+		const uint64_t W = REAC_PACER_DISCARD_WIN_NS;
+		struct reac_discard_watch w = { 0 };
+		double rate = 0;
+		uint64_t t = 1000000000ull, frames = 0;
+
+		/* THE RIG'S CADENCE: one 258-frame trim every 24 s, i.e. every window
+		 * discards something but no two drains ever trim back to back. */
+		CHK(reac_discard_watch_step(&w, t, frames, &rate) == 0);   /* opens */
+		int fired = 0, fires = 0;
+		for (int win = 0; win < 6; win++) {
+			t += W;
+			frames += 258;                       /* one trim inside this window */
+			if (reac_discard_watch_step(&w, t, frames, &rate)) {
+				fires++;
+				if (!fired) {
+					fired = 1;
+					/* 258 frames over a 30 s window */
+					CHK(rate > 8.0 && rate < 9.0);
+					CHK(w.run == REAC_PACER_DISCARD_WIN_RUN);
+				}
+			}
+		}
+		CHK(fired == 1);        /* it fired */
+		CHK(fires == 1);        /* and exactly once, not every window after */
+
+		/* A ONE-OFF must stay quiet. One trim, then clean windows: a scene recall
+		 * or a startup transient is not a rate mismatch and must not cry wolf. */
+		struct reac_discard_watch q = { 0 };
+		uint64_t qt = 5000000000ull, qf = 0;
+		CHK(reac_discard_watch_step(&q, qt, qf, &rate) == 0);
+		qt += W; qf += 300;                      /* the one-off */
+		CHK(reac_discard_watch_step(&q, qt, qf, &rate) == 0);
+		for (int win = 0; win < 10; win++) {     /* silence afterwards */
+			qt += W;
+			CHK(reac_discard_watch_step(&q, qt, qf, &rate) == 0);
+		}
+		CHK(q.run == 0);        /* a clean window broke the run */
+		CHK(q.warned == 0);
+
+		/* AN INTERRUPTED run must not accumulate across the gap: two discarding
+		 * windows, one clean, then two more discarding is five windows of which
+		 * no three are consecutive, and must stay silent. */
+		struct reac_discard_watch r = { 0 };
+		uint64_t rt = 9000000000ull, rf = 0;
+		CHK(reac_discard_watch_step(&r, rt, rf, &rate) == 0);
+		const int pattern[5] = { 1, 1, 0, 1, 1 };
+		for (int i = 0; i < 5; i++) {
+			rt += W;
+			if (pattern[i])
+				rf += 100;
+			CHK(reac_discard_watch_step(&r, rt, rf, &rate) == 0);
+		}
+		CHK(r.warned == 0);
+
+		/* A window that has NOT closed yet decides nothing, however much was
+		 * discarded inside it. */
+		struct reac_discard_watch h = { 0 };
+		uint64_t ht = 1000000ull;
+		CHK(reac_discard_watch_step(&h, ht, 0, &rate) == 0);
+		CHK(reac_discard_watch_step(&h, ht + W - 1, 999999, &rate) == 0);
+		CHK(h.run == 0);
+	}
+
+	/* ---- the guard-floor override --------------------------------------- *
+	 * The M5 sweep sets REACPW_GUARD_FLOOR_FRAMES. A value it cannot parse, or one
+	 * outside the safe band, must keep the COMPILED floor -- a sweep step that
+	 * silently ran at the default would attribute a whole row of measurements to a
+	 * depth that was never configured. reac_pacer_guard_floor resolves once per
+	 * process, so this checks the pure combination rule around it. */
+	CHK(reac_pacer_guard_high(0) >= REAC_PACER_GUARD_FLOOR_MIN);
+	CHK(reac_pacer_guard_high(1000) == REAC_PACER_GUARD_BURST_MULT * 1000);
+	CHK(reac_pacer_guard_high(1) == reac_pacer_guard_floor());
+
 	/* 4. live cadence on lo (best-effort; needs CAP_NET_RAW). */
 	struct reac_pacer p;
 	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = 8000, .prio = 0, .cpu = -1,
@@ -371,6 +455,6 @@ int main(void)
 	CHK(ratio > 0.5 && ratio < 1.5);
 
 	printf("OK: pacer period (125/250/272 us) + SPSC ring (FIFO/overrun/underrun) + "
-	       "steady ~8000 fps emit\n");
+	       "steady ~8000 fps emit + sustained-discard detector + guard floor\n");
 	return 0;
 }
