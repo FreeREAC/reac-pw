@@ -283,6 +283,20 @@ static void on_process(void *data)
 			n->staged = 0;
 		}
 	}
+
+	/* RETURN THE BUFFER. Every dequeue owes a queue, and this path — the one with
+	 * audio actually linked — used to fall out of the function still holding it.
+	 * The pool drains within a few quanta, dequeue_buffer then returns NULL
+	 * forever, and the early return above turns into the whole steady state: the
+	 * sink stops submitting and the pacer free-runs on FILLER.
+	 *
+	 * Nothing about that looks wrong from outside. Frames keep going out at the
+	 * right rate, the pacer's timing still measures clean, the link stays
+	 * established, the box stays enrolled — and no audio reaches it. The only
+	 * symptom is silence downstream, which is exactly the signal least likely to
+	 * be attributed to the sender. It survived because every measurement on this
+	 * path reads the box's CAPTURE side, which does not touch this buffer at all. */
+	pw_stream_queue_buffer(n->stream, pwb);
 }
 
 /* Build the node's param pods into `b`: the three PropInfo descriptors (volume,

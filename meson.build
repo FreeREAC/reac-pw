@@ -44,7 +44,7 @@ m_dep        = cc.find_library('m', required : false)
 # while decoding the downstream as plain LE, so the RX path would silently
 # disagree with the TX path about the wire layout (#80). Building quietly
 # against an older system libreac is exactly what this floor exists to stop.
-libreac_dep = dependency('libreac', version : '>=0.5.0',
+libreac_dep = dependency('libreac', version : '>=0.6.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -210,7 +210,8 @@ test('reac_master', master_test)
 # struct reac_master.
 master_fsm_test = executable('test_reac_master_fsm',
   ['tests/test_reac_master_fsm.c', 'src/reac_master_fsm.c'],
-  include_directories : [include_directories('src')])
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
 test('reac_master_fsm', master_fsm_test)
 
 # --- acceptance test: the S-1608 downstream is byte-exact vs the M-300 capture -
@@ -338,7 +339,8 @@ test('reac_gain', gain_test)
 # strings a consumer (openmixer's stagebox card) matches on.
 link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', 'src/reac_link_state.c'],
-  include_directories : [include_directories('src')])
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
 test('reac_link_state', link_state_test)
 
 # --- unit test: passive discovery — the sighting classifier + table ------------
