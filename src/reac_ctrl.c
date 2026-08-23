@@ -53,20 +53,25 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
 	if (out->kind != REAC_CTRL_FILLER && reac_ctrl_checksum_verify(frame) != 0)
 		return -1;
 
-	/* The box cold-connect JOIN: cdea 04 03, BE len 0x13/0x14, then 00 02.
-	 * Keyed ONLY on block[0:6] + checksum — the tail is device inventory
-	 * (0x41 is NOT a MAC tail). Broadcast AND unicast accepted (the box emits
-	 * it x3 on PHY-up while still in broadcast mode). */
+	/* The box cold-connect JOIN: a link-4 SINGLE record container whose DT1 TAG
+	 * is the join grant or the box-ready record. THE TAG IS THE DISCRIMINATOR,
+	 * NOT THE LENGTH. This used to read block[2:4] and accept 0x0013/0x0014,
+	 * which is the same two records — the four cold-connect containers happen to
+	 * have four different lengths, so a length test looks like it works right up
+	 * to a container that is not full. Keyed on the container header + the tag +
+	 * the checksum; the tail is device inventory (0x41 is NOT a MAC tail).
+	 * Broadcast AND unicast accepted (the box emits it x3 on PHY-up while still
+	 * in broadcast mode). */
 	if (out->kind == REAC_CTRL_GRANT) {
-		if ((out->op_len == 0x0013 || out->op_len == 0x0014) &&
-		    out->sel == 0x00 && out->sel2 == 0x02) {
+		if (out->opcode == 0x00 &&        /* the DT1 container's own header byte */
+		    (out->dt1_tag == REAC_DT1_TAG_JOIN ||
+		     out->dt1_tag == REAC_DT1_TAG_BOX_READY)) {
 			*ev = REAC_M_RX_BOX_JOIN;
 			return 0;
 		}
-		/* A cdea 04 03 that fails the JOIN matcher is a cold-connect variant
-		 * we do not understand — don't guess (never generic UNICAST: that
-		 * could falsely close a grant window). The live log dumps the block
-		 * so the matcher can be extended from a real capture. */
+		/* A link-4 record we do not understand — don't guess (never generic
+		 * UNICAST: that could falsely close a grant window). The live log dumps
+		 * the block so the matcher can be extended from a real capture. */
 		return -1;
 	}
 
@@ -81,11 +86,22 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
 	if (!to_us)
 		return -1;   /* unicast between other parties */
 
-	/* Unicast-to-us box heartbeat: sel 0x81 keep-alive (the box's ESTABLISHED
-	 * "I am locked" signal — symmetric to the heartbeat our slave emits), sel 0x00
-	 * disconnect (BYE). */
+	/* Unicast-to-us box heartbeat: opcode 0x81, the box's ESTABLISHED "I am
+	 * locked" signal, symmetric to the heartbeat our slave emits. */
 	if (out->kind == REAC_CTRL_BOX_HB) {
-		*ev = (out->sel == 0x00) ? REAC_M_RX_BOX_BYE : REAC_M_RX_BOX_HEARTBEAT;
+		*ev = REAC_M_RX_BOX_HEARTBEAT;
+		return 0;
+	}
+	/* THE BYE IS THE HEARTBEAT WITH ITS OPCODE CLEARED — link 1, SINGLE, opcode
+	 * 0x00 — and on link 1 that opcode is the master's bulk scene push, so
+	 * libreac classifies it as SCENE_TRANSFER. The two are the same four header
+	 * bytes and no field separates them; what separates them here is DIRECTION.
+	 * This function only ever sees frames a box sent to us while we are the
+	 * master, and a box never pushes a scene, so a link-1 SINGLE bulk frame
+	 * arriving unicast from a box is its disconnect. Anything that widens this
+	 * function's input (a promiscuous tap, a splitter) must re-derive it. */
+	if (out->kind == REAC_CTRL_SCENE_TRANSFER && out->seg == REAC_SEG_SINGLE) {
+		*ev = REAC_M_RX_BOX_BYE;
 		return 0;
 	}
 	/* The box's config-announce (cdea 01 03 0010) is its SETUP DECLARATION — the
@@ -94,7 +110,7 @@ int reac_ctrl_classify_box_frame(const uint8_t *frame, size_t len,
 	 * unicast, re-declaring itself with this frame (verified live: a real S-0808
 	 * to reac-pw-as-master sends config-announce + unicast, never a 04 03 JOIN).
 	 * Surface it distinctly so the master FSM can establish on it. */
-	if (out->op0 == 0x01 && out->op1 == 0x03 && out->op_len == 0x0010) {
+	if (out->kind == REAC_CTRL_CONFIG_ANNOUNCE) {
 		*ev = REAC_M_RX_BOX_CONFIG;
 		return 0;
 	}

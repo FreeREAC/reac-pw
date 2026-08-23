@@ -169,9 +169,9 @@ static uint64_t upstream_corpus(void)
 					absorb_len(len); absorb(frame, len);
 					len = reac_ctrl_build_config_announce(frame, master, src, cnt, nch);
 					absorb_len(len); absorb(frame, len);
-					len = reac_ctrl_build_name_frame(frame, master, src, cnt, nch);
+					len = reac_ctrl_build_identity_first(frame, master, src, cnt, nch);
 					absorb_len(len); absorb(frame, len);
-					len = reac_ctrl_build_extra_frame(frame, master, src, cnt, nch);
+					len = reac_ctrl_build_identity_last(frame, master, src, cnt, nch);
 					absorb_len(len); absorb(frame, len);
 					len = reac_ctrl_build_headamp(frame, bcast, src, cnt,
 					                              (uint8_t)(nch & 0x3f),

@@ -75,9 +75,11 @@ int main(void)
 	d = reac_slave_step_tick(&s);
 	CHK(d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER && !d.with_join);
 
-	/* §13d step 2: the master cycles cdea 01 sub-states (PROBE). We learn the master
-	 * from the L2 source and keep flooding (no grant yet, flood not done). */
-	struct reac_ctrl_parsed probe = master_frame(REAC_CTRL_PROBE, MASTER);
+	/* §13d step 2: the master pushes its scene (link 1, opcode 0x00). We learn the
+	 * master from the L2 source and keep flooding (no grant yet, flood not done).
+	 * This was PROBE — the parser's link-1 catch-all, whose "cdea 01 sub-states"
+	 * are the segment states of this one transfer. */
+	struct reac_ctrl_parsed probe = master_frame(REAC_CTRL_SCENE_TRANSFER, MASTER);
 	d = reac_slave_step_rx(&s, &probe);
 	CHK(s.fsm.have_master && memcmp(s.fsm.master_mac, MASTER, 6) == 0);  /* learned */
 	CHK(d.state == FSM_FLOOD_ANNOUNCE);
@@ -199,7 +201,7 @@ int main(void)
 	 * broadcast, never idle, never a per-slot cold-connect spam. */
 	{
 		reac_slave_fsm_init(&s, &cfg);
-		struct reac_ctrl_parsed mprobe = master_frame(REAC_CTRL_PROBE, MASTER);
+		struct reac_ctrl_parsed mprobe = master_frame(REAC_CTRL_SCENE_TRANSFER, MASTER);
 
 		/* phase 1: the BOUNDED broadcast flood — always FLOOD_FILLER, never a join
 		 * alongside. Keep the master learned (periodic probe) so it can hand off. */

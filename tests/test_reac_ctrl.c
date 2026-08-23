@@ -100,7 +100,9 @@ int main(void)
 
 	struct reac_ctrl_parsed p;
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_BOX_HB);
-	CHK(p.counter == 0x1234 && p.op0 == 1 && p.op1 == 3 && p.op_len == 1 && p.sel == 0x81);
+	CHK(p.counter == 0x1234);
+	CHK(p.link == REAC_LINK_CTRL && p.seg == REAC_SEG_SINGLE &&
+	    p.opcode == REAC_OP_BOX_HB && p.blk_len == 1);
 	CHK(!p.is_broadcast && memcmp(p.src, SRC, 6) == 0 && memcmp(p.dst, MASTER, 6) == 0);
 
 	/* 1b. the heartbeat width follows box_channels (W3): 8-ch = 340 B, 40-ch = 1492 B,
@@ -175,25 +177,36 @@ int main(void)
 	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x14 &&
 	    f[22] == 0x00 && f[23] == 0x02);                     /* zoneA block head */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
-	CHK(ev == REAC_M_RX_BOX_JOIN && p.sel2 == 0x02);         /* sel2 parsed */
+	CHK(ev == REAC_M_RX_BOX_JOIN);
+	CHK(p.link == REAC_LINK_RECORD && p.seg == REAC_SEG_SINGLE &&
+	    p.dt1_tag == REAC_DT1_TAG_JOIN);                     /* the tag, not the length */
 	memcpy(f, BCAST, 6);                                     /* broadcast variant */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_JOIN && p.is_broadcast);
 
-	/* (b) the 0x13 length variant is also a JOIN */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
-	f[21] = 0x13;
-	reac_ctrl_checksum_apply(f);
-	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
-	CHK(ev == REAC_M_RX_BOX_JOIN);
+	/* (b) THE LENGTH DECIDES NOTHING. Rewriting block[2:4] to any value at all
+	 * leaves the record a JOIN, because what makes it one is its DT1 tag. The old
+	 * matcher read this field and accepted a hand-kept set of four values, which
+	 * is what a container that is not full breaks. */
+	static const uint8_t LENS[] = { 0x13, 0x15, 0x1f, 0x00 };
+	for (size_t li = 0; li < sizeof LENS / sizeof LENS[0]; li++) {
+		n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+		f[21] = LENS[li];
+		reac_ctrl_checksum_apply(f);
+		CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
+		CHK(ev == REAC_M_RX_BOX_JOIN && p.blk_len == LENS[li]);
+	}
 
-	/* (c) rejects: corrupted checksum / op_len 0x15 / our own echo / non-Roland */
+	/* (c) rejects: corrupted checksum / an unknown DT1 tag / our own echo /
+	 * non-Roland. The tag is the field that can refuse now — a link-4 record whose
+	 * register page we have never captured must not close a grant window. */
 	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
 	f[49] ^= 0x5a;                                           /* break the checksum */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
-	f[21] = 0x15;                                            /* bad op_len */
+	f[34] = 0x07; f[35] = 0x77;                              /* an uncaptured tag */
 	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT && p.dt1_tag == 0x0777);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7, 16, NULL, 12); /* src == our_mac */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
@@ -209,14 +222,18 @@ int main(void)
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_JOIN);
 
-	/* (e) box hb sel 0x81 -> HEARTBEAT (the box's "I am locked" signal); sel 0x00
-	 *     -> BYE; bcast FILLER -> presence; unicast upstream FILLER -> UNICAST */
+	/* (e) box hb opcode 0x81 -> HEARTBEAT (the box's "I am locked" signal); opcode
+	 *     0x00 -> BYE; bcast FILLER -> presence; unicast upstream FILLER -> UNICAST.
+	 *     The BYE's opcode is the bulk-transfer opcode, so libreac classifies the
+	 *     frame as SCENE_TRANSFER and only DIRECTION tells the two apart — see the
+	 *     note in reac_ctrl_classify_box_frame. */
 	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_HEARTBEAT);
 	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
 	f[22] = 0x00;                                            /* disconnect latch */
 	reac_ctrl_checksum_apply(f);
+	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_SCENE_TRANSFER);   /* the collision */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_BYE);
 	n = reac_ctrl_build_upstream_filler(f, BCAST, SRC, 9, 16, NULL, 12);
