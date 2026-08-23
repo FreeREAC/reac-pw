@@ -9,8 +9,9 @@
 # The version below is what reac-pw's `dependency('libreac', version: ...)`
 # floor is checked against when the fallback is taken, so it has to track the
 # libreac the wrap actually clones (`revision = main`). Keep it in step with
-# packaging/libreac.spec upstream; reac-pw's meson.build additionally probes for
-# a 0.5.0-only symbol so a stale checkout cannot pass on this string alone.
+# packaging/libreac.spec upstream. The version string alone proves nothing — it is
+# hardcoded here, so a stale checkout reports it too. What a stale checkout cannot
+# do is configure: src/reac_ctrlblk.c is listed below and does not exist before it.
 
 project('libreac', 'c',
   version : '0.6.0',
