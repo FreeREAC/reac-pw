@@ -66,6 +66,8 @@ int main(void)
 		struct reac_console_cfg cfg = { .out_channels = 8,
 		                                .console_field = cc->console_field };
 		struct reac_master m;
+	uint8_t first_scene_chunk[34];
+	int first_scene_chunk_set = 0;
 		reac_master_init(&m, cc->mac, &cfg, FPS);
 
 		/* ---- (a) cfea announce (idle): the per-console identity bytes ---- */
@@ -113,9 +115,24 @@ int main(void)
 		CHK(f[23] == 0x22 && f[24] == 0xc8);          /* declares 0x22c8      */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 		{
+			/* Chunk 1 carries the body verbatim and is the SAME for every console
+			 * profile: the scene is the desk's own state, and nothing in the
+			 * transfer is keyed to the mixer model. Byte-comparing against a
+			 * captured M-200i block would only assert that we replay THAT desk's
+			 * mixer state, which is the thing we deliberately stopped doing. */
 			uint8_t blk[34];
 			CHK(reac_ctrl_build_scene_step(blk, m.scene, sizeof m.scene, 1) == 0);
-			CHK(memcmp(blk, GOLD_PROBES[6].blk, 34) == 0);   /* phase 6, sub 0x02 */
+			CHK(blk[0] == 0xcd && blk[1] == 0xea);
+			CHK(blk[2] == 0x01 && blk[3] == 0x00);           /* op-0100        */
+			CHK(blk[4] == 0x00 && blk[5] == 0x1a);           /* 26-byte payload */
+			CHK(memcmp(blk + 7, m.scene + REAC_SCENE_HEAD_BYTES,
+			           REAC_SCENE_CHUNK_BYTES) == 0);
+			if (first_scene_chunk_set)
+				CHK(memcmp(blk, first_scene_chunk, 34) == 0);  /* profile-independent */
+			else {
+				memcpy(first_scene_chunk, blk, 34);
+				first_scene_chunk_set = 1;
+			}
 		}
 
 		/* ---- (b) console-INDEPENDENT grant sweep: byte-identical to the real

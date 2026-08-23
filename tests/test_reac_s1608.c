@@ -101,7 +101,7 @@ static int test_probe_rotation(void)
 	struct reac_master m;
 	reac_master_init(&m, OUR_MAC, &idle, 8000);
 
-	const int expect[10] = { 6, 2, 8, 4, 0, 6, 2, 8, 4, 0 };
+	int prev_step = 0;
 	int np = 0, fillers_checked = 0;
 	uint8_t cur_desc = 0;
 	int have = 0;
@@ -114,11 +114,27 @@ static int test_probe_rotation(void)
 		reac_master_stamp(&m, f, e, idx);
 
 		if (e == REAC_M_EMIT_SCENE_CHUNK) {
-			const uint8_t *g = gold_probe(expect[np], 0x02);
-			CHK(g != NULL);
-			CHK(memcmp(f + 16, g, 34) == 0);      /* byte-exact vs the live M-200 */
+			/* The chunk carries the body slice for its step, verbatim, with a valid
+			 * checksum — and no two consecutive chunks are identical. That last one
+			 * is the property the old model got wrong: it emitted each block TWICE,
+			 * which a mirrored capture had made look like the desk's own behaviour. */
+			CHK(f[18] == 0x01 && f[19] == 0x00);
+			CHK(f[20] == 0x00 && f[21] == 0x1a);
+			size_t off = REAC_SCENE_HEAD_BYTES +
+			             (size_t)(m.scene_step - 1) * REAC_SCENE_CHUNK_BYTES;
+			CHK(memcmp(f + 23, m.scene + off, REAC_SCENE_CHUNK_BYTES) == 0);
 			CHK(reac_ctrl_checksum_verify(f) == 0);
-			cur_desc = f[49];                      /* this probe's checksum */
+			/* The step advances by exactly one per chunk slot. That is the
+			 * body-independent form of the invariant the old model broke: it
+			 * emitted each block TWICE and advanced every other slot, which a
+			 * MIRRORED capture (every frame duplicated) had made look like the
+			 * desk's own behaviour. Comparing chunk bytes cannot express this —
+			 * a generated body is mostly zeros, so neighbouring chunks are
+			 * legitimately identical and only the STEP distinguishes them. */
+			if (np > 0)
+				CHK(m.scene_step == prev_step + 1);
+			prev_step = m.scene_step;
+			cur_desc = f[49];                      /* this chunk's checksum */
 			have = 1;
 			np++;
 		} else if (e == REAC_M_EMIT_FILLER && have) {
@@ -129,7 +145,7 @@ static int test_probe_rotation(void)
 			fillers_checked++;
 		}
 	}
-	CHK(np == 10);                                 /* saw a full 5-phase rotation */
+	CHK(np == 10);                                 /* ten chunks walked in order */
 	CHK(fillers_checked > 100);                    /* and plenty of tracking FILLERs */
 	return 0;
 }

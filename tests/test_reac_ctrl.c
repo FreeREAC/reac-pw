@@ -386,24 +386,26 @@ int main(void)
 		 * misses. Two of them ride middle chunks, which is exactly where the old
 		 * synthetic pattern went, so this assertion is the regression that keeps a
 		 * future generated body from re-breaking the promotion invisibly. */
-		CHK(memcmp(reac_scene_placeholder + REAC_SCENE_TAG_ID_OFF,   "1234", 4) == 0);
-		CHK(memcmp(reac_scene_placeholder + REAC_SCENE_TAG_SYSP_OFF, "SYSP", 4) == 0);
-		CHK(memcmp(reac_scene_placeholder + REAC_SCENE_TAG_SCEN_OFF, "SCEN", 4) == 0);
+		uint8_t gen[REAC_SCENE_BYTES];
+		CHK(reac_ctrl_scene_build(gen, sizeof gen, SRC) == 0);
+		CHK(memcmp(gen + REAC_SCENE_TAG_ID_OFF,   "1234", 4) == 0);
+		CHK(memcmp(gen + REAC_SCENE_TAG_SYSP_OFF, "SYSP", 4) == 0);
+		CHK(memcmp(gen + REAC_SCENE_TAG_SCEN_OFF, "SCEN", 4) == 0);
+		CHK(memcmp(gen + REAC_SCENE_MAC_OFF, SRC, 6) == 0);
+		CHK(reac_ctrl_scene_build(gen, sizeof gen - 1, SRC) == -1);
 		/* and they must survive the chunker onto the wire, not just exist in the
 		 * body: SYSP rides chunk 32 and SCEN chunk 33. */
 		{
 			uint8_t c32[34], c33[34];
-			CHK(reac_ctrl_build_scene_step(c32, reac_scene_placeholder,
-			                               REAC_SCENE_BYTES, 33) == 0);
-			CHK(reac_ctrl_build_scene_step(c33, reac_scene_placeholder,
-			                               REAC_SCENE_BYTES, 34) == 0);
+			CHK(reac_ctrl_build_scene_step(c32, gen, REAC_SCENE_BYTES, 33) == 0);
+			CHK(reac_ctrl_build_scene_step(c33, gen, REAC_SCENE_BYTES, 34) == 0);
 			CHK(memmem(c32 + 7, 26, "SYSP", 4) != NULL);
 			CHK(memmem(c33 + 7, 26, "SCEN", 4) != NULL);
 		}
 
 		/* Our identity goes into the body, replacing the capturing desk's. */
 		uint8_t mine[REAC_SCENE_BYTES];
-		memcpy(mine, reac_scene_placeholder, sizeof mine);
+		CHK(reac_ctrl_scene_build(mine, sizeof mine, SRC) == 0);
 		CHK(reac_ctrl_scene_set_mac(mine, sizeof mine, SRC) == 0);
 		CHK(memcmp(mine + REAC_SCENE_MAC_OFF, SRC, 6) == 0);
 		CHK(reac_ctrl_scene_set_mac(mine, sizeof mine - 1, SRC) == -1);
