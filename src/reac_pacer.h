@@ -179,7 +179,57 @@ struct reac_pacer_cfg {
 	 * timing-identical. 1 = follow the best available reference. Set from
 	 * REACPW_CLOCK_FOLLOW; see docs/ENV-KNOBS.md. */
 	int clock_follow;
+	/* SLOT-DEBT CATCH-UP (workstream CLK, 2026-08-23). How many overslept slots the
+	 * pacer will repay by staying on its original deadline grid instead of
+	 * re-basing the phase to `now`. 0 = the rate-derived default
+	 * (reac_catchup_default_slots — a zero-initialised cfg gets the default,
+	 * never "off"); -1 restores the historical behaviour, re-base always and lose
+	 * the overslept slots for good; >0 is an explicit slot count, which is
+	 * RATE-DEPENDENT and exists for sweeps. Set from REACPW_CATCHUP_MAX_SLOTS;
+	 * see docs/ENV-KNOBS.md. */
+	int catchup_max_slots;
 };
+
+/* Default slot-debt budget, EXPRESSED IN TIME because the thing it bounds is a
+ * duration and not a slot count.
+ *
+ * THE PACER OVERSLEEPS BY AN AMOUNT OF TIME. It is a scheduler tail — a
+ * preemption, an interrupt, a stall — and it has no idea what the REAC rate is.
+ * So a budget written as "4 slots" silently means 1.0 ms at 48 kHz and 0.5 ms at
+ * 96 kHz: the SAME hiccup that is repayable on one rig becomes unrepayable on the
+ * other, and nothing says so. That is not a tuning question, it is a units bug
+ * waiting for a rate change, and this rig has a rate change coming.
+ *
+ * 1000 us is MEASURED, not guessed. From the 30-minute soak's per-window worst
+ * single debt (198 windows, `reac.health.slot-debt-max`):
+ *
+ *     p50 250 us   p90 500 us   p95 750 us   worst 2000 us
+ *
+ * 1.0 ms covers ~97% of what a half-hour throws at a busy host; the remainder is
+ * real stalls, which are reported rather than smeared onto the wire. It bounds
+ * the catch-up burst to 1.0 ms of frames — 4 x 1492 B = 48 us of wire at 48 kHz,
+ * 8 x 1492 B = 95 us at 96 kHz, both a small fraction of a slot and both well
+ * under the 10.8 us stddev the box's OWN return already carries.
+ *
+ * AT 48 kHz THIS IS EXACTLY THE 4 SLOTS THAT WERE SOAKED — 1000 us x 4000 fps /
+ * 1e6 = 4, by construction — so the shipping behaviour is unchanged and the
+ * measurement behind it still applies. At 96 kHz it becomes 8, which is the same
+ * duration and is the number the 48 kHz distribution implies. That does NOT make
+ * 96 kHz verified; see docs/96K-SWITCH-ASSESSMENT.md. It makes the default stop
+ * being wrong for a reason nobody would have seen. */
+#define REAC_CATCHUP_MAX_DEFAULT_US 1000
+
+/* The budget in slots for a given frame rate. Rounds to at least 1: a budget that
+ * rounds to zero would silently disable catch-up at an absurd rate, and "off"
+ * must be something a caller ASKS for. */
+static inline uint32_t reac_catchup_default_slots(int fps)
+{
+	if (fps <= 0)
+		return 1;
+	uint32_t n = (uint32_t)(((double)REAC_CATCHUP_MAX_DEFAULT_US * (double)fps)
+	                        / 1e6 + 0.5);
+	return n ? n : 1;
+}
 
 /* Re-evaluate the clock discipline every this many slots (~8 Hz at 8000 fps).
  * reac_rx recomputes its slope ~4x/s, so anything faster only re-reads the same
@@ -232,6 +282,7 @@ struct reac_pacer {
 	int fd;                          /* AF_PACKET socket */
 	int ifindex;
 	long period_ns;                  /* 1e9 / fps */
+	uint32_t catchup_max_slots;      /* slot-debt budget; 0 = re-base always */
 	int prio, cpu;
 	uint8_t src[6];
 
@@ -243,6 +294,30 @@ struct reac_pacer {
 	_Atomic uint64_t tx_frames;
 	_Atomic uint64_t tx_errors;
 	_Atomic uint64_t late_wakes;     /* slots where we woke > 1 period late */
+	/* SLOT DEBT (workstream CLK). A late wake used to re-base the deadline to
+	 * `now`, which throws the overslept slots away permanently: measured on the
+	 * live rig at 3.6 slots/s = 900 ppm of transmit deficit, which is the ENTIRE
+	 * cause of the TX ring's growth and therefore of the guard's 64 ms discards.
+	 * These two counters separate the debt we repaid from the debt we declared. */
+	_Atomic uint64_t slots_catchup;  /* late wakes repaid by staying on the grid */
+	_Atomic uint64_t slots_dropped;  /* slots abandoned: the debt exceeded the budget */
+	/* THE TAIL, which is the thing a short run cannot show. slots_dropped says how
+	 * much debt we abandoned; it does not say whether that was a hundred one-slot
+	 * misses or one hundred-slot stall, and those are different faults with
+	 * different fixes. This is the largest SINGLE debt seen since the last read —
+	 * the number that says whether the catch-up budget is set right, and the only
+	 * one that can distinguish a busy host from a stall. Read-and-reset by the
+	 * health poll so a heartbeat reports its own window's worst case. */
+	_Atomic uint32_t slot_debt_max;  /* largest single overslept debt, in slots */
+
+	/* Health window state. MAIN-LOOP ONLY (reac_pacer_health_poll) — never touched
+	 * by the pacer thread, so no atomics and no RT cost. */
+	uint64_t health_win_ns;          /* monotonic ns at the window's open (0 = none) */
+	uint64_t health_tx_frames;       /* tx_frames at the window's open */
+	uint64_t health_trim_frames;     /* ring_trim_frames at the window's open */
+	uint64_t health_late_wakes;
+	uint64_t health_slots_dropped;
+	uint64_t health_slots_catchup;
 
 	/* frame-ring depth guard telemetry (task #152). ring_depth_{min,peak} bound the
 	 * depth SAWTOOTH seen since the last EMITTED depth line (read-and-reset there),
@@ -433,6 +508,53 @@ void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
  * test can drive the whole path (including proving inertness) without the RT
  * thread or a socket. */
 long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns);
+
+/* ---- HEALTH, published where an operator can see it (workstream CLK) --------
+ *
+ * THE FAULT THIS EXISTS FOR IS INVISIBLE BY CONSTRUCTION. The depth guard drops
+ * 256 frames — 64 ms of audio — in one step so that PipeWire never starves, which
+ * means no xrun is raised, no telemetry counter moves, and the console reports a
+ * healthy graph while audio disappears. A signal that does not observe what it
+ * claims to observe is exactly the defect family this project keeps paying for,
+ * so the daemon states its own health in numbers rather than leaving it to be
+ * inferred from a heartbeat nobody reads.
+ *
+ * WINDOWED, never cumulative: a lifetime counter cannot tell an operator whether
+ * the desk is dropping audio RIGHT NOW. Everything here is a rate over the window
+ * that just closed, except the two raw counters an operator may want to difference
+ * by hand. Computed on the main loop from the pacer's atomics — the RT path is
+ * untouched. */
+/* Health window length. Long enough that the drift figure is not dominated by
+ * one scheduler hiccup (at 900 ppm and 4000 fps the deficit is 3.6 frames/s, so a
+ * 10 s window resolves it to ~3%), short enough that an operator sees a fault
+ * appear rather than an average of the last hour. */
+#define REAC_PACER_HEALTH_WINDOW_NS  10000000000ull
+
+struct reac_pacer_health {
+	int      valid;              /* 0 until the first full window has closed */
+	double   window_s;           /* length of the window these rates cover */
+	double   drift_ppm;          /* transmit deficit: (nominal - emitted) / nominal.
+	                              * POSITIVE means we put fewer frames on the wire
+	                              * than the rate asks for, so the TX ring grows. */
+	double   discard_fps;        /* frames the depth guard discarded per second */
+	double   discard_ms_per_s;   /* the same loss stated as audio: ms lost per second */
+	double   late_wakes_ps;      /* late wakes per second */
+	double   slots_dropped_ps;   /* unrepayable slot debt per second */
+	double   slots_catchup_ps;   /* slot debt repaid on the grid per second */
+	uint64_t tx_errors;          /* cumulative sendto() failures */
+	uint64_t late_wakes;         /* cumulative */
+	uint32_t ring_frames;        /* TX ring depth at the close of the window */
+	uint32_t slot_debt_max;      /* largest SINGLE overslept debt in the window,
+	                              * in slots. <= the catch-up budget means every
+	                              * miss was repayable; above it is the tail. */
+	double   ring_ms;            /* the same depth as graph->wire latency */
+};
+
+/* Fold one main-loop poll into the health window and, when a window closes,
+ * write the rates into *out and return 1. Returns 0 (and leaves *out alone)
+ * between windows. `now_ns` must be CLOCK_MONOTONIC (reac_pacer_mono_ns). */
+int reac_pacer_health_poll(struct reac_pacer *p, uint64_t now_ns,
+                           struct reac_pacer_health *out);
 
 void reac_pacer_stop(struct reac_pacer *p);
 void reac_pacer_close(struct reac_pacer *p);
