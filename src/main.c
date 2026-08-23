@@ -290,8 +290,8 @@ static void usage(const char *p)
 	  "                reac-playback.NAME) so one master per REAC VLAN/segment coexists.\n"
 	  "  --headamp CH:PARAM:VALUE  master role, repeatable: a per-channel head-amp\n"
 	  "                command the master re-asserts to the box (declarative/DMX).\n"
-	  "                CH = wire channel 0..39; PARAM = phantom|pad|sens; VALUE = 0/1\n"
-	  "                for phantom|pad, 0..55 raw SENS code for sens. RIG-GATED.\n"
+	  "                CH = head-amp channel 0..%d; PARAM = phantom|pad|sens; VALUE = 0/1\n"
+	  "                for phantom|pad, 0..%d raw SENS code for sens. RIG-GATED.\n"
 	  "  --src-mac M   our on-wire source MAC (aa:bb:cc:dd:ee:ff). Default for BOTH\n"
 	  "                roles: the --tx NIC's OWN hardware address, verbatim — our frames\n"
 	  "                carry OUR identity (real boxes and desks sync to it; a borrowed\n"
@@ -325,7 +325,8 @@ static void usage(const char *p)
 	  "                graph/wire difference instead of the depth guard discarding\n"
 	  "                it. Default OFF: the loop's sign is verified but its\n"
 	  "                measurement phase is not, so it spends most of its\n"
-	  "                authority on a standing correction. See ENV-KNOBS.md.\n", p);
+	  "                authority on a standing correction. See ENV-KNOBS.md.\n",
+	  p, REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
