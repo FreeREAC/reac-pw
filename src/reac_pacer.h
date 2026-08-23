@@ -181,20 +181,55 @@ struct reac_pacer_cfg {
 	int clock_follow;
 	/* SLOT-DEBT CATCH-UP (workstream CLK, 2026-08-23). How many overslept slots the
 	 * pacer will repay by staying on its original deadline grid instead of
-	 * re-basing the phase to `now`. 0 = REAC_CATCHUP_MAX_SLOTS_DEFAULT (a
-	 * zero-initialised cfg gets the default, never "off"); -1 restores the
-	 * historical behaviour — re-base always, and lose the overslept slots for
-	 * good. Set from REACPW_CATCHUP_MAX_SLOTS; see docs/ENV-KNOBS.md. */
+	 * re-basing the phase to `now`. 0 = the rate-derived default
+	 * (reac_catchup_default_slots — a zero-initialised cfg gets the default,
+	 * never "off"); -1 restores the historical behaviour, re-base always and lose
+	 * the overslept slots for good; >0 is an explicit slot count, which is
+	 * RATE-DEPENDENT and exists for sweeps. Set from REACPW_CATCHUP_MAX_SLOTS;
+	 * see docs/ENV-KNOBS.md. */
 	int catchup_max_slots;
 };
 
-/* Default slot-debt budget. MEASURED, not guessed: on the live rig the pacer
- * oversleeps by one slot about 3.6 times a second and by more than four slots
- * 0.09 times a second, so 4 repays essentially the whole debt while bounding the
- * catch-up burst to 4 x 1492 B = 48 us of wire at 1 Gb/s — a fifth of one slot,
- * and well under the 10.8 us stddev the box's OWN return already carries. A debt
- * larger than this is a real stall and is reported, not smeared onto the wire. */
-#define REAC_CATCHUP_MAX_SLOTS_DEFAULT 4
+/* Default slot-debt budget, EXPRESSED IN TIME because the thing it bounds is a
+ * duration and not a slot count.
+ *
+ * THE PACER OVERSLEEPS BY AN AMOUNT OF TIME. It is a scheduler tail — a
+ * preemption, an interrupt, a stall — and it has no idea what the REAC rate is.
+ * So a budget written as "4 slots" silently means 1.0 ms at 48 kHz and 0.5 ms at
+ * 96 kHz: the SAME hiccup that is repayable on one rig becomes unrepayable on the
+ * other, and nothing says so. That is not a tuning question, it is a units bug
+ * waiting for a rate change, and this rig has a rate change coming.
+ *
+ * 1000 us is MEASURED, not guessed. From the 30-minute soak's per-window worst
+ * single debt (198 windows, `reac.health.slot-debt-max`):
+ *
+ *     p50 250 us   p90 500 us   p95 750 us   worst 2000 us
+ *
+ * 1.0 ms covers ~97% of what a half-hour throws at a busy host; the remainder is
+ * real stalls, which are reported rather than smeared onto the wire. It bounds
+ * the catch-up burst to 1.0 ms of frames — 4 x 1492 B = 48 us of wire at 48 kHz,
+ * 8 x 1492 B = 95 us at 96 kHz, both a small fraction of a slot and both well
+ * under the 10.8 us stddev the box's OWN return already carries.
+ *
+ * AT 48 kHz THIS IS EXACTLY THE 4 SLOTS THAT WERE SOAKED — 1000 us x 4000 fps /
+ * 1e6 = 4, by construction — so the shipping behaviour is unchanged and the
+ * measurement behind it still applies. At 96 kHz it becomes 8, which is the same
+ * duration and is the number the 48 kHz distribution implies. That does NOT make
+ * 96 kHz verified; see docs/96K-SWITCH-ASSESSMENT.md. It makes the default stop
+ * being wrong for a reason nobody would have seen. */
+#define REAC_CATCHUP_MAX_DEFAULT_US 1000
+
+/* The budget in slots for a given frame rate. Rounds to at least 1: a budget that
+ * rounds to zero would silently disable catch-up at an absurd rate, and "off"
+ * must be something a caller ASKS for. */
+static inline uint32_t reac_catchup_default_slots(int fps)
+{
+	if (fps <= 0)
+		return 1;
+	uint32_t n = (uint32_t)(((double)REAC_CATCHUP_MAX_DEFAULT_US * (double)fps)
+	                        / 1e6 + 0.5);
+	return n ? n : 1;
+}
 
 /* Re-evaluate the clock discipline every this many slots (~8 Hz at 8000 fps).
  * reac_rx recomputes its slope ~4x/s, so anything faster only re-reads the same

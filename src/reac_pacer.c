@@ -1206,10 +1206,15 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	p->period_ns = reac_pacer_period_ns(cfg->fps);
 	/* 0 (a zero-initialised cfg) means "the default", not "off" — a daemon that
 	 * owns the clock must not lose slots because a caller forgot a field. -1 is
-	 * how a caller says off, and it restores the historical re-base exactly. */
+	 * how a caller says off, and it restores the historical re-base exactly.
+	 * The default is derived from the RATE, because the budget bounds a duration
+	 * and not a slot count; see REAC_CATCHUP_MAX_DEFAULT_US. */
 	p->catchup_max_slots = cfg->catchup_max_slots == 0
-		? (uint32_t)REAC_CATCHUP_MAX_SLOTS_DEFAULT
+		? reac_catchup_default_slots(cfg->fps)
 		: (cfg->catchup_max_slots < 0 ? 0u : (uint32_t)cfg->catchup_max_slots);
+	fprintf(stderr, "reac-pacer: slot-debt catch-up %s (%u slots = %.0f us at %d fps)\n",
+	        p->catchup_max_slots ? "ON" : "OFF", p->catchup_max_slots,
+	        (double)p->catchup_max_slots * (double)p->period_ns / 1e3, cfg->fps);
 	p->prev_state = REAC_M_IDLE;
 	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
 
