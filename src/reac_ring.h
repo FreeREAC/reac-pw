@@ -31,7 +31,8 @@ struct reac_ring {
 	float *buf;              /* planar: channel c at buf + c*capacity */
 	uint32_t capacity;       /* per-channel slots, power of two */
 	uint32_t mask;           /* capacity - 1 */
-	uint32_t channels;       /* 40 for the downstream broadcast */
+	uint32_t channels;       /* rows the CONSUMER reads: 40, the frame's slot count */
+	uint32_t wrote_channels; /* rows the producer filled last write (producer-only) */
 	_Atomic uint32_t head;   /* producer writes here (next free slot)  */
 	_Atomic uint32_t tail;   /* consumer reads here (next valid slot)  */
 	_Atomic uint64_t underruns; /* RT-side: quanta that had to be silenced */
@@ -49,12 +50,30 @@ uint32_t reac_ring_readable(const struct reac_ring *r);
 uint32_t reac_ring_writable(const struct reac_ring *r);
 
 /* PRODUCER (RX feeder thread). Push `n` per-channel samples from a planar,
- * de-interleaved float source `planar[c*n + s]`. If the ring can't hold all of
- * them it writes as many as fit and drops the NEWEST remainder (an overrun):
- * SPSC discipline forbids the producer from moving tail, so it never races the
- * consumer to drop the oldest. Bounded-latency trimming of the oldest is a
- * consumer-side job (reac_ring_trim). Returns frames actually written. */
-uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n);
+ * de-interleaved float source `planar[c*n + s]`, `src_channels` rows wide.
+ *
+ * SRC_CHANNELS IS THE BOX'S WIDTH, NOT THE RING'S. The frame carries 40 slots and
+ * the consumer reads all 40, but an S-0808 fills eight of them; the other 32 are
+ * silence by definition. Writing that silence sample-by-sample every frame cost
+ * 210 ns of the 344 ns the whole receive path spends per frame -- more than the
+ * decode, the zero-fill and the float conversion together (docs/FASTPATH-
+ * MEASUREMENTS.md, C). So the producer writes only the rows it has, and the rows
+ * past `src_channels` keep whatever they already hold.
+ *
+ * THAT IS SAFE ONLY BECAUSE THIS FUNCTION KEEPS THEM SILENT. reac_ring_init
+ * calloc's the buffer, so an untouched row is zero from birth; and when
+ * `src_channels` SHRINKS -- a 16-channel box swapped for an 8-channel one -- the
+ * rows it vacates are zeroed here, once, on the change. Without that the old
+ * box's audio would circulate forever in rows nothing overwrites: silence that
+ * turns back into someone else's microphone. `wrote_channels` is producer-only
+ * state and needs no atomic.
+ *
+ * If the ring can't hold all `n` it writes as many as fit and drops the NEWEST
+ * remainder (an overrun): SPSC discipline forbids the producer from moving tail,
+ * so it never races the consumer to drop the oldest. Bounded-latency trimming of
+ * the oldest is a consumer-side job (reac_ring_trim). Returns frames written. */
+uint32_t reac_ring_write(struct reac_ring *r, const float *planar, uint32_t n,
+                         uint32_t src_channels);
 
 /* CONSUMER (PipeWire process()). Pop `n` per-channel samples into PipeWire's
  * planar output `dst[c]` buffers (one pointer per channel). On underrun the

@@ -72,13 +72,21 @@ static void feed_frame(struct reac_rx *rx, const struct reac_mode *mode,
 		ns = REAC_SAMPLES_PER_PKT;
 	if (nch > REAC_MAX_CHANNELS)
 		nch = REAC_MAX_CHANNELS;
-	/* Zero-init: the ring consumer reads ring->channels rows; an upstream frame
-	 * fills only the first nch, the rest must be real silence, not stack junk. */
-	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT] = { 0 };
+	/* NOT zero-initialised, and the ring is why. This buffer used to be declared
+	 * `= { 0 }` -- a 1920-byte memset every frame -- because the ring consumer
+	 * reads all 40 rows and an 8-channel box fills eight, so the other 32 had to
+	 * be handed over as real silence rather than stack junk. reac_ring_write now
+	 * owns that guarantee: it is calloc'd silent and it zeroes any row a narrowing
+	 * source abandons. So the rows past nch are never read from here and never
+	 * need to exist. Rows 0..nch-1 are each written in full below.
+	 *
+	 * Do not reinstate the initialiser without also reinstating the 40-row write.
+	 * Half of that pair is stale audio going to the graph. */
+	float planar[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT];
 	for (int ch = 0; ch < nch; ch++)
 		for (int s = 0; s < ns; s++)
 			planar[ch * ns + s] = reac_s24le_to_f32(&s24[(size_t)(ch * ns + s) * 3]);
-	reac_ring_write(rx->ring, planar, (uint32_t)ns);
+	reac_ring_write(rx->ring, planar, (uint32_t)ns, (uint32_t)nch);
 	atomic_fetch_add_explicit(&rx->frames_ok, 1, memory_order_relaxed);
 }
 
