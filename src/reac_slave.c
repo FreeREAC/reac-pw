@@ -148,10 +148,17 @@ struct reac_slave_decision reac_slave_step_phy(struct reac_slave *s, int up)
 float reac_slave_headamp_gain(uint8_t sens_value, int pad_on)
 {
 	/* Input sensitivity S dBu = the level that reaches nominal, so the equivalent
-	 * preamp gain is -S dB. reac_headamp_sens_db() already folds the pad into S
-	 * (pad on -> +20 dBu -> 20 dB less gain), 1 dB per SENS value step. */
-	int gain_db = -reac_headamp_sens_db(sens_value, pad_on);
-	return powf(10.0f, (float)gain_db / 20.0f);
+	 * preamp gain is -S dB, with the pad already folded in (pad on -> +20 dBu ->
+	 * 20 dB less gain).
+	 *
+	 * CENTI-dB, deliberately. The step is NOT 1 dB and is not even constant: the
+	 * box's own table gives 0.90 dB per step in one stage, 0.95 in the next, 0.98
+	 * in the last, and no step at all across the three stage breaks. The whole-dB
+	 * conversion rounds, so neighbouring steps collide on one integer and the
+	 * virtual box would show two different SENS values as the same gain in places
+	 * the hardware does not. */
+	int gain_cdb = -reac_headamp_sens_cdb(sens_value, pad_on);
+	return powf(10.0f, (float)gain_cdb / 2000.0f);
 }
 
 int reac_slave_headamp_rx(struct reac_slave *s, const struct reac_ctrl_parsed *p)

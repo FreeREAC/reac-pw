@@ -47,20 +47,36 @@ int main(void)
 {
 	const float STEP = powf(10.0f, 1.0f / 20.0f);   /* +1 dB in linear amplitude */
 
-	/* (a) DIRECTION: a higher SENS value = a more sensitive input (lower dBu) = MORE
-	 * gain. Strictly monotone across the whole 0x00..0x37 range, pad off. */
+	/* (a) DIRECTION: a higher SENS value is a more sensitive input (lower dBu) and
+	 * so MORE gain. NON-DECREASING, not strictly increasing: the box's own step
+	 * table breaks into four coarse stages, and at each break (7->8, 23->24,
+	 * 39->40) the coarse stage changes while the fine code resets, so gain is
+	 * unchanged. Three pairs of steps therefore deliver identical gain and differ
+	 * only in noise figure. */
 	for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++)
-		CHK(reac_slave_headamp_gain((uint8_t)(v + 1), 0) >
+		CHK(reac_slave_headamp_gain((uint8_t)(v + 1), 0) >=
 		    reac_slave_headamp_gain((uint8_t)v, 0));
-
-	/* (b) 1 dB PER STEP: each +1 in SENS value multiplies the linear gain by
-	 * 10^(1/20). Checked at both pad settings across the range. */
 	for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++) {
-		CHK(approx(reac_slave_headamp_gain((uint8_t)(v + 1), 0),
-		           reac_slave_headamp_gain((uint8_t)v, 0) * STEP));
-		CHK(approx(reac_slave_headamp_gain((uint8_t)(v + 1), 1),
-		           reac_slave_headamp_gain((uint8_t)v, 1) * STEP));
+		int flat = (v == 7 || v == 23 || v == 39);
+		int equal = approx(reac_slave_headamp_gain((uint8_t)(v + 1), 0),
+		                   reac_slave_headamp_gain((uint8_t)v, 0));
+		CHK(flat ? equal : !equal);      /* flat EXACTLY at the three breaks */
 	}
+
+	/* (b) THE STEP IS PER-STAGE, NOT A CONSTANT. 0.90 dB inside stage 2, 0.95 in
+	 * stage 1, 0.98 in stage 0 — measured on the metal off the preamp's own noise
+	 * floor, which tracks gain exactly inside a stage. The old assertion here was
+	 * a flat 1 dB per step, which is what the firmware's table refutes. */
+	for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++) {
+		if (v == 7 || v == 23 || v == 39)
+			continue;                    /* the breaks, covered above */
+		int cdb = reac_headamp_sens_cdb((uint8_t)v, 0) -
+		          reac_headamp_sens_cdb((uint8_t)(v + 1), 0);
+		float step = powf(10.0f, (float)cdb / 2000.0f);
+		CHK(approx(reac_slave_headamp_gain((uint8_t)(v + 1), 0),
+		           reac_slave_headamp_gain((uint8_t)v, 0) * step));
+	}
+
 
 	/* (c) PAD ON = 20 dB LESS gain (a 10x smaller linear multiplier) at the same
 	 * SENS value. */
@@ -68,9 +84,14 @@ int main(void)
 		CHK(approx(reac_slave_headamp_gain((uint8_t)v, 1),
 		           reac_slave_headamp_gain((uint8_t)v, 0) * 0.1f));
 
-	/* Model anchor: value 0x08 pad off -> sens -18 dBu -> +18 dB gain. */
-	CHK(reac_headamp_sens_db(0x08, 0) == -18);
-	CHK(approx(reac_slave_headamp_gain(0x08, 0), powf(10.0f, 18.0f / 20.0f)));
+	/* Model anchor, on the measured curve rather than a flat 1 dB per step. Step
+	 * 0x08 is the FIRST entry of stage 2, so it carries stage 3's seven steps of
+	 * 0.90 dB and nothing for the break: 6.30 dB of gain, sens -16.30 dBu. The old
+	 * anchor here said -18, which is what a straight line predicts and the box does
+	 * not do. */
+	CHK(reac_headamp_sens_cdb(0x08, 0) == -1630);
+	CHK(reac_headamp_sens_cdb(0x07, 0) == -1630);        /* its twin, same gain */
+	CHK(approx(reac_slave_headamp_gain(0x08, 0), powf(10.0f, 16.30f / 20.0f)));
 
 	/* (d) DEFAULT UNITY: a fresh slave has every input's gain at 1.0 until the
 	 * master sends anything, and applying an all-unity table is a byte no-op. */

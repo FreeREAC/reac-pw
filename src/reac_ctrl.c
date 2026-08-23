@@ -830,17 +830,4 @@ int reac_ctrl_headamp_record_verify(const uint8_t *frame)
 /* SENS dB <-> VALUE (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).
  * Ground-truthed on the M-200 SENS display: pad off 0x00 = -10 dBu .. 0x37 =
  * -65 dBu; pad on 0x00 = +10 .. 0x37 = -45. */
-int reac_headamp_sens_db(uint8_t value, int pad_on)
-{
-	return -10 - (int)value + (pad_on ? 20 : 0);
-}
 
-uint8_t reac_headamp_sens_value(int db, int pad_on)
-{
-	int v = -10 - db + (pad_on ? 20 : 0);
-	if (v < 0)
-		v = 0;
-	if (v > REAC_HEADAMP_SENS_MAX)
-		v = REAC_HEADAMP_SENS_MAX;
-	return (uint8_t)v;
-}
