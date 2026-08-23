@@ -8,8 +8,8 @@
 //   m200i-s1608-48k-mirror__real-m200-s1608-coldboot-2026-07-11.pcap
 // and kept because a body of the RIGHT LENGTH is what lets the transfer
 // complete and the box run its commit. The scene is the mixer's state, so
-// generating this from our own console is the follow-on work; the framing in
-// reac_ctrl.c is what had to be right first.
+// generating this from our own console is the follow-on work; the framing
+// itself lives in libreac (reac_ctrlblk.c) and had to be right first.
 
 #include "reac_scene_body.h"
 

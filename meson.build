@@ -337,6 +337,15 @@ test('reac_gain', gain_test)
 # Pins reac_link_state_from_master: every reac_master_state -> its badge string
 # (IDLE folded into "probing"), the just_dropped overlay, and the exact wire
 # strings a consumer (openmixer's stagebox card) matches on.
+# --- source gate: every dequeued pw_buffer is queued back, on every path -------
+# Not a unit test: the defect lives in a PipeWire callback no unit test reaches,
+# and it fails in the way that hides best — the sink re-sends one stale frame
+# forever at exactly the right rate with a valid non-zero audio region, so every
+# check except "does this frame differ from the last one" reports health.
+python3 = find_program('python3', required : true)
+test('sink_buffer_pairing', python3,
+  args : [meson.current_source_dir() / 'tests' / 'test_sink_buffer_pairing.py'])
+
 link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', 'src/reac_link_state.c'],
   include_directories : [include_directories('src')],
