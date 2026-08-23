@@ -311,7 +311,11 @@ static void usage(const char *p)
 	  "                A designated device outranks the name heuristic; it does NOT\n"
 	  "                rescue a structurally unusable one (HDMI/DisplayPort sinks,\n"
 	  "                software timers) and it does NOT outrank measured instability.\n"
-	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n", p);
+	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n"
+	  "  REACPW_CATCHUP_MAX_SLOTS=<n>  master role: how many OVERSLEPT slots the\n"
+	  "                pacer repays by staying on its deadline grid instead of\n"
+	  "                re-basing the phase and losing them. Unset = 4 (measured);\n"
+	  "                -1 = never repay, the pre-2026-08-23 behaviour.\n", p);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
@@ -641,7 +645,12 @@ int main(int argc, char **argv)
 		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
 		                              /* #77: unset -> nothing is designated and the
 		                               * name heuristic alone grades the reference. */
-		                              .clock_ref = getenv("REACPW_CLOCK_REF") };
+		                              .clock_ref = getenv("REACPW_CLOCK_REF"),
+		                              /* Slot-debt budget. Unset -> the measured
+		                               * default; see reac_pacer.h. */
+		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
+		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
+		                                  : 0 };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
