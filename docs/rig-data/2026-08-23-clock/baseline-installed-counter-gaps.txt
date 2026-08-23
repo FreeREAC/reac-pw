@@ -1,0 +1,9 @@
+gaps: 357969 frames over 89.573 s  (the probe sees traffic)
+  emitted 3996.3936 pps  -901.6 ppm vs 4000
+  time holes > 1.5 slots: 356 (3.97/s), 104.8 ms of wire time inside them
+  sequence-counter gaps:  0  (0 frames built and never sent)
+
+  VERDICT: every hole is a slot the loop NEVER RAN. The counter is
+  contiguous across all of them, so no frame was built and lost —
+  sendto() did not fail once. The deficit is overslept slots being
+  abandoned, which is a pacer question and not a socket one.

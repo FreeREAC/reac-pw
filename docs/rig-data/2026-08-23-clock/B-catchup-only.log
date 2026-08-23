@@ -1,0 +1,91 @@
+reac-pw: recovered REAC rate = 48000 Hz (4000 pps), rx stream = box upstream return (box-width)
+reac-pw: MASTER role (M-200 profile) on 'enp128s20f0u6' — event-driven establishment: probing until the box's cold-connect (cdea 04 03) arrives; FSM/RX transcript on stderr
+reac-pw: MASTER autodetect — reac-capture / reac-playback appear sized to the box once it is recognized on the wire
+reac-master: [42790.154790] IDLE -> PROBING (timer)
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=0 catchup=0 dropped_slots=0
+reac-disco: [42790.854566] box 00:40:ab:c4:dc:9c model=s0808
+reac-master: [42790.854575] recognized box = S-0808 (8 in / 8 out) from 00:40:ab:c4:dc:9c
+reac-master: [42790.854576] box presence GAINED (CONFIG from 00:40:ab:c4:dc:9c)
+reac-master: [42790.854576] rx CONFIG from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [42790.854576] PROBING -> GRANTING (rx CONFIG)
+reac-master: [42790.854783] rx UNICAST from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-pw: autodetected S-0808 (8 in / 8 out) -> reac-capture 8 in / reac-playback 8 out
+reac-master: [42791.005532] box presence LOST (600 frames silent)
+reac-master: [42791.058035] box presence GAINED (UNICAST from 00:40:ab:c4:dc:9c)
+reac-master: [42791.606534] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030014000200fe 0ff0410a00001212 01000600010078f7 0000000000000000 
+reac-master: [42791.606785] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030013000200fe 0ef0410a00001212 03020001007af700 0000000000000002 
+reac-master: [42791.607032] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [42792.480532] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030013000200fe 0ef0410a00001212 050010110852f700 0000000000000002 
+reac-master: [42792.550534] GRANTING -> ESTABLISHED (timer)
+reac-master: [42792.550782] rx UNICAST from 00:40:ab:c4:dc:9c (state ESTABLISHED, 946.0 ms after last chanmap)
+reac-disco: [42792.854785] box 00:40:ab:c4:dc:9c model=s0808 (ours)
+reac-master: [42793.302282] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state ESTABLISHED)
+reac-pacer: ring depth 23 frames (5.75 ms) [interval min 0 (0.00 ms) max 41 (10.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=12 catchup=12 dropped_slots=0
+reac-health: drift -2.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 1.27/s (catchup 1.27/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 1 (0.25 ms) max 41 (10.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=20 catchup=20 dropped_slots=0
+reac-health: drift -8.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 23 frames (5.75 ms) | late 0.69/s (catchup 0.69/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 46 frames (11.50 ms) [interval min 12 (3.00 ms) max 50 (12.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=26 catchup=25 dropped_slots=9
+reac-health: drift +252.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 46 frames (11.50 ms) | late 0.69/s (catchup 0.59/s, dropped 0.88/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 44 frames (11.00 ms) [interval min 7 (1.75 ms) max 49 (12.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=29 catchup=28 dropped_slots=9
+reac-health: drift +0.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 46 frames (11.50 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 50 frames (12.50 ms) [interval min 13 (3.25 ms) max 65 (16.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=49 catchup=46 dropped_slots=24
+reac-health: drift +400.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 61 frames (15.25 ms) | late 2.10/s (catchup 1.90/s, dropped 1.50/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 68 frames (17.00 ms) [interval min 28 (7.00 ms) max 81 (20.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=73 catchup=68 dropped_slots=40
+reac-health: drift +417.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 68 frames (17.00 ms) | late 2.75/s (catchup 2.55/s, dropped 1.57/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 32 (8.00 ms) max 81 (20.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=138 catchup=133 dropped_slots=40
+reac-health: drift -0.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 6.37/s (catchup 6.37/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 19 (4.75 ms) max 60 (15.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=182 catchup=177 dropped_slots=40
+reac-health: drift -0.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 5.20/s (catchup 5.20/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 21 (5.25 ms) max 61 (15.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=243 catchup=238 dropped_slots=40
+reac-health: drift +0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 5.30/s (catchup 5.30/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 21 (5.25 ms) max 59 (14.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=284 catchup=279 dropped_slots=40
+reac-health: drift +0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 3.80/s (catchup 3.80/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 34 frames (8.50 ms) [interval min 24 (6.00 ms) max 59 (14.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=293 catchup=288 dropped_slots=40
+reac-health: drift +0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 0.60/s (catchup 0.60/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 22 (5.50 ms) max 58 (14.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=298 catchup=293 dropped_slots=40
+reac-health: drift -0.3 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.49/s (catchup 0.49/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 21 (5.25 ms) max 59 (14.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=305 catchup=300 dropped_slots=40
+reac-health: drift +1.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.70/s (catchup 0.70/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 23 (5.75 ms) max 59 (14.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=313 catchup=308 dropped_slots=40
+reac-health: drift -0.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 0.78/s (catchup 0.78/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 20 (5.00 ms) max 58 (14.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=318 catchup=313 dropped_slots=40
+reac-health: drift -15.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 46 frames (11.50 ms) | late 0.50/s (catchup 0.50/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 18 (4.50 ms) max 57 (14.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=324 catchup=319 dropped_slots=40
+reac-health: drift +13.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.59/s (catchup 0.59/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 23 (5.75 ms) max 57 (14.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=331 catchup=326 dropped_slots=40
+reac-health: drift +0.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.70/s (catchup 0.70/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 35 frames (8.75 ms) [interval min 23 (5.75 ms) max 57 (14.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=333 catchup=328 dropped_slots=40
+reac-health: drift +1.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 0.39/s (catchup 0.39/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 21 (5.25 ms) max 56 (14.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=350 catchup=345 dropped_slots=40
+reac-health: drift -1.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 1.67/s (catchup 1.67/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 46 frames (11.50 ms) [interval min 20 (5.00 ms) max 56 (14.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=354 catchup=349 dropped_slots=40
+reac-health: drift +0.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.40/s (catchup 0.40/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 19 (4.75 ms) max 56 (14.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=368 catchup=363 dropped_slots=40
+reac-health: drift -11.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 46 frames (11.50 ms) | late 1.18/s (catchup 1.18/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 23 (5.75 ms) max 55 (13.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=373 catchup=368 dropped_slots=40
+reac-health: drift +11.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.49/s (catchup 0.49/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 47 frames (11.75 ms) [interval min 19 (4.75 ms) max 55 (13.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=377 catchup=372 dropped_slots=40
+reac-health: drift +0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 36 frames (9.00 ms) | late 0.50/s (catchup 0.50/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 46 frames (11.50 ms) [interval min 16 (4.00 ms) max 54 (13.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=382 catchup=377 dropped_slots=40
+reac-health: drift +1.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 35 frames (8.75 ms) | late 0.60/s (catchup 0.60/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 17 (4.25 ms) max 55 (13.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=387 catchup=382 dropped_slots=40
+reac-health: drift +0.3 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 47 frames (11.75 ms) | late 0.29/s (catchup 0.29/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 36 frames (9.00 ms) [interval min 21 (5.25 ms) max 55 (13.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=390 catchup=385 dropped_slots=40
+reac-health: drift -15.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 35 frames (8.75 ms) | late 0.49/s (catchup 0.49/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 56 frames (14.00 ms) [interval min 14 (3.50 ms) max 63 (15.75 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=405 catchup=399 dropped_slots=48
+reac-health: drift +234.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 56 frames (14.00 ms) | late 1.27/s (catchup 1.18/s, dropped 0.78/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 56 frames (14.00 ms) [interval min 22 (5.50 ms) max 62 (15.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=408 catchup=402 dropped_slots=48
+reac-health: drift -5.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 44 frames (11.00 ms) | late 0.29/s (catchup 0.29/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 45 frames (11.25 ms) [interval min 23 (5.75 ms) max 62 (15.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=413 catchup=407 dropped_slots=48
+reac-health: drift +5.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 56 frames (14.00 ms) | late 0.78/s (catchup 0.78/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 56 frames (14.00 ms) [interval min 25 (6.25 ms) max 62 (15.50 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=419 catchup=413 dropped_slots=48
+reac-health: drift +1.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 56 frames (14.00 ms) | late 0.30/s (catchup 0.30/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 56 frames (14.00 ms) [interval min 22 (5.50 ms) max 61 (15.25 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=423 catchup=417 dropped_slots=48
+reac-health: drift +0.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 56 frames (14.00 ms) | late 0.60/s (catchup 0.60/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 45 frames (11.25 ms) [interval min 23 (5.75 ms) max 60 (15.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=429 catchup=423 dropped_slots=48
+reac-health: drift -1.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 45 frames (11.25 ms) | late 0.59/s (catchup 0.59/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 45 frames (11.25 ms) [interval min 20 (5.00 ms) max 60 (15.00 ms)] | guard trims=0 dropped=0 frames | tx_errors=0 late_wakes=435 catchup=429 dropped_slots=48
+reac-health: drift +0.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 45 frames (11.25 ms) | late 1.10/s (catchup 1.10/s, dropped 0.00/s) | tx_errors 0 | rate-match n/a ppm
