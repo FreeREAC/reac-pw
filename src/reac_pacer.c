@@ -87,11 +87,80 @@ int reac_frame_ring_push(struct reac_frame_ring *r, const uint8_t *frame, uint16
 	return 1;
 }
 
+/* The floor, resolved once. See reac_pacer.h for why this is overridable: it makes
+ * the spec's M5 ring-depth sweep a restart per step instead of a rebuild per step.
+ * A value outside [MIN, MAX], or one that does not parse cleanly, keeps the
+ * compiled floor and SAYS SO -- a typo'd sweep step that silently ran at the
+ * default would produce a whole row of measurements attributed to the wrong
+ * depth, which is worse than no measurement. */
+uint32_t reac_pacer_guard_floor(void)
+{
+	static uint32_t resolved;
+	static int done;
+	if (done)
+		return resolved;
+	done = 1;
+	resolved = REAC_PACER_GUARD_FLOOR_FRAMES;
+	const char *e = getenv("REACPW_GUARD_FLOOR_FRAMES");
+	if (e && *e) {
+		char *end;
+		unsigned long v = strtoul(e, &end, 10);
+		if (*end == '\0' && v >= REAC_PACER_GUARD_FLOOR_MIN &&
+		    v <= REAC_PACER_GUARD_FLOOR_MAX) {
+			resolved = (uint32_t)v;
+			fprintf(stderr, "reac-pacer: guard floor %u frames "
+			        "(REACPW_GUARD_FLOOR_FRAMES, default %u)\n",
+			        resolved, REAC_PACER_GUARD_FLOOR_FRAMES);
+		} else {
+			fprintf(stderr, "reac-pacer: IGNORING REACPW_GUARD_FLOOR_FRAMES='%s' "
+			        "— not an integer in [%u, %u]. The guard floor stays at %u "
+			        "frames; any measurement taken now belongs to the DEFAULT "
+			        "depth, not the one you asked for.\n",
+			        e, REAC_PACER_GUARD_FLOOR_MIN, REAC_PACER_GUARD_FLOOR_MAX,
+			        resolved);
+		}
+	}
+	return resolved;
+}
+
+int reac_discard_watch_step(struct reac_discard_watch *w, uint64_t now,
+                            uint64_t trim_frames, double *frames_per_s)
+{
+	if (!w->win_ns) {                 /* first call: open the window, decide nothing */
+		w->win_ns = now;
+		w->win_frames = trim_frames;
+		return 0;
+	}
+	if (now - w->win_ns < REAC_PACER_DISCARD_WIN_NS)
+		return 0;                     /* window still open */
+
+	uint64_t dropped = trim_frames - w->win_frames;
+	double secs = (double)(now - w->win_ns) / 1e9;
+	int warn = 0;
+	if (dropped) {
+		/* A window that discarded ANY audio counts. The threshold is deliberately
+		 * one frame and not a rate: a rate threshold would need a number nobody
+		 * can defend, and sustained loss of one frame per window is still
+		 * sustained loss. The RUN length is what keeps a one-off quiet. */
+		if (++w->run >= REAC_PACER_DISCARD_WIN_RUN && !w->warned) {
+			w->warned = 1;
+			warn = 1;
+			if (frames_per_s)
+				*frames_per_s = (double)dropped / secs;
+		}
+	} else {
+		w->run = 0;                   /* a clean window breaks the run */
+	}
+	w->win_ns = now;
+	w->win_frames = trim_frames;
+	return warn;
+}
+
 uint32_t reac_pacer_guard_high(uint32_t quantum_frames)
 {
+	uint32_t floor = reac_pacer_guard_floor();
 	uint32_t burst = REAC_PACER_GUARD_BURST_MULT * quantum_frames;
-	return burst > REAC_PACER_GUARD_FLOOR_FRAMES ? burst
-	                                             : REAC_PACER_GUARD_FLOOR_FRAMES;
+	return burst > floor ? burst : floor;
 }
 
 uint32_t reac_frame_ring_trim_count(uint32_t depth, uint32_t high, uint32_t target)
@@ -634,32 +703,48 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 		fprintf(out, "reac-disco: [%.6f] %d device(s) went silent > %llu s — withdrawn\n",
 		        (double)now / 1e9, gone,
 		        (unsigned long long)(REAC_DISCO_STALE_NS / 1000000000ULL));
-	/* A SUSTAINED trim is not bounded-latency housekeeping, it is a RATE
-	 * MISMATCH, and it must say so instead of hiding as a rising number in the
-	 * telemetry line below. The guard exists because the graph clock can run
-	 * marginally fast against the wire, which trims RARELY. When the wire and the
-	 * graph are at different RATES the producer outruns the consumer forever, so
-	 * the guard trims on drain after drain and throws away ~100 ms of audio each
-	 * time — the "extremely saturated" sound, with nothing in the log that names
-	 * a cause. reac-pw has no TX resampler, so this is the only honest warning we
-	 * can give. Once per run: an operator who reads it can act, and a repeat every
-	 * drain would be the same flood the gate above exists to prevent. */
-	if (rtrims != p->log_last_trims) {
-		if (++p->trim_run >= 20 && !p->trim_warned) {
-			uint64_t rf = atomic_load_explicit(&p->ring_trim_frames,
-			                                   memory_order_relaxed);
-			p->trim_warned = 1;
-			fprintf(out, "reac-pacer: WIRE/GRAPH RATE MISMATCH — the guard has "
-			        "trimmed on %u consecutive drains (%llu trims, %llu frames "
-			        "dropped). This is not latency housekeeping: the graph is "
-			        "producing faster than the wire consumes, so audio is being "
-			        "discarded in ~100 ms chunks. reac-pw has NO TX resampler — "
-			        "run the wire at the graph's rate (--rate) or the audio stays "
-			        "chopped.\n", p->trim_run,
-			        (unsigned long long)rtrims, (unsigned long long)rf);
-		}
-	} else {
-		p->trim_run = 0;
+	/* A SUSTAINED trim is not bounded-latency housekeeping, it is a RATE MISMATCH,
+	 * and it must say so instead of hiding as a rising number in the telemetry
+	 * line below. The guard exists because the graph clock can run marginally fast
+	 * against the wire, which trims RARELY. When the two are at different RATES the
+	 * producer outruns the consumer forever, the guard trims for ever, and each
+	 * trim throws away the whole band between HIGH and TARGET — with nothing in
+	 * the log that names a cause. reac-pw has no TX resampler, so this warning is
+	 * the only honest thing it can say.
+	 *
+	 * MEASURED AS A DISCARD RATE, NOT AS A RUN OF DRAINS, and that is the whole
+	 * point of this version. The previous detector counted CONSECUTIVE drains that
+	 * trimmed and needed twenty of them. On the rig, 2026-08-23, the guard trimmed
+	 * 356 times over an hour — one trim every ~24 s, 258 frames each, 64 ms of
+	 * audio discarded every time — and this warning fired ZERO times, because a
+	 * single non-trimming drain in between reset the run to zero and the drain
+	 * cadence is 200 ms. The detector was unreachable in precisely the condition it
+	 * was written for: it could only see a mismatch gross enough to trim four
+	 * seconds running, and was blind to a few-thousand-ppm drift that is still
+	 * discarding audio continuously.
+	 *
+	 * So: measure frames discarded per second over a fixed window, and require
+	 * several consecutive windows to have discarded something. That excludes the
+	 * one-off trim a startup or a scene recall can legitimately cause, and catches
+	 * any rate error large enough to matter however slowly it accumulates. The ppm
+	 * figure is the actionable number — it is the graph's excess over the wire. */
+	uint64_t rframes_now = atomic_load_explicit(&p->ring_trim_frames,
+	                                            memory_order_relaxed);
+	double discard_per_s;
+	if (reac_discard_watch_step(&p->discard, now, rframes_now, &discard_per_s)) {
+		double fps = 1e9 / (double)p->period_ns;
+		fprintf(out, "reac-pacer: WIRE/GRAPH RATE MISMATCH — the depth guard has "
+		        "discarded audio in %u consecutive %llu s windows: %.1f frames/s "
+		        "= %.0f ppm of graph-over-wire excess (%llu trims, %llu frames "
+		        "total). This is not latency housekeeping. reac-pw has NO TX "
+		        "resampler, so every bit of that drift leaves as a dropout — run "
+		        "the wire at the graph's rate (--rate), or fix the rate match. "
+		        "The buffering only decides how BIG each dropout is, never "
+		        "whether there is one.\n",
+		        p->discard.run,
+		        (unsigned long long)(REAC_PACER_DISCARD_WIN_NS / 1000000000ull),
+		        discard_per_s, discard_per_s / fps * 1e6,
+		        (unsigned long long)rtrims, (unsigned long long)rframes_now);
 	}
 
 	int emit = (rtrims != p->log_last_trims) ||
@@ -675,16 +760,26 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 		uint64_t rframes = atomic_load_explicit(&p->ring_trim_frames,
 		                                        memory_order_relaxed);
 		double slot_ms = (double)p->period_ns / 1e6;
+		/* tx_errors and late_wakes ride this line because until now they existed
+		 * ONLY in the shutdown summary. The fast-path spec's §12 Q2 — are the
+		 * 26.5%..84.6% tx_errors seen in two old summaries real during established
+		 * audio, or an artifact of a failed establishment? — could not be answered
+		 * without killing the daemon, which is exactly the state you cannot kill
+		 * when you want to know. Same for late_wakes, which the spec names as the
+		 * jitter margin instrument (M3). Both are cumulative counts; a rate is a
+		 * subtraction of two heartbeats. */
+		uint64_t txe = atomic_load_explicit(&p->tx_errors, memory_order_relaxed);
+		uint64_t txf = atomic_load_explicit(&p->tx_frames, memory_order_relaxed);
+		uint64_t lw  = atomic_load_explicit(&p->late_wakes, memory_order_relaxed);
 		fprintf(out, "reac-pacer: ring depth %u frames (%.2f ms) [interval min %u "
 		        "(%.2f ms) max %u (%.2f ms)] | guard trims=%llu dropped=%llu frames"
-		        " | tx_errors=%llu late_wakes=%llu catchup=%llu dropped_slots=%llu\n",
+		        " | tx=%llu tx_errors=%llu late_wakes=%llu catchup=%llu"
+		        " dropped_slots=%llu\n",
 		        rdepth, (double)rdepth * slot_ms,
 		        rmin, (double)rmin * slot_ms, rmax, (double)rmax * slot_ms,
 		        (unsigned long long)rtrims, (unsigned long long)rframes,
-		        (unsigned long long)atomic_load_explicit(&p->tx_errors,
-		                                                 memory_order_relaxed),
-		        (unsigned long long)atomic_load_explicit(&p->late_wakes,
-		                                                 memory_order_relaxed),
+		        (unsigned long long)txf, (unsigned long long)txe,
+		        (unsigned long long)lw,
 		        (unsigned long long)atomic_load_explicit(&p->slots_catchup,
 		                                                 memory_order_relaxed),
 		        (unsigned long long)atomic_load_explicit(&p->slots_dropped,
@@ -989,9 +1084,11 @@ static void *pacer_loop(void *arg)
 	sigfillset(&allsig);
 	pthread_sigmask(SIG_BLOCK, &allsig, NULL);
 
-	uint8_t frame[REAC_FRAME_BYTES];
-	uint8_t popbuf[2048];
-	uint8_t rxbuf[2048];
+	/* REAC_PACER_SLOT_SZ, not REAC_FRAME_BYTES: the pop below writes straight into
+	 * this buffer, so it must be able to hold the ring's widest slot rather than
+	 * the frame we intend to send. Only REAC_FRAME_BYTES are ever transmitted. */
+	uint8_t frame[REAC_PACER_SLOT_SZ];
+	uint8_t rxbuf[REAC_PACER_SLOT_SZ];
 
 	uint64_t deadline = mono_ns() + (uint64_t)p->period_ns;
 	atomic_store_explicit(&p->started, 1, memory_order_release);
@@ -1053,13 +1150,17 @@ static void *pacer_loop(void *arg)
 		}
 
 		/* Pull the next encoded frame; on underrun emit a silent FILLER so the
-		 * slot — and the master sequence — never stalls. */
-		uint16_t n = reac_frame_ring_pop(&p->ring, popbuf);
-		if (n >= REAC_FRAME_BYTES) {
-			memcpy(frame, popbuf, REAC_FRAME_BYTES);
-		} else {
+		 * slot — and the master sequence — never stalls.
+		 *
+		 * The pop lands DIRECTLY in `frame`. It used to land in a staging buffer
+		 * that was then memcpy'd here, 1492 bytes per slot, 4000 times a second,
+		 * inside the SCHED_FIFO loop. A short pop leaving `frame` half-written is
+		 * not a hazard: build_silent_filler memsets the whole frame before it
+		 * writes anything, so the underrun branch overwrites every byte the pop
+		 * could have touched. */
+		uint16_t n = reac_frame_ring_pop(&p->ring, frame);
+		if (n < REAC_FRAME_BYTES)
 			build_silent_filler(frame, p->src);
-		}
 
 		/* Advance the master FSM by one frame; stamp the counter + control block.
 		 * This turns a plain audio FILLER into the right cdea/cfea control frame
@@ -1276,7 +1377,7 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	uint32_t depth = (uint32_t)(cfg->fps / 4);
 	if (depth < 8)
 		depth = 8;
-	if (reac_frame_ring_init(&p->ring, depth, 2048) != 0)
+	if (reac_frame_ring_init(&p->ring, depth, REAC_PACER_SLOT_SZ) != 0)
 		return -1;
 
 	/* SOCK_NONBLOCK so the RT pacer thread's sendto() can never block on a backed-up

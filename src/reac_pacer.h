@@ -57,6 +57,11 @@ int  reac_frame_ring_init(struct reac_frame_ring *r, uint32_t slots, uint32_t sl
 void reac_frame_ring_free(struct reac_frame_ring *r);
 /* PRODUCER: copy one frame in. Drops (overrun) the NEWEST if full — SPSC forbids
  * the producer moving tail. Returns 1 on write, 0 on drop. */
+/* The frame ring's slot size. Every buffer a pop can land in must be at least
+ * this big — the pacer emits straight out of the popped buffer, so the slot
+ * width, not the frame width, is what bounds the write. */
+#define REAC_PACER_SLOT_SZ 2048u
+
 int  reac_frame_ring_push(struct reac_frame_ring *r, const uint8_t *frame, uint16_t n);
 /* CONSUMER: copy the oldest frame into `out` (slot_sz). Returns its length, or 0
  * if empty (underrun). REALTIME-SAFE. */
@@ -83,6 +88,25 @@ uint32_t reac_frame_ring_readable(const struct reac_frame_ring *r);
  * runaway drift toward the cap does. quantum_frames is plumbed live from the sink
  * node's process() (graph_quantum); 0 before the first callback -> FLOOR. */
 #define REAC_PACER_GUARD_FLOOR_FRAMES   512u   /* hard min HIGH (~128 ms @48k)     */
+
+/* The floor, overridable at runtime by REACPW_GUARD_FLOOR_FRAMES.
+ *
+ * The fast-path spec's M5 -- sweep this constant down until tx_errors, filler
+ * frames or trims appear -- was the highest-value measurement it named, and it
+ * was also the only one of M1..M5 that demanded a rebuild of reac-pw between
+ * steps, which is what made it the only one needing a rig restart. As an
+ * environment variable the sweep is a restart of the daemon per step and nothing
+ * more. Out-of-range or unparseable values keep the compiled floor: a sweep must
+ * never be able to silently configure a ring too shallow to hold one producer
+ * burst, because the symptom of that is filler frames, which sound like nothing
+ * in particular. Read ONCE, off the RT path. */
+uint32_t reac_pacer_guard_floor(void);
+
+/* Bounds for the override. The low bound is one 1024-sample quantum's worth of
+ * frames (1024/12 = 85) rounded up to 96 -- below that the ring cannot absorb a
+ * single producer burst and every drive cycle underruns. */
+#define REAC_PACER_GUARD_FLOOR_MIN       96u
+#define REAC_PACER_GUARD_FLOOR_MAX     4096u
 #define REAC_PACER_GUARD_BURST_MULT       4u   /* ring holds >= this many bursts   */
 
 /* HIGH watermark for a given producer burst size (frames per process() callback,
@@ -95,6 +119,35 @@ uint32_t reac_pacer_guard_high(uint32_t quantum_frames);
  * band would fire every drain — the line is emitted ONLY on this heartbeat
  * (carrying the interval min/max/last depth) or when the guard trims. */
 #define REAC_PACER_DEPTH_LOG_HB_NS     10000000000ull  /* 10 s health heartbeat */
+
+/* The discard-rate detector's window and how many consecutive windows must have
+ * discarded audio before it speaks. 30 s x 3 = a minute and a half of continuous
+ * loss before the warning, which is long enough that a scene recall or a startup
+ * transient cannot trip it and short enough to be on screen before a show. */
+#define REAC_PACER_DISCARD_WIN_NS      30000000000ull  /* 30 s discard window   */
+#define REAC_PACER_DISCARD_WIN_RUN     3u              /* windows before warning */
+
+/* The discard-rate detector's state and decision, split out PURE so it can be
+ * unit-tested. It is split out because the version it replaces was not testable
+ * and was not tested, and was therefore wrong in the field for as long as it
+ * existed: it required twenty CONSECUTIVE trimming drains, the rig trims once
+ * every ~24 s against a 200 ms drain cadence, and so it never fired once while
+ * 64 ms of audio went missing every 24 seconds. A detector nobody can drive from
+ * a test is a detector nobody has checked. */
+struct reac_discard_watch {
+	uint64_t win_ns;      /* mono_ns the current window opened (0 = not started) */
+	uint64_t win_frames;  /* cumulative trim_frames when it opened               */
+	unsigned run;         /* consecutive closed windows that discarded audio     */
+	int      warned;      /* the warning has been emitted (once per run)         */
+};
+
+/* Advance the watch. `trim_frames` is the pacer's cumulative discarded-frame
+ * count. Returns 1 EXACTLY ONCE, on the window that completes a run of
+ * REAC_PACER_DISCARD_WIN_RUN windows each of which discarded at least one frame;
+ * 0 otherwise. On a 1 return, *frames_per_s carries the rate measured over the
+ * window that triggered it. PURE apart from the struct it is handed. */
+int reac_discard_watch_step(struct reac_discard_watch *w, uint64_t now,
+                            uint64_t trim_frames, double *frames_per_s);
 
 /* Depth-guard math (PURE — unit-tested): the number of frames to drop so a ring
  * of `depth` frames drains back to `target`, but only once `depth` exceeds the
@@ -421,8 +474,7 @@ struct reac_pacer {
 	 * one baseline line via the heartbeat branch. */
 	uint64_t log_last_ns;            /* mono_ns of the last emitted depth line */
 	uint64_t log_last_trims;         /* ring_trims count at the last depth line */
-	unsigned trim_run;               /* consecutive drains that trimmed          */
-	int      trim_warned;            /* the sustained-trim diagnostic fired once */
+	struct reac_discard_watch discard;  /* sustained audio-discard detector     */
 };
 
 /* period for an fps (ns). Exposed for the unit test. */
