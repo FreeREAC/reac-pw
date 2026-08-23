@@ -179,7 +179,22 @@ struct reac_pacer_cfg {
 	 * timing-identical. 1 = follow the best available reference. Set from
 	 * REACPW_CLOCK_FOLLOW; see docs/ENV-KNOBS.md. */
 	int clock_follow;
+	/* SLOT-DEBT CATCH-UP (workstream CLK, 2026-08-23). How many overslept slots the
+	 * pacer will repay by staying on its original deadline grid instead of
+	 * re-basing the phase to `now`. 0 = REAC_CATCHUP_MAX_SLOTS_DEFAULT (a
+	 * zero-initialised cfg gets the default, never "off"); -1 restores the
+	 * historical behaviour — re-base always, and lose the overslept slots for
+	 * good. Set from REACPW_CATCHUP_MAX_SLOTS; see docs/ENV-KNOBS.md. */
+	int catchup_max_slots;
 };
+
+/* Default slot-debt budget. MEASURED, not guessed: on the live rig the pacer
+ * oversleeps by one slot about 3.6 times a second and by more than four slots
+ * 0.09 times a second, so 4 repays essentially the whole debt while bounding the
+ * catch-up burst to 4 x 1492 B = 48 us of wire at 1 Gb/s — a fifth of one slot,
+ * and well under the 10.8 us stddev the box's OWN return already carries. A debt
+ * larger than this is a real stall and is reported, not smeared onto the wire. */
+#define REAC_CATCHUP_MAX_SLOTS_DEFAULT 4
 
 /* Re-evaluate the clock discipline every this many slots (~8 Hz at 8000 fps).
  * reac_rx recomputes its slope ~4x/s, so anything faster only re-reads the same
@@ -232,6 +247,7 @@ struct reac_pacer {
 	int fd;                          /* AF_PACKET socket */
 	int ifindex;
 	long period_ns;                  /* 1e9 / fps */
+	uint32_t catchup_max_slots;      /* slot-debt budget; 0 = re-base always */
 	int prio, cpu;
 	uint8_t src[6];
 
@@ -243,6 +259,22 @@ struct reac_pacer {
 	_Atomic uint64_t tx_frames;
 	_Atomic uint64_t tx_errors;
 	_Atomic uint64_t late_wakes;     /* slots where we woke > 1 period late */
+	/* SLOT DEBT (workstream CLK). A late wake used to re-base the deadline to
+	 * `now`, which throws the overslept slots away permanently: measured on the
+	 * live rig at 3.6 slots/s = 900 ppm of transmit deficit, which is the ENTIRE
+	 * cause of the TX ring's growth and therefore of the guard's 64 ms discards.
+	 * These two counters separate the debt we repaid from the debt we declared. */
+	_Atomic uint64_t slots_catchup;  /* late wakes repaid by staying on the grid */
+	_Atomic uint64_t slots_dropped;  /* slots abandoned: the debt exceeded the budget */
+
+	/* Health window state. MAIN-LOOP ONLY (reac_pacer_health_poll) — never touched
+	 * by the pacer thread, so no atomics and no RT cost. */
+	uint64_t health_win_ns;          /* monotonic ns at the window's open (0 = none) */
+	uint64_t health_tx_frames;       /* tx_frames at the window's open */
+	uint64_t health_trim_frames;     /* ring_trim_frames at the window's open */
+	uint64_t health_late_wakes;
+	uint64_t health_slots_dropped;
+	uint64_t health_slots_catchup;
 
 	/* frame-ring depth guard telemetry (task #152). ring_depth_{min,peak} bound the
 	 * depth SAWTOOTH seen since the last EMITTED depth line (read-and-reset there),
@@ -433,6 +465,50 @@ void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
  * test can drive the whole path (including proving inertness) without the RT
  * thread or a socket. */
 long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns);
+
+/* ---- HEALTH, published where an operator can see it (workstream CLK) --------
+ *
+ * THE FAULT THIS EXISTS FOR IS INVISIBLE BY CONSTRUCTION. The depth guard drops
+ * 256 frames — 64 ms of audio — in one step so that PipeWire never starves, which
+ * means no xrun is raised, no telemetry counter moves, and the console reports a
+ * healthy graph while audio disappears. A signal that does not observe what it
+ * claims to observe is exactly the defect family this project keeps paying for,
+ * so the daemon states its own health in numbers rather than leaving it to be
+ * inferred from a heartbeat nobody reads.
+ *
+ * WINDOWED, never cumulative: a lifetime counter cannot tell an operator whether
+ * the desk is dropping audio RIGHT NOW. Everything here is a rate over the window
+ * that just closed, except the two raw counters an operator may want to difference
+ * by hand. Computed on the main loop from the pacer's atomics — the RT path is
+ * untouched. */
+/* Health window length. Long enough that the drift figure is not dominated by
+ * one scheduler hiccup (at 900 ppm and 4000 fps the deficit is 3.6 frames/s, so a
+ * 10 s window resolves it to ~3%), short enough that an operator sees a fault
+ * appear rather than an average of the last hour. */
+#define REAC_PACER_HEALTH_WINDOW_NS  10000000000ull
+
+struct reac_pacer_health {
+	int      valid;              /* 0 until the first full window has closed */
+	double   window_s;           /* length of the window these rates cover */
+	double   drift_ppm;          /* transmit deficit: (nominal - emitted) / nominal.
+	                              * POSITIVE means we put fewer frames on the wire
+	                              * than the rate asks for, so the TX ring grows. */
+	double   discard_fps;        /* frames the depth guard discarded per second */
+	double   discard_ms_per_s;   /* the same loss stated as audio: ms lost per second */
+	double   late_wakes_ps;      /* late wakes per second */
+	double   slots_dropped_ps;   /* unrepayable slot debt per second */
+	double   slots_catchup_ps;   /* slot debt repaid on the grid per second */
+	uint64_t tx_errors;          /* cumulative sendto() failures */
+	uint64_t late_wakes;         /* cumulative */
+	uint32_t ring_frames;        /* TX ring depth at the close of the window */
+	double   ring_ms;            /* the same depth as graph->wire latency */
+};
+
+/* Fold one main-loop poll into the health window and, when a window closes,
+ * write the rates into *out and return 1. Returns 0 (and leaves *out alone)
+ * between windows. `now_ns` must be CLOCK_MONOTONIC (reac_pacer_mono_ns). */
+int reac_pacer_health_poll(struct reac_pacer *p, uint64_t now_ns,
+                           struct reac_pacer_health *out);
 
 void reac_pacer_stop(struct reac_pacer *p);
 void reac_pacer_close(struct reac_pacer *p);

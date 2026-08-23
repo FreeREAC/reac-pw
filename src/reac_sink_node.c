@@ -28,6 +28,7 @@
 #include "reac_tx.h"
 #include "reac_pacer.h"
 #include "reac_gain.h"
+#include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_link_state.h"
 #include "reac_arbitration.h"
@@ -163,6 +164,21 @@ struct reac_sink_node {
 	/* ProcessLatency smoother (task #152): EMA of the drain-observed ring depth +
 	 * re-advertise hysteresis, driven from the 200 ms log timer. See reac_lat.h. */
 	struct reac_lat lat;
+
+	/* TX RATE MATCHING (workstream CLK). The area PipeWire's adapter resampler
+	 * reads; NULL until the graph gives us one (and forever if the link needs no
+	 * resampler). Written on the RT process() thread, read there too. */
+	struct spa_io_rate_match *rate_match;
+	/* The correction currently applied, in milli-ppm. Written by the RT thread,
+	 * read by the 200 ms property poll — one relaxed atomic each way. */
+	_Atomic int rate_match_milli_ppm;
+	/* Have we ever been handed a rate-match area? Distinguishes "no resampler on
+	 * this link" from "a resampler we are steering to zero". */
+	_Atomic int rate_match_present;
+
+	/* Health window snapshot, refreshed by the 200 ms poll and published as node
+	 * properties when a window closes. */
+	struct reac_pacer_health health;
 };
 
 /* REALTIME. Pull this quantum's PCM from the input ports, accumulate into the
@@ -192,6 +208,44 @@ static void on_process(void *data)
 	 * ACTUAL producer burst (up to one quantum of frames pushed per callback), not
 	 * a guessed steady state. A single relaxed atomic store; RT-safe. */
 	atomic_store_explicit(&n->pacer.graph_quantum, nframes, memory_order_relaxed);
+
+	/* ---- TX RATE MATCHING (workstream CLK) ------------------------------------
+	 *
+	 * ABSORB THE DIFFERENCE INSTEAD OF DISCARDING IT. The producer (this callback,
+	 * clocked by the graph) and the consumer (the pacer, clocked by its own
+	 * deadline grid) will never agree exactly, and the frame ring is where the
+	 * disagreement accumulates. Until now the only thing that ever removed it was
+	 * the depth guard, which does so by cutting 256 frames — 64 ms of audio — out
+	 * of the ring in one step, silently, with no xrun raised because preventing the
+	 * xrun is precisely its job.
+	 *
+	 * The signal is the ring's own depth against the guard's TARGET, not an
+	 * estimate of anyone's oscillator. That is deliberate: a level loop corrects
+	 * the error that is actually there, whatever caused it, and it is the same
+	 * error the guard was about to correct with a machete.
+	 *
+	 * PROPORTIONAL, BOUNDED, AND HONEST ABOUT WHAT IT IS. It does not abolish
+	 * drift, it moves it into the resampler, so the correction it is applying is
+	 * published (reac.health.rate-match-ppm) for an operator to watch. A large and
+	 * steady correction is a FAULT REPORT, not a success: it means something
+	 * upstream is losing frames and this loop is the only reason it is inaudible.
+	 * That is why the pacer's own transmit deficit is fixed at source as well —
+	 * see the slot-debt branch in reac_pacer.c. */
+	if (n->rate_match) {
+		uint32_t depth  = reac_frame_ring_readable(&n->pacer.ring);
+		uint32_t qf     = nframes / (uint32_t)REAC_SAMPLES_PER_PKT;
+		uint32_t target = reac_pacer_guard_high(qf) / 2;
+		double err = target ? ((double)depth - (double)target) / (double)target : 0.0;
+		if (err >  1.0) err =  1.0;
+		if (err < -1.0) err = -1.0;
+		/* depth ABOVE target => we are consuming too slowly => ask the resampler
+		 * for fewer samples per second, i.e. a rate below nominal. */
+		double ppm = -err * (double)REAC_SINK_RATE_MATCH_MAX_PPM;
+		n->rate_match->rate = 1.0 + ppm / 1e6;
+		atomic_store_explicit(&n->rate_match_milli_ppm, (int)(ppm * 1000.0),
+		                      memory_order_relaxed);
+		atomic_store_explicit(&n->rate_match_present, 1, memory_order_relaxed);
+	}
 
 	/* GRAPH CLOCK REFERENCE (#75). This callback is the one place that sees the
 	 * elected driver's spa_io_clock, and on this rig that driver is the RME the
@@ -468,6 +522,20 @@ static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 	struct reac_sink_node *n = data;
 	if (id == SPA_IO_Position)
 		n->position = (size >= sizeof(struct spa_io_position)) ? area : NULL;
+	/* THE SINK HAD NO RATE MATCHING AT ALL, and that is why a discard was the only
+	 * place the drift could go. The source node has published io_rate_match since
+	 * the Tier-A clock bridge landed; the sink published nothing, so when the graph
+	 * handed us more audio per second than we could put on the wire, the frame ring
+	 * grew until the depth guard cut 256 frames out of it in one step. PipeWire's
+	 * resampler is already in this node's adapter — the graph runs 192 kHz and the
+	 * node runs 48 — and it will absorb a rate error continuously if we tell it
+	 * one. It cannot be told by a node that never claims a rate.
+	 *
+	 * NULL when the link carries no resampler (a same-rate graph). We then publish
+	 * "n/a" rather than a zero, because a correction that is not being applied and
+	 * a correction of zero are different facts. */
+	if (id == SPA_IO_RateMatch)
+		n->rate_match = (size >= sizeof(struct spa_io_rate_match)) ? area : NULL;
 }
 
 static const struct pw_stream_events stream_events = {
@@ -633,6 +701,80 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 	}
 }
 
+/* MAIN LOOP: publish the daemon's own health onto the node, so the console can
+ * see the fault it is otherwise structurally unable to see.
+ *
+ * THE 64 ms DISCARD RAISES NO XRUN. That is not an oversight in the guard, it is
+ * the guard's purpose: PipeWire never starves, so no xrun counter moves, no
+ * telemetry row changes, and the console draws a healthy graph while audio goes
+ * missing in 64 ms blocks. Every other symptom of this fault is also absent by
+ * construction. So the daemon says it in numbers, on the one doorway it already
+ * has to the console — its own node properties, beside reac.link-state.
+ *
+ * Published only when a health window closes (10 s), and every value is a rate
+ * over that window, so a consumer that skips updates loses resolution and nothing
+ * else. That is what openmixer's telemetry contract asks for: its own SSE,
+ * latest-wins, skip when late, never accumulate. */
+static void sink_publish_health(struct reac_sink_node *n)
+{
+	if (!n->stream || !n->pacer_open)
+		return;
+	if (!reac_pacer_health_poll(&n->pacer, reac_pacer_mono_ns(), &n->health))
+		return;   /* window still open */
+
+	const struct reac_pacer_health *h = &n->health;
+	char drift[24], dfps[24], dms[24], txe[24], lw[24], lwps[24];
+	char cups[24], drps[24], rfr[24], rms[24], rmatch[24];
+	snprintf(drift,  sizeof drift,  "%.1f", h->drift_ppm);
+	snprintf(dfps,   sizeof dfps,   "%.3f", h->discard_fps);
+	snprintf(dms,    sizeof dms,    "%.3f", h->discard_ms_per_s);
+	snprintf(txe,    sizeof txe,    "%llu", (unsigned long long)h->tx_errors);
+	snprintf(lw,     sizeof lw,     "%llu", (unsigned long long)h->late_wakes);
+	snprintf(lwps,   sizeof lwps,   "%.2f", h->late_wakes_ps);
+	snprintf(cups,   sizeof cups,   "%.2f", h->slots_catchup_ps);
+	snprintf(drps,   sizeof drps,   "%.2f", h->slots_dropped_ps);
+	snprintf(rfr,    sizeof rfr,    "%u",   h->ring_frames);
+	snprintf(rms,    sizeof rms,    "%.2f", h->ring_ms);
+	/* "n/a" is not decoration. A link with no resampler gives us no rate-match
+	 * area, and reporting 0 there would claim we are steering something we cannot
+	 * reach — the same lie as a soft meter reading a hardware state. */
+	if (atomic_load_explicit(&n->rate_match_present, memory_order_relaxed))
+		snprintf(rmatch, sizeof rmatch, "%.1f",
+		         atomic_load_explicit(&n->rate_match_milli_ppm,
+		                              memory_order_relaxed) / 1000.0);
+	else
+		snprintf(rmatch, sizeof rmatch, "n/a");
+
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_HEALTH_DRIFT_PPM,   drift,
+		REAC_PROP_HEALTH_DISCARD_FPS, dfps,
+		REAC_PROP_HEALTH_DISCARD_MS,  dms,
+		REAC_PROP_HEALTH_TX_ERRORS,   txe,
+		REAC_PROP_HEALTH_LATE_WAKES,  lw,
+		REAC_PROP_HEALTH_LATE_PS,     lwps,
+		REAC_PROP_HEALTH_CATCHUP_PS,  cups,
+		REAC_PROP_HEALTH_DROPPED_PS,  drps,
+		REAC_PROP_HEALTH_RING_FRAMES, rfr,
+		REAC_PROP_HEALTH_RING_MS,     rms,
+		REAC_PROP_HEALTH_RATE_MATCH,  rmatch,
+		NULL);
+	if (props) {
+		pw_stream_update_properties(n->stream, &props->dict);
+		pw_properties_free(props);
+	}
+
+	/* The same window on stderr, because the journal is where a fault is read
+	 * after the fact and a property only ever shows the latest value. */
+	fprintf(stderr,
+	        "reac-health: drift %+.1f ppm | discard %.3f frames/s (%.3f ms/s) | "
+	        "ring %u frames (%.2f ms) | late %.2f/s (catchup %.2f/s, dropped %.2f/s) | "
+	        "tx_errors %llu | rate-match %s ppm\n",
+	        h->drift_ppm, h->discard_fps, h->discard_ms_per_s,
+	        h->ring_frames, h->ring_ms, h->late_wakes_ps,
+	        h->slots_catchup_ps, h->slots_dropped_ps,
+	        (unsigned long long)h->tx_errors, rmatch);
+}
+
 /* MAIN LOOP: advertise the node's graph->wire delay as SPA_PARAM_ProcessLatency
  * so PipeWire's latency algorithm folds it into the graph latency (the default
  * pw_filter latency handling applies a node ProcessLatency — we do NOT set
@@ -752,6 +894,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	sink_publish_link_props(n);
 	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
 	sink_publish_latency(n);
+	sink_publish_health(n);
 }
 
 /* Build the node DESCRIPTION for `channels` outputs labelled `label` (NULL/"" ->
@@ -945,6 +1088,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */
 	pcfg.n_headamps = cfg->n_headamps;
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
+	pcfg.catchup_max_slots = cfg->catchup_max_slots;  /* 0 = the measured default */
 	if (cfg->clock_ref) {                    /* #77; "" = designate nothing */
 		strncpy(n->clock_ref, cfg->clock_ref, sizeof n->clock_ref - 1);
 		n->clock_ref[sizeof n->clock_ref - 1] = '\0';

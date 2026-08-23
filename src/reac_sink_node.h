@@ -55,6 +55,9 @@ struct reac_sink_cfg {
 	 * not. NULL/empty (the default) designates nothing, and nothing about the
 	 * grading or the selection changes. Inert unless clock_follow is set. */
 	const char *clock_ref;
+	/* Slot-debt catch-up budget, passed straight through to the pacer. 0 = the
+	 * measured default, -1 = off. See reac_pacer.h. */
+	int catchup_max_slots;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
@@ -109,5 +112,15 @@ void reac_sink_node_set_peer_source(struct reac_sink_node *n,
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
+
+/* Bound on the correction handed to PipeWire's resampler, in ppm. Sized so the
+ * level loop settles WELL inside the guard band rather than against it: with the
+ * pacer's measured 900 ppm deficit and a proportional loop, the steady-state depth
+ * is target * (1 + drift/MAX), which at 5000 ppm is 1.18 * target — comfortably
+ * below the guard's HIGH at 2 * target, so the guard never fires. 5000 ppm is
+ * 0.007 of a semitone; the resampler does not care and neither does an ear. If
+ * this bound is ever REACHED the loop has lost authority and the discards come
+ * back, which is why the applied correction is published rather than assumed. */
+#define REAC_SINK_RATE_MATCH_MAX_PPM  5000
 
 #endif /* REAC_SINK_NODE_H */

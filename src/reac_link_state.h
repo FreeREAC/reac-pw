@@ -86,6 +86,53 @@
  * operator's). "1" or "0". */
 #define REAC_PROP_MASTER_CONFLICT "reac.master.conflict"
 
+/* ---- HEALTH (workstream CLK, 2026-08-23) --------------------------------- *
+ *
+ * WHY THESE ARE NODE PROPERTIES AND NOT A NEW WIRE. reac-pw already speaks to the
+ * console through exactly one doorway — the properties on its own PipeWire nodes,
+ * which is where reac.link-state, reac.box-model and reac.pace.source already
+ * live. Adding a socket, a file or an HTTP endpoint would be a second ledger for
+ * the same facts, with neither door announcing the other. One store, one writer.
+ *
+ * The console side is NOT built here (another lane owns that repo). openmixer's
+ * telemetry is a settled design — its own SSE, latest-wins, skip when late, never
+ * accumulate — and these rows are shaped to drop straight into it: every one is a
+ * scalar over the window that just closed, so a consumer that misses three
+ * updates has lost nothing but resolution.
+ *
+ * All values are decimal strings; the units are in the names or stated here. */
+#define REAC_PROP_HEALTH_DRIFT_PPM   "reac.health.drift-ppm"
+	/* Transmit deficit over the last window: (nominal - emitted) / nominal, in
+	 * ppm. POSITIVE means fewer frames reached the wire than the rate asks for,
+	 * so the TX ring grows and the depth guard will eventually discard. This is
+	 * THE number: on the live rig, unfixed, it reads about +900. */
+#define REAC_PROP_HEALTH_DISCARD_FPS "reac.health.discard-fps"
+	/* Frames the depth guard discarded per second. Nonzero means audio is being
+	 * dropped RIGHT NOW, in 64 ms blocks, with no xrun and no other symptom. */
+#define REAC_PROP_HEALTH_DISCARD_MS  "reac.health.discard-ms-per-s"
+	/* The same loss restated as what an operator hears: milliseconds of audio
+	 * lost per second. */
+#define REAC_PROP_HEALTH_TX_ERRORS   "reac.health.tx-errors"
+	/* Cumulative sendto() failures (EAGAIN on a backed-up NIC queue). Each one is
+	 * a frame built, counter-stamped and never sent. Difference two readings. */
+#define REAC_PROP_HEALTH_LATE_WAKES  "reac.health.late-wakes"
+	/* Cumulative slots where the pacer woke more than a full period late. */
+#define REAC_PROP_HEALTH_LATE_PS     "reac.health.late-wakes-per-s"
+#define REAC_PROP_HEALTH_CATCHUP_PS  "reac.health.catchup-slots-per-s"
+	/* Overslept slots REPAID on the grid per second. The correction working,
+	 * which is the thing an operator should be able to watch rather than trust. */
+#define REAC_PROP_HEALTH_DROPPED_PS  "reac.health.dropped-slots-per-s"
+	/* Overslept slots ABANDONED per second: the debt exceeded the catch-up
+	 * budget, so it was declared instead of smeared onto the wire. */
+#define REAC_PROP_HEALTH_RING_FRAMES "reac.health.ring-frames"
+#define REAC_PROP_HEALTH_RING_MS     "reac.health.ring-ms"
+	/* TX ring depth at the close of the window, in frames and in ms of
+	 * graph->wire latency. */
+#define REAC_PROP_HEALTH_RATE_MATCH  "reac.health.rate-match-ppm"
+	/* The correction currently handed to PipeWire's resampler via io_rate_match,
+	 * in ppm. "n/a" when the graph gave this node no rate-match area (no
+	 * resampler on the link, so there is nothing to steer). */
+
 /* reac-pw only ever LISTENS: it reports frames its promiscuous socket already receives
  * and transmits nothing to discover. There is deliberately no "probing" value — active
  * probing a live segment could disturb a joined box. */

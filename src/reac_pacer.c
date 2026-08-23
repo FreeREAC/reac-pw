@@ -676,15 +676,85 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 		                                        memory_order_relaxed);
 		double slot_ms = (double)p->period_ns / 1e6;
 		fprintf(out, "reac-pacer: ring depth %u frames (%.2f ms) [interval min %u "
-		        "(%.2f ms) max %u (%.2f ms)] | guard trims=%llu dropped=%llu frames\n",
+		        "(%.2f ms) max %u (%.2f ms)] | guard trims=%llu dropped=%llu frames"
+		        " | tx_errors=%llu late_wakes=%llu catchup=%llu dropped_slots=%llu\n",
 		        rdepth, (double)rdepth * slot_ms,
 		        rmin, (double)rmin * slot_ms, rmax, (double)rmax * slot_ms,
-		        (unsigned long long)rtrims, (unsigned long long)rframes);
+		        (unsigned long long)rtrims, (unsigned long long)rframes,
+		        (unsigned long long)atomic_load_explicit(&p->tx_errors,
+		                                                 memory_order_relaxed),
+		        (unsigned long long)atomic_load_explicit(&p->late_wakes,
+		                                                 memory_order_relaxed),
+		        (unsigned long long)atomic_load_explicit(&p->slots_catchup,
+		                                                 memory_order_relaxed),
+		        (unsigned long long)atomic_load_explicit(&p->slots_dropped,
+		                                                 memory_order_relaxed));
 		p->log_last_ns = now;
 		p->log_last_trims = rtrims;
 	}
 
 	return count;
+}
+
+/* ---- health, windowed (workstream CLK) ---------------------------------- *
+ *
+ * Every number here is a RATE over the window that just closed, because a
+ * cumulative counter answers the wrong question: an operator standing at the desk
+ * needs to know whether audio is being dropped NOW, and a lifetime total says only
+ * that it once was. The two raw counters that survive as totals do so because an
+ * operator may legitimately want to difference two heartbeat lines by hand.
+ *
+ * MAIN LOOP ONLY. The pacer thread publishes into atomics; this reads them. */
+int reac_pacer_health_poll(struct reac_pacer *p, uint64_t now_ns,
+                           struct reac_pacer_health *out)
+{
+	uint64_t tx     = atomic_load_explicit(&p->tx_frames, memory_order_relaxed);
+	uint64_t trim   = atomic_load_explicit(&p->ring_trim_frames, memory_order_relaxed);
+	uint64_t late   = atomic_load_explicit(&p->late_wakes, memory_order_relaxed);
+	uint64_t drop   = atomic_load_explicit(&p->slots_dropped, memory_order_relaxed);
+	uint64_t catch_ = atomic_load_explicit(&p->slots_catchup, memory_order_relaxed);
+
+	if (!p->health_win_ns || now_ns < p->health_win_ns) {
+		p->health_win_ns = now_ns;
+		p->health_tx_frames = tx;
+		p->health_trim_frames = trim;
+		p->health_late_wakes = late;
+		p->health_slots_dropped = drop;
+		p->health_slots_catchup = catch_;
+		return 0;
+	}
+	uint64_t dt_ns = now_ns - p->health_win_ns;
+	if (dt_ns < REAC_PACER_HEALTH_WINDOW_NS)
+		return 0;
+
+	double dt = (double)dt_ns / 1e9;
+	double emitted_ps = (double)(tx - p->health_tx_frames) / dt;
+	double nominal_ps = 1e9 / (double)p->period_ns;
+	uint32_t rdepth = reac_frame_ring_readable(&p->ring);
+
+	out->valid           = 1;
+	out->window_s        = dt;
+	/* POSITIVE = we emitted fewer frames than the rate asks for, so the ring grows.
+	 * This is measured against the frames that actually left, not against the
+	 * period we intended — the whole point is that those two disagreed. */
+	out->drift_ppm       = (nominal_ps - emitted_ps) / nominal_ps * 1e6;
+	out->discard_fps     = (double)(trim - p->health_trim_frames) / dt;
+	out->discard_ms_per_s = out->discard_fps * (double)p->period_ns / 1e6;
+	out->late_wakes_ps   = (double)(late - p->health_late_wakes) / dt;
+	out->slots_dropped_ps = (double)(drop - p->health_slots_dropped) / dt;
+	out->slots_catchup_ps = (double)(catch_ - p->health_slots_catchup) / dt;
+	out->tx_errors       = atomic_load_explicit(&p->tx_errors, memory_order_relaxed);
+	out->late_wakes      = late;
+	out->ring_frames     = rdepth;
+	out->ring_ms         = (double)rdepth * (double)p->period_ns / 1e6;
+
+	p->health_win_ns = now_ns;
+	p->health_tx_frames = tx;
+	p->health_trim_frames = trim;
+	p->health_late_wakes = late;
+	p->health_slots_dropped = drop;
+	p->health_slots_catchup = catch_;
+	return 1;
 }
 
 /* ---- live head-amp control handoff (task #203) --------------------------- *
@@ -1057,9 +1127,7 @@ static void *pacer_loop(void *arg)
 		else
 			atomic_fetch_add_explicit(&p->tx_frames, 1, memory_order_relaxed);
 
-		/* Advance the absolute deadline by exactly one period (no drift). If we
-		 * woke a full period or more late (scheduler hiccup), snap forward so we
-		 * don't burst-catch-up and smear the cadence.
+		/* Advance the absolute deadline by exactly one period (no drift).
 		 *
 		 * The period is a CONSTANT unless clock following is enabled (#75). With
 		 * the knob unset this is `p->period_ns`, the same expression as before —
@@ -1068,12 +1136,50 @@ static void *pacer_loop(void *arg)
 		 * the discipline steers the period CONTINUOUSLY and the deadline still
 		 * advances by exactly one period: the phase is never stepped, so a
 		 * correction is a slow pull rather than an audible click. */
-		deadline += (uint64_t)(p->clock_follow ? reac_pacer_clock_tick(p, mono_ns())
-		                                       : p->period_ns);
+		long slot_ns = p->clock_follow ? reac_pacer_clock_tick(p, mono_ns())
+		                               : p->period_ns;
+		deadline += (uint64_t)slot_ns;
 		uint64_t now = mono_ns();
 		if (now > deadline) {
+			/* WE OVERSLEPT. What this branch does with the debt is the whole
+			 * difference between a clock master and a process that happens to
+			 * send packets.
+			 *
+			 * It used to read `deadline = now + period` unconditionally. That
+			 * re-bases the grid onto the hiccup, so every slot we overslept is
+			 * gone for good — and MEASURED on the live rig that is not a rare
+			 * event: 3.6 slots per second, 900 ppm of transmit deficit, which is
+			 * the entire reason the TX ring grows and the depth guard discards
+			 * 256 frames (64 ms of audio) every eighty-odd seconds. The
+			 * discipline in reac_clock cannot see it, because it steers the
+			 * period from a REFERENCE's rate error and the reference is fine:
+			 * the RME graph clock measures -5.6 ppm against CLOCK_MONOTONIC and
+			 * the boxes return within 20 ppm of nominal. Nothing was wrong with
+			 * the oscillator. We were simply not putting the frames out.
+			 *
+			 * So: STAY ON THE GRID and repay the debt. Leaving `deadline` in the
+			 * past makes the next clock_nanosleep return immediately and the owed
+			 * slots go out back to back, which costs 12 us of wire each and
+			 * restores the long-run rate to exactly `fps` frames per second of
+			 * monotonic time. That is the definition of owning the clock.
+			 *
+			 * BOUNDED, because an unbounded catch-up is the thing the old comment
+			 * was right to fear: a process stalled for 100 ms would dump 400
+			 * frames onto the wire in one burst and smear the cadence the pacer
+			 * exists to protect. Past the budget we re-base exactly as before —
+			 * but we COUNT the slots we abandoned instead of losing them
+			 * silently, because a dropout the daemon cannot name is a dropout
+			 * nobody will ever find. */
 			atomic_fetch_add_explicit(&p->late_wakes, 1, memory_order_relaxed);
-			deadline = now + (uint64_t)p->period_ns;
+			uint64_t behind = (now - deadline) / (uint64_t)p->period_ns + 1;
+			if (p->catchup_max_slots && behind <= (uint64_t)p->catchup_max_slots) {
+				atomic_fetch_add_explicit(&p->slots_catchup, 1,
+				                          memory_order_relaxed);
+			} else {
+				atomic_fetch_add_explicit(&p->slots_dropped, behind,
+				                          memory_order_relaxed);
+				deadline = now + (uint64_t)p->period_ns;
+			}
 		}
 	}
 	return NULL;
@@ -1089,6 +1195,12 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	p->cpu  = cfg->cpu;
 	p->fps  = cfg->fps > 0 ? cfg->fps : 8000;
 	p->period_ns = reac_pacer_period_ns(cfg->fps);
+	/* 0 (a zero-initialised cfg) means "the default", not "off" — a daemon that
+	 * owns the clock must not lose slots because a caller forgot a field. -1 is
+	 * how a caller says off, and it restores the historical re-base exactly. */
+	p->catchup_max_slots = cfg->catchup_max_slots == 0
+		? (uint32_t)REAC_CATCHUP_MAX_SLOTS_DEFAULT
+		: (cfg->catchup_max_slots < 0 ? 0u : (uint32_t)cfg->catchup_max_slots);
 	p->prev_state = REAC_M_IDLE;
 	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
 
