@@ -385,6 +385,22 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 
 int main(int argc, char **argv)
 {
+	/* HELP IS PURE TEXT AND MUST NOT REQUIRE A CAPABILITY. Asking how to run this
+	 * is exactly what an operator does on a machine where the binary has no caps
+	 * yet — answering that with the CAP_NET_RAW refusal hides the very sentence
+	 * that tells them how to fix it. Answered before the preflight, which then
+	 * guards every real start unchanged. */
+	if (argc < 2) {
+		usage(argv[0]);
+		return 2;
+	}
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+			usage(argv[0]);
+			return 0;
+		}
+	}
+
 	/* Before anything is opened, per §4e: a missing capability must arrive as a
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();

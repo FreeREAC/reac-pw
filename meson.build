@@ -246,7 +246,7 @@ test('reac_master', master_test)
 # Its own process: the knob is cached on first getenv() read, like this file's others.
 master_no_enroll_test = executable('test_reac_master_no_enroll',
   ['tests/test_reac_master_no_enroll.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
    'src/reac_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
