@@ -173,6 +173,25 @@ int main(void)
 
 	/* 6. SENS dB codec at all anchors (dB = -10 - value + (pad ? 20 : 0)):
 	 * pad off 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on 0x00 = +10 .. 0x37 = -45. */
+	/* THE CODEC ASSUMES 1.0 dB PER STEP AND THE WIRE MEASURES ~1.235.
+	 *
+	 * Rig, S-0808 port 8, a real acoustic source, one commanded change at a time,
+	 * three captures per point, reversible to 0.3 dB across three link cycles:
+	 *
+	 *   sens 32  mean -34.2 dBFS      32 -> 22  (10 steps)  13.1 dB
+	 *   sens 22  mean -47.3 dBFS      22 -> 12  (10 steps)  11.6 dB
+	 *   sens 12  mean -58.9 dBFS      32 -> 12  (20 steps)  24.7 dB
+	 *   sens 32  mean -34.5 dBFS   <- returns to baseline, so it is not the room
+	 *
+	 * 24.7 dB for 20 commanded steps is 1.235 dB/step; the two 10-step halves give
+	 * 1.31 and 1.16, whose difference is inside the source's own 1.8 dB spread. An
+	 * operator asking for 10 dB is getting about 12.3.
+	 *
+	 * These assertions pin the CURRENT 1 dB/step codec, deliberately. Correcting it
+	 * is a contract change, not a constant edit: the conversion runs in both
+	 * directions, reac_slave.c derives its virtual preamp gain from it, and
+	 * openmixer carries sensDbu across the wire. Whoever changes the scale has to
+	 * come through these lines and see the measurement that motivates it. */
 	CHK(reac_headamp_sens_db(0x00, 0) == -10);
 	CHK(reac_headamp_sens_db(0x37, 0) == -65);
 	CHK(reac_headamp_sens_db(0x00, 1) == 10);
@@ -189,6 +208,7 @@ int main(void)
 	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */
 
 	printf("OK: head-amp record byte-exact vs the M-200 capture (inner 0x80 / "
-	       "outer sum-0), TAG dispatch grant-safe, SENS dB codec anchored\n");
+	       "outer sum-0), TAG dispatch grant-safe, SENS dB codec anchored at the\n"
+	       "1 dB/step the code assumes (the wire measures ~1.235 — see the note)\n");
 	return 0;
 }
