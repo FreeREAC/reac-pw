@@ -234,7 +234,6 @@ enum reac_headamp_param {
 	REAC_HEADAMP_PAD     = 0x01,   /* -20 dB pad on/off (value 0|1) */
 	REAC_HEADAMP_SENS    = 0x02,   /* sensitivity (value 0x00..0x37, 1 dB/step) */
 };
-#define REAC_HEADAMP_SENS_MAX 0x37
 
 /* The head-amp WIRE-CHANNEL space: 0x00..0x2f, so 0x30 = 48 addressable channels.
  *
@@ -280,7 +279,5 @@ int reac_ctrl_headamp_record_verify(const uint8_t *frame);
 /* SENS VALUE <-> dB (pad-relative, 1 dB/step): dB = -10 - value + (pad ? 20 : 0).
  * pad off: 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on: 0x00 = +10 .. 0x37 = -45.
  * sens_value clamps into 0x00..0x37. */
-int     reac_headamp_sens_db(uint8_t value, int pad_on);
-uint8_t reac_headamp_sens_value(int db, int pad_on);
 
 #endif /* REAC_CTRL_H */

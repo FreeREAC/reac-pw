@@ -173,42 +173,83 @@ int main(void)
 
 	/* 6. SENS dB codec at all anchors (dB = -10 - value + (pad ? 20 : 0)):
 	 * pad off 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on 0x00 = +10 .. 0x37 = -45. */
-	/* THE CODEC ASSUMES 1.0 dB PER STEP AND THE WIRE MEASURES ~1.235.
+	/* THE SENS CURVE IS A TABLE, NOT A CONSTANT — and not the 1.235 dB/step I
+	 * reported from a microphone either. That figure came from an acoustic source
+	 * that is not stable enough for the job: the identical 32->12 command measured
+	 * 24.7 dB in one session and 18.9 dB in another, while the noise floor gave
+	 * -91.4 and -102.7 both times, to 0.1 dB.
 	 *
-	 * Rig, S-0808 port 8, a real acoustic source, one commanded change at a time,
-	 * three captures per point, reversible to 0.3 dB across three link cycles:
+	 * The authority is the box's own 56-entry table at 0x0c0327a0, and the scale
+	 * comes from the floor, which tracks gain exactly inside a stage and
+	 * reproduces to 0.03 dB. Measured on an S-0808:
 	 *
-	 *   sens 32  mean -34.2 dBFS      32 -> 22  (10 steps)  13.1 dB
-	 *   sens 22  mean -47.3 dBFS      22 -> 12  (10 steps)  11.6 dB
-	 *   sens 12  mean -58.9 dBFS      32 -> 12  (20 steps)  24.7 dB
-	 *   sens 32  mean -34.5 dBFS   <- returns to baseline, so it is not the room
+	 *   stage 2 (idx  8..23)  0.90 dB/step      break 8   no gain step
+	 *   stage 1 (idx 24..39)  0.95 dB/step      break 24  no gain step
+	 *   stage 0 (idx 40..55)  0.98 dB/step      break 40  no gain step
+	 *   stage 3 (idx  0.. 7)  unmeasured, assumed 0.90 (its floor is under the
+	 *                         converter's, so it cannot be read this way)
 	 *
-	 * 24.7 dB for 20 commanded steps is 1.235 dB/step; the two 10-step halves give
-	 * 1.31 and 1.16, whose difference is inside the source's own 1.8 dB spread. An
-	 * operator asking for 10 dB is getting about 12.3.
+	 * Span 48.75 dB, not 55. The breaks were confirmed at exactly the indices the
+	 * firmware table predicts, and they carry no gain step: across 23->24 the
+	 * signal is flat while the floor drops 6.06 dB, so what changes there is the
+	 * noise figure, not the gain.
 	 *
-	 * These assertions pin the CURRENT 1 dB/step codec, deliberately. Correcting it
-	 * is a contract change, not a constant edit: the conversion runs in both
-	 * directions, reac_slave.c derives its virtual preamp gain from it, and
-	 * openmixer carries sensDbu across the wire. Whoever changes the scale has to
-	 * come through these lines and see the measurement that motivates it. */
+	 * Changing the scale is a contract change — the conversion runs both ways,
+	 * reac_slave.c derives virtual preamp gain from it, and openmixer publishes
+	 * sensDbu — so these assertions exist to make the next change deliberate. */
+	/* Endpoints. The span is 48.75 dB across the 56 steps, not the 55 dB a flat
+	 * 1 dB per step implies — see the header for how each stage was measured. */
+	CHK(reac_headamp_sens_cdb(0x00, 0) == -1000);
+	CHK(reac_headamp_sens_cdb(0x37, 0) == -1000 - 4875);
+	CHK(reac_headamp_sens_cdb(0x00, 1) ==  1000);
+	CHK(reac_headamp_sens_cdb(0x37, 1) ==  1000 - 4875);
 	CHK(reac_headamp_sens_db(0x00, 0) == -10);
-	CHK(reac_headamp_sens_db(0x37, 0) == -65);
-	CHK(reac_headamp_sens_db(0x00, 1) == 10);
-	CHK(reac_headamp_sens_db(0x37, 1) == -45);
-	CHK(reac_headamp_sens_value(-10, 0) == 0x00);
-	CHK(reac_headamp_sens_value(-65, 0) == 0x37);
-	CHK(reac_headamp_sens_value(10, 1) == 0x00);
-	CHK(reac_headamp_sens_value(-45, 1) == 0x37);
-	/* every value round-trips, both pad states; out-of-range dB clamps */
-	for (int pad = 0; pad <= 1; pad++)
-		for (int v = 0; v <= REAC_HEADAMP_SENS_MAX; v++)
-			CHK(reac_headamp_sens_value(reac_headamp_sens_db((uint8_t)v, pad), pad) == v);
+	CHK(reac_headamp_sens_db(0x37, 0) == -59);   /* -58.75, rounded */
+	CHK(reac_headamp_sens_value_cdb(-1000, 0) == 0x00);
+	CHK(reac_headamp_sens_value_cdb(-1000 - 4875, 0) == 0x37);
+
+	/* THE CURVE IS NOT A LINE, and this is where that is pinned. Steps inside a
+	 * stage differ by stage, and the three stage breaks carry NO gain step at
+	 * all. A single constant cannot express this, which is the entire reason the
+	 * conversion is a table. */
+	CHK(reac_headamp_sens_cdb(9, 0)  - reac_headamp_sens_cdb(10, 0) == 90);  /* stage 2 */
+	CHK(reac_headamp_sens_cdb(25, 0) - reac_headamp_sens_cdb(26, 0) == 95);  /* stage 1 */
+	CHK(reac_headamp_sens_cdb(41, 0) - reac_headamp_sens_cdb(42, 0) == 98);  /* stage 0 */
+	CHK(reac_headamp_sens_cdb(7, 0)  == reac_headamp_sens_cdb(8, 0));        /* break */
+	CHK(reac_headamp_sens_cdb(23, 0) == reac_headamp_sens_cdb(24, 0));       /* break */
+	CHK(reac_headamp_sens_cdb(39, 0) == reac_headamp_sens_cdb(40, 0));       /* break */
+
+	/* ROUND TRIP, in centi-dB where it is exact: step -> dB -> step is the
+	 * identity everywhere except the three lower twins of a break, which the
+	 * reverse lookup deliberately promotes to their quieter partner (same gain,
+	 * 6.06 dB less noise). Asserting the exception rather than excusing it. */
+	for (int pad = 0; pad <= 1; pad++) {
+		for (int v = 0; v <= REAC_HEADAMP_SENS_MAX; v++) {
+			int back = reac_headamp_sens_value_cdb(
+				reac_headamp_sens_cdb((uint8_t)v, pad), pad);
+			int expect = (v == 7 || v == 23 || v == 39) ? v + 1 : v;
+			CHK(back == expect);
+		}
+	}
+
+	/* The whole-dB pair is LOSSY and must not be trusted to round-trip: the
+	 * device's steps are all under 1 dB, so neighbouring steps collide on one
+	 * integer. Pinned as a known limitation so nobody re-derives it as a bug. */
+	{
+		int collisions = 0;
+		for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++)
+			if (reac_headamp_sens_db((uint8_t)v, 0) ==
+			    reac_headamp_sens_db((uint8_t)(v + 1), 0))
+				collisions++;
+		CHK(collisions > 0);
+	}
+
 	CHK(reac_headamp_sens_value(99, 0) == 0x00);      /* hotter than min gain */
-	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */
+	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */     /* below max gain */
 
 	printf("OK: head-amp record byte-exact vs the M-200 capture (inner 0x80 / "
-	       "outer sum-0), TAG dispatch grant-safe, SENS dB codec anchored at the\n"
-	       "1 dB/step the code assumes (the wire measures ~1.235 — see the note)\n");
+	       "outer sum-0), TAG dispatch grant-safe, SENS codec is the firmware's\n"
+	       "56-entry table: per-stage steps, no gain at the three breaks, and a\n"
+	       "centi-dB round trip that is the identity bar the promoted twins\n");
 	return 0;
 }
