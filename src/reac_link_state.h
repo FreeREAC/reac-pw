@@ -124,6 +124,10 @@
 #define REAC_PROP_HEALTH_DROPPED_PS  "reac.health.dropped-slots-per-s"
 	/* Overslept slots ABANDONED per second: the debt exceeded the catch-up
 	 * budget, so it was declared instead of smeared onto the wire. */
+#define REAC_PROP_HEALTH_DEBT_MAX    "reac.health.slot-debt-max"
+	/* Largest SINGLE overslept debt in the window, in slots. At or below the
+	 * catch-up budget every miss was repayable; above it is the tail that a short
+	 * run cannot show, and the number that says whether the budget is set right. */
 #define REAC_PROP_HEALTH_RING_FRAMES "reac.health.ring-frames"
 #define REAC_PROP_HEALTH_RING_MS     "reac.health.ring-ms"
 	/* TX ring depth at the close of the window, in frames and in ms of
