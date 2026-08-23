@@ -127,3 +127,92 @@ segment, with the catch-up budget re-swept (`REACPW_CATCHUP_MAX_SLOTS`, no
 rebuild needed) and `reac.health.slot-debt-max` read to size it.** That knob and
 that counter exist precisely so this can be answered with a number instead of an
 argument.
+
+---
+
+## The budget, derived from 48 kHz data — no 96 kHz master required
+
+The oversleep is a DURATION. It does not care about the slot period, so the
+existing distribution converts directly. From the 30-minute soak's per-window
+worst single debt (198 windows of `reac.health.slot-debt-max`, catch-up on):
+
+| worst single debt | wall time | windows | cumulative | the same debt at 96 kHz |
+|---|---|---|---|---|
+| 0 slots | 0 µs | 17 | 8.6% | 0 |
+| 1 | 250 µs | 116 | 67.2% | 2 |
+| 2 | 500 µs | 52 | 93.4% | 4 |
+| 3 | 750 µs | 7 | 97.0% | 6 |
+| 5 | 1250 µs | 2 | 98.0% | 10 |
+| 6 | 1500 µs | 1 | 98.5% | 12 |
+| 7 | 1750 µs | 1 | 99.0% | 14 |
+| 8 | 2000 µs | 2 | 100% | **16** |
+
+**p50 250 µs · p90 500 µs · p95 750 µs · worst 2000 µs.**
+
+**So the defensible 96 kHz budget is 8 slots**, which is the same 1000 µs that
+covers ~97% at 48 kHz. That is now the shipping default and it is computed, not
+configured: `REAC_CATCHUP_MAX_DEFAULT_US` = 1000, converted at open. At 48 kHz it
+still evaluates to exactly the 4 slots that were soaked, so nothing about the
+measured configuration changed.
+
+Two honesty notes on this table:
+
+- **These are per-window MAXIMA, not the distribution of individual late wakes.**
+  Each row is the worst debt in a 10 s window, so the table over-weights the tail
+  — which is the conservative direction for sizing a budget, but it is not the
+  same statement as "90% of late wakes are under 500 µs".
+- **The control run (catch-up OFF, under heavier load) has a worse tail** — p95 of
+  2500 µs and a worst of 3000 µs, i.e. 20 and 24 slots at 96 kHz. A 96 kHz rig
+  under show load may well look more like that than like the soak.
+
+## What the conversion CANNOT tell us, and what a minimal trial would prove
+
+The conversion answers one question — what budget the *existing* oversleep
+distribution implies at 96 kHz — and it assumes that distribution is unchanged by
+running at 96 kHz. **That assumption is the whole risk, and it is exactly what a
+trial has to test**, because at 96 kHz the pacer wakes 8 000 times a second
+instead of 4 000 and the host's behaviour under that is not a conversion of
+anything. Specifically, unmeasurable from 48 kHz data:
+
+1. **Does the oversleep distribution itself get worse?** Twice the wake rate is
+   twice the opportunity to be preempted and twice the syscall load in the
+   `SCHED_FIFO` loop (the RX drain is up to 8 `recv()` per slot). If the tail
+   grows as well as being measured against a shorter slot, the 8-slot budget is
+   optimistic and both effects compound.
+2. **Can the pacer thread hold 8 kHz at all under show load?** At 48 kHz it uses
+   2.8% of a core and misses ~4 deadlines a second. Doubling the wake rate is the
+   regime where a `SCHED_FIFO` thread starts competing with USB interrupt load,
+   and no 48 kHz number predicts where that turns over.
+3. **Do these two boxes establish and STAY established at 8 000 fps?** Never
+   observed on this rig. "A box has no rate setting of its own" is a design fact,
+   not a measurement of an S-0808 and an S-1608 following our 96 kHz cadence.
+4. **What the 2:1 resample does** to the sink adapter's behaviour, versus today's
+   4:1 from a 192 kHz graph.
+
+### The minimal trial
+
+**One segment, one box, the S-0808 on `enp128s20f0u6`** — the segment whose
+capture is 8 channels rather than the S-1608's 16, and the one every measurement
+in `docs/rig-data/2026-08-23-clock/` was taken on, so there is a matched 48 kHz
+baseline for every number. Not both segments: a mixed-rate rig is a strictly
+harder case and it is not what needs answering first.
+
+- **Cost to start:** one master restart, so a few-second re-handshake on that box.
+  If the box does not follow 8 000 fps the segment is down until it is restarted
+  at 48 kHz — a rollback of one command, but audibly down in between.
+- **Duration: 30 minutes**, to be comparable with the soak that is the baseline.
+- **Read:** `reac.health.slot-debt-max` (the whole point — the 96 kHz debt
+  distribution in its own units), `discard-fps`, `drift-ppm`, `late-wakes-per-s`,
+  `ring-frames`, and the FSM transcript for any `ESTABLISHED -> PROBING`.
+- **Pass:** the box establishes and holds it for the full 30 minutes with zero
+  drops; `discard-fps` stays 0; the worst debt stays at or under 8 slots for ~97%
+  of windows, mirroring the 48 kHz result.
+- **Fail, and what it means:** debts routinely above 8 slots says the budget must
+  rise (and the burst with it — 16 slots is 190 µs of wire, still tolerable); any
+  `ESTABLISHED -> PROBING` says the box does not follow our 96 kHz cadence, which
+  is a protocol finding and outranks every tuning question here.
+- **It needs no new code.** `REACPW_CATCHUP_MAX_SLOTS` sweeps the budget without a
+  rebuild and `slot-debt-max` is already published.
+
+**Do not run it while the console is being validated.** The failure mode is a
+segment down, and the operator is at the desk.
