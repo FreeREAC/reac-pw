@@ -394,6 +394,15 @@ struct reac_pacer {
 	 * can load it from another thread without a data race. A pointer store/load
 	 * is lock-free on every arch reac-pw targets. */
 	_Atomic (const struct reac_box_model *) recognized_box;
+	/* THE ESTABLISHED BOX'S HEAD-AMP BASE, mirrored for cross-thread reads. It is
+	 * the chassis strap the box announced (libreac reac_ports.h), carried here
+	 * because it CANNOT be recomputed: it is not a function of the width, the
+	 * model or anything else a reader already holds. The sink node used to derive
+	 * it by calling the grant allocator on the recognized width, which worked only
+	 * while width and strap were collinear on the three chassis we own.
+	 * -1 means NO BOX IS ON THE WIRE — the same state recognized_box == NULL
+	 * reports, not an established box whose base is unknown. */
+	_Atomic int recognized_headamp_base;
 	/* The geometry the box DECLARED (config-announce port table, libreac
 	 * reac_ports_parse) and that reac_master_set_box last applied. Pacer-thread
 	 * only (rx_ingest + sync_published_box run there): the dedup that stops the

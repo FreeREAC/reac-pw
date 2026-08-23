@@ -6,7 +6,7 @@
 #include "reac_headamp_tx.h"  /* struct reac_headamp_tx */
 
 #include <reac/reac.h>        /* REAC_FRAME_BYTES */
-#include <reac/reac_ports.h>  /* reac_headamp_base — the per-width placement law */
+#include <reac/reac_ports.h>  /* the announced-base law + REAC_HEADAMP_BASE_* */
 #include <string.h>
 
 /* ---- The allocator ------------------------------------------------------- *
@@ -62,13 +62,20 @@
  * one. Where a box's AUDIO lands stays reac_boxreg's decision over
  * REAC_AUDIO_FABRIC_SLOTS. Multi-box allocation (#129) must keep them apart.
  *
- * The observed per-width base itself lives in libreac (reac_headamp_base — one
- * home; openmixer reads the same value off the reac.headamp.base node prop).
- * This allocator stays the POLICY seam, deliberately separated from the
- * mechanism below it, so multi-box allocation (#129 — several boxes sharing one
- * fabric) can replace the policy without touching the sweep generator; the day
- * two boxes must coexist, this becomes a real free-list over the fabric and the
- * observed bases become preferences. */
+ * THE BASE IS NOT OURS TO CHOOSE. It is the box's own chassis strap, announced
+ * in its config announce at block[7] and multiplied by 0x10 (libreac
+ * reac_ports.h). This function used to derive it from the box's INPUT WIDTH via
+ * libreac's reac_headamp_base(), which agreed with the wire on all three chassis
+ * we own only because width and strap are collinear on them — a 16-input chassis
+ * always straps 2. A master cannot move where a head-amp write lands by granting
+ * differently; nothing in the box consumes a granted base.
+ *
+ * So what is left here is not allocation, it is ADMISSION: the box states its
+ * base, and we check the slots it claims fit the head-amp space. They may not —
+ * width 32 at base 0x20 runs to 0x3f, past the 0x2f ceiling — and a box that
+ * does not fit is REFUSED, never quietly moved to a base it did not ask for.
+ * Multi-box coexistence (#129) is a question of whether two announced bases
+ * overlap, not of where to put them. */
 
 int reac_grant_alloc_fits(int base, int width)
 {
@@ -83,28 +90,18 @@ int reac_grant_alloc_fits(int base, int width)
 	return (base + width - 1) <= REAC_HEADAMP_CEILING;
 }
 
-int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch)
+int reac_grant_allocate(struct reac_grant_alloc *out, int base, int in_ch)
 {
 	if (!out || in_ch <= 0 || in_ch > REAC_GRANT_MAX_WIDTH)
 		return -1;
 
-	/* The observed base for this width (libreac's reac_headamp_base), when there
-	 * is one AND it still fits. The fits() gate is not ceremony: it is what
-	 * forbids a 32-wide box from taking the S-1608's 0x20, and it keeps a future
-	 * policy edit from silently allocating past the head-amp space. */
-	int base = reac_headamp_base(in_ch);
-	if (base >= 0 && reac_grant_alloc_fits(base, in_ch)) {
-		out->base  = (uint8_t)base;
-		out->width = (uint8_t)in_ch;
-		return 0;
-	}
-
-	/* An unobserved width (or an observed base that does not fit): take the lowest
-	 * base that does. "Width-many contiguous slots wherever they fit", with the
-	 * space otherwise empty — reac-pw grants one box at a time (see #129). */
-	if (!reac_grant_alloc_fits(0, in_ch))
+	/* The box announced this base. Admit it if the slots it claims fit the
+	 * head-amp space, and refuse if they do not — there is no second choice to
+	 * fall back to. Moving a box to a base it did not announce writes its
+	 * head-amp records to slots its preamps never read. */
+	if (!reac_grant_alloc_fits(base, in_ch))
 		return -1;
-	out->base  = 0x00;
+	out->base  = (uint8_t)base;
 	out->width = (uint8_t)in_ch;
 	return 0;
 }

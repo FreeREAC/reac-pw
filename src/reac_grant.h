@@ -86,7 +86,7 @@ int reac_grant_alloc_fits(int base, int width);
  * origin. The observed base is then validated against the head-amp ceiling, and any
  * width without an observed base (or whose observed base does not fit) falls back
  * to the lowest base that does. */
-int reac_grant_allocate(struct reac_grant_alloc *out, int in_ch);
+int reac_grant_allocate(struct reac_grant_alloc *out, int base, int in_ch);
 
 /* Build the grant sweep for `alloc` into `sweep` (capacity `max` rows of 34 bytes).
  * Returns the number of rows written (= REAC_GRANT_SWEEP_LEN(alloc->width)), or -1

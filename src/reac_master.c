@@ -313,10 +313,10 @@ static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
  * bogus recognition can never leave the master with an EMPTY grant. Shared by init,
  * reac_master_set_box and reac_master_set_headamp_src — the sweep is a pure
  * function of (alloc, headamp_src), so every input change funnels through here. */
-static int rebuild_grant_sweep(struct reac_master *m, int in_ch)
+static int rebuild_grant_sweep(struct reac_master *m, int base, int in_ch)
 {
 	struct reac_grant_alloc a;
-	if (reac_grant_allocate(&a, in_ch) != 0)
+	if (reac_grant_allocate(&a, base, in_ch) != 0)
 		return -1;
 	int n = reac_grant_build_sweep(m->grant_burst, REAC_GRANT_SWEEP_MAX, &a,
 	                               m->headamp_src);
@@ -551,7 +551,8 @@ void reac_master_forget_box(struct reac_master *m)
 	gen_cfea(m->announce_blk, m->src, &m->cfg, 0);
 }
 
-void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
+void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch,
+                         int headamp_base)
 {
 	(void)out_ch;   /* S-0808 and S-1608 are both 8-OUT — the INPUT width distinguishes */
 	/* Allocate width-many contiguous head-amp slots for this box and rebuild group A
@@ -561,7 +562,7 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch)
 	 * and the cfea anyway, so a nonsense recognition still reached the wire while the
 	 * allocation it was supposed to describe did not. */
 	int had_box = reac_master_has_box(m);
-	if (rebuild_grant_sweep(m, in_ch) != 0)
+	if (rebuild_grant_sweep(m, headamp_base, in_ch) != 0)
 		return;
 	/* Enrol the box's DECLARED input width. The cdea 0103 000d group map is the gate
 	 * the box reads to open its audio return to full width (verified byte-for-byte
@@ -602,7 +603,7 @@ void reac_master_set_headamp_src(struct reac_master *m,
 	m->headamp_src = tx;
 	/* Rebuild so the next grant enrolls the CURRENT head-amp state. Same
 	 * allocation — only group A's values change. */
-	rebuild_grant_sweep(m, m->alloc.width);
+	rebuild_grant_sweep(m, m->alloc.base, m->alloc.width);
 }
 
 /* Restart the control cycle AT THE HEADER SLOT, so a fresh courtship opens with
@@ -672,7 +673,7 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	 * function of (alloc, headamp_src) and this runs on the pacer thread — the same thread
 	 * that drains head-amp edits into the table — so there is no race. Keeps the current
 	 * sweep on a transient allocate/build failure (rebuild_grant_sweep is all-or-nothing). */
-	rebuild_grant_sweep(m, m->alloc.width);
+	rebuild_grant_sweep(m, m->alloc.base, m->alloc.width);
 	/* cfea box-count on latch: hold count=0 so the announce carries the
 	 * RECOGNIZED-BUT-UNGRANTED window a real M-200 holds through the whole
 	 * dwell (reac-firmware-re/HEADAMP-MASTER-STATE-2026-07-17.md, Update 9
