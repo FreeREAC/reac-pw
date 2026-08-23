@@ -151,12 +151,13 @@ float reac_slave_headamp_gain(uint8_t sens_value, int pad_on)
 	 * preamp gain is -S dB, with the pad already folded in (pad on -> +20 dBu ->
 	 * 20 dB less gain).
 	 *
-	 * CENTI-dB, deliberately. The step is NOT 1 dB and is not even constant: the
-	 * box's own table gives 0.90 dB per step in one stage, 0.95 in the next, 0.98
-	 * in the last, and no step at all across the three stage breaks. The whole-dB
-	 * conversion rounds, so neighbouring steps collide on one integer and the
-	 * virtual box would show two different SENS values as the same gain in places
-	 * the hardware does not. */
+	 * CENTI-dB, though the step measures a whole dB and the integer conversion
+	 * would now be exact. Kept because the unit costs nothing and the reason it
+	 * was introduced is still live: this ran on whole dB while the codec was a
+	 * firmware-derived curve of sub-dB steps, and neighbouring SENS values
+	 * collided on one integer, so the virtual box showed the same gain where the
+	 * hardware moved. A finer unit cannot produce that failure whatever the curve
+	 * turns out to be. */
 	int gain_cdb = -reac_headamp_sens_cdb(sens_value, pad_on);
 	return powf(10.0f, (float)gain_cdb / 2000.0f);
 }
