@@ -42,7 +42,8 @@
 
 #include "reac_slots.h"   /* the two slot spaces: audio fabric vs head-amp */
 #include "reac_grant.h"   /* struct reac_grant_alloc, REAC_GRANT_SWEEP_MAX */
-#include "reac_scene.h"   /* REAC_SCENE_BYTES — the push body the master carries */
+#include <reac/reac_ctrlblk.h>  /* REAC_SCENE_BYTES — the transfer, from the library */
+#include "reac_scene_body.h"     /* reac_scene_placeholder — the body we push   */
 
 struct reac_headamp_tx;   /* reac_headamp_tx.h — the head-amp state group A pushes */
 

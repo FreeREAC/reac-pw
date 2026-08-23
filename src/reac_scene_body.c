@@ -11,7 +11,7 @@
 // generating this from our own console is the follow-on work; the framing in
 // reac_ctrl.c is what had to be right first.
 
-#include "reac_ctrl.h"
+#include "reac_scene_body.h"
 
 const uint8_t reac_scene_placeholder[REAC_SCENE_BYTES] = {
 	0x31, 0x32, 0x33, 0x34, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x80,

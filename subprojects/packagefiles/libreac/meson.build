@@ -13,7 +13,7 @@
 # a 0.5.0-only symbol so a stale checkout cannot pass on this string alone.
 
 project('libreac', 'c',
-  version : '0.5.0',
+  version : '0.6.0',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2'])
 
@@ -22,7 +22,8 @@ libreac_m = meson.get_compiler('c').find_library('m', required : false)
 
 libreac_lib = static_library('reac',
   ['src/reac.c', 'src/reac_decode.c', 'src/reac_upstream.c', 'src/reac_encode.c',
-   'src/reac_capture.c', 'src/pcap_source.c', 'src/reac_ports.c'],
+   'src/reac_capture.c', 'src/pcap_source.c', 'src/reac_ports.c',
+   'src/reac_ctrlblk.c'],
   include_directories : libreac_inc,
   dependencies : [libreac_m],
   install : false)
