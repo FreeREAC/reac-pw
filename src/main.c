@@ -39,6 +39,7 @@
 #include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
+#include "reac_seglock.h"    /* one master per segment, across processes */
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
@@ -641,6 +642,28 @@ int main(int argc, char **argv)
 		                              /* #77: unset -> nothing is designated and the
 		                               * name heuristic alone grades the reference. */
 		                              .clock_ref = getenv("REACPW_CLOCK_REF") };
+		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
+		 * lock; RX above has been running unlocked, which is correct — observing a
+		 * segment is a copy and must stay safe beside somebody else's master. */
+		static struct reac_seglock seglock;
+		int claimed = reac_seglock_claim(&seglock, tx_if);
+		if (claimed == -1) {
+			fprintf(stderr,
+			    "reac-pw: REFUSING to master '%s' — another process already holds\n"
+			    "         that segment (%s). Two masters on one segment is the\n"
+			    "         fault this lock exists to make impossible; it has cost an\n"
+			    "         evening once and corrupted a live measurement once.\n"
+			    "         Nothing is taken over automatically: stop the holder, or\n"
+			    "         drive a different segment. Who holds it:\n"
+			    "           grep %s /proc/net/unix\n",
+			    tx_if, seglock.name, seglock.name);
+			exit(1);
+		}
+		if (claimed == -2)
+			fprintf(stderr, "reac-pw: could not claim a segment lock for '%s' "
+			        "(interface or netns unreadable); proceeding UNPROTECTED\n",
+			        tx_if);
+
 		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
 		if (!sink) {
 			/* A master with no TX is not a degraded master, it is a silent one:

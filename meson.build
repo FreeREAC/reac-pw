@@ -77,6 +77,7 @@ reac_pw_src = [
   'src/reac_rx.c',
   'src/reac_pace_watch.c',
   'src/reac_box_pin.c',
+  'src/reac_seglock.c',
   'src/reac_arbitration.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c', 'src/reac_scene_body.c',
@@ -400,7 +401,8 @@ test('reac_arbitration', arbitration_test)
 # head-amp enrollment from a guess, and a box granted slots it does not own links,
 # streams audio and silently ignores every head-amp record.
 box_pin_test = executable('test_reac_box_pin',
-  ['tests/test_reac_box_pin.c', 'src/reac_box_pin.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
+  ['tests/test_reac_box_pin.c', 'src/reac_box_pin.c',
+  'src/reac_seglock.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
   dependencies : [libreac_dep],
   include_directories : [include_directories('src')])
 test('reac_box_pin', box_pin_test)
