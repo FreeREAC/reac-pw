@@ -746,6 +746,10 @@ int reac_pacer_health_poll(struct reac_pacer *p, uint64_t now_ns,
 	out->tx_errors       = atomic_load_explicit(&p->tx_errors, memory_order_relaxed);
 	out->late_wakes      = late;
 	out->ring_frames     = rdepth;
+	/* Read-and-reset: each window reports ITS OWN worst case, so a single stall an
+	 * hour ago cannot go on colouring every line after it. */
+	out->slot_debt_max   = atomic_exchange_explicit(&p->slot_debt_max, 0,
+	                                                memory_order_relaxed);
 	out->ring_ms         = (double)rdepth * (double)p->period_ns / 1e6;
 
 	p->health_win_ns = now_ns;
@@ -1172,6 +1176,11 @@ static void *pacer_loop(void *arg)
 			 * nobody will ever find. */
 			atomic_fetch_add_explicit(&p->late_wakes, 1, memory_order_relaxed);
 			uint64_t behind = (now - deadline) / (uint64_t)p->period_ns + 1;
+			/* Record the WORST single debt, not just the total. Two relaxed
+			 * atomics on the rare path; the common slot never reaches here. */
+			uint32_t b32 = behind > UINT32_MAX ? UINT32_MAX : (uint32_t)behind;
+			if (b32 > atomic_load_explicit(&p->slot_debt_max, memory_order_relaxed))
+				atomic_store_explicit(&p->slot_debt_max, b32, memory_order_relaxed);
 			if (p->catchup_max_slots && behind <= (uint64_t)p->catchup_max_slots) {
 				atomic_fetch_add_explicit(&p->slots_catchup, 1,
 				                          memory_order_relaxed);

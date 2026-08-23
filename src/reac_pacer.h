@@ -266,6 +266,14 @@ struct reac_pacer {
 	 * These two counters separate the debt we repaid from the debt we declared. */
 	_Atomic uint64_t slots_catchup;  /* late wakes repaid by staying on the grid */
 	_Atomic uint64_t slots_dropped;  /* slots abandoned: the debt exceeded the budget */
+	/* THE TAIL, which is the thing a short run cannot show. slots_dropped says how
+	 * much debt we abandoned; it does not say whether that was a hundred one-slot
+	 * misses or one hundred-slot stall, and those are different faults with
+	 * different fixes. This is the largest SINGLE debt seen since the last read —
+	 * the number that says whether the catch-up budget is set right, and the only
+	 * one that can distinguish a busy host from a stall. Read-and-reset by the
+	 * health poll so a heartbeat reports its own window's worst case. */
+	_Atomic uint32_t slot_debt_max;  /* largest single overslept debt, in slots */
 
 	/* Health window state. MAIN-LOOP ONLY (reac_pacer_health_poll) — never touched
 	 * by the pacer thread, so no atomics and no RT cost. */
@@ -501,6 +509,9 @@ struct reac_pacer_health {
 	uint64_t tx_errors;          /* cumulative sendto() failures */
 	uint64_t late_wakes;         /* cumulative */
 	uint32_t ring_frames;        /* TX ring depth at the close of the window */
+	uint32_t slot_debt_max;      /* largest SINGLE overslept debt in the window,
+	                              * in slots. <= the catch-up budget means every
+	                              * miss was repayable; above it is the tail. */
 	double   ring_ms;            /* the same depth as graph->wire latency */
 };
 

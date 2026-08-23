@@ -738,7 +738,7 @@ static void sink_publish_health(struct reac_sink_node *n)
 
 	const struct reac_pacer_health *h = &n->health;
 	char drift[24], dfps[24], dms[24], txe[24], lw[24], lwps[24];
-	char cups[24], drps[24], rfr[24], rms[24], rmatch[24];
+	char cups[24], drps[24], rfr[24], rms[24], rmatch[24], dmax[24];
 	snprintf(drift,  sizeof drift,  "%.1f", h->drift_ppm);
 	snprintf(dfps,   sizeof dfps,   "%.3f", h->discard_fps);
 	snprintf(dms,    sizeof dms,    "%.3f", h->discard_ms_per_s);
@@ -748,6 +748,7 @@ static void sink_publish_health(struct reac_sink_node *n)
 	snprintf(cups,   sizeof cups,   "%.2f", h->slots_catchup_ps);
 	snprintf(drps,   sizeof drps,   "%.2f", h->slots_dropped_ps);
 	snprintf(rfr,    sizeof rfr,    "%u",   h->ring_frames);
+	snprintf(dmax,   sizeof dmax,   "%u",   h->slot_debt_max);
 	snprintf(rms,    sizeof rms,    "%.2f", h->ring_ms);
 	/* "n/a" is not decoration. A link with no resampler gives us no rate-match
 	 * area, and reporting 0 there would claim we are steering something we cannot
@@ -768,6 +769,7 @@ static void sink_publish_health(struct reac_sink_node *n)
 		REAC_PROP_HEALTH_LATE_PS,     lwps,
 		REAC_PROP_HEALTH_CATCHUP_PS,  cups,
 		REAC_PROP_HEALTH_DROPPED_PS,  drps,
+		REAC_PROP_HEALTH_DEBT_MAX,    dmax,
 		REAC_PROP_HEALTH_RING_FRAMES, rfr,
 		REAC_PROP_HEALTH_RING_MS,     rms,
 		REAC_PROP_HEALTH_RATE_MATCH,  rmatch,
@@ -781,11 +783,11 @@ static void sink_publish_health(struct reac_sink_node *n)
 	 * after the fact and a property only ever shows the latest value. */
 	fprintf(stderr,
 	        "reac-health: drift %+.1f ppm | discard %.3f frames/s (%.3f ms/s) | "
-	        "ring %u frames (%.2f ms) | late %.2f/s (catchup %.2f/s, dropped %.2f/s) | "
-	        "tx_errors %llu | rate-match %s ppm\n",
+	        "ring %u frames (%.2f ms) | late %.2f/s (catchup %.2f/s, dropped %.2f/s, "
+	        "worst debt %u slots) | tx_errors %llu | rate-match %s ppm\n",
 	        h->drift_ppm, h->discard_fps, h->discard_ms_per_s,
 	        h->ring_frames, h->ring_ms, h->late_wakes_ps,
-	        h->slots_catchup_ps, h->slots_dropped_ps,
+	        h->slots_catchup_ps, h->slots_dropped_ps, h->slot_debt_max,
 	        (unsigned long long)h->tx_errors, rmatch);
 }
 
