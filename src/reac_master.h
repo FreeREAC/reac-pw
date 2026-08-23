@@ -550,4 +550,14 @@ const char *reac_master_state_name(enum reac_master_state s);
 const char *reac_master_rx_event_name(enum reac_master_rx_event e);
 const char *reac_master_drop_name(enum reac_master_drop_reason r);
 
+/* The rate a master takes when nothing says otherwise. Operator ruling,
+ * 2026-08-23: "96k is 96kHz and should be the default reac clock rate."
+ *
+ * This is a DEFAULT, not a detection: a master drives a segment that is silent
+ * until it speaks, so there is nothing on the wire to read. Cadence is
+ * fps = rate/12 at every rate, so 96 kHz is 8000 fps and a 125 us slot — half
+ * the 48 kHz slot, which is why the pacer's late-wake budget matters MORE at
+ * 96 k and not less. See docs/RATE-AND-CLOCK-CONFIG.md. */
+#define REAC_MASTER_DEFAULT_RATE  96000
+
 #endif /* REAC_MASTER_H */

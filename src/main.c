@@ -268,7 +268,10 @@ static void usage(const char *p)
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
 	  "                slaves to us) | slave (an external master drives; we lock to its\n"
 	  "                cadence + return our inputs upstream)\n"
-	  "  --rate R      force the REAC sample rate (default: auto-detect on --live, 48000 on --pcap)\n"
+	  "  --rate R      the REAC sample rate: 44100, 48000 or 96000.\n"
+	  "                Default 96000 in the MASTER role (a master DEFINES the rate;\n"
+	  "                there is nothing to detect on a segment nobody is driving).\n"
+	  "                As a SLAVE, auto-detected from the wire cadence.\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
@@ -378,6 +381,7 @@ int main(int argc, char **argv)
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();
 
+	const char *rate_provenance = "auto-detect from the wire cadence";
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
@@ -425,6 +429,7 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			rxcfg.forced_rate = rate;
+			rate_provenance = "--rate on the command line";
 		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
 			tx_if = argv[++i];
 		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
@@ -567,6 +572,34 @@ int main(int argc, char **argv)
 	 *
 	 * Cadence is fps = rate/12 at every rate — 12 samples per frame is invariant,
 	 * so a higher rate sends the same frames more often, nothing else changes. */
+
+	/* THE MASTER'S RATE DEFAULT, and the provenance of whatever it ends up being.
+	 *
+	 * A MASTER DEFINES THE RATE; THERE IS NOTHING TO DETECT. Auto-detect is a
+	 * slave's default and it is the right one there — a slave joins a segment
+	 * somebody else is already driving, so reading the cadence off the wire is the
+	 * only honest thing it can do. A master drives a segment that is SILENT until
+	 * it speaks, so "auto" does not resolve to the operator's intent, it resolves
+	 * to whatever the fallback happens to be, and nothing on screen says which.
+	 *
+	 * The default is 96 kHz by the operator's ruling (2026-08-23): "96k is 96kHz
+	 * and should be the default reac clock rate." A Roland desk offers 44.1/48/96
+	 * and drives the segment at the one chosen; this is that menu's default
+	 * position, not a detection result.
+	 *
+	 * AND THE RATE IS PRINTED WITH WHERE IT CAME FROM. Three sources have
+	 * disagreed on this rig at once — a command line, an environment file nothing
+	 * read, and this default — and the disagreement was invisible because the
+	 * startup line said only the number. A mechanical gate beats a rule anyone has
+	 * to remember: the journal now carries the provenance beside the value, so a
+	 * 96 k master pointed at a 48 k segment says so in its first two lines. */
+	if (role == REAC_ROLE_MASTER && rxcfg.forced_rate == 0) {
+		rxcfg.forced_rate = REAC_MASTER_DEFAULT_RATE;
+		rate_provenance = "the master default (nothing else said otherwise)";
+	}
+	fprintf(stderr, "reac-pw: REAC rate = %d Hz (%d pps) from %s\n",
+	        rxcfg.forced_rate, rxcfg.forced_rate / REAC_SAMPLES_PER_PKT,
+	        rate_provenance);
 
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
