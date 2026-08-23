@@ -58,6 +58,12 @@ struct reac_sink_cfg {
 	/* Slot-debt catch-up budget, passed straight through to the pacer. 0 = the
 	 * measured default, -1 = off. See reac_pacer.h. */
 	int catchup_max_slots;
+	/* TX rate matching. 0 = on (the default: a zero-initialised cfg gets the
+	 * behaviour that does not drop audio), -1 = off, which restores a sink that
+	 * publishes no io_rate_match at all. The off case exists so the two levers can
+	 * be measured SEPARATELY on the rig; it is not a configuration anyone should
+	 * run. Set from REACPW_RATE_MATCH=0. */
+	int rate_match_off;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
