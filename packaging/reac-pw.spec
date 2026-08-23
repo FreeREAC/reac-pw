@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.2.0}
+Version:        %{?version_override}%{!?version_override:0.3.0}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,7 +17,7 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 0.6.0
+BuildRequires:  pkgconfig(libreac) >= 0.7.0
 Requires:       pipewire
 
 %description
@@ -28,20 +28,32 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-Links dynamically against the system libreac (>= 0.6.0), which carries the
+Links dynamically against the system libreac (>= 0.7.0), which carries the
 shared REAC byte-layout core: frame validation, 24-bit decode of the braid in
 both directions (downstream and box upstream), the braided encode, the
 f32<->s24 sample pair, the OHRCA +2 length rule, capture and pcap replay.
-Nothing is vendored. The floor is 0.6.0: that is the release that actually
-SHIPS the control-block core in the shared object (reac_ctrl_*, reac_headamp_*,
-reac_ports_parse). Up to 0.5.0 the spec's hand-kept object list left
+Nothing is vendored.
+
+The floor is 0.7.0 because that is the release that removed
+reac_ctrl_build_name_frame() and reac_ctrl_build_extra_frame() and replaced them
+with reac_ctrl_build_identity_first(), which this package calls. libreac shipped
+that break once as 0.6.0 with its soname still 0, and every guard was inert at
+the same moment: this floor accepted the library with and without the symbols,
+the unchanged NEVRA made `rpm -U` a no-op, and the installed binary loaded the
+new libreac.so.0 and died on `undefined symbol`. 0.7.0 carries soname 1, so
+rpm's generated runtime requires now refuses a mismatched pair at install time
+rather than at exec.
+
+Earlier floors, subsumed: 0.6.0 was the release that actually SHIPPED the
+control-block core in the shared object (reac_ctrl_*, reac_headamp_*,
+reac_ports_parse) -- up to 0.5.0 the spec's hand-kept object list left
 reac_ctrlblk.o and reac_ports.o out of libreac.so while -devel installed the
 headers declaring them, so a build resolved every include and then failed at
-link -- or, worse, linked against a stale subproject and never touched the
-system library at all. 0.5.0 remains the floor for the decode side (the release
-whose downstream decode reads the same braid its encoder writes; a 0.4.x
-libreac-devel links happily and mis-decodes every downstream frame), and 0.6.0
-subsumes it. Keep this in step with meson.build's dependency() floor.
+link. 0.5.0 was the floor for the decode side (the release whose downstream
+decode reads the same braid its encoder writes; a 0.4.x libreac-devel links
+happily and mis-decodes every downstream frame).
+
+Keep this in step with meson.build's dependency() floor.
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -52,7 +64,7 @@ subsumes it. Keep this in step with meson.build's dependency() floor.
 # build-id) so the plain buildtype still yields a real debuginfo package.
 # --wrap-mode=nofallback: the libreac dependency MUST resolve to the system
 # libreac-devel (pkg-config), never the bundled subproject wrap -- the RPM links
-# libreac dynamically (runtime dep auto-generated from the libreac.so.0 soname).
+# libreac dynamically (runtime dep auto-generated from the libreac.so.1 soname).
 %set_build_flags
 meson setup _build --prefix=%{_prefix} --buildtype=plain --wrap-mode=nofallback
 meson compile -C _build
@@ -80,6 +92,19 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Sun Aug 23 2026 Pau Aliagas <linuxnow@gmail.com> - 0.3.0-1
+- Builds against the SYSTEM libreac >= 0.7.0, and the version moves so that
+  installing it is not a no-op. libreac 0.7.0 removed
+  reac_ctrl_build_name_frame() and reac_ctrl_build_extra_frame(); this package
+  calls reac_ctrl_build_identity_first() instead, so the two have to be
+  installed TOGETHER -- a 0.3.0 binary cannot run on libreac 0.6.0 and the old
+  0.2.0 binary cannot run on 0.7.0.
+- libreac 0.7.0 carries soname 1, so the runtime requires rpm generates from it
+  (libreac.so.1) now refuses a mismatched pair at INSTALL time. Under 0.6.0's
+  soname 0 the pair installed cleanly and the binary died on `undefined symbol`
+  at exec, which is the failure this release exists to make impossible.
+- A control frame is told apart by its opcode, not by how long it is.
+
 * Sat Aug 22 2026 Pau Aliagas <linuxnow@gmail.com> - 0.2.0-1
 - Builds against the SYSTEM libreac >= 0.6.0, the first release whose shared
   object actually contains the control-block core. The floor is checked twice
