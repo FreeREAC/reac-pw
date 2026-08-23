@@ -175,6 +175,20 @@ rx_dup_test = executable('test_reac_rx_dup',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_dup', rx_dup_test)
 
+# --- unit test: --live refuses a vanished/nonexistent interface ---------------
+# A dead, renamed or never-existed --live NIC used to be discovered only INSIDE
+# the feeder thread (silently — the thread just returns NULL) whenever --rate
+# was also given, because reac_rx_open() skipped opening the capture at all in
+# that case. The deployed unit always passes --rate. No privilege or live
+# traffic needed: a made-up interface name is refused the same way as a
+# genuinely dead one.
+rx_live_iface_test = executable('test_reac_rx_live_iface',
+  ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_pace_watch.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_rx_live_iface', rx_live_iface_test)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],

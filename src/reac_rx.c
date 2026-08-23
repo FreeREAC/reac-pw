@@ -11,6 +11,7 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <net/if.h>   /* if_nametoindex — the vanished-interface check */
 
 #include <reac/reac.h>
 /* the downstream (40-ch braided) decode + the two wire sources, reused as-is */
@@ -27,6 +28,11 @@ static uint64_t mono_ns(void)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+int reac_rx_iface_present(const char *ifname)
+{
+	return ifname && if_nametoindex(ifname) != 0;
 }
 
 /* Decode one gate-accepted frame into the ring (planar float, ring-width x 12
@@ -166,8 +172,18 @@ static void *rx_loop(void *arg)
 	/* Open the wire source inside the thread so the fd/FILE* lives and dies with
 	 * it. (rate-detect in reac_rx_open used a SEPARATE short-lived capture.) */
 	if (live) {
-		if (reac_capture_open(&cap, rx->cfg.source) != 0)
+		if (reac_capture_open(&cap, rx->cfg.source) != 0) {
+			/* reac_rx_open() already refused a missing/uncapable interface
+			 * before this thread was ever spawned; reaching this a second
+			 * time means the interface left BETWEEN that check and here. Loud
+			 * either way — a feeder thread that returns NULL silently is
+			 * exactly the "runs deaf, looks alive" failure this exists to
+			 * rule out. */
+			fprintf(stderr, "reac-pw: --live '%s': capture open failed at feeder "
+			        "start (interface present a moment ago, gone now?) — RX is "
+			        "NOT running\n", rx->cfg.source);
 			return NULL;
+		}
 		reac_capture_set_nonblock(&cap, 0); /* blocking; EINTR/stop-flag exits */
 		/* SO_RCVTIMEO so a traffic-idle recv() still wakes periodically to
 		 * recheck rx->running. Needed because SIGINT/SIGTERM never reach this
@@ -193,11 +209,31 @@ static void *rx_loop(void *arg)
 	unsigned seen_epoch = atomic_load_explicit(&rx->peer_epoch, memory_order_acquire);
 	uint64_t pcap_first_ts = 0, wall_first_ns = 0;
 	uint64_t last_stat_ns = 0;   /* periodic RX telemetry (every ~2 s) */
+	uint64_t last_iface_check_ns = 0;   /* the vanished-interface alarm below */
 
 	while (atomic_load_explicit(&rx->running, memory_order_acquire)) {
 		long n;
 		uint64_t pcap_ts = 0;
 		if (live) {
+			/* THE LOUD ALTERNATIVE TO SILENT PROBING. recv() on a socket bound
+			 * to an interface that vanished mid-run (USB re-enumeration, a
+			 * rename) does not reliably error — it can just keep timing out on
+			 * SO_RCVTIMEO exactly like a genuinely idle wire, so the master
+			 * pacer above logs "still PROBING" forever with nothing to tell
+			 * the two apart. Ask directly, every ~2 s: does the NAME we bound
+			 * to still resolve to an interface at all? This is the same check
+			 * reac_rx_open() makes at startup, repeated here because the
+			 * interface can leave AFTER that check passed. */
+			uint64_t chk_now = mono_ns();
+			if (chk_now - last_iface_check_ns >= 2000000000ull) {
+				last_iface_check_ns = chk_now;
+				if (!reac_rx_iface_present(rx->cfg.source))
+					fprintf(stderr, "reac-pw: LIVE INTERFACE '%s' VANISHED — it no "
+					        "longer exists (removed, renamed, or a USB NIC "
+					        "re-enumerated). The capture socket is deaf: no packet "
+					        "can arrive on it again. This is NOT a dead box; fix "
+					        "the interface name and restart.\n", rx->cfg.source);
+			}
 			n = reac_capture_next(&cap, frame, sizeof frame);
 		} else {
 			n = pcap_source_next(&ps, frame, sizeof frame, &pcap_ts);
@@ -340,15 +376,33 @@ int reac_rx_open(struct reac_rx *rx, const struct reac_rx_cfg *cfg, struct reac_
 	rx->cfg = *cfg;
 	rx->ring = ring;
 
-	if (cfg->forced_rate) {
-		rx->sample_rate = cfg->forced_rate;
-	} else if (cfg->kind == REAC_RX_LIVE) {
+	if (cfg->kind == REAC_RX_LIVE) {
+		/* Open (and validate) the interface UNCONDITIONALLY, even when --rate
+		 * forces the sample rate and no detection is needed below: this is the
+		 * only place a dead, renamed, or never-existed --live NIC can be
+		 * refused before reac_rx_start() spawns the feeder thread. A capture
+		 * failure discovered only inside that thread (rx_loop) has nowhere to
+		 * report to but its own silent `return NULL` — the daemon keeps
+		 * running with no RX, no error, and no exit, indistinguishable from a
+		 * box that is genuinely dead. Fail loudly HERE, and name the
+		 * interface. */
 		struct reac_capture cap = { .fd = -1 };
-		if (reac_capture_open(&cap, cfg->source) != 0)
+		if (reac_capture_open(&cap, cfg->source) != 0) {
+			fprintf(stderr, "reac-pw: --live '%s': no such interface, or "
+			        "insufficient capability (needs CAP_NET_RAW) — refusing to "
+			        "start rather than run a capture socket that can never "
+			        "receive\n", cfg->source);
 			return -1;
-		int r = reac_detect_rate_fd(cap.fd, 500);
+		}
+		if (cfg->forced_rate) {
+			rx->sample_rate = cfg->forced_rate;
+		} else {
+			int r = reac_detect_rate_fd(cap.fd, 500);
+			rx->sample_rate = r > 0 ? r : 48000; /* default when no traffic yet */
+		}
 		reac_capture_close(&cap);
-		rx->sample_rate = r > 0 ? r : 48000; /* default when no traffic yet */
+	} else if (cfg->forced_rate) {
+		rx->sample_rate = cfg->forced_rate;
 	} else {
 		/* offline: peek a few frames to snap the rate from inter-arrival cadence
 		 * would need timestamps; for pcap we accept forced_rate or default 48k. */
