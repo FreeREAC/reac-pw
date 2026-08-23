@@ -50,6 +50,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
 #include <linux/if_packet.h>
 
 static struct pw_main_loop *g_loop;
@@ -70,6 +71,120 @@ static int parse_mac(const char *s, uint8_t out[6])
 	for (int i = 0; i < 6; i++)
 		out[i] = (uint8_t)b[i];
 	return 0;
+}
+
+/* ---- capability preflight (trunk/VLAN spec 2026-08-23, §4e) ---------------
+ *
+ * CAPABILITIES ARE LOST SILENTLY, AND THIS RIG HAS ALREADY PAID FOR IT. They live
+ * on the inode, so every relink drops them and the rebuilt binary looks identical
+ * while being unable to open a socket. Worse, /tmp is mounted nosuid, which
+ * STRIPS file capabilities with no error at all: setcap reports success, getcap
+ * prints the set, and the binary still has nothing. That case cost real time and
+ * is invisible unless the daemon says so, which is why it is named below.
+ *
+ * The check runs BEFORE anything is opened, so the failure arrives as a sentence
+ * instead of as a daemon that starts, logs normally and receives nothing.
+ *
+ *   CAP_NET_RAW    the AF_PACKET sockets — every segment, and the detector.
+ *                  Absent, nothing works: refuse.
+ *   CAP_NET_ADMIN  creating, marking and removing VLAN sub-interfaces. Absent, we
+ *                  can still ADOPT sub-interfaces that already exist, because
+ *                  adoption needs no capability — so this is a loud refusal of
+ *                  the part we cannot do, NOT an exit. A partially usable daemon
+ *                  that names the missing part beats one that refuses everything.
+ */
+#define CAP_BIT_NET_ADMIN 12
+#define CAP_BIT_NET_RAW   13
+
+static int read_cap_effective(unsigned long long *out)
+{
+	FILE *f = fopen("/proc/self/status", "r");
+	if (!f)
+		return -1;
+	char line[256];
+	int got = 0;
+	while (fgets(line, sizeof line, f)) {
+		if (strncmp(line, "CapEff:", 7) == 0) {
+			*out = strtoull(line + 7, NULL, 16);
+			got = 1;
+			break;
+		}
+	}
+	fclose(f);
+	return got ? 0 : -1;
+}
+
+/* 1 = the binary sits on a nosuid mount (capabilities are stripped there),
+ * 0 = it does not, -1 = could not tell. */
+static int path_on_nosuid(const char *path)
+{
+	struct statvfs vfs;
+	if (!path || statvfs(path, &vfs) != 0)
+		return -1;
+	return (vfs.f_flag & ST_NOSUID) ? 1 : 0;
+}
+
+static void say_nosuid(const char *exe)
+{
+	int ns = path_on_nosuid(exe);
+	if (ns == 1)
+		fprintf(stderr,
+		    "         AND THE BINARY IS ON A NOSUID FILESYSTEM, which strips file\n"
+		    "         capabilities with no error — setcap will report success and\n"
+		    "         change nothing. Move it onto a normal filesystem first\n"
+		    "         (a build tree under /tmp is the usual cause).\n");
+	else if (ns < 0)
+		fprintf(stderr,
+		    "         (could not tell whether that path is on a nosuid mount)\n");
+}
+
+/* Read our own effective set and act on what is missing. Returns with the
+ * process alive only if CAP_NET_RAW is held. */
+static void capability_preflight(void)
+{
+	char exe[4096];
+	ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+	if (n < 0)
+		n = 0;
+	exe[n] = '\0';
+	const char *path = n ? exe : "<path-to>/reac-pw";
+
+	unsigned long long eff = 0;
+	if (read_cap_effective(&eff) != 0) {
+		fprintf(stderr, "reac-pw: could not read /proc/self/status CapEff; "
+		        "skipping the capability preflight\n");
+		return;
+	}
+
+	int have_raw   = (eff >> CAP_BIT_NET_RAW)   & 1ULL;
+	int have_admin = (eff >> CAP_BIT_NET_ADMIN) & 1ULL;
+
+	if (!have_raw) {
+		fprintf(stderr,
+		    "reac-pw: FATAL — CAP_NET_RAW is not in our effective set, so no REAC\n"
+		    "         socket can be opened and this daemon would receive nothing.\n"
+		    "         binary: %s\n"
+		    "         fix:    sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice=ep %s\n",
+		    path, path);
+		say_nosuid(path);
+		fprintf(stderr,
+		    "         Capabilities are dropped on EVERY relink; tools/build.sh sets\n"
+		    "         them and verifies them. Refusing to start.\n");
+		exit(1);
+	}
+
+	if (!have_admin) {
+		fprintf(stderr,
+		    "reac-pw: CAP_NET_ADMIN is missing. VLAN sub-interfaces cannot be\n"
+		    "         created, marked or removed, so a trunk's tagged VIDs cannot be\n"
+		    "         served. Sub-interfaces that ALREADY EXIST are still served —\n"
+		    "         adoption needs no capability — so this is a refusal of one\n"
+		    "         part, not of the daemon.\n"
+		    "         binary: %s\n"
+		    "         fix:    sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice=ep %s\n",
+		    path, path);
+		say_nosuid(path);
+	}
 }
 
 /* Why the AF_PACKET TX could not open, said in words the operator can act on.
@@ -251,6 +366,10 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 
 int main(int argc, char **argv)
 {
+	/* Before anything is opened, per §4e: a missing capability must arrive as a
+	 * sentence, not as a daemon that runs deaf. */
+	capability_preflight();
+
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;

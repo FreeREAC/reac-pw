@@ -7,8 +7,11 @@
 # the segment is clear before starting anything.
 #
 # The binary loses its file capabilities on every relink, and without them
-# reac-pw cannot open a raw socket and fails to sync SILENTLY — so the caps are
-# re-applied and verified here rather than remembered.
+# reac-pw cannot open a raw socket and fails to sync SILENTLY — so the full set is
+# re-applied and verified here rather than remembered. cap_net_admin is needed to
+# create VLAN sub-interfaces on a trunk (trunk/VLAN spec §4e); adopting ones that
+# already exist needs no capability, which is why the daemon warns rather than
+# refuses when only that one is missing.
 #
 #   tools/rig-restart-master.sh <iface> <binary> <logfile> [extra args...]
 set -o pipefail
@@ -36,8 +39,15 @@ left=$(masters_on "$iface")
 [ -z "$left" ] || { echo "REFUSING TO START: still running on $iface: $left"; exit 1; }
 echo "segment $iface clear"
 
-sudo -n setcap cap_net_raw,cap_sys_nice=ep "$bin" || exit 1
-getcap "$bin" | grep -q cap_net_raw || { echo "caps missing on $bin"; exit 1; }
+sudo -n setcap cap_net_raw,cap_net_admin,cap_sys_nice=ep "$bin" || exit 1
+# getcap normalises the order, so check each capability on its own.
+caps=$(getcap "$bin")
+for c in cap_net_raw cap_net_admin cap_sys_nice; do
+	case "$caps" in
+		*"$c"*) ;;
+		*) echo "caps INCOMPLETE on $bin: missing $c (got '${caps:-<empty>}') — a nosuid mount strips them silently" >&2; exit 1 ;;
+	esac
+done
 
 cd "$(dirname "$(dirname "$bin")")" || exit 1
 nohup "$bin" --live "$iface" --tx "$iface" "$@" > "$log" 2>&1 &
