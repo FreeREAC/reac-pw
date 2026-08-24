@@ -1,0 +1,14 @@
+# The two reac-pw masters this rig runs, VERBATIM.
+#
+# Committed because the last copy lived in /tmp and a reboot took it. A rig fact that exists
+# only outside the repo is a rig fact you lose exactly when you need it.
+#
+# --rate 48000 IS LOAD-BEARING: the master default is 96000 and this segment runs 48k. A master
+# defines the pace, so omitting it re-clocks the whole segment.
+#
+# The 32 --headamp args are the S-1608's re-assertion set (sens 32, phantom on) across its
+# CH 0x20..0x2f window. Restore them verbatim: this is the state the desk was measured in.
+
+/usr/bin/reac-pw --live enp128s20f0u6 --tx enp128s20f0u6 --mixer m200 --rate 48000
+
+/usr/bin/reac-pw --live enp131s0 --tx enp131s0 --name s1608 --mixer m5000 --rate 48000 --headamp 32:sens:32 --headamp 32:phantom:1 --headamp 33:sens:32 --headamp 33:phantom:1 --headamp 34:sens:32 --headamp 34:phantom:1 --headamp 35:sens:32 --headamp 35:phantom:1 --headamp 36:sens:32 --headamp 36:phantom:1 --headamp 37:sens:32 --headamp 37:phantom:1 --headamp 38:sens:32 --headamp 38:phantom:1 --headamp 39:sens:32 --headamp 39:phantom:1 --headamp 40:sens:32 --headamp 40:phantom:1 --headamp 41:sens:32 --headamp 41:phantom:1 --headamp 42:sens:32 --headamp 42:phantom:1 --headamp 43:sens:32 --headamp 43:phantom:1 --headamp 44:sens:32 --headamp 44:phantom:1 --headamp 45:sens:32 --headamp 45:phantom:1 --headamp 46:sens:32 --headamp 46:phantom:1 --headamp 47:sens:32 --headamp 47:phantom:1
