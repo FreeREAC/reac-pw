@@ -551,14 +551,16 @@ const char *reac_master_state_name(enum reac_master_state s);
 const char *reac_master_rx_event_name(enum reac_master_rx_event e);
 const char *reac_master_drop_name(enum reac_master_drop_reason r);
 
-/* The rate a master takes when nothing says otherwise. Operator ruling,
- * 2026-08-23: "96k is 96kHz and should be the default reac clock rate."
- *
- * This is a DEFAULT, not a detection: a master drives a segment that is silent
- * until it speaks, so there is nothing on the wire to read. Cadence is
+/* The master's default rate, when nothing says otherwise, is
+ * reac_rate_best_drivable() (reac_rate_cfg.h) — superseded from the flat
+ * 2026-08-23 "always 96k" ruling by 2026-08-26-reac-runtime-config.md §0:
+ * "the default must be the best one that we can drive." With no real
+ * drivability probe yet, reac-pw always declares the whole closed list
+ * drivable, so the observable default is still 96 kHz — but it is now an
+ * ARITHMETIC result of that declaration, not a second, independently
+ * hard-coded number that could silently disagree with it. Cadence is
  * fps = rate/12 at every rate, so 96 kHz is 8000 fps and a 125 us slot — half
  * the 48 kHz slot, which is why the pacer's late-wake budget matters MORE at
  * 96 k and not less. See docs/RATE-AND-CLOCK-CONFIG.md. */
-#define REAC_MASTER_DEFAULT_RATE  96000
 
 #endif /* REAC_MASTER_H */

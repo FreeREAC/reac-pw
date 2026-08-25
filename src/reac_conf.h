@@ -42,8 +42,9 @@
  *      floor of the stack, and a floor is the thing you land on when nothing
  *      above answered.
  *
- *   6. THE BUILT-IN DEFAULT        e.g. REAC_MASTER_DEFAULT_RATE
- *      Compiled in. Reached only when all five above are silent.
+ *   6. THE BUILT-IN DEFAULT        e.g. reac_rate_best_drivable() (reac_rate_cfg.h)
+ *      Compiled in, or computed with no live input. Reached only when all
+ *      five above are silent.
  *
  * An empty value is NOT an answer. `REAC_RATE=` sets nothing and falls through,
  * because a key someone blanked out is a key they turned off, not a key they set

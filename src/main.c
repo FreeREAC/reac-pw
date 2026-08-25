@@ -35,6 +35,7 @@
 #include "reac_sink_node.h"
 #include "reac_slave.h"
 #include "reac_role.h"
+#include "reac_rate_cfg.h"
 #include "reac_mac.h"
 #include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
@@ -606,10 +607,17 @@ int main(int argc, char **argv)
 	 * it speaks, so "auto" does not resolve to the operator's intent, it resolves
 	 * to whatever the fallback happens to be, and nothing on screen says which.
 	 *
-	 * The default is 96 kHz by the operator's ruling (2026-08-23): "96k is 96kHz
-	 * and should be the default reac clock rate." A Roland desk offers 44.1/48/96
-	 * and drives the segment at the one chosen; this is that menu's default
-	 * position, not a detection result.
+	 * The default is the BEST DRIVABLE rate (2026-08-26-reac-runtime-config.md
+	 * §0), superseding the flat 2026-08-23 "always 96k" ruling: "the default
+	 * must be the best one that we can drive; if we cannot drive a 96 kHz
+	 * mixer then we must default to something lesser." reac-pw has no real
+	 * drivability probe yet, so it always declares the whole closed list
+	 * drivable (reac_rate_cfg.h's honesty clause) and the arithmetic default
+	 * stays 96 kHz — but it is now a COMPUTED fact, not an independent
+	 * hard-coded one, so a future probe changes this line's answer with no
+	 * edit here. A Roland desk offers 44.1/48/96 and drives the segment at the
+	 * one chosen; this is that menu's default position, not a detection
+	 * result.
 	 *
 	 * AND THE RATE IS PRINTED WITH WHERE IT CAME FROM. Three sources have
 	 * disagreed on this rig at once — a command line, an environment file nothing
@@ -642,7 +650,7 @@ int main(int argc, char **argv)
 			}
 		}
 		if (rxcfg.forced_rate == 0) {
-			rxcfg.forced_rate = REAC_MASTER_DEFAULT_RATE;
+			rxcfg.forced_rate = reac_rate_best_drivable(REAC_RATE_ALL_BITS);
 			rate_layer = REAC_CONF_BUILTIN;
 		}
 	}
