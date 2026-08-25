@@ -35,6 +35,7 @@
 #include "reac_disco.h"
 #include "reac_headamp_tx.h"
 #include "reac_clock.h"
+#include "reac_rate_cfg.h"
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
 
@@ -186,8 +187,12 @@ enum reac_pacer_evkind {
 };
 
 /* Cause codes for REAC_PEV_STATE blk[0]: 0..3 = the reac_master_rx_event that
- * fired the transition; REAC_PEV_CAUSE_TIMER = a safety-fallback timer. */
-#define REAC_PEV_CAUSE_TIMER 0xff
+ * fired the transition; REAC_PEV_CAUSE_TIMER = a safety-fallback timer;
+ * REAC_PEV_CAUSE_RATE_CHANGE = an accepted `reac.cfg.rate` re-establish
+ * (reac_pacer_apply_rate), so the transcript tells a rate change apart from
+ * an ordinary drop. */
+#define REAC_PEV_CAUSE_TIMER        0xff
+#define REAC_PEV_CAUSE_RATE_CHANGE  0xfe
 
 struct reac_pacer_event {
 	uint64_t mono_ns;
@@ -241,6 +246,14 @@ struct reac_pacer_cfg {
 	 * RATE-DEPENDENT and exists for sweeps. Set from REACPW_CATCHUP_MAX_SLOTS;
 	 * see docs/ENV-KNOBS.md. */
 	int catchup_max_slots;
+	/* Drivability (2026-08-26-reac-runtime-config.md §0): which of the closed
+	 * three rates (reac_rate_cfg.h) this segment can actually be driven at. 0
+	 * (a zero-initialised cfg) means REAC_RATE_ALL_BITS — the honest default
+	 * for a daemon with no real probe: declare the whole closed list drivable
+	 * rather than guess a narrower one. A caller with an actual measurement
+	 * (today: only a test, standing in for the probe that does not exist yet)
+	 * passes a narrower mask directly. */
+	unsigned drivable_mask;
 };
 
 /* Default slot-debt budget, EXPRESSED IN TIME because the thing it bounds is a
@@ -336,6 +349,15 @@ struct reac_pacer {
 	int ifindex;
 	long period_ns;                  /* 1e9 / fps */
 	uint32_t catchup_max_slots;      /* slot-debt budget; 0 = re-base always */
+	int      catchup_max_slots_cfg;  /* the RAW reac_pacer_cfg value that produced
+	                                  * the line above (0 = rate-derived default,
+	                                  * -1 = off, >0 = an explicit sweep count) —
+	                                  * kept so a live rate change can re-resolve
+	                                  * the budget for the new fps the same way
+	                                  * reac_pacer_open did for the first one,
+	                                  * rather than leaving a stale rate-derived
+	                                  * number behind (see resolve_catchup_slots
+	                                  * in reac_pacer.c). */
 	int prio, cpu;
 	uint8_t src[6];
 
@@ -441,6 +463,39 @@ struct reac_pacer {
 	_Atomic uint64_t ha_cmd_drops;              /* commands dropped (ring full) */
 	_Atomic uint64_t ha_cmd_applied;            /* commands drained + applied (diag) */
 
+	/* ---- live rate re-establish (2026-08-26-reac-runtime-config.md) --------- *
+	 * A controller asserts `reac.cfg.rate` on the sink node's Props, same
+	 * channel as head-amp. Deciding whether to accept it is PURE
+	 * (reac_rate_cfg_decide) and happens on the caller's thread (the PipeWire
+	 * main loop) before anything here is touched — a refused rate never
+	 * reaches the pacer thread at all. What DOES need this thread is APPLYING
+	 * an accepted one: p->period_ns, p->fps, the clock discipline and the
+	 * whole `struct reac_master` (cycle_len, grant_dwell, ...: all fps-scaled,
+	 * see reac_master_init) are pacer-thread-owned state, exactly like the
+	 * head-amp TABLE above — so the handoff is the same single-writer pattern,
+	 * simplified to one pending cell instead of a ring: unlike a head-amp
+	 * write (one of up to REAC_HEADAMP_MAX_CH*3 independent cells), only the
+	 * LATEST requested rate is ever meaningful, so a second assertion before
+	 * the first drains simply supersedes it — nothing accumulates or replays
+	 * out of order. rate_req_seq is bumped by the producer AFTER the value is
+	 * stored (release), so the consumer's acquire load of the seq is what
+	 * makes the stored value visible; rate_req_seen is PACER-THREAD-ONLY. */
+	_Atomic int      rate_req_hz;
+	_Atomic uint32_t rate_req_seq;
+	uint32_t         rate_req_seen;             /* PACER THREAD ONLY */
+
+	/* What is currently standing, for the property poll (sink_publish_link_
+	 * props's rate-props analogue) to publish. Written by the pacer thread at
+	 * open() and again whenever a rate request is applied; read from any
+	 * thread once open() has returned. drivable_mask is set once at open() and
+	 * never changes after (like p->clock_follow above) — plain, not atomic. */
+	unsigned      drivable_mask;
+	_Atomic int   rate_hz;             /* the standing rate, Hz               */
+	_Atomic int   rate_asserted;       /* 0 = default, 1 = operator-asserted  */
+	_Atomic int   rate_refused;        /* enum reac_rate_refuse, last refusal */
+	_Atomic int   rate_reestablishing; /* 1 from an accepted request until the
+	                                    * FSM reaches ESTABLISHED again        */
+
 	/* ---- clock discipline (#75) ------------------------------------------- *
 	 * INERT unless clock_follow is set. Publishers (any thread) drop a ppm sample
 	 * into their OWN slot — one slot per source, so two references can never race
@@ -531,6 +586,34 @@ int  reac_pacer_headamp_set(struct reac_pacer *p, uint8_t ch, uint8_t param,
  * apply path without the RT thread. Returns the number of commands applied.
  * PACER-THREAD-ONLY in production (it is the sole writer of the head-amp table). */
 int  reac_pacer_headamp_drain(struct reac_pacer *p);
+
+/* PRODUCER side (task cfg.rate) — request that the pacer apply `hz` as the new
+ * standing rate. The CALLER has already run it through reac_rate_cfg_decide
+ * and gotten REAC_RATE_REFUSE_NONE back; this function does not re-validate,
+ * it only hands the accepted value to the RT thread. Non-blocking, lock-free,
+ * safe from the PipeWire main loop. Only the latest request matters (see the
+ * struct's rate_req_seq comment), so there is no "ring full" case. */
+void reac_pacer_request_rate(struct reac_pacer *p, int hz);
+
+/* CONSUMER side — apply one already-accepted rate to `p`: recompute
+ * period_ns/fps/the clock discipline/the catch-up budget for the new cadence,
+ * then RE-ESTABLISH by re-running reac_master_init at the new fps (an
+ * INTERNAL re-establish per the spec — no process restart, no new socket).
+ * Re-init starts the FSM at IDLE exactly as reac_pacer_open originally did;
+ * the very next pacer_loop iteration promotes it to PROBING and the box
+ * re-enrolls through the same grant/dwell sequence as a cold start, just at
+ * the new cadence. The console cfg and head-amp table are NOT reset — only
+ * establishment is redone, per the ruling that a rate change re-clocks the
+ * segment and nothing else. PACER-THREAD-ONLY in production; exposed so the
+ * offline test can drive it without a live NIC. Returns the fps applied. */
+int reac_pacer_apply_rate(struct reac_pacer *p, int hz);
+
+/* Drain the latest pending rate request (if its seq is newer than what was
+ * last applied) and apply it. The RT pacer thread calls this once per slot,
+ * right beside reac_pacer_headamp_drain. Returns 1 if a rate was applied this
+ * call, 0 if there was nothing new to apply. PACER-THREAD-ONLY in production;
+ * exposed for the offline test. */
+int reac_pacer_rate_drain(struct reac_pacer *p);
 
 /* CLOCK_MONOTONIC in ns — the one clock every reac.discovery.* timestamp is measured
  * against (sighting, staleness aging, and the published age_ms). */

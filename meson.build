@@ -104,6 +104,7 @@ reac_pw_src = [
   'src/reac_mac.c',
   'src/reac_headamp_tx.c',
   'src/reac_headamp_prop.c',
+  'src/reac_rate_cfg.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',
@@ -497,6 +498,28 @@ headamp_live_test = executable('test_reac_headamp_live',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_headamp_live', headamp_live_test)
+
+# --- unit test: reac.cfg.rate — closed list, drivability, decision core, and --
+# the internal re-establish (2026-08-26-reac-runtime-config.md) ---------------
+# Pure decision core (reac_rate_cfg.c: closed-list membership, the drivable-mask
+# arithmetic, the accept/refuse decision, the SPA_PROP_params parse) plus the
+# pacer-level re-establish (reac_pacer_apply_rate/_request_rate/_rate_drain),
+# driven directly with no socket/RT privilege — same style as
+# test_reac_headamp_live. Proves: an in-list, drivable rate re-establishes with
+# the grant/dwell sequence byte-identical in SHAPE at the new cadence; an
+# out-of-list rate is refused and nothing moves; a slave refuses every
+# assertion; and the default is the best rate a (possibly narrowed) drivable
+# mask allows — the segment-cannot-do-96k case included, since no real
+# drivability probe exists yet to supply that mask from the wire (see
+# reac_rate_cfg.h's honesty clause).
+rate_cfg_test = executable('test_reac_rate_cfg',
+  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c',
+   'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
+   'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c',
+   'src/reac_clock.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep, spa_dep])
+test('reac_rate_cfg', rate_cfg_test)
 
 # --- unit test: the GRANT enrollment sweep — allocator + generated group A -----
 # The fix for "link established != channels enrolled" (GRANT-SWEEP.md, 2026-07-17).

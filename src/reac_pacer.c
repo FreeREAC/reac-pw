@@ -278,6 +278,12 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
 		else if (from == REAC_M_ESTABLISHED)
 			p->on_session(p->session_ctx, NULL, 0);   /* the session ENDED */
 	}
+	/* A rate change's re-establish is "pending" (reac.cfg.rate.state) exactly
+	 * until the FSM completes one, whatever path it takes to get there — this
+	 * is a no-op on every OTHER transition into ESTABLISHED (the flag is
+	 * already 0), so ordinary establishment is unaffected. */
+	if (to == REAC_M_ESTABLISHED)
+		atomic_store_explicit(&p->rate_reestablishing, 0, memory_order_release);
 	atomic_store_explicit(&p->fsm_state, to, memory_order_release);
 	atomic_store_explicit(&p->grant_attempts, p->master.grant_attempts,
 	                      memory_order_relaxed);
@@ -924,6 +930,121 @@ int reac_pacer_headamp_drain(struct reac_pacer *p)
 	return applied;
 }
 
+/* ---- live rate re-establish (2026-08-26-reac-runtime-config.md) --------- */
+
+/* Resolve a reac_pacer_cfg.catchup_max_slots RAW value into the slot budget
+ * for a given fps — the exact ternary reac_pacer_open has always applied, kept
+ * as a helper so a live rate change (reac_pacer_apply_rate) can re-resolve it
+ * for the NEW fps instead of leaving the OLD fps's slot count standing (a
+ * rate-derived budget is meant to track the rate; see REAC_CATCHUP_MAX_DEFAULT_US).
+ * cfg_val 0 = the rate-derived default, negative = off, positive = an
+ * explicit sweep count that is left exactly as given (it was never
+ * rate-derived, so a rate change must not rescale it). */
+static uint32_t resolve_catchup_slots(int cfg_val, int fps)
+{
+	if (cfg_val == 0)
+		return reac_catchup_default_slots(fps);
+	if (cfg_val < 0)
+		return 0u;
+	return (uint32_t)cfg_val;
+}
+
+void reac_pacer_request_rate(struct reac_pacer *p, int hz)
+{
+	atomic_store_explicit(&p->rate_req_hz, hz, memory_order_relaxed);
+	/* Release: publish the value store before the consumer can observe the
+	 * new seq (pairs with the acquire load in reac_pacer_rate_drain). */
+	atomic_fetch_add_explicit(&p->rate_req_seq, 1, memory_order_release);
+}
+
+int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
+{
+	int fps = hz / REAC_SAMPLES_PER_PKT;
+
+	p->period_ns = reac_pacer_period_ns(fps);
+	p->fps = fps;
+	p->slot_period_ns = p->period_ns;
+	reac_clock_disc_init(&p->clock, REAC_ROLE_MASTER, p->period_ns);
+	/* The catch-up budget bounds a DURATION, not a slot count (see
+	 * REAC_CATCHUP_MAX_DEFAULT_US) — re-resolve it for the new fps the same
+	 * way reac_pacer_open resolved it for the opening one. */
+	p->catchup_max_slots = resolve_catchup_slots(p->catchup_max_slots_cfg, fps);
+
+	/* RE-ESTABLISH: re-run the same init reac_pacer_open used to bring the FSM
+	 * up the first time, at the new fps. This is what makes the change an
+	 * INTERNAL re-establish rather than a redesign — the box re-enrolls
+	 * through the exact grant/dwell machinery a cold start uses, just scaled
+	 * to a different cadence. The console cfg survives (m.cfg was set once
+	 * from the operator's --mixer/--box choice and a rate change does not
+	 * touch it); m->cfg.out_channels == 0 means "never configured", the same
+	 * sentinel reac_pacer_open reads off cfg->console. head-amp is NOT
+	 * replayed here — reac_master_set_headamp_src below re-points the sweep at
+	 * the SAME table (p->headamp), so the operator's current settings enroll
+	 * again exactly as they would on any other establishment. */
+	struct reac_console_cfg saved_cfg = p->master.cfg;
+	const struct reac_console_cfg *ccfg = saved_cfg.out_channels ? &saved_cfg : NULL;
+	/* Captured BEFORE reac_master_init overwrites p->master: note_transition and
+	 * sync_published_box normally read the OLD state straight off p->master, but
+	 * here the re-init that PRODUCES the new state has to run first (it is what
+	 * computes the new cfg/fps-derived fields), so the old values have to be
+	 * saved by hand instead of read back out of a struct that no longer holds
+	 * them. Getting this order backwards would log the drop with an
+	 * already-zeroed box_mac/drop_reason — worth being explicit about here. */
+	enum reac_master_state old_state = p->master.state;
+	uint8_t old_box_mac[6];
+	memcpy(old_box_mac, p->master.box_mac, 6);
+	int was_established = (old_state == REAC_M_ESTABLISHED);
+
+	reac_master_init(&p->master, p->src, ccfg, fps);
+	reac_master_set_headamp_src(&p->master, &p->headamp);
+
+	p->prev_state = REAC_M_IDLE;
+	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
+	atomic_store_explicit(&p->grant_attempts, 0, memory_order_relaxed);
+	memset(p->rx_since_change, 0, sizeof p->rx_since_change);
+	p->probing_slots = 0;
+
+	/* A RE-ESTABLISHMENT IS A NEW SESSION (note_transition's own law): end the
+	 * old one if it was live. This is deliberately NOT counted into p->drops[]
+	 * — those count FAULTS (grant timeout, peer-gone, BYE), and an operator's
+	 * `reac.cfg.rate` is not one. */
+	if (p->on_session && was_established)
+		p->on_session(p->session_ctx, NULL, 0);
+
+	/* The box the FSM just forgot is no longer recognized either — the same
+	 * consequence enter_probing's reac_master_forget_box has on any other
+	 * backward transition, applied here by hand because sync_published_box
+	 * would otherwise read the has_box the re-init above already cleared. */
+	if (atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
+		atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
+	atomic_store_explicit(&p->recognized_headamp_base, -1, memory_order_release);
+	p->declared_in = p->declared_out = 0;
+
+	{
+		uint8_t blk[32] = { REAC_PEV_CAUSE_RATE_CHANGE };
+		pev_push(p, REAC_PEV_STATE, (uint8_t)old_state, (uint8_t)REAC_M_IDLE,
+		        old_box_mac, blk);
+	}
+
+	atomic_store_explicit(&p->rate_hz, hz, memory_order_release);
+	atomic_store_explicit(&p->rate_asserted, 1, memory_order_release);
+	atomic_store_explicit(&p->rate_reestablishing, 1, memory_order_release);
+	return fps;
+}
+
+int reac_pacer_rate_drain(struct reac_pacer *p)
+{
+	/* Acquire: pairs with the release in reac_pacer_request_rate — seeing the
+	 * new seq guarantees the value store beside it is visible too. */
+	uint32_t seq = atomic_load_explicit(&p->rate_req_seq, memory_order_acquire);
+	if (seq == p->rate_req_seen)
+		return 0;
+	p->rate_req_seen = seq;
+	int hz = atomic_load_explicit(&p->rate_req_hz, memory_order_relaxed);
+	reac_pacer_apply_rate(p, hz);
+	return 1;
+}
+
 /* ---- clock discipline (#75) --------------------------------------------- *
  * The pacer has always free-run on CLOCK_MONOTONIC. That is correct only when
  * nothing else on the rig is the clock master; the moment a word-clock-locked
@@ -1170,6 +1291,14 @@ static void *pacer_loop(void *arg)
 		if (n < REAC_FRAME_BYTES)
 			build_silent_filler(frame, p->src);
 
+		/* Apply an accepted `reac.cfg.rate` change BEFORE this slot's master
+		 * step, so the frame about to be built already belongs to the new
+		 * cadence rather than the one about to be replaced. See
+		 * reac_pacer_apply_rate: this re-runs the FSM's own init at the new
+		 * fps, which is the internal re-establish the spec calls for — no
+		 * process restart, no new socket, the box simply re-enrolls. */
+		reac_pacer_rate_drain(p);
+
 		/* Advance the master FSM by one frame; stamp the counter + control block.
 		 * This turns a plain audio FILLER into the right cdea/cfea control frame
 		 * (probe / grant / chanmap / announce) when the sequence calls for it. */
@@ -1321,14 +1450,28 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * how a caller says off, and it restores the historical re-base exactly.
 	 * The default is derived from the RATE, because the budget bounds a duration
 	 * and not a slot count; see REAC_CATCHUP_MAX_DEFAULT_US. */
-	p->catchup_max_slots = cfg->catchup_max_slots == 0
-		? reac_catchup_default_slots(cfg->fps)
-		: (cfg->catchup_max_slots < 0 ? 0u : (uint32_t)cfg->catchup_max_slots);
+	p->catchup_max_slots_cfg = cfg->catchup_max_slots;
+	p->catchup_max_slots = resolve_catchup_slots(cfg->catchup_max_slots, cfg->fps);
 	fprintf(stderr, "reac-pacer: slot-debt catch-up %s (%u slots = %.0f us at %d fps)\n",
 	        p->catchup_max_slots ? "ON" : "OFF", p->catchup_max_slots,
 	        (double)p->catchup_max_slots * (double)p->period_ns / 1e3, cfg->fps);
 	p->prev_state = REAC_M_IDLE;
 	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
+
+	/* Drivability + the standing rate (2026-08-26-reac-runtime-config.md §0):
+	 * a zero-initialised cfg means "declare the whole closed list drivable" —
+	 * the honest default for a daemon with no real probe (see reac_rate_cfg.h).
+	 * The rate the caller opened at (cfg->fps * REAC_SAMPLES_PER_PKT) is
+	 * published as the standing rate, sourced as "default" until an
+	 * assertion changes it — main.c already decides FOR ITSELF whether that
+	 * rate came from the operator's --rate or from auto-detect/the built-in
+	 * default; reac_rate_asserted lets it say which. */
+	p->drivable_mask = cfg->drivable_mask ? cfg->drivable_mask : REAC_RATE_ALL_BITS;
+	atomic_store_explicit(&p->rate_hz, cfg->fps * REAC_SAMPLES_PER_PKT,
+	                      memory_order_relaxed);
+	atomic_store_explicit(&p->rate_asserted, 0, memory_order_relaxed);
+	atomic_store_explicit(&p->rate_refused, REAC_RATE_REFUSE_NONE, memory_order_relaxed);
+	atomic_store_explicit(&p->rate_reestablishing, 0, memory_order_relaxed);
 
 	/* Clock discipline (#75). The object is always initialised — it costs a memset
 	 * — but it is only ever CONSULTED when the knob is set. With clock_follow == 0

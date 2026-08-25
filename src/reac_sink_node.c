@@ -30,6 +30,8 @@
 #include "reac_gain.h"
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
+#include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
+#include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
 #include "reac_link_state.h"
 #include "reac_arbitration.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
@@ -138,6 +140,15 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
+
+	/* reac.rate / reac.rate.source / reac.cfg.rate.state / reac.cfg.rate.refused
+	 * (2026-08-26-reac-runtime-config.md): same shadow-and-compare pattern as
+	 * the link-state trio above, so sink_publish_rate_props only re-stamps the
+	 * filter's properties when the pacer's rate atomics actually moved. */
+	int rate_hz_last;
+	int rate_asserted_last;
+	int rate_reestablishing_last;
+	enum reac_rate_refuse rate_refused_last;
 
 	/* #208: the peer reac-capture node's SLOT (main's `&src`), so the same log-timer
 	 * that keeps THIS sink's badge live also drives the source's — that node has no
@@ -396,20 +407,25 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		SPA_PROP_INFO_type,        SPA_POD_CHOICE_RANGE_Float(1.0f, 0.0f, REAC_GAIN_VOL_MAX),
 		SPA_PROP_INFO_container,   SPA_POD_Id(SPA_TYPE_Array));
 
-	/* Head-amp control (task #203). Discoverable so a controller sees that this
-	 * master node accepts per-channel preamp commands; the values ride SPA_PROP_params
-	 * (an extensible (key,value) list) as "reac.headamp.<ch>.{phantom,pad,sens}" =
-	 * absolute setting. Advertised alongside volume/mute; the SET path is
-	 * on_param_changed -> reac_headamp_prop_parse -> the pacer command ring. Unlike
-	 * volume, head-amp state is NOT echoed in the Props state object below — it is
-	 * write-through control re-asserted on the wire by the DMX scheduler, not a node
-	 * property to read back. */
+	/* SPA_PROP_params is the one extensible (key,value) bag both the head-amp
+	 * control (task #203) and the runtime rate control
+	 * (2026-08-26-reac-runtime-config.md) ride — one PropInfo per underlying
+	 * SPA prop id, so both keys are named in this single entry rather than
+	 * two competing PropInfo objects with the same id. Advertised alongside
+	 * volume/mute; the SET paths are on_param_changed -> reac_headamp_prop_parse
+	 * -> the pacer's head-amp command ring, and on_param_changed ->
+	 * reac_rate_prop_parse -> reac_rate_cfg_decide -> reac_pacer_request_rate.
+	 * Neither is echoed in the Props state object below: head-amp is
+	 * write-through control re-asserted on the wire by the DMX scheduler, and
+	 * rate reads back on reac.rate/reac.cfg.rate.* node properties instead
+	 * (sink_publish_rate_props) — the same split link-state already uses. */
 	params[3] = spa_pod_builder_add_object(b,
 		SPA_TYPE_OBJECT_PropInfo, SPA_PARAM_PropInfo,
 		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_params),
 		SPA_PROP_INFO_description, SPA_POD_String(
-			"REAC head-amp: params \"reac.headamp.<ch>.{phantom,pad,sens}\" = value"),
-		SPA_PROP_INFO_type,        SPA_POD_String("reac.headamp.<ch>.<param>"));
+			"REAC head-amp: \"reac.headamp.<ch>.{phantom,pad,sens}\" = value; "
+			"REAC rate: \"reac.cfg.rate\" = 44100|48000|96000"),
+		SPA_PROP_INFO_type,        SPA_POD_String("reac.headamp.<ch>.<param> | reac.cfg.rate"));
 
 	/* Current state. The channelMap mirrors the AUX ports (playback_NN -> AUXc),
 	 * so a controller's per-channel sliders line up with the box outputs; `volume`
@@ -522,6 +538,32 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 	                                  (int)(sizeof ha / sizeof ha[0]));
 	for (int i = 0; i < nha; i++)
 		reac_pacer_headamp_set(&n->pacer, ha[i].ch, ha[i].param, ha[i].value);
+
+	/* LIVE rate control (2026-08-26-reac-runtime-config.md): the same Props
+	 * object may carry a `reac.cfg.rate` assertion under SPA_PROP_params. The
+	 * DECISION (reac_rate_cfg_decide) is pure and runs right here on the main
+	 * loop; only an ACCEPTED rate crosses to the RT pacer thread
+	 * (reac_pacer_request_rate), which is the only thing that actually needs
+	 * to run there (period_ns/fps/the master FSM are pacer-thread-owned state,
+	 * same reasoning as the head-amp table above). This node exists ONLY in
+	 * the master role (reac_sink_node_new is never called for a slave), so
+	 * REAC_ROLE_MASTER is a fact of this call site, not a read of some stored
+	 * role — a slave's own REFUSE_ROLE_SLAVE answer is exercised at the
+	 * decision-core level (test_reac_rate_cfg.c), because a slave has no
+	 * props-carrying node to assert it through at all yet. */
+	int req_hz;
+	int rate_parsed = reac_rate_prop_parse(param, &req_hz);
+	if (rate_parsed != 0) {
+		enum reac_rate_refuse refusal = rate_parsed < 0
+			? REAC_RATE_REFUSE_MALFORMED
+			: reac_rate_cfg_decide(REAC_ROLE_MASTER, req_hz, n->pacer.drivable_mask);
+		atomic_store_explicit(&n->pacer.rate_refused, (int)refusal, memory_order_relaxed);
+		if (refusal == REAC_RATE_REFUSE_NONE)
+			reac_pacer_request_rate(&n->pacer, req_hz);
+		/* A refusal moves nothing: no request reaches the pacer, so fps,
+		 * period_ns and the master FSM are untouched — the refused prop
+		 * above is the only thing that changes. */
+	}
 
 	if (changed)
 		sink_publish(n);
@@ -644,6 +686,51 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		                              reac_link_state_name(ls),
 		                              bm ? bm->token : "none",
 		                              width);
+}
+
+/* MAIN LOOP: stamp reac.rate / reac.rate.source / reac.rate.drivable /
+ * reac.cfg.rate.state / reac.cfg.rate.refused (2026-08-26-reac-runtime-
+ * config.md §0/§1) — the read side of the `reac.cfg.rate` write door
+ * on_param_changed answers below. Reads only the pacer's cross-thread-safe
+ * rate atomics (never on_process/RT); re-stamps only when one of them
+ * actually moved, same shadow-and-compare pattern as sink_publish_link_props.
+ * drivable_mask is read-only after reac_pacer_open, so it needs no shadow —
+ * it can only ever agree with itself. */
+static void sink_publish_rate_props(struct reac_sink_node *n)
+{
+	if (!n->stream)
+		return;
+
+	int hz = atomic_load_explicit(&n->pacer.rate_hz, memory_order_acquire);
+	int asserted = atomic_load_explicit(&n->pacer.rate_asserted, memory_order_relaxed);
+	int reest = atomic_load_explicit(&n->pacer.rate_reestablishing, memory_order_acquire);
+	enum reac_rate_refuse refused = (enum reac_rate_refuse)
+		atomic_load_explicit(&n->pacer.rate_refused, memory_order_relaxed);
+
+	if (hz == n->rate_hz_last && asserted == n->rate_asserted_last &&
+	    reest == n->rate_reestablishing_last && refused == n->rate_refused_last)
+		return;                          /* unchanged: do not spam the update */
+	n->rate_hz_last = hz;
+	n->rate_asserted_last = asserted;
+	n->rate_reestablishing_last = reest;
+	n->rate_refused_last = refused;
+
+	char rate_s[16];
+	snprintf(rate_s, sizeof rate_s, "%d", hz);
+	char drivable[32];
+	reac_rate_drivable_csv(n->pacer.drivable_mask, drivable, sizeof drivable);
+
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_RATE,          rate_s,
+		REAC_PROP_RATE_SOURCE,   asserted ? REAC_RATE_SOURCE_ASSERTED : REAC_RATE_SOURCE_DEFAULT,
+		REAC_PROP_RATE_DRIVABLE, drivable,
+		REAC_PROP_RATE_STATE,    reest ? REAC_RATE_STATE_PENDING : REAC_RATE_STATE_APPLIED,
+		REAC_PROP_RATE_REFUSED,  reac_rate_refuse_code(refused),
+		NULL);
+	if (props) {
+		pw_stream_update_properties(n->stream, &props->dict);
+		pw_properties_free(props);
+	}
 }
 
 /* MAIN LOOP: stamp reac.discovery.* — WHAT IS ON THIS SEGMENT, as opposed to what this
@@ -912,6 +999,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	sink_publish_box_clock(n);     /* before the drain, so a change prints now */
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
+	sink_publish_rate_props(n);
 	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
 	sink_publish_latency(n);
 	sink_publish_health(n);
@@ -1044,6 +1132,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	 * shadows above were reset to the seeds, so these publish the current pacer
 	 * state immediately). */
 	sink_publish_link_props(n);
+	sink_publish_rate_props(n);
 	sink_publish_disco_props(n);
 	sink_publish_latency(n);
 	return 0;
