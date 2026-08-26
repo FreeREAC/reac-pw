@@ -418,6 +418,160 @@ int main(void)
 	CHK(reac_pacer_guard_high(1000) == REAC_PACER_GUARD_BURST_MULT * 1000);
 	CHK(reac_pacer_guard_high(1) == reac_pacer_guard_floor());
 
+	/* ---- runtime pace change: IN-PLACE RESYNC, not a re-enrol --------------
+	 * (2026-08-26-rate-change-jitter.md — the operator's ruling: "we only
+	 * need to change this pace in real time, resync with the new rate"). An
+	 * already-ESTABLISHED master's session — box identity, channel map,
+	 * head-amp table — must survive reac_pacer_apply_rate untouched; only the
+	 * cadence changes. Golden fps-derived numbers below are the exact
+	 * formulas reac_master_init also uses (reac_master.c ~441-473), evaluated
+	 * by hand for 8000 fps so a broken recompute shows as a wrong NUMBER, not
+	 * just a wrong shape. */
+	{
+		static const uint8_t OUR[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		static const uint8_t BOXM[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
+		static const uint8_t JOIN_BLK[32] = {
+		 0x04,0x03,0x00,0x14,0x00,0x02,0x00,0xfe,0x0f,0xf0,0x41,0x0a,0x00,0x00,0x12,0x12,
+		 0x01,0x00,0x06,0x00,0x01,0x00,0x78,0xf7,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		};
+		struct reac_console_cfg cfg = { .out_channels = 16, .console_field = 1 };
+		struct reac_pacer p6;
+		uint16_t cnt; int ix; long guard;
+
+		memset(&p6, 0, sizeof p6);
+		p6.fd = -1;
+		atomic_init(&p6.recognized_headamp_base, -1);
+		memcpy(p6.src, OUR, 6);
+		p6.fps = 4000;
+		p6.period_ns = reac_pacer_period_ns(4000);
+		p6.slot_period_ns = p6.period_ns;
+		p6.catchup_max_slots_cfg = 0;
+		reac_headamp_tx_init(&p6.headamp);
+		reac_master_init(&p6.master, p6.src, &cfg, 4000);   /* 48 kHz */
+		reac_master_set_headamp_src(&p6.master, &p6.headamp);
+		p6.prev_state = REAC_M_IDLE;
+		atomic_init(&p6.fsm_state, REAC_M_IDLE);
+		atomic_init(&p6.rate_hz, 48000);
+		atomic_init(&p6.rate_asserted, 0);
+		atomic_init(&p6.rate_reestablishing, 0);
+		p6.health_win_ns = 12345;   /* nonzero: prove apply_rate clears it */
+
+		/* Establish, same sequence run_establish() (test_reac_rate_cfg.c)
+		 * uses: set_box, drain the scene push, JOIN, then walk the
+		 * dwell+burst to ESTABLISHED. */
+		reac_master_set_box(&p6.master, 16, 8, 0x20);   /* S-1608: 16 in/8 out */
+		CHK(reac_master_has_box(&p6.master) == 1);
+		guard = 0;
+		while ((p6.master.scene_complete == 0 || p6.master.scene_inflight) &&
+		       guard++ < 4L * p6.master.cycle_len)
+			(void)reac_master_next(&p6.master, &cnt, &ix);
+		CHK(reac_master_rx(&p6.master, REAC_M_RX_BOX_JOIN, BOXM, JOIN_BLK) == 1);
+		CHK(p6.master.state == REAC_M_GRANTING);
+		int span = p6.master.grant_dwell +
+		           p6.master.grant_burst_len * p6.master.grant_stride + 4;
+		for (int i = 0; i < span; i++)
+			(void)reac_master_next(&p6.master, &cnt, &ix);
+		CHK(p6.master.state == REAC_M_ESTABLISHED);
+		/* fsm_state is normally kept in sync by note_transition, which only
+		 * runs from the real pacer_loop/rx_ingest paths; driving the FSM
+		 * directly via reac_master_next (as above) never touches it, so it is
+		 * synced by hand here — same convention section 3's p3 block uses. */
+		p6.fsm_state = p6.master.state;
+
+		/* Snapshot every piece of SESSION state a rate change must not move. */
+		uint8_t box_mac_before[6];
+		memcpy(box_mac_before, p6.master.box_mac, 6);
+		int alloc_base_before  = p6.master.alloc.base;
+		int alloc_width_before = p6.master.alloc.width;
+		int grant_len_before   = p6.master.grant_burst_len;
+		unsigned session_before = p6.master.session_seq;
+		const struct reac_headamp_tx *headamp_src_before = p6.master.headamp_src;
+		uint8_t chanmap_before[34];
+		memcpy(chanmap_before, p6.master.chanmap[0], 34);
+
+		int fps = reac_pacer_apply_rate(&p6, 96000);
+		CHK(fps == 8000);
+
+		/* THE FIX: the FSM never leaves ESTABLISHED — no re-enrol, no probe,
+		 * no forgotten box. This is the exact line the old always-re-init
+		 * code could not pass (it forced REAC_M_IDLE here). */
+		CHK(p6.master.state == REAC_M_ESTABLISHED);
+		CHK(atomic_load_explicit(&p6.fsm_state, memory_order_relaxed) ==
+		    REAC_M_ESTABLISHED);
+		CHK(reac_master_has_box(&p6.master) == 1);
+
+		/* Session facts: byte-for-byte unchanged. */
+		CHK(memcmp(p6.master.box_mac, box_mac_before, 6) == 0);
+		CHK(p6.master.alloc.base  == alloc_base_before);
+		CHK(p6.master.alloc.width == alloc_width_before);
+		CHK(p6.master.grant_burst_len == grant_len_before);
+		CHK(p6.master.session_seq == session_before);
+		CHK(p6.master.headamp_src == headamp_src_before);
+		CHK(p6.master.cfg.out_channels == 16 && p6.master.cfg.console_field == 1);
+		CHK(memcmp(p6.master.chanmap[0], chanmap_before, 34) == 0);
+
+		/* Cadence: recomputed for 8000 fps, matching reac_master_init's own
+		 * formulas evaluated by hand (not re-derived here, so a broken
+		 * recompute shows as a wrong number). */
+		CHK(p6.master.fps == 8000);
+		CHK(p6.master.cycle_len == 21556);
+		CHK(p6.master.probe_stride == 16);
+		CHK(p6.master.burst_end == 5440);
+		CHK(p6.master.sub02_off == 5456);
+		CHK(p6.master.chanmap_off == 11906);
+		CHK(p6.master.sub01_off == 21551);
+		CHK(p6.master.grant_frames == 1200);
+		CHK(p6.master.grant_dwell == 12800);
+		CHK(p6.master.link_check_reload == 52000);
+		CHK(p6.master.link_check == 52000);   /* freshly re-armed, not stale */
+
+		/* Pacer-level fields + the health-window re-baseline. */
+		CHK(p6.fps == 8000);
+		CHK(p6.period_ns == reac_pacer_period_ns(8000));
+		CHK(p6.health_win_ns == 0);
+		CHK(atomic_load_explicit(&p6.rate_hz, memory_order_relaxed) == 96000);
+		CHK(atomic_load_explicit(&p6.rate_asserted, memory_order_relaxed) == 1);
+		/* The FSM never left ESTABLISHED, so per rate_reestablishing's own
+		 * contract ("1 until the FSM reaches ESTABLISHED again") there is
+		 * nothing pending — it must read 0, never latch at 1 forever. */
+		CHK(atomic_load_explicit(&p6.rate_reestablishing, memory_order_relaxed) == 0);
+
+		/* The FSM keeps running normally afterwards — a plain heartbeat
+		 * cadence, no re-probe hiding behind the preserved state flag. */
+		for (int i = 0; i < 100; i++)
+			(void)reac_master_next(&p6.master, &cnt, &ix);
+		CHK(p6.master.state == REAC_M_ESTABLISHED);
+
+		/* A NOT-YET-ESTABLISHED master (IDLE here; PROBING/GRANTING share the
+		 * same code path — the guard is a single `state == ESTABLISHED`
+		 * equality, not a per-state enumeration) takes the ORIGINAL
+		 * cold-establish branch, byte-identical to before this change: FSM
+		 * forced to IDLE, rate_reestablishing set pending. This is the "byte-
+		 * exact boot" / "unestablished master behaves safely" guarantee. */
+		struct reac_pacer p7;
+		memset(&p7, 0, sizeof p7);
+		p7.fd = -1;
+		atomic_init(&p7.recognized_headamp_base, -1);
+		memcpy(p7.src, OUR, 6);
+		p7.fps = 4000;
+		p7.period_ns = reac_pacer_period_ns(4000);
+		reac_headamp_tx_init(&p7.headamp);
+		reac_master_init(&p7.master, p7.src, NULL, 4000);
+		p7.prev_state = REAC_M_IDLE;
+		atomic_init(&p7.fsm_state, REAC_M_IDLE);
+		atomic_init(&p7.rate_hz, 48000);
+		atomic_init(&p7.rate_asserted, 0);
+		atomic_init(&p7.rate_reestablishing, 0);
+		CHK(p7.master.state == REAC_M_IDLE);
+
+		int fps7 = reac_pacer_apply_rate(&p7, 96000);
+		CHK(fps7 == 8000);
+		CHK(p7.master.state == REAC_M_IDLE);
+		CHK(atomic_load_explicit(&p7.fsm_state, memory_order_relaxed) ==
+		    REAC_M_IDLE);
+		CHK(atomic_load_explicit(&p7.rate_reestablishing, memory_order_relaxed) == 1);
+	}
+
 	/* 4. live cadence on lo (best-effort; needs CAP_NET_RAW). */
 	struct reac_pacer p;
 	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = 8000, .prio = 0, .cpu = -1,

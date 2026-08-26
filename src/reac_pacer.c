@@ -957,6 +957,70 @@ void reac_pacer_request_rate(struct reac_pacer *p, int hz)
 	atomic_fetch_add_explicit(&p->rate_req_seq, 1, memory_order_release);
 }
 
+/* Recompute reac_master's FPS-DERIVED cadence constants IN PLACE, for a
+ * runtime pace change on an ALREADY-ESTABLISHED master
+ * (2026-08-26-rate-change-jitter.md — the operator's ruling: "we only need to
+ * change this pace in real time, resync with the new rate", not re-enrol a
+ * session that has not changed). Mirrors, field for field, the fps-derived
+ * block of reac_master_init (reac_master.c ~441-473) — duplicated here rather
+ * than exposed as a reac_master entry point because reac_master.c/.h are out
+ * of scope for this fix (a concurrent lane owns them). If reac_master ever
+ * grows its own in-place rate-update API this duplication should retire in
+ * its favor.
+ *
+ * Deliberately leaves untouched: m->state, m->cfg, m->chanmap*,
+ * m->announce_blk, m->enroll_blk, m->scene*, m->alloc, m->grant_burst*,
+ * m->headamp_src, m->box_mac, m->session_seq, m->commit_seen — the SESSION,
+ * not the cadence, and a runtime rate change must leave every bit of it
+ * standing for the FSM to stay ESTABLISHED. m->cycle_pos, m->announce_tick and
+ * m->est_chanmap_tick are also left alone: each is checked against the fps
+ * this function just updated on its NEXT tick (reac_master.c ~952-983, a
+ * modulo or a `< m->fps` threshold), so they self-correct within one control
+ * cycle without a reset — at worst a one-off phase shift in the housekeeping
+ * cadence, not a protocol fault.
+ *
+ * m->link_check IS reset (to the freshly computed m->link_check_reload):
+ * left standing, a peer-gone budget counted in OLD-fps ticks completes in the
+ * wrong WALL-CLOCK time under the NEW cadence — halved if the rate just
+ * doubled — and could false-drop a session the box never actually lost.
+ * Resetting it is exactly what every legitimate presence event already does
+ * (reac_master_rx), so the just-changed cadence starts with a fresh full
+ * window, the same courtesy a heartbeat gives it.
+ *
+ * grant_frames/grant_stride/grant_dwell are recomputed too even though they
+ * are inert while ESTABLISHED: they only matter if the box later drops and
+ * re-probes, and leaving them at the OLD fps's values would misdirect that
+ * FUTURE grant window's real-world duration. reac_master.c's
+ * REACPW_GRANT_DWELL_S diagnostic override is private to that file (out of
+ * scope) and is not replicated here — a live rate change falls back to the
+ * built-in ~1.6 s dwell for any grant that follows it. */
+static void master_update_fps_derived(struct reac_master *m, int fps)
+{
+	m->fps = fps > 0 ? fps : 8000;
+
+	m->cycle_len    = (int)(((int64_t)m->fps * 10778) / 4000);
+	m->probe_stride = m->fps / 500;
+	if (m->probe_stride < 1)
+		m->probe_stride = 1;
+	m->burst_end    = (341 - 1) * m->probe_stride;
+	m->sub02_off    = m->burst_end + m->probe_stride;
+	m->chanmap_off  = (int)(((int64_t)m->fps * 5953) / 4000);
+	m->sub01_off    = m->cycle_len - 5;
+
+	m->grant_frames = (m->fps * 15) / 100;
+	if (m->grant_frames < 1)
+		m->grant_frames = 1;
+	m->grant_stride = REAC_M_GRANT_STRIDE;
+	m->grant_dwell  = (m->fps * REAC_M_GRANT_DWELL_SECONDS_X10) / 10;
+	if (m->grant_dwell < 1)
+		m->grant_dwell = 1;
+
+	m->link_check_reload = (m->fps * REAC_M_LINKCHECK_SECONDS_X10) / 10;
+	if (m->link_check_reload < 1)
+		m->link_check_reload = 1;
+	m->link_check = m->link_check_reload;
+}
+
 int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 {
 	int fps = hz / REAC_SAMPLES_PER_PKT;
@@ -970,30 +1034,66 @@ int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 	 * way reac_pacer_open resolved it for the opening one. */
 	p->catchup_max_slots = resolve_catchup_slots(p->catchup_max_slots_cfg, fps);
 
-	/* RE-ESTABLISH: re-run the same init reac_pacer_open used to bring the FSM
-	 * up the first time, at the new fps. This is what makes the change an
-	 * INTERNAL re-establish rather than a redesign — the box re-enrolls
-	 * through the exact grant/dwell machinery a cold start uses, just scaled
-	 * to a different cadence. The console cfg survives (m.cfg was set once
-	 * from the operator's --mixer/--box choice and a rate change does not
-	 * touch it); m->cfg.out_channels == 0 means "never configured", the same
-	 * sentinel reac_pacer_open reads off cfg->console. head-amp is NOT
-	 * replayed here — reac_master_set_headamp_src below re-points the sweep at
-	 * the SAME table (p->headamp), so the operator's current settings enroll
-	 * again exactly as they would on any other establishment. */
-	struct reac_console_cfg saved_cfg = p->master.cfg;
-	const struct reac_console_cfg *ccfg = saved_cfg.out_channels ? &saved_cfg : NULL;
-	/* Captured BEFORE reac_master_init overwrites p->master: note_transition and
-	 * sync_published_box normally read the OLD state straight off p->master, but
-	 * here the re-init that PRODUCES the new state has to run first (it is what
-	 * computes the new cfg/fps-derived fields), so the old values have to be
-	 * saved by hand instead of read back out of a struct that no longer holds
-	 * them. Getting this order backwards would log the drop with an
-	 * already-zeroed box_mac/drop_reason — worth being explicit about here. */
+	/* Re-baseline the health window (reac_pacer_health_poll): drift_ppm
+	 * compares the NEW nominal period against emitted_ps, an average of
+	 * recent tx intervals that still reflects the OLD rate for a window.
+	 * Left standing, the very next poll reports new-nominal-vs-old-average as
+	 * a huge transient (measured 48->96k: +334025 ppm, decaying over ~20 s) —
+	 * a measurement artifact, not audio jitter. Zeroing health_win_ns makes
+	 * the next poll re-open the window exactly as it does on its first ever
+	 * call, so the rate this window measures against is the one just applied. */
+	p->health_win_ns = 0;
+
 	enum reac_master_state old_state = p->master.state;
 	uint8_t old_box_mac[6];
 	memcpy(old_box_mac, p->master.box_mac, 6);
 	int was_established = (old_state == REAC_M_ESTABLISHED);
+
+	if (was_established) {
+		/* IN-PLACE RESYNC, not a re-enrol: the session does not change with
+		 * the cadence — same box, same channel map, same head-amp — so
+		 * forcing reac_master_init here would re-run the full probe/grant/
+		 * chanmap machinery for no protocol reason, starving tx for ~8 s
+		 * while the box re-earns an enrollment it never lost (measured,
+		 * 2026-08-26-rate-change-jitter.md). Recompute only the fps-derived
+		 * cadence and let the box re-lock its frame PLL to the new emission
+		 * rate on its own; nothing is re-granted, nothing is forgotten. */
+		master_update_fps_derived(&p->master, fps);
+
+		uint8_t blk[32] = { REAC_PEV_CAUSE_RATE_CHANGE };
+		pev_push(p, REAC_PEV_STATE, (uint8_t)old_state, (uint8_t)old_state,
+		        old_box_mac, blk);
+
+		atomic_store_explicit(&p->rate_hz, hz, memory_order_release);
+		atomic_store_explicit(&p->rate_asserted, 1, memory_order_release);
+		/* The FSM never left ESTABLISHED, so per this flag's own contract
+		 * ("1 from an accepted request until the FSM reaches ESTABLISHED
+		 * again") there is nothing to wait for — note_transition (the only
+		 * other place that clears it) will never fire, since no transition
+		 * happens, so this must be set to 0 here or it would latch at 1
+		 * forever. */
+		atomic_store_explicit(&p->rate_reestablishing, 0, memory_order_release);
+		/* The FSM stayed ESTABLISHED, but the published mirror is otherwise
+		 * only written by note_transition on a real transition — which never
+		 * fires here. Publish it so a cross-thread reader and the standing
+		 * props see the true state right after the resync, not a stale one. */
+		atomic_store_explicit(&p->fsm_state, p->master.state, memory_order_release);
+		return fps;
+	}
+
+	/* No live session to protect (IDLE/PROBING/GRANTING): the existing
+	 * cold-establish path is correct and simplest, byte-identical to before
+	 * this change. RE-ESTABLISH: re-run the same init reac_pacer_open used to
+	 * bring the FSM up the first time, at the new fps. The console cfg
+	 * survives (m.cfg was set once from the operator's --mixer/--box choice
+	 * and a rate change does not touch it); m->cfg.out_channels == 0 means
+	 * "never configured", the same sentinel reac_pacer_open reads off
+	 * cfg->console. head-amp is NOT replayed here — reac_master_set_headamp_src
+	 * below re-points the sweep at the SAME table (p->headamp), so the
+	 * operator's current settings enroll again exactly as they would on any
+	 * other establishment. */
+	struct reac_console_cfg saved_cfg = p->master.cfg;
+	const struct reac_console_cfg *ccfg = saved_cfg.out_channels ? &saved_cfg : NULL;
 
 	reac_master_init(&p->master, p->src, ccfg, fps);
 	reac_master_set_headamp_src(&p->master, &p->headamp);
@@ -1004,12 +1104,10 @@ int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 	memset(p->rx_since_change, 0, sizeof p->rx_since_change);
 	p->probing_slots = 0;
 
-	/* A RE-ESTABLISHMENT IS A NEW SESSION (note_transition's own law): end the
-	 * old one if it was live. This is deliberately NOT counted into p->drops[]
-	 * — those count FAULTS (grant timeout, peer-gone, BYE), and an operator's
-	 * `reac.cfg.rate` is not one. */
-	if (p->on_session && was_established)
-		p->on_session(p->session_ctx, NULL, 0);
+	/* No p->on_session(NULL, 0) call here: that fires a session END, and
+	 * was_established is always false on this path — the ESTABLISHED case
+	 * returned above already, so there is no live session for this branch to
+	 * end. A master that was only PROBING/GRANTING never had one. */
 
 	/* The box the FSM just forgot is no longer recognized either — the same
 	 * consequence enter_probing's reac_master_forget_box has on any other
