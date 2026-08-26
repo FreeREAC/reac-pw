@@ -361,6 +361,24 @@ static void note_transition(struct reac_pacer *p, enum reac_master_state from,
  * it — otherwise reac.box-model / reac.box-width keep naming a box that has left
  * the wire, and a consumer computing a head-amp address from that width addresses
  * a box that is not there. Call after every step of the master. */
+/* Seqlock writer bracket for rx_identity (see reac_pacer.h). The pacer thread is
+ * the ONLY writer, so no writer lock is needed — the bracket just publishes an
+ * odd sequence while the struct is mid-write and an even one when it is stable,
+ * with release fences so a reader that saw the same even sequence twice saw a
+ * consistent snapshot. */
+static inline unsigned identity_write_begin(struct reac_pacer *p)
+{
+	unsigned s = atomic_load_explicit(&p->identity_seq, memory_order_relaxed);
+	atomic_store_explicit(&p->identity_seq, s + 1, memory_order_relaxed);  /* odd */
+	atomic_thread_fence(memory_order_release);
+	return s;
+}
+static inline void identity_write_end(struct reac_pacer *p, unsigned s)
+{
+	atomic_thread_fence(memory_order_release);
+	atomic_store_explicit(&p->identity_seq, s + 2, memory_order_relaxed);  /* even */
+}
+
 static void sync_published_box(struct reac_pacer *p)
 {
 	if (!reac_master_has_box(&p->master)) {
@@ -371,12 +389,33 @@ static void sync_published_box(struct reac_pacer *p)
 		/* Forget the declared geometry with the box, so a re-declaration after
 		 * a drop re-fires set_box instead of deduping into silence. */
 		p->declared_in = p->declared_out = 0;
+		/* And forget the box's identity — a NEW box on this segment must not
+		 * wear the departed one's firmware/hw until it answers for itself. */
+		if (p->rx_identity.has_fw || p->rx_identity.has_model_name ||
+		    p->rx_identity.has_hw_block) {
+			unsigned s = identity_write_begin(p);
+			reac_identity_init(&p->rx_identity);
+			identity_write_end(p, s);
+		}
 	} else {
 		/* The base the master is actually granting with, which is the one the
 		 * box announced. Mirrored, never recomputed downstream. */
 		atomic_store_explicit(&p->recognized_headamp_base,
 		                      p->master.alloc.base, memory_order_release);
 	}
+}
+
+void reac_pacer_read_identity(const struct reac_pacer *p, struct reac_identity *out)
+{
+	unsigned s1, s2;
+	do {
+		s1 = atomic_load_explicit(&p->identity_seq, memory_order_acquire);
+		if (s1 & 1u)
+			continue;                       /* a write is in flight */
+		*out = p->rx_identity;                  /* struct-copy the snapshot */
+		atomic_thread_fence(memory_order_acquire);
+		s2 = atomic_load_explicit(&p->identity_seq, memory_order_relaxed);
+	} while ((s1 & 1u) || s1 != s2);
 }
 
 void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len)
@@ -397,6 +436,25 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 		int mi = reac_disco_model_index(sight.model);
 		pev_push(p, REAC_PEV_SIGHTING, (uint8_t)sight.role,
 		         (uint8_t)(mi + 1), sight.mac, NULL);
+	}
+
+	/* IDENTITY replies, BEFORE the FSM filter. The box answers the identity poll
+	 * the grant sweep's group B sends (DT1 tag 0x0500) with single-record replies
+	 * — firmware (0x0000) and the hardware block (0x0600). The master classifier
+	 * discards them as a link-4 record it has no FSM action for, so extract here,
+	 * on the same reasoning as the discovery pass above: recording what the box
+	 * SAID never alters what the master DOES. Fold into rx_identity under the
+	 * seqlock so the non-RT property poll (reac.box-firmware / reac.box-hw) reads a
+	 * consistent snapshot. */
+	{
+		uint16_t addr_lo;
+		const uint8_t *payload;
+		size_t plen;
+		if (reac_ctrl_identity_reply(frame, len, &addr_lo, &payload, &plen) == 1) {
+			unsigned s = identity_write_begin(p);
+			reac_identity_ingest(&p->rx_identity, addr_lo, payload, plen);
+			identity_write_end(p, s);
+		}
 	}
 
 	struct reac_ctrl_parsed parsed;

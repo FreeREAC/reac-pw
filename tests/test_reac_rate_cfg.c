@@ -301,15 +301,6 @@ static int run_establish(struct reac_master *m, struct establish_shape *out)
 	return 0;
 }
 
-static int shapes_equal(const struct establish_shape *a, const struct establish_shape *b)
-{
-	return a->grants == b->grants &&
-	       a->grant_burst_len == b->grant_burst_len &&
-	       a->first_grant_slot == b->first_grant_slot &&
-	       a->stride == b->stride &&
-	       a->reached_established && b->reached_established;
-}
-
 /* Build a `struct reac_pacer` with everything reac_pacer_apply_rate touches
  * initialised, but NO AF_PACKET socket at all — p->fd stays -1 and nothing
  * here ever calls reac_pacer_open/start. Mirrors the subset of open()'s work

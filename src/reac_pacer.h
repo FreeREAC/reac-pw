@@ -36,6 +36,7 @@
 #include "reac_headamp_tx.h"
 #include "reac_clock.h"
 #include "reac_rate_cfg.h"
+#include <reac/reac_identity.h>   /* the box identity-page decode (DT1 tag 0x0500) */
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
 
@@ -428,6 +429,17 @@ struct reac_pacer {
 	 * -1 means NO BOX IS ON THE WIRE — the same state recognized_box == NULL
 	 * reports, not an established box whose base is unknown. */
 	_Atomic int recognized_headamp_base;
+	/* THE BOX'S OWN IDENTITY, decoded from the identity-page replies (DT1 tag
+	 * 0x0500) the grant sweep's group B polls. Written ONLY on the pacer thread as
+	 * replies arrive (reac_pacer_rx_ingest); read by the non-RT property poll
+	 * (reac.box-firmware / reac.box-hw) on another thread. A pointer/int atomic is
+	 * not enough — the firmware, name and hw block do not fit one word — so the two
+	 * cross a SEQLOCK: `identity_seq` is even when `rx_identity` is stable and odd
+	 * while the writer is mid-update, and the reader retries until it reads the same
+	 * even sequence on both sides. The writer is single (the pacer thread), so no
+	 * writer lock is needed. Reset to "nothing seen" when the box is forgotten. */
+	struct reac_identity rx_identity;
+	_Atomic unsigned identity_seq;
 	/* The geometry the box DECLARED (config-announce port table, libreac
 	 * reac_ports_parse) and that reac_master_set_box last applied. Pacer-thread
 	 * only (rx_ingest + sync_published_box run there): the dedup that stops the
@@ -576,6 +588,14 @@ int  reac_pacer_submit(struct reac_pacer *p, const uint8_t *frame, uint16_t n);
  * the rx_* counters, mirrors fsm_state, and pushes log events into the ring.
  * The pacer's per-slot drain calls this for every recv()'d frame. */
 void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len);
+
+/* Read the box's decoded identity (firmware / model / hw block) into *out, a
+ * consistent snapshot lifted across the seqlock — safe from any non-RT thread
+ * (the property poll). The result carries its own has_* flags: an address the box
+ * never answered stays a fact, not a zero. Never blocks meaningfully — identity
+ * writes happen only as a box establishes, so the reader reads a stable sequence
+ * at once in practice. */
+void reac_pacer_read_identity(const struct reac_pacer *p, struct reac_identity *out);
 
 /* CONSUMER side (any non-RT thread, e.g. a 200 ms main-loop timer): drain the
  * event ring, formatting each event to `out` (one line per event). Returns the

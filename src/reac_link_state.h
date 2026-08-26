@@ -40,6 +40,15 @@
 #define REAC_PROP_BOX_MODEL  "reac.box-model"
 #define REAC_PROP_BOX_WIDTH  "reac.box-width"
 
+/* The box's OWN identity, decoded from the identity-page replies (DT1 tag 0x0500)
+ * the grant sweep polls — beside reac.box-model, which comes from the geometry.
+ * reac.box-firmware is the version as "D.DDD" (S-0808 1.003, …); reac.box-hw is
+ * the raw hardware-identity block as hex, carried UNINTERPRETED (its meaning is
+ * unresolved). Both are the EMPTY STRING until the box answers the poll (and again
+ * once it drops) — a consumer reads "" as "not answered", a fact, not a zero. */
+#define REAC_PROP_BOX_FIRMWARE "reac.box-firmware"
+#define REAC_PROP_BOX_HW       "reac.box-hw"
+
 /* WHERE the box identity came from. There is exactly one possible answer while a
  * box is known — the wire — and saying so explicitly is the point: reac-pw has no
  * configured box any more (the master's --box was retired 2026-08-05), so a
