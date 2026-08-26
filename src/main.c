@@ -953,6 +953,56 @@ static void listener_close(struct listener *L, struct pw_loop *loop)
 	reac_seglock_release(&L->seglock);
 }
 
+/* --- clean segment re-open on a REAC rate change (2026-08-26) ----------------
+ * The operator ruled re-establishment acceptable: a REAC pace change re-clocks
+ * the segment and the box re-enrolls. We do it the fresh-launch way — tear the
+ * segment down and bring it back up at the new rate — so the pacer, ring and
+ * nodes are all clean, instead of the in-place reconnect that left the ring
+ * running deep and dropping slots for ~1 min (2026-08-26-rate-change-jitter). */
+static void listener_reopen_at_rate(struct listener *L, struct pw_loop *loop, int hz)
+{
+	fprintf(stderr, "reac-pw: %sREAC rate -> %d Hz: clean segment re-open (box re-enrolls)\n",
+	        L->cfg.tag, hz);
+	if (L->opened)
+		listener_close(L, loop);
+	L->opened = 0;
+	L->rx_started = 0;
+	L->cfg.rxcfg.forced_rate = hz;
+	if (listener_open(L, loop) != 0) {
+		fprintf(stderr, "reac-pw: %sre-open at %d Hz FAILED — segment down\n", L->cfg.tag, hz);
+		return;
+	}
+	L->opened = 1;
+	if (reac_rx_start(&L->rx) != 0) {
+		fprintf(stderr, "reac-pw: %sre-open RX start FAILED — segment down\n", L->cfg.tag);
+		listener_close(L, loop);
+		L->opened = 0;
+		return;
+	}
+	L->rx_started = 1;
+}
+
+struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
+
+/* ONE main-loop poll (200 ms) for every segment, not per-listener: a
+ * listener_close from inside a per-listener timer would free that very timer.
+ * Runs on the loop thread, never inside a node callback, so the destroy+rebuild
+ * is safe. */
+static void on_rate_reopen_timer(void *data, uint64_t exp)
+{
+	(void)exp;
+	struct rate_reopen_ctx *c = data;
+	for (int i = 0; i < c->n; i++) {
+		struct listener *L = &c->listeners[i];
+		if (!L->opened || !L->sink)
+			continue;
+		int hz = reac_sink_node_take_reopen_rate(L->sink);
+		if (hz > 0)
+			listener_reopen_at_rate(L, c->loop, hz);
+	}
+}
+
+
 int main(int argc, char **argv)
 {
 	/* HELP IS PURE TEXT AND MUST NOT REQUIRE A CAPABILITY. Asking how to run this
@@ -1341,6 +1391,14 @@ int main(int argc, char **argv)
 		pw_main_loop_destroy(g_loop);
 		pw_deinit();
 		return 1;
+	}
+
+	struct rate_reopen_ctx rrctx = { listeners, n_listeners, loop };
+	struct spa_source *rate_timer = pw_loop_add_timer(loop, on_rate_reopen_timer, &rrctx);
+	if (rate_timer) {
+		struct timespec first = { 0, 200 * 1000000L };
+		struct timespec interval = { 0, 200 * 1000000L };
+		pw_loop_update_timer(loop, rate_timer, &first, &interval, false);
 	}
 
 	pw_main_loop_run(g_loop);

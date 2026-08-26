@@ -105,6 +105,10 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
  * decide the reac-capture / reac-playback widths. */
 const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n);
 
+/* Take (read+clear) the pending accepted reac.cfg.rate for a clean segment re-open,
+ * 0 if none. Main's poll timer calls this; see reac_sink_node.c param_changed. */
+int reac_sink_node_take_reopen_rate(struct reac_sink_node *n);
+
 /* Wire the peer reac-capture node's SLOT (#208) so the sink's main-loop badge timer
  * also keeps the source node's reac.link-state / box-model / box-width in sync — the
  * capture node has no pacer handle of its own. Pass the address of main's source-node

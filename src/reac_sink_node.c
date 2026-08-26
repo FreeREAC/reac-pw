@@ -97,6 +97,8 @@ struct reac_sink_node {
 	int pacer_open;
 	int channels;             /* current filter port count; 0 = no filter yet */
 	int sample_rate;
+	_Atomic int reopen_rate;  /* accepted reac.cfg.rate awaiting main's clean
+	                           * segment re-open (0 = none); see param_changed */
 	uint8_t src[6];           /* our master MAC */
 	struct pw_loop *loop;
 	const char *inst;         /* per-instance node suffix (for filter (re)build) */
@@ -600,8 +602,14 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 			? REAC_RATE_REFUSE_MALFORMED
 			: reac_rate_cfg_decide(REAC_ROLE_MASTER, req_hz, n->pacer.drivable_mask);
 		atomic_store_explicit(&n->pacer.rate_refused, (int)refusal, memory_order_relaxed);
-		if (refusal == REAC_RATE_REFUSE_NONE)
-			reac_pacer_request_rate(&n->pacer, req_hz);
+		if (refusal == REAC_RATE_REFUSE_NONE && req_hz != n->sample_rate)
+			/* Accepted REAC pace change: re-clocks the segment, box re-enrolls
+			 * (operator 2026-08-26: re-establishment is acceptable). Stash it for
+			 * main's poll timer to apply as a CLEAN segment re-open (listener
+			 * close+open at the new rate = fresh pacer/ring/nodes, the fresh-launch
+			 * state) instead of the in-place reconnect that left the ring deep and
+			 * jittering ~1 min (2026-08-26-rate-change-jitter). */
+			atomic_store_explicit(&n->reopen_rate, req_hz, memory_order_relaxed);
 		/* A refusal moves nothing: no request reaches the pacer, so fps,
 		 * period_ns and the master FSM are untouched — the refused prop
 		 * above is the only thing that changes. */
@@ -1405,6 +1413,14 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	sink_publish_disco_props(n);
 	sink_publish_latency(n);
 	return 0;
+}
+
+/* main's rate-reopen poll reads and CLEARS the pending accepted rate here; nonzero
+ * means "re-open this segment at this Hz". Atomic-exchange so a second poll before
+ * the re-open completes cannot act on it twice. */
+int reac_sink_node_take_reopen_rate(struct reac_sink_node *n)
+{
+	return n ? atomic_exchange_explicit(&n->reopen_rate, 0, memory_order_relaxed) : 0;
 }
 
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
