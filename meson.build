@@ -563,6 +563,24 @@ sink_format_test = executable('test_reac_sink_format',
   dependencies : [spa_dep, libreac_dep])
 test('reac_sink_format', sink_format_test)
 
+# --- unit test: reac_source_node's rate renegotiation (one wire, one rate) ---
+# (2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b: "capture AND playback
+# follow it together"). reac_source_node.c's source_reconnect_rate/reac_
+# source_node_publish_rate are not pure (they own a live pw_stream, like the
+# sink's own reconnect) and are not exercised here; what IS pure and is
+# exactly what those functions call is reac_sink_format.h's shared builder +
+# decisions, now proven at the source's own call shape: the pod carries the
+# new rate at real REAC box widths (8/16/32/40), the reconnect gate fires
+# exactly on an accepted change and stays false on a matching or refused
+# rate, and the post-attempt rate matches the connect outcome. Sabotage-
+# verified: an inverted gate would silently reintroduce the exact bug this
+# task fixes (capture stuck presenting the boot rate).
+source_format_test = executable('test_reac_source_format',
+  ['tests/test_reac_source_format.c', 'src/reac_sink_format.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [spa_dep, libreac_dep])
+test('reac_source_format', source_format_test)
+
 # --- unit test: the GRANT enrollment sweep — allocator + generated group A -----
 # The fix for "link established != channels enrolled" (GRANT-SWEEP.md, 2026-07-17).
 # Pins the slot ALLOCATOR (observed bases, the 0x2f fabric ceiling), the sweep SHAPE

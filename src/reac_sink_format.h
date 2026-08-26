@@ -31,18 +31,29 @@
  * pure and provable is what n->sample_rate should become given the
  * attempt's outcome — see the function's own comment.
  *
- * SCOPE: reac-playback (the master TX sink) only. Its presented rate is
- * authoritatively the pacer's rate_hz — the same atomic sink_publish_rate_
- * props already reads — so the pacer's existing accepted-rate signal is the
- * ONE path this renegotiation rides. reac-capture (reac_source_node) is
- * DELIBERATELY NOT extended here: its Format rate is `reac_rx`'s own
- * recovered/forced wire rate, a separate mechanism with no live update path
- * of its own today (set once at reac_rx_open, never re-detected). Wiring it
- * to reac_pacer_apply_rate would invent a second, parallel rate channel
- * exactly where the discipline governing this increment forbids one; giving
- * reac-capture a live rate would first need reac_rx itself to re-detect or
- * be told the new rate, which is a reac_rx change, not a format-pod change,
- * and is out of this increment. */
+ * SCOPE, REVISED (2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b: "a rate
+ * is ONE wire rate — capture AND playback follow it together"): this module's
+ * pod-builder and both PURE decisions are node-agnostic (channels + rate in,
+ * a pod or a verdict out) and are now shared by reac_source_node.c's own
+ * renegotiate path (source_reconnect_rate), not reac-playback alone. That
+ * sharing is deliberate, not incidental: the two nodes must renegotiate to
+ * the exact same shape, and a second hand-copied builder is exactly the kind
+ * of per-node split the spec forbids.
+ *
+ * The two nodes still differ in WHICH rate they follow. reac-playback (the
+ * master TX sink) is authoritatively the pacer's rate_hz — the same atomic
+ * sink_publish_rate_props already reads — so a MASTER's reac-capture also
+ * follows rate_hz: it is the same wire, so it is the same fact, pushed to the
+ * peer node via reac_source_node_publish_rate (see reac_sink_node.c's
+ * sink_publish_rate_props, which calls it once it has decided the pacer's
+ * rate moved). A SLAVE's reac-capture rate is `reac_rx`'s own recovered/
+ * forced wire rate, a separate mechanism with no live update path of its own
+ * today (set once at reac_rx_open, never re-detected) — wiring that live
+ * would first need reac_rx itself to re-detect or be told the new rate,
+ * which is a reac_rx change, not a format-pod change, and stays a TODO (see
+ * reac_source_node.h's reac_source_node_publish_rate doc); a slave rate
+ * change is not operator-driven the way a master's `reac.cfg.rate` write is,
+ * so this is not on the path any current control exercises. */
 #ifndef REAC_SINK_FORMAT_H
 #define REAC_SINK_FORMAT_H
 

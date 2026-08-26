@@ -908,6 +908,21 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 	if (reac_sink_format_needs_update(n->sample_rate, hz))
 		sink_reconnect_rate(n, hz);
 
+	/* ONE WIRE, ONE RATE (2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b):
+	 * push the same accepted rate onto the peer reac-capture node so it
+	 * presents the same Format the wire is actually running at — the gap that
+	 * left reac-capture's Format stuck at boot rate while reac-playback's
+	 * followed. This is not a second decision: `hz` (the pacer's rate_hz) IS
+	 * the wire rate for a master, and peer_src is wired only in the master
+	 * role (main.c calls reac_sink_node_set_peer_source only for c->role ==
+	 * REAC_ROLE_MASTER), so this call is reached only where that fact holds.
+	 * reac_source_node_publish_rate is itself idempotent (its own reac_sink_
+	 * format_needs_update check), so calling it here — inside the branch that
+	 * already gates on THIS node's rate having moved — costs nothing extra on
+	 * a poll where nothing changed. */
+	if (n->peer_src && *n->peer_src)
+		reac_source_node_publish_rate(*n->peer_src, hz);
+
 	char rate_s[16];
 	snprintf(rate_s, sizeof rate_s, "%d", hz);
 	char drivable[32];
