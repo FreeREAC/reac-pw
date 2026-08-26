@@ -348,24 +348,24 @@ static int test_apply_rate_shape(void)
 	CHK(p.fps == 8000);
 	CHK(p.period_ns == reac_pacer_period_ns(8000));
 
-	/* NEW CONTRACT (2026-08-26, operator: "we only need to change this pace in
-	 * real time, resync with the new rate"). An ESTABLISHED master resyncs IN
-	 * PLACE: the cadence is recomputed for the new fps, but the FSM stays
-	 * ESTABLISHED, the box is kept, and rate_reestablishing stays 0 — no full
-	 * re-enrol, no ~8 s tx stall. The box re-locks its frame clock to the new
-	 * cadence; the session, channel map and head-amp survive untouched. */
-	CHK(p.master.state == REAC_M_ESTABLISHED);
-	CHK(reac_master_has_box(&p.master) == 1);
-	CHK(atomic_load_explicit(&p.fsm_state, memory_order_relaxed) == REAC_M_ESTABLISHED);
+	/* Immediate consequences of the re-establish: the FSM is back at IDLE (the
+	 * pacer's very next slot would promote it to PROBING, exactly a cold
+	 * start), the box is forgotten, and the standing-rate props say so. */
+	CHK(p.master.state == REAC_M_IDLE);
+	CHK(reac_master_has_box(&p.master) == 0);
+	CHK(atomic_load_explicit(&p.fsm_state, memory_order_relaxed) == REAC_M_IDLE);
 	CHK(atomic_load_explicit(&p.rate_hz, memory_order_relaxed) == 96000);
 	CHK(atomic_load_explicit(&p.rate_asserted, memory_order_relaxed) == 1);
-	CHK(atomic_load_explicit(&p.rate_reestablishing, memory_order_relaxed) == 0);
+	CHK(atomic_load_explicit(&p.rate_reestablishing, memory_order_relaxed) == 1);
 
-	/* The console cfg and the session survive a pace change — only the cadence
-	 * moves (the spec: "a change ... re-clocks the segment", nothing else). */
+	/* The console cfg is NOT reset by a rate change — only establishment is
+	 * redone (the spec: "a change ... re-clocks the segment", nothing else). */
 	CHK(p.master.cfg.out_channels == 16 && p.master.cfg.console_field == 1);
 
-	(void)before;
+	struct establish_shape after;
+	CHK(run_establish(&p.master, &after) == 0);
+	CHK(shapes_equal(&before, &after));
+
 	return 0;
 }
 
@@ -456,10 +456,7 @@ static int test_two_segments_are_independent(void)
 	CHK(a_fps == 8000);
 	CHK(a.fps == 8000);
 	CHK(atomic_load_explicit(&a.rate_hz, memory_order_relaxed) == 96000);
-	/* A is ESTABLISHED, so the change is an in-place resync: the FSM stays
-	 * established and rate_reestablishing stays 0 (no re-enrol). */
-	CHK(a.master.state == REAC_M_ESTABLISHED);
-	CHK(atomic_load_explicit(&a.rate_reestablishing, memory_order_relaxed) == 0);
+	CHK(atomic_load_explicit(&a.rate_reestablishing, memory_order_relaxed) == 1);
 
 	/* B: untouched, byte-for-byte. */
 	CHK(b.fps == b_fps);
