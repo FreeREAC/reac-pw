@@ -419,6 +419,67 @@ static int test_narrow_mask_refuses_and_defaults_lower(void)
 	return 0;
 }
 
+/* ---- part 3: ONE DAEMON, N LISTENERS — segment independence -------------
+ *
+ * (docs/design/specs/2026-08-20-reac-auto-spine.md §5, the openmixer tree).
+ * main.c now opens one `struct reac_pacer` per configured interface against a
+ * SHARED PipeWire loop instead of one per process. Nothing in reac_pacer.c
+ * changed to make that safe — every field this test touches was already
+ * instance-owned — but the CLAIM that it is safe had never been exercised
+ * with two instances alive at once, and one true singleton *did* exist one
+ * layer up (main.c's segment lock was a function-local `static`, which a
+ * per-listener loop would have shared across every segment had it stayed
+ * that way). This is the regression net for the instance-independence claim
+ * the whole multi-listener shape rests on: two bare pacers, this rig's
+ * actual pair (m200 unnamed + m5000 s1608-shaped), each reaching ESTABLISHED
+ * on its own, and a `reac.cfg.rate` assertion on one leaving the other's
+ * fps, period, FSM state and rate props byte-for-byte untouched. */
+static int test_two_segments_are_independent(void)
+{
+	struct reac_console_cfg cfg_a = { .out_channels = 16, .console_field = 0 };  /* m200 */
+	struct reac_console_cfg cfg_b = { .out_channels = 16, .console_field = 1 };  /* m5000 */
+	struct reac_pacer a, b;
+	bare_pacer_init(&a, 4000, &cfg_a);   /* 48 kHz, like this rig's segment A */
+	bare_pacer_init(&b, 4000, &cfg_b);   /* 48 kHz, like this rig's segment B */
+
+	struct establish_shape sh_a, sh_b;
+	CHK(run_establish(&a.master, &sh_a) == 0);
+	CHK(sh_a.reached_established);
+	CHK(run_establish(&b.master, &sh_b) == 0);
+	CHK(sh_b.reached_established);
+
+	/* Snapshot everything a rate change on A must not touch on B. */
+	int b_fps = b.fps;
+	long b_period = b.period_ns;
+	enum reac_master_state b_state = b.master.state;
+	int b_rate_hz        = atomic_load_explicit(&b.rate_hz, memory_order_relaxed);
+	int b_rate_asserted  = atomic_load_explicit(&b.rate_asserted, memory_order_relaxed);
+	int b_reestablishing = atomic_load_explicit(&b.rate_reestablishing, memory_order_relaxed);
+	int b_out_channels   = b.master.cfg.out_channels;
+	int b_console_field  = b.master.cfg.console_field;
+
+	/* The write door: reac_rate_cfg_decide (pure) then reac_pacer_apply_rate —
+	 * on_param_changed's own sequence — applied ONLY to segment A. */
+	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 96000, a.drivable_mask) == REAC_RATE_REFUSE_NONE);
+	int a_fps = reac_pacer_apply_rate(&a, 96000);
+	CHK(a_fps == 8000);
+	CHK(a.fps == 8000);
+	CHK(atomic_load_explicit(&a.rate_hz, memory_order_relaxed) == 96000);
+	CHK(atomic_load_explicit(&a.rate_reestablishing, memory_order_relaxed) == 1);
+
+	/* B: untouched, byte-for-byte. */
+	CHK(b.fps == b_fps);
+	CHK(b.period_ns == b_period);
+	CHK(b.master.state == b_state);
+	CHK(atomic_load_explicit(&b.rate_hz, memory_order_relaxed) == b_rate_hz);
+	CHK(atomic_load_explicit(&b.rate_asserted, memory_order_relaxed) == b_rate_asserted);
+	CHK(atomic_load_explicit(&b.rate_reestablishing, memory_order_relaxed) == b_reestablishing);
+	CHK(b.master.cfg.out_channels == b_out_channels);
+	CHK(b.master.cfg.console_field == b_console_field);
+
+	return 0;
+}
+
 int main(void)
 {
 	CHK(test_closed_list_and_bits() == 0);
@@ -429,9 +490,12 @@ int main(void)
 	CHK(test_apply_rate_shape() == 0);
 	CHK(test_refused_rate_moves_nothing() == 0);
 	CHK(test_narrow_mask_refuses_and_defaults_lower() == 0);
+	CHK(test_two_segments_are_independent() == 0);
 
-	printf("OK: reac.cfg.rate — closed list, drivability, decide/parse, and the "
+	printf("OK: reac.cfg.rate — closed list, drivability, decide/parse, the "
 	       "pacer-level internal re-establish (shape-identical at a new rate; a "
-	       "refused rate moves nothing; a narrowed segment defaults lower)\n");
+	       "refused rate moves nothing; a narrowed segment defaults lower), and "
+	       "two segments (auto-spine §5's N listeners) staying independent under "
+	       "a rate change\n");
 	return 0;
 }

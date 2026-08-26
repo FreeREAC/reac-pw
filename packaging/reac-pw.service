@@ -6,12 +6,27 @@ Wants=pipewire.service
 
 [Service]
 Type=simple
-# Edit /etc/reac-pw/reac-pw.conf to set REAC_IFACE / REAC_RATE.
-EnvironmentFile=/etc/reac-pw/reac-pw.conf
-ExecStart=/usr/bin/reac-pw --live ${REAC_IFACE} --rate ${REAC_RATE}
-# raw 0x8819 capture/emit without running as root
-AmbientCapabilities=CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_RAW
+# ONE daemon, N listeners (docs/design/specs/2026-08-20-reac-auto-spine.md §5,
+# the openmixer tree): this unit passes NO interface, NO --rate and NO
+# --headamp — every segment's settings, including which NICs face REAC at
+# all, come from the layered conf reac_conf.h already implements. Edit
+# %h/.config/reac-pw/reac-pw.env (REAC_IFACES — the one config-once fact) and
+# one %h/.config/reac-pw/<iface>.env per segment (REAC_TX/REAC_ROLE/
+# REAC_MIXER/REAC_NAME/REAC_HEADAMP/REAC_RATE); packaging/reac-pw.conf is the
+# commented worked example for this rig's own two segments. `%h` is systemd's
+# specifier for the invoking user's home — this is a PipeWire client and must
+# run in that user's session (a bare system unit with no HOME cannot find
+# either file, or the user's PipeWire socket).
+EnvironmentFile=%h/.config/reac-pw/reac-pw.env
+ExecStart=/usr/bin/reac-pw
+# raw 0x8819 capture/emit + VLAN sub-interface management + the SCHED_FIFO
+# pacer, all WITHOUT running as root: FILE capabilities on the binary
+# (rpm's %caps, applied by rpm itself at install — see packaging/reac-pw.spec)
+# are the mechanism, so no AmbientCapabilities= belongs here (a user unit
+# cannot grant ambient capabilities anyway, and the line was inert on this
+# unit even before that). The bounding set must include everything the file
+# capabilities grant — narrower than that silently drops what setcap gave.
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_NICE
 # run in the operator's PipeWire session bus
 Restart=on-failure
 RestartSec=2

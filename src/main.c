@@ -27,7 +27,24 @@
  *   reac-pw --pcap capture.pcap [--rate 48000]
  *   reac-pw --live reac0 [--rate 96000] [--role master] [--tx reac0]
  *   reac-pw --live reac0 --role slave   --tx reac0      # slaved to a desk
- */
+ *
+ * ONE DAEMON, N LISTENERS (docs/design/specs/2026-08-20-reac-auto-spine.md §5,
+ * the openmixer tree). A single master process manages every segment this
+ * host faces, spawning one internal LISTENER per interface against ONE shared
+ * PipeWire main loop — the daemon-per-NIC shape (a templated unit per
+ * interface) was considered and REJECTED there. `--live` may be repeated (or
+ * given as a comma list) to run several segments from one command line; the
+ * packaged service gives none at all and reads which NICs face REAC from the
+ * layered conf (REAC_IFACES) — the ONE config-once fact auto-spine names.
+ * Only the FIRST segment honours the per-box flags below (--tx/--role/
+ * --mixer/--name/--headamp/--box/--src-mac/--box-channels/--box-model),
+ * exactly as every invocation before this one; every other segment reads its
+ * own REAC_TX/REAC_ROLE/REAC_MIXER/REAC_NAME/REAC_HEADAMP/REAC_BOX_CHANNELS
+ * from `~/.config/reac-pw/<iface>.env` (reac_conf.h's per-segment layer,
+ * already generic key/value — nothing there needed to change). This is what
+ * lets a single-interface invocation stay BYTE-IDENTICAL to today: a lone
+ * listener is the same code path it always was, just reached through an
+ * array of one. */
 
 #include "reac_ring.h"
 #include "reac_rx.h"
@@ -55,6 +72,12 @@
 #include <sys/socket.h>
 #include <sys/statvfs.h>
 #include <linux/if_packet.h>
+#include <net/if.h>           /* IFNAMSIZ */
+
+/* Bounded, per docs/design/specs/2026-08-20-reac-auto-spine.md ("a segment
+ * beyond the bound is reported, never silently ignored") — this rig needs 2;
+ * 8 is headroom for a bigger trunk without inviting an unbounded array. */
+#define REAC_PW_MAX_LISTENERS 8
 
 static struct pw_main_loop *g_loop;
 
@@ -74,6 +97,40 @@ static int parse_mac(const char *s, uint8_t out[6])
 	for (int i = 0; i < 6; i++)
 		out[i] = (uint8_t)b[i];
 	return 0;
+}
+
+/* Split `s` on commas and/or whitespace into up to `max` NUL-terminated
+ * tokens, each truncated to IFNAMSIZ-1 bytes. Returns the token count (0 for
+ * an empty/NULL/all-separator string). A token beyond `max` is REPORTED and
+ * dropped, never silently lost (auto-spine's own bounding rule, applied here
+ * to the list of interfaces/segments that names it). */
+static int split_list(const char *s, char out[][IFNAMSIZ + 1], int max)
+{
+	if (!s)
+		return 0;
+	int n = 0;
+	const char *p = s;
+	while (*p) {
+		while (*p == ',' || *p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		const char *start = p;
+		while (*p && *p != ',' && *p != ' ' && *p != '\t')
+			p++;
+		size_t len = (size_t)(p - start);
+		if (n >= max) {
+			fprintf(stderr, "reac-pw: too many entries in '%s' (max %d); "
+			        "'%.*s' is dropped\n", s, max, (int)len, start);
+			continue;
+		}
+		if (len > (size_t)IFNAMSIZ)
+			len = IFNAMSIZ;
+		memcpy(out[n], start, len);
+		out[n][len] = '\0';
+		n++;
+	}
+	return n;
 }
 
 /* ---- capability preflight (trunk/VLAN spec 2026-08-23, §4e) ---------------
@@ -227,8 +284,9 @@ static void explain_tx_failure(const char *ifname)
 	}
 }
 
-/* Parse "CH:PARAM:VALUE" (a master-role --headamp arg) into *out. CH is the WIRE
- * channel (0..REAC_HEADAMP_MAX_CH-1); PARAM is phantom|pad|sens; VALUE is 0/1 for
+/* Parse "CH:PARAM:VALUE" (a master-role --headamp arg, or one cell of a
+ * REAC_HEADAMP conf list) into *out. CH is the WIRE channel
+ * (0..REAC_HEADAMP_MAX_CH-1); PARAM is phantom|pad|sens; VALUE is 0/1 for
  * phantom|pad and the raw SENS code 0..0x37 for sens. Returns 0, or -1 if
  * malformed / out of range. */
 static int parse_headamp(const char *s, struct reac_headamp_setting *out)
@@ -260,20 +318,55 @@ static int parse_headamp(const char *s, struct reac_headamp_setting *out)
 	return 0;
 }
 
+/* Parse a REAC_HEADAMP conf VALUE: a whitespace/comma separated list of
+ * CH:PARAM:VALUE cells (parse_headamp's own grammar) — one conf line
+ * replacing the S-1608's 32 individual --headamp flags in a hand-run master.
+ * Returns the cell count (0 for an empty list), or -1 on any malformed cell:
+ * the WHOLE list is refused rather than applying a partial table silently,
+ * the same honesty rule REAC_RATE's layer lookup already follows. */
+static int parse_headamp_list(const char *s, struct reac_headamp_setting *out, int max)
+{
+	int n = 0;
+	const char *p = s;
+	while (*p) {
+		while (*p == ',' || *p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		const char *start = p;
+		while (*p && *p != ',' && *p != ' ' && *p != '\t')
+			p++;
+		size_t len = (size_t)(p - start);
+		char cell[32];
+		if (len >= sizeof cell || n >= max)
+			return -1;
+		memcpy(cell, start, len);
+		cell[len] = '\0';
+		if (parse_headamp(cell, &out[n]) != 0)
+			return -1;
+		n++;
+	}
+	return n;
+}
+
 static void usage(const char *p)
 {
 	fprintf(stderr,
 	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
 	  "         [--mixer M] [--box MODEL[:LABEL]] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
-	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW)\n"
+	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW).\n"
+	  "                Repeatable (or a comma list in one flag) to run several segments in\n"
+	  "                this ONE daemon — see \"auto-spine\" below.\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
 	  "                slaves to us) | slave (an external master drives; we lock to its\n"
 	  "                cadence + return our inputs upstream)\n"
 	  "  --rate R      the REAC sample rate: 44100, 48000 or 96000.\n"
 	  "                Default 96000 in the MASTER role (a master DEFINES the rate;\n"
 	  "                there is nothing to detect on a segment nobody is driving).\n"
-	  "                As a SLAVE, auto-detected from the wire cadence.\n"
+	  "                As a SLAVE, auto-detected from the wire cadence. Given on the\n"
+	  "                command line, it is a WHOLE-INVOCATION override and applies to\n"
+	  "                every segment (auto-spine: this is the layer openmixer uses).\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
@@ -297,6 +390,26 @@ static void usage(const char *p)
 	  "                roles: the --tx NIC's OWN hardware address, verbatim — our frames\n"
 	  "                carry OUR identity (real boxes and desks sync to it; a borrowed\n"
 	  "                MAC collides with the real device and makes captures ambiguous).\n"
+	  "auto-spine (ONE daemon, N listeners — 2026-08-20-reac-auto-spine.md §5): only the\n"
+	  "  FIRST segment honours the per-box flags above. Every OTHER segment — and a daemon\n"
+	  "  started with NO --live/--pcap at all, the packaged-service shape — reads its own\n"
+	  "  settings from the layered conf, keyed by ITS interface\n"
+	  "  (~/.config/reac-pw/<iface>.env; reac_conf.h's precedence, unchanged):\n"
+	  "    REAC_TX=IFNAME             default: the same interface (this rig's masters\n"
+	  "                               always tx == live)\n"
+	  "    REAC_ROLE=master|slave     default: master\n"
+	  "    REAC_MIXER=m200|m300|m5000 default: m200\n"
+	  "    REAC_NAME=NAME             node suffix; default: the interface name (the FIRST\n"
+	  "                               segment defaults to bare names instead, matching\n"
+	  "                               every invocation before this one)\n"
+	  "    REAC_HEADAMP=\"CH:PARAM:VALUE ...\"  the head-amp re-assertion table, space or\n"
+	  "                               comma separated (replaces N --headamp flags)\n"
+	  "    REAC_BOX_CHANNELS=N        slave role: our own input width; default 16\n"
+	  "  and REAC_RATE per segment exactly as a single-segment run already resolves it.\n"
+	  "  Which interfaces to serve with NO --live/--pcap at all comes from REAC_IFACES (a\n"
+	  "  comma/space list) at the env/per-host/last-resort conf layers — the ONE fact a\n"
+	  "  fixed installation configures once (there is no segment yet to key a per-segment\n"
+	  "  lookup on, so only those three layers can answer it).\n"
 	  "environment (see docs/ENV-KNOBS.md; unset = default behavior, byte-identical):\n"
 	  "  REACPW_GRANT_DWELL_S=N  master role: hold the recognized-but-ungranted dwell\n"
 	  "                for N whole seconds before the grant burst (default: the built-in\n"
@@ -341,7 +454,11 @@ static void usage(const char *p)
  * in the RT pacer thread, which hands the model over via the pacer's atomic
  * recognized_box (read here through reac_sink_node_recognized_box) — so no pw_* call is
  * ever made from the pacer thread. The library owns the node lifecycle: this reads the
- * width + label and calls the two ensure() entry points, nothing more. */
+ * width + label and calls the two ensure() entry points, nothing more.
+ *
+ * One instance PER LISTENER (auto-spine §5): `tag` identifies which segment a line is
+ * about once more than one shares this process's stderr, and is the empty string for a
+ * lone listener — the historical, unprefixed output. */
 struct autodetect_ctx {
 	struct reac_source_node    **src;   /* main's source slot (created/rebuilt here) */
 	struct reac_sink_node       *sink;  /* the master engine (owns the recognizer)   */
@@ -349,6 +466,7 @@ struct autodetect_ctx {
 	const struct reac_box_model *last;  /* last model acted on (edge-detects changes) */
 	const char                  *pin;   /* a retired --box value, for the disagreement
 	                                     * notice; NULL once reported (report ONCE)  */
+	const char                  *tag;   /* "[iface] " once N>1, "" for a lone listener */
 };
 
 static void on_autodetect_timer(void *data, uint64_t expirations)
@@ -367,21 +485,468 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	{
 		const char *pin = c->pin;   /* the notice CONSUMES c->pin; keep it to print */
 		if (reac_box_pin_notice(&c->pin, bm->token))
-			fprintf(stderr, "reac-pw: --box pinned '%.*s', the wire says %s — the "
+			fprintf(stderr, "reac-pw: %s--box pinned '%.*s', the wire says %s — the "
 			        "WIRE WINS and the nodes are now sized to it. The pin is still what "
 			        "this segment shows before a box is powered, so fix it if this box "
 			        "is the permanent one.\n",
-			        (int)strcspn(pin, ":"), pin, bm->display);
+			        c->tag, (int)strcspn(pin, ":"), pin, bm->display);
 	}
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
-		fprintf(stderr, "reac-pw: could not size reac-capture to %d ch (%s)\n",
-		        bm->in_ch, bm->display);
+		fprintf(stderr, "reac-pw: %scould not size reac-capture to %d ch (%s)\n",
+		        c->tag, bm->in_ch, bm->display);
 	if (reac_sink_node_ensure(c->sink, bm->out_ch, bm->display) != 0)
-		fprintf(stderr, "reac-pw: could not size reac-playback to %d ch (%s)\n",
-		        bm->out_ch, bm->display);
-	fprintf(stderr, "reac-pw: autodetected %s -> reac-capture %d in / reac-playback "
-	        "%d out\n", bm->display, bm->in_ch, bm->out_ch);
+		fprintf(stderr, "reac-pw: %scould not size reac-playback to %d ch (%s)\n",
+		        c->tag, bm->out_ch, bm->display);
+	fprintf(stderr, "reac-pw: %sautodetected %s -> reac-capture %d in / reac-playback "
+	        "%d out\n", c->tag, bm->display, bm->in_ch, bm->out_ch);
+}
+
+/* ---- one listener per segment (auto-spine §5) ----------------------------
+ *
+ * Everything main() used to hold as single local variables — the RX feeder,
+ * the ring, the source/sink nodes, the slave engine, the segment lock, the
+ * autodetect watcher — lifted verbatim into one struct so main() can hold an
+ * ARRAY of them and open each against the SAME shared PipeWire loop. Nothing
+ * about a single segment's own behaviour changes; this is the per-segment
+ * body multiplied, not redesigned. */
+
+struct listener_cfg {
+	struct reac_rx_cfg rxcfg;
+	char tx_if_buf[64];   /* generous over IFNAMSIZ: silences -Wformat-truncation against the 256-byte conf value buffer */
+	const char *tx_if;                 /* NULL = no TX side (RX-only monitor) */
+	enum reac_role role;
+	const struct reac_mixer_profile *mixer;
+	char name_buf[64];    /* same reasoning as tx_if_buf */
+	const char *inst_name;              /* NULL = bare node names */
+	uint8_t src_mac[6];
+	int src_mac_set;
+	int box_channels;                   /* SLAVE role: our own input width */
+	const struct reac_box_model *pin_model;
+	const char *pin_label;
+	const char *box_pin_spec;
+	struct reac_headamp_setting headamps[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
+	int n_headamps;
+	enum reac_conf_layer rate_layer;    /* ARGV when a whole-invocation --rate forced it */
+	char tag[IFNAMSIZ + 4];             /* "[iface] " once N>1, "" for a lone listener */
+};
+
+struct listener {
+	struct listener_cfg cfg;
+	int opened;             /* listener_open() succeeded */
+	int rx_started;         /* reac_rx_start() succeeded */
+
+	struct reac_ring ring;
+	struct reac_rx rx;
+
+	struct reac_source_node *src;
+	struct reac_source_node_cfg src_cfg;
+
+	struct reac_sink_node *sink;
+	struct reac_ring tx_ring;
+	int tx_ring_init;
+
+	struct reac_slave slave;
+	int slave_open;
+
+	struct reac_seglock seglock;
+
+	struct autodetect_ctx adc;
+	struct spa_source *ad_timer;
+};
+
+static void listener_cfg_defaults(struct listener_cfg *c)
+{
+	memset(c, 0, sizeof *c);
+	c->rxcfg.pcap_realtime = 1;
+	c->role = REAC_ROLE_MASTER;
+	c->mixer = reac_mixer_profile_by_name("m200");
+	c->box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;
+}
+
+/* Fill a listener's configuration from the layered conf files, keyed by ITS
+ * OWN interface — the shape a segment gets when it reaches main() with no
+ * per-box command-line flags at all (every segment beyond the first, and the
+ * packaged service's segments, which get none). `is_first` controls only the
+ * node-name default: the FIRST segment keeps BARE names (no REAC_NAME -> NULL,
+ * matching every invocation before this one, where an unnamed master gets
+ * unnamed nodes); every OTHER segment defaults its name to its own interface,
+ * so two segments never collide on "reac-capture"/"reac-playback" with
+ * nothing in the conf to tell them apart. */
+static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, int is_first)
+{
+	listener_cfg_defaults(c);
+	c->rxcfg.kind = REAC_RX_LIVE;
+	c->rxcfg.source = iface;
+
+	char v[256];
+
+	if (reac_conf_lookup("REAC_TX", iface, NULL, v, sizeof v) != REAC_CONF_NONE)
+		snprintf(c->tx_if_buf, sizeof c->tx_if_buf, "%.63s", v);
+	else
+		snprintf(c->tx_if_buf, sizeof c->tx_if_buf, "%s", iface);
+	c->tx_if = c->tx_if_buf;
+
+	if (reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
+		enum reac_role r;
+		if (reac_role_parse(v, &r) == 0)
+			c->role = r;
+		else
+			fprintf(stderr, "reac-pw: [%s] ignoring REAC_ROLE='%s' (master|slave)\n",
+			        iface, v);
+	}
+
+	if (reac_conf_lookup("REAC_MIXER", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
+		const struct reac_mixer_profile *m = reac_mixer_profile_by_name(v);
+		if (m)
+			c->mixer = m;
+		else
+			fprintf(stderr, "reac-pw: [%s] ignoring unknown REAC_MIXER='%s'\n", iface, v);
+	}
+
+	if (reac_conf_lookup("REAC_NAME", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
+		snprintf(c->name_buf, sizeof c->name_buf, "%.63s", v);
+		c->inst_name = c->name_buf;
+	} else if (!is_first) {
+		snprintf(c->name_buf, sizeof c->name_buf, "%s", iface);
+		c->inst_name = c->name_buf;
+	}
+	/* is_first with no REAC_NAME: inst_name stays NULL (bare names). */
+
+	if (reac_conf_lookup("REAC_HEADAMP", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
+		int n = parse_headamp_list(v, c->headamps,
+		                          (int)(sizeof c->headamps / sizeof c->headamps[0]));
+		if (n < 0)
+			fprintf(stderr, "reac-pw: [%s] ignoring malformed REAC_HEADAMP\n", iface);
+		else
+			c->n_headamps = n;
+	}
+
+	if (reac_conf_lookup("REAC_BOX_CHANNELS", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
+		int n = atoi(v);
+		if (n >= 2 && n <= REAC_MAX_CHANNELS && (n & 1) == 0)
+			c->box_channels = n;
+		else
+			fprintf(stderr, "reac-pw: [%s] ignoring invalid REAC_BOX_CHANNELS='%s'\n",
+			        iface, v);
+	}
+
+	/* REAC_RATE is resolved inside listener_open, by the SAME per-segment
+	 * logic every listener uses — no separate copy of that lookup here. */
+}
+
+/* The master-role rate default, resolved exactly as a single-instance run
+ * always has (docs/RATE-AND-CLOCK-CONFIG.md): an explicit --rate (ARGV,
+ * already stored in c->rxcfg.forced_rate before this is called) wins
+ * outright; otherwise the layered conf is consulted FOR THIS SEGMENT; the
+ * built-in best-drivable pick is the floor. */
+static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_layer *out_layer)
+{
+	char v[64];
+	const char *seg = (c->rxcfg.kind == REAC_RX_LIVE) ? c->rxcfg.source : NULL;
+	enum reac_conf_layer got = reac_conf_lookup("REAC_RATE", seg, NULL, v, sizeof v);
+	if (got != REAC_CONF_NONE) {
+		int r = atoi(v);
+		if (r == 44100 || r == 48000 || r == 96000) {
+			*out_layer = got;
+			return r;
+		}
+		/* A layer that answered with nonsense must SAY so and be skipped, not
+		 * silently drop us to the built-in with no explanation. */
+		fprintf(stderr, "reac-pw: %signoring REAC_RATE='%s' from %s — REAC "
+		        "runs at 44100, 48000 or 96000 Hz and nothing else\n",
+		        c->tag, v, reac_conf_layer_name(got));
+	}
+	*out_layer = REAC_CONF_BUILTIN;
+	return reac_rate_best_drivable(REAC_RATE_ALL_BITS);
+}
+
+/* Bring one segment online: resolve its rate, open the RX feeder, and (role
+ * permitting) the TX side + node lifecycle — the single-instance body main()
+ * used to run inline, called once per configured interface against ONE
+ * shared loop. Returns 0 with L fully populated (still needs
+ * reac_rx_start()), or -1 on a refusal this segment cannot recover from
+ * (already reported on stderr, and everything this call opened is already
+ * cleaned up). A refusal here does not necessarily end the daemon — see
+ * main()'s single-vs-multi distinction at the call site. */
+static int listener_open(struct listener *L, struct pw_loop *loop)
+{
+	struct listener_cfg *c = &L->cfg;
+
+	L->src = NULL;
+	L->sink = NULL;
+	L->slave_open = 0;
+	L->tx_ring_init = 0;
+	L->seglock.fd = -1;
+	L->ad_timer = NULL;
+
+	/* SAMPLE RATE — the master chooses it; the box follows. See
+	 * docs/RATE-AND-CLOCK-CONFIG.md for the full law; this is its per-segment
+	 * application, unchanged from the single-instance code it replaces. */
+	if (c->role == REAC_ROLE_MASTER && c->rxcfg.forced_rate == 0)
+		c->rxcfg.forced_rate = listener_resolve_rate(c, &c->rate_layer);
+	else if (c->rxcfg.forced_rate != 0)
+		c->rate_layer = REAC_CONF_ARGV;
+
+	/* NAME THE LAYER THAT ANSWERED, not merely the value — three sources have
+	 * disagreed on this rig at once and the disagreement was invisible
+	 * because the startup line said only the number. */
+	fprintf(stderr, "reac-pw: %sREAC rate = %d Hz (%d pps), from %s\n", c->tag,
+	        c->rxcfg.forced_rate, c->rxcfg.forced_rate / REAC_SAMPLES_PER_PKT,
+	        c->rxcfg.forced_rate == 0 ? "auto-detect from the wire cadence"
+	                                  : reac_conf_layer_name(c->rate_layer));
+
+	/* The role picks which stream RX decodes (see DESIGN's role table): as
+	 * MASTER our capture is a box's upstream return (its input channels,
+	 * box-width braided frames); as SLAVE it is the master's 40-ch downstream
+	 * broadcast. The wire carries both; the gate keeps them apart. */
+	c->rxcfg.accept = (c->role == REAC_ROLE_MASTER) ? REAC_RX_ACCEPT_UPSTREAM
+	                                                : REAC_RX_ACCEPT_DOWNSTREAM;
+
+	if (reac_rx_open(&L->rx, &c->rxcfg, &L->ring) != 0) {
+		fprintf(stderr, "reac-pw: %scannot open source '%s'\n", c->tag, c->rxcfg.source);
+		return -1;
+	}
+	fprintf(stderr, "reac-pw: %srecovered REAC rate = %d Hz (%d pps), rx stream = %s\n",
+	        c->tag, L->rx.sample_rate, L->rx.sample_rate / REAC_SAMPLES_PER_PKT,
+	        c->rxcfg.accept == REAC_RX_ACCEPT_UPSTREAM
+	          ? "box upstream return (box-width)" : "master downstream (40 ch)");
+
+	/* The reac-capture source is created AFTER the TX side, because whether to DEFER
+	 * it depends on whether a recognizer (the master pacer) exists. In pure autodetect
+	 * (master + a live TX pacer) it is deferred: nothing plugged -> nothing in the
+	 * graph, and the node appears sized to the box the moment it is recognized (the
+	 * autodetect timer below). Every other mode (slave, or pcap / no-TX master) has no
+	 * recognizer, so the node is created at its startup width. */
+	L->src_cfg = (struct reac_source_node_cfg){
+		.loop = loop, .ring = &L->ring, .rx = &L->rx, .sample_rate = L->rx.sample_rate,
+		.inst = c->inst_name, .master_role = (c->role == REAC_ROLE_MASTER),
+	};
+
+	/* TX side: who drives the handshake + the clock depends on the role.
+	 *   master -> reac:playback sink: WE encode the graph downstream + the pacer
+	 *             drives the cdea/cfea grant + owns the clock (a box slaves to us).
+	 *   slave  -> reac_slave engine: an external master drives; we lock to its
+	 *             cadence + return our input channels upstream at the box's slots. */
+	if (c->tx_if && c->role == REAC_ROLE_MASTER) {
+		/* Default master MAC = THIS NIC's own address (reac_mac.h); --src-mac
+		 * overrides it. The mixer profile sets only the console-model byte. */
+		uint8_t master_mac_buf[6];
+		if (!c->src_mac_set && reac_mac_default_src(c->tx_if, master_mac_buf) != 0)
+			fprintf(stderr, "reac-pw: %scould not read %s hardware address for the "
+			        "master source MAC; using the locally-administered fallback\n",
+			        c->tag, c->tx_if);
+		const uint8_t *master_src = c->src_mac_set ? c->src_mac : master_mac_buf;
+		reac_ring_init(&L->tx_ring, REAC_MAX_CHANNELS, (uint32_t)(L->rx.sample_rate / 4));
+		L->tx_ring_init = 1;
+		struct reac_sink_cfg scfg = { .ifname = c->tx_if,
+		                              /* The graph filter is DEFERRED until a box is
+		                               * recognized (reac_sink_node_new leaves it at 0
+		                               * and the autodetect watcher sizes it), so this
+		                               * is only the ceiling. */
+		                              .channels = REAC_MAX_CHANNELS,
+		                              .sample_rate = L->rx.sample_rate,
+		                              .src_mac = master_src, .master_mac = NULL,
+		                              /* THE FAMILY, as configured. It does NOT come from the
+	                               * rate: the two are independent settings and each is
+	                               * obeyed as given (see reac_master.h). */
+	                              .console_field = c->mixer->console_field,
+		                              .inst = c->inst_name, .label = NULL,
+		                              .headamps = c->n_headamps ? c->headamps : NULL,
+		                              .n_headamps = c->n_headamps,
+		                              /* #75: default OFF -> the pacer free-runs on
+		                               * CLOCK_MONOTONIC exactly as it always has. */
+		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
+		                              /* --rate / a conf-file rate is an ASSERTION; only the
+		                               * built-in best-drivable pick is the convention. */
+		                              .rate_asserted = c->rate_layer != REAC_CONF_BUILTIN
+		                                            && c->rate_layer != REAC_CONF_NONE,
+		                              /* #77: unset -> nothing is designated and the
+		                               * name heuristic alone grades the reference. */
+		                              .clock_ref = getenv("REACPW_CLOCK_REF"),
+		                              /* Slot-debt budget. Unset -> the measured
+		                               * default; see reac_pacer.h. */
+		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
+		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
+		                                  : 0,
+		                              /* RATE MATCHING SHIPS OFF. OPT IN WITH
+		                               * REACPW_RATE_MATCH=1. See reac_pacer.h's
+		                               * cfg.rate_match_off for the full measurement —
+		                               * unchanged by this refactor. */
+		                              .rate_match_off =
+		                                  (getenv("REACPW_RATE_MATCH") &&
+		                                   atoi(getenv("REACPW_RATE_MATCH")) != 0)
+		                                  ? 0 : -1 };
+		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
+		 * lock; RX above has been running unlocked, which is correct — observing a
+		 * segment is a copy and must stay safe beside somebody else's master. */
+		int claimed = reac_seglock_claim(&L->seglock, c->tx_if);
+		if (claimed == -1) {
+			fprintf(stderr,
+			    "reac-pw: %sREFUSING to master '%s' — another process already holds\n"
+			    "         that segment (%s). Two masters on one segment is the\n"
+			    "         fault this lock exists to make impossible; it has cost an\n"
+			    "         evening once and corrupted a live measurement once.\n"
+			    "         Nothing is taken over automatically: stop the holder, or\n"
+			    "         drive a different segment. Who holds it:\n"
+			    "           grep %s /proc/net/unix\n",
+			    c->tag, c->tx_if, L->seglock.name, L->seglock.name);
+			reac_rx_close(&L->rx);
+			reac_ring_free(&L->ring);
+			reac_ring_free(&L->tx_ring);
+			return -1;
+		}
+		if (claimed == -2)
+			fprintf(stderr, "reac-pw: %scould not claim a segment lock for '%s' "
+			        "(interface or netns unreadable); proceeding UNPROTECTED\n",
+			        c->tag, c->tx_if);
+
+		L->sink = reac_sink_node_new(loop, &L->tx_ring, &scfg); /* encodes + emits REAC */
+		if (!L->sink) {
+			/* A master with no TX is not a degraded master, it is a silent one:
+			 * it probes nothing, grants nothing and syncs no box, while every
+			 * other sign of health stays green. Refuse instead. */
+			explain_tx_failure(c->tx_if);
+			reac_seglock_release(&L->seglock);
+			reac_rx_close(&L->rx);
+			reac_ring_free(&L->ring);
+			reac_ring_free(&L->tx_ring);
+			return -1;
+		}
+		fprintf(stderr, "reac-pw: %sMASTER role (%s profile) on '%s' — "
+		        "event-driven establishment: probing until the box's "
+		        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
+		        "stderr\n", c->tag, c->mixer->display, c->tx_if);
+		if (c->n_headamps)
+			fprintf(stderr, "reac-pw: %shead-amp DMX send armed — %d cell(s), "
+			        "re-asserted once established (RIG-GATED: verify 48V at the "
+			        "XLR pins)\n", c->tag, c->n_headamps);
+	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE) {
+		/* The slave returns its OWN input channels (a box width) upstream. The PCM
+		 * for them would come from a reac:return sink; for now the ring is the
+		 * carrier and the slave emits silent/own-input FILLER until that sink is
+		 * linked. The engine learns the master MAC from the wire — never set here. */
+		uint8_t box_mac[6];
+		if (c->src_mac_set) {
+			memcpy(box_mac, c->src_mac, 6);
+		} else if (reac_mac_default_src(c->tx_if, box_mac) != 0) {
+			/* NIC hwaddr unreadable — the locally-administered fallback is still
+			 * on-wire safe (no manufacturer carries it), but note it so an
+			 * ambiguous capture is explained. */
+			fprintf(stderr, "reac-pw: %scould not read %s hardware address for the box "
+			        "source MAC; using the locally-administered fallback\n",
+			        c->tag, c->tx_if);
+		}
+		fprintf(stderr, "reac-pw: %sslave box source MAC = "
+		        "%02x:%02x:%02x:%02x:%02x:%02x%s\n", c->tag,
+		        box_mac[0], box_mac[1], box_mac[2], box_mac[3], box_mac[4], box_mac[5],
+		        c->src_mac_set ? " (--src-mac override)"
+		                       : " (this NIC's own address; --src-mac overrides)");
+		reac_ring_init(&L->tx_ring, REAC_MAX_CHANNELS, (uint32_t)(L->rx.sample_rate / 4));
+		L->tx_ring_init = 1;
+		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
+		                                .box_channels = c->box_channels,
+		                                .sample_rate = L->rx.sample_rate,
+		                                .src_mac = box_mac };
+		if (reac_slave_open(&L->slave, &slcfg, &L->tx_ring) == 0) {
+			L->slave_open = 1;
+			if (reac_slave_start(&L->slave) == 0) {
+				reac_slave_set_phy_up(&L->slave, 1);  /* PHY up: begin the establishment */
+				fprintf(stderr, "reac-pw: %sSLAVE role (%d-ch upstream return) — "
+				        "responding to an external master, locked to its cadence\n",
+				        c->tag, c->box_channels);
+			} else {
+				fprintf(stderr, "reac-pw: %sslave engine thread failed to start\n", c->tag);
+				reac_slave_close(&L->slave); L->slave_open = 0;
+			}
+		} else {
+			fprintf(stderr, "reac-pw: %sslave engine not created (AF_PACKET on '%s' "
+			        "failed — need CAP_NET_RAW?)\n", c->tag, c->tx_if);
+		}
+	}
+
+	/* Now that we know whether a recognizer exists (master + a live TX pacer), either
+	 * DEFER the box nodes to autodetect or expose the source at its startup width. */
+	L->adc = (struct autodetect_ctx){0};
+	/* #75: the RX feeder is the BOX clock reference's measurement source — it already
+	 * tracks the box's counter slope and publishes a filtered ppm error. The sink's
+	 * existing 200 ms timer forwards it to the pacer's discipline. Wired
+	 * unconditionally; it is only ever read when clock following is enabled. */
+	if (L->sink)
+		reac_sink_node_set_rate_source(L->sink, &L->rx);
+	if (c->role == REAC_ROLE_MASTER && L->sink) {
+		/* Pure autodetect: the pacer recognizes the box on the wire; a 200 ms main-
+		 * loop watcher then (re)sizes reac-capture / reac-playback to its widths. No
+		 * box node exists until then (nothing plugged = nothing in the graph). */
+		L->adc.src = &L->src;
+		L->adc.sink = L->sink;
+		L->adc.scfg = L->src_cfg;
+		L->adc.pin  = c->box_pin_spec;      /* reported once, if the wire disagrees */
+		L->adc.tag  = c->tag;
+		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
+		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
+		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
+		reac_sink_node_set_peer_source(L->sink, &L->src);
+		L->ad_timer = pw_loop_add_timer(loop, on_autodetect_timer, &L->adc);
+		if (L->ad_timer) {
+			struct timespec first = { 0, 200 * 1000000L };
+			struct timespec interval = { 0, 200 * 1000000L };
+			pw_loop_update_timer(loop, L->ad_timer, &first, &interval, false);
+		}
+		if (c->pin_model) {
+			/* The fixed-install pin: put the nodes on the graph NOW, at the pinned
+			 * width and name, so the patch exists before the box is powered. This
+			 * is the same pair of calls the autodetect watcher makes on
+			 * recognition, so a box that later declares something else simply
+			 * re-sizes them — no separate "pinned" code path to diverge. */
+			if (reac_source_node_ensure(&L->src, &L->src_cfg, c->pin_model->in_ch, c->pin_label) != 0 ||
+			    reac_sink_node_ensure(L->sink, c->pin_model->out_ch, c->pin_label) != 0) {
+				fprintf(stderr, "reac-pw: %s--box: could not size the nodes to %s\n",
+				        c->tag, c->pin_model->display);
+				return -1;
+			}
+			fprintf(stderr, "reac-pw: %sMASTER pinned --box %s — reac-capture %d ch / "
+			        "reac-playback %d ch labelled '%s', present from boot. The pin names "
+			        "and sizes the ports; the WIRE still decides what is enrolled, and "
+			        "outranks the pin if a different box declares itself.\n",
+			        c->tag, c->pin_model->token, c->pin_model->in_ch, c->pin_model->out_ch,
+			        c->pin_label);
+		} else {
+			fprintf(stderr, "reac-pw: %sMASTER autodetect — reac-capture / reac-playback "
+			        "appear sized to the box once it is recognized on the wire\n", c->tag);
+		}
+	} else {
+		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
+		 * the full 40-slot fabric. With no recognizer there is nothing that could
+		 * honestly narrow it to a box, and nothing may pretend otherwise. */
+		if (reac_source_node_ensure(&L->src, &L->src_cfg, 0, NULL) != 0) {
+			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+/* Tear down one segment, mirroring main()'s single-instance shutdown block.
+ * Safe on a partially-opened L (every destroy/close/free below is documented
+ * NULL/unheld-safe), so it doubles as listener_open()'s own failure cleanup. */
+static void listener_close(struct listener *L, struct pw_loop *loop)
+{
+	reac_rx_stop(&L->rx);
+	if (L->ad_timer)
+		pw_loop_destroy_source(loop, L->ad_timer);   /* stop the autodetect watcher first */
+	reac_source_node_destroy(L->src);                /* may be NULL (never recognized) */
+	reac_sink_node_destroy(L->sink);
+	if (L->slave_open) {
+		reac_slave_stop(&L->slave);
+		reac_slave_close(&L->slave);
+	}
+	if (L->tx_ring_init)
+		reac_ring_free(&L->tx_ring);
+	reac_rx_close(&L->rx);
+	reac_ring_free(&L->ring);
+	reac_seglock_release(&L->seglock);
 }
 
 int main(int argc, char **argv)
@@ -406,6 +971,10 @@ int main(int argc, char **argv)
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();
 
+	/* ---- the CLI template: byte-identical to every invocation before this one.
+	 * These are the flags/variables main() always had; they describe ONE
+	 * segment (the first --live, or --pcap) and nothing else. Auto-spine's
+	 * extra segments never read them — see listener_cfg_from_conf. */
 	enum reac_conf_layer rate_layer = REAC_CONF_NONE;
 	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
 	                             .pcap_realtime = 1 };
@@ -427,11 +996,49 @@ int main(int argc, char **argv)
 	const struct reac_mixer_profile *mixer =
 		reac_mixer_profile_by_name("m200");   /* master: which desk generation we speak as */
 
+	/* auto-spine §5: EXTRA `--live` interfaces beyond the template's own (a
+	 * repeated flag, or a comma list in one flag). A stable copy is kept here
+	 * because the template's own iface below points at argv, which a later
+	 * split_list() call must not alias. */
+	char first_iface_buf[IFNAMSIZ + 1];
+	char extra_ifaces[REAC_PW_MAX_LISTENERS][IFNAMSIZ + 1];
+	int n_extra_ifaces = 0;
+	int have_live = 0;   /* was --live given at all (vs --pcap, vs neither) */
+
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
 			rxcfg.kind = REAC_RX_PCAP; rxcfg.source = argv[++i];
 		} else if (!strcmp(argv[i], "--live") && i + 1 < argc) {
-			rxcfg.kind = REAC_RX_LIVE; rxcfg.source = argv[++i];
+			char toks[REAC_PW_MAX_LISTENERS][IFNAMSIZ + 1];
+			int nt = split_list(argv[++i], toks, REAC_PW_MAX_LISTENERS);
+			if (nt == 0) {
+				fprintf(stderr, "reac-pw: --live needs at least one interface name\n");
+				return 2;
+			}
+			rxcfg.kind = REAC_RX_LIVE;
+			int start = 0;
+			if (!have_live) {
+				/* The FIRST --live (of possibly several): the template's own
+				 * interface, byte-identical to today when it is the only one. */
+				snprintf(first_iface_buf, sizeof first_iface_buf, "%s", toks[0]);
+				rxcfg.source = first_iface_buf;
+				have_live = 1;
+				start = 1;
+			}
+			/* One slot of REAC_PW_MAX_LISTENERS is always the template's own
+			 * interface once this branch runs at all, so extras are bounded to
+			 * the rest — checked HERE, not left to the later array-assembly
+			 * copy to truncate silently (auto-spine: "a segment beyond the
+			 * bound is reported, never silently ignored"). */
+			for (int k = start; k < nt; k++) {
+				if (n_extra_ifaces >= REAC_PW_MAX_LISTENERS - 1) {
+					fprintf(stderr, "reac-pw: too many --live interfaces (max %d); "
+					        "'%s' is dropped\n", REAC_PW_MAX_LISTENERS, toks[k]);
+					continue;
+				}
+				snprintf(extra_ifaces[n_extra_ifaces++], sizeof extra_ifaces[0],
+				        "%s", toks[k]);
+			}
 		} else if (!strcmp(argv[i], "--rate") && i + 1 < argc) {
 			/* Validate before it reaches the ring depth (sample_rate/4): a
 			 * negative/garbage rate underflows to a huge depth, next_pow2
@@ -550,9 +1157,20 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
+
 	if (!rxcfg.source) {
-		usage(argv[0]);
-		return 2;
+		/* Neither --pcap nor --live: the packaged-service shape (auto-spine
+		 * §5 — "the unit needs no per-box flags"). Pull the ONE config-once
+		 * fact — which NICs face REAC — from the layered conf. There is no
+		 * segment yet to key a per-segment lookup on, so only the process
+		 * environment / per-host / last-resort layers can answer it. */
+		char v[512];
+		if (reac_conf_lookup("REAC_IFACES", NULL, NULL, v, sizeof v) != REAC_CONF_NONE)
+			n_extra_ifaces = split_list(v, extra_ifaces, REAC_PW_MAX_LISTENERS);
+		if (n_extra_ifaces == 0) {
+			usage(argv[0]);
+			return 2;
+		}
 	}
 	if (reac_role_validate(role, tx_if != NULL) != 0) {
 		fprintf(stderr, "reac-pw: --role slave needs --tx IFNAME (the REAC NIC for the "
@@ -577,381 +1195,156 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/* SAMPLE RATE — the master chooses it; the box follows.
-	 *
-	 * On a real Roland desk the operator selects the REAC rate from a menu. The
-	 * desk drives the segment at that rate and every stagebox locks to it — a box
-	 * has no rate setting of its own. reac-pw is the master here, so `--rate` is
-	 * the same choice, and it is honoured as given.
-	 *
-	 * A previous revision of this comment claimed the box infers its rate from the
-	 * DESK IDENTITY (console byte 01 = OHRCA => 96 kHz, 00 = V-Mixer => 48 kHz
-	 * only) and clamped --rate to match. That was an inference, never
-	 * demonstrated, and it is wrong: the identity byte says which desk we
-	 * impersonate, not which rate the operator picked.
-	 *
-	 * Beware this paragraph's history — the same block also asserted the upstream
-	 * "+2 bytes" were the Ethernet FCS, falsified 2026-07-25 (a real OHRCA CRC-16;
-	 * docs/OHRCA-UPSTREAM-DUPLICATE-FRAMES.md, fixtures UP32A/UP32B). Two wrong
-	 * claims from one comment: state what is measured, mark the rest open (#73).
-	 *
-	 * Cadence is fps = rate/12 at every rate — 12 samples per frame is invariant,
-	 * so a higher rate sends the same frames more often, nothing else changes. */
+	/* ---- assemble the listener array --------------------------------- */
+	struct listener listeners[REAC_PW_MAX_LISTENERS];
+	int n_listeners = 0;
 
-	/* THE MASTER'S RATE DEFAULT, and the provenance of whatever it ends up being.
-	 *
-	 * A MASTER DEFINES THE RATE; THERE IS NOTHING TO DETECT. Auto-detect is a
-	 * slave's default and it is the right one there — a slave joins a segment
-	 * somebody else is already driving, so reading the cadence off the wire is the
-	 * only honest thing it can do. A master drives a segment that is SILENT until
-	 * it speaks, so "auto" does not resolve to the operator's intent, it resolves
-	 * to whatever the fallback happens to be, and nothing on screen says which.
-	 *
-	 * The default is the BEST DRIVABLE rate (2026-08-26-reac-runtime-config.md
-	 * §0), superseding the flat 2026-08-23 "always 96k" ruling: "the default
-	 * must be the best one that we can drive; if we cannot drive a 96 kHz
-	 * mixer then we must default to something lesser." reac-pw has no real
-	 * drivability probe yet, so it always declares the whole closed list
-	 * drivable (reac_rate_cfg.h's honesty clause) and the arithmetic default
-	 * stays 96 kHz — but it is now a COMPUTED fact, not an independent
-	 * hard-coded one, so a future probe changes this line's answer with no
-	 * edit here. A Roland desk offers 44.1/48/96 and drives the segment at the
-	 * one chosen; this is that menu's default position, not a detection
-	 * result.
-	 *
-	 * AND THE RATE IS PRINTED WITH WHERE IT CAME FROM. Three sources have
-	 * disagreed on this rig at once — a command line, an environment file nothing
-	 * read, and this default — and the disagreement was invisible because the
-	 * startup line said only the number. A mechanical gate beats a rule anyone has
-	 * to remember: the journal now carries the provenance beside the value, so a
-	 * 96 k master pointed at a 48 k segment says so in its first two lines. */
-	if (role == REAC_ROLE_MASTER && rxcfg.forced_rate == 0) {
-		/* Walk the LAYERS before falling back to the compiled-in default. The
-		 * order is declared in reac_conf.h and pinned by test_reac_conf; this
-		 * call is the only place it is implemented, so there is one order and
-		 * not one per reader. */
-		char v[64];
-		const char *seg = (rxcfg.kind == REAC_RX_LIVE) ? rxcfg.source : NULL;
-		enum reac_conf_layer got = reac_conf_lookup("REAC_RATE", seg, NULL,
-		                                           v, sizeof v);
-		if (got != REAC_CONF_NONE) {
-			int r = atoi(v);
-			if (r == 44100 || r == 48000 || r == 96000) {
-				rxcfg.forced_rate = r;
-				rate_layer = got;
+	if (rxcfg.source && rxcfg.kind == REAC_RX_PCAP) {
+		/* Exactly today: one listener, pcap replay, the CLI template verbatim. */
+		n_listeners = 1;
+		struct listener_cfg *c = &listeners[0].cfg;
+		listener_cfg_defaults(c);
+		c->rxcfg = rxcfg;
+		c->tx_if = tx_if;
+		c->role = role;
+		c->mixer = mixer;
+		c->inst_name = inst_name;
+		memcpy(c->src_mac, src_mac, 6);
+		c->src_mac_set = src_mac_set;
+		c->box_channels = box_channels;
+		c->pin_model = pin_model;
+		c->pin_label = pin_label;
+		c->box_pin_spec = box_pin_spec;
+		memcpy(c->headamps, headamps, sizeof(headamps[0]) * (size_t)n_headamps);
+		c->n_headamps = n_headamps;
+		c->rate_layer = rate_layer;
+	} else {
+		/* LIVE: either the operator named interface(s) on the command line
+		 * (have_live), or REAC_IFACES supplied them above with no CLI at all. */
+		const char *ifaces[REAC_PW_MAX_LISTENERS];
+		int n_ifaces = 0;
+		if (have_live) {
+			ifaces[n_ifaces++] = rxcfg.source;
+			for (int k = 0; k < n_extra_ifaces && n_ifaces < REAC_PW_MAX_LISTENERS; k++)
+				ifaces[n_ifaces++] = extra_ifaces[k];
+		} else {
+			for (int k = 0; k < n_extra_ifaces && n_ifaces < REAC_PW_MAX_LISTENERS; k++)
+				ifaces[n_ifaces++] = extra_ifaces[k];
+		}
+		if (n_ifaces == 0) {
+			usage(argv[0]);
+			return 2;
+		}
+		n_listeners = n_ifaces;
+		for (int i = 0; i < n_ifaces; i++) {
+			struct listener_cfg *c = &listeners[i].cfg;
+			if (i == 0 && have_live) {
+				/* Byte-exact with every invocation before this one. */
+				listener_cfg_defaults(c);
+				c->rxcfg = rxcfg;
+				c->rxcfg.source = ifaces[0];
+				c->tx_if = tx_if;
+				c->role = role;
+				c->mixer = mixer;
+				c->inst_name = inst_name;
+				memcpy(c->src_mac, src_mac, 6);
+				c->src_mac_set = src_mac_set;
+				c->box_channels = box_channels;
+				c->pin_model = pin_model;
+				c->pin_label = pin_label;
+				c->box_pin_spec = box_pin_spec;
+				memcpy(c->headamps, headamps, sizeof(headamps[0]) * (size_t)n_headamps);
+				c->n_headamps = n_headamps;
+				c->rate_layer = rate_layer;
 			} else {
-				/* A layer that answered with nonsense must SAY so and be
-				 * skipped, not silently drop us to the built-in with no
-				 * explanation — that is how a config file gets blamed for
-				 * working and a default gets blamed for not. */
-				fprintf(stderr, "reac-pw: ignoring REAC_RATE='%s' from %s — REAC "
-				        "runs at 44100, 48000 or 96000 Hz and nothing else\n",
-				        v, reac_conf_layer_name(got));
+				listener_cfg_from_conf(c, ifaces[i], i == 0);
+				/* A whole-invocation --rate (the ARGV layer) outranks every
+				 * per-segment conf file, on EVERY listener — it is the layer
+				 * "openmixer uses" (reac_conf.h precedence #1). */
+				if (rxcfg.forced_rate != 0) {
+					c->rxcfg.forced_rate = rxcfg.forced_rate;
+					c->rate_layer = REAC_CONF_ARGV;
+				}
 			}
 		}
-		if (rxcfg.forced_rate == 0) {
-			rxcfg.forced_rate = reac_rate_best_drivable(REAC_RATE_ALL_BITS);
-			rate_layer = REAC_CONF_BUILTIN;
-		}
 	}
-	/* NAME THE LAYER THAT ANSWERED, not merely the value. A layered config that
-	 * cannot tell you which layer won is a debugging trap, and this rig has
-	 * already spent a morning on exactly that class of confusion: three sources
-	 * disagreed about the rate at once and the startup line printed only the
-	 * number. */
-	fprintf(stderr, "reac-pw: REAC rate = %d Hz (%d pps), from %s\n",
-	        rxcfg.forced_rate, rxcfg.forced_rate / REAC_SAMPLES_PER_PKT,
-	        rate_layer == REAC_CONF_NONE ? "auto-detect from the wire cadence"
-	                                     : reac_conf_layer_name(rate_layer));
 
-	/* The role picks which stream RX decodes (see DESIGN's role table): as
-	 * MASTER our capture is a box's upstream return (its input channels,
-	 * box-width braided frames); as SLAVE it is the master's 40-ch downstream
-	 * broadcast. The wire carries both; the gate keeps them apart. */
-	rxcfg.accept = (role == REAC_ROLE_MASTER) ? REAC_RX_ACCEPT_UPSTREAM
-	                                          : REAC_RX_ACCEPT_DOWNSTREAM;
+	/* Tag every listener for the log, now that N is known. A LONE listener
+	 * keeps today's unprefixed lines, byte-identical. */
+	for (int i = 0; i < n_listeners; i++) {
+		if (n_listeners > 1)
+			snprintf(listeners[i].cfg.tag, sizeof listeners[i].cfg.tag, "[%s] ",
+			        listeners[i].cfg.rxcfg.source ? listeners[i].cfg.rxcfg.source : "?");
+		else
+			listeners[i].cfg.tag[0] = '\0';
+	}
 
 	pw_init(&argc, &argv);
-
-	struct reac_ring ring;
-	struct reac_rx rx;
-	if (reac_rx_open(&rx, &rxcfg, &ring) != 0) {
-		fprintf(stderr, "reac-pw: cannot open source '%s'\n", rxcfg.source);
-		return 1;
-	}
-	fprintf(stderr, "reac-pw: recovered REAC rate = %d Hz (%d pps), rx stream = %s\n",
-	        rx.sample_rate, rx.sample_rate / REAC_SAMPLES_PER_PKT,
-	        rxcfg.accept == REAC_RX_ACCEPT_UPSTREAM
-	          ? "box upstream return (box-width)" : "master downstream (40 ch)");
 
 	g_loop = pw_main_loop_new(NULL);
 	struct pw_loop *loop = pw_main_loop_get_loop(g_loop);
 	pw_loop_add_signal(loop, SIGINT, on_signal, NULL);
 	pw_loop_add_signal(loop, SIGTERM, on_signal, NULL);
 
-	/* The reac-capture source is created AFTER the TX side, because whether to DEFER
-	 * it depends on whether a recognizer (the master pacer) exists. In pure autodetect
-	 * (master + a live TX pacer) it is deferred: nothing plugged -> nothing in the
-	 * graph, and the node appears sized to the box the moment it is recognized (the
-	 * autodetect timer below). Every other mode (slave, or pcap / no-TX master) has no
-	 * recognizer, so the node is created at its startup width. The cfg bundles the
-	 * process-lifetime constants so a later resize needs only the width + label. */
-	struct reac_source_node *src = NULL;
-	struct reac_source_node_cfg src_cfg = {
-		.loop = loop, .ring = &ring, .rx = &rx, .sample_rate = rx.sample_rate,
-		.inst = inst_name, .master_role = (role == REAC_ROLE_MASTER),
-	};
-
-	/* TX side: who drives the handshake + the clock depends on the role.
-	 *   master -> reac:playback sink: WE encode the graph downstream + the pacer
-	 *             drives the cdea/cfea grant + owns the clock (a box slaves to us).
-	 *   slave  -> reac_slave engine: an external master drives; we lock to its
-	 *             cadence + return our input channels upstream at the box's slots. */
-	struct reac_sink_node *sink = NULL;
-	struct reac_slave slave;
-	int slave_open = 0;
-	struct reac_ring tx_ring;
-	int tx_ring_init = 0;
-
-	if (tx_if && role == REAC_ROLE_MASTER) {
-		/* Default master MAC = THIS NIC's own address (reac_mac.h); --src-mac
-		 * overrides it. The mixer profile sets only the console-model byte. */
-		uint8_t master_mac_buf[6];
-		if (!src_mac_set && reac_mac_default_src(tx_if, master_mac_buf) != 0)
-			fprintf(stderr, "reac-pw: could not read %s hardware address for the "
-			        "master source MAC; using the locally-administered fallback\n",
-			        tx_if);
-		const uint8_t *master_src = src_mac_set ? src_mac : master_mac_buf;
-		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
-		tx_ring_init = 1;
-		struct reac_sink_cfg scfg = { .ifname = tx_if,
-		                              /* The graph filter is DEFERRED until a box is
-		                               * recognized (reac_sink_node_new leaves it at 0
-		                               * and the autodetect watcher sizes it), so this
-		                               * is only the ceiling. */
-		                              .channels = REAC_MAX_CHANNELS,
-		                              .sample_rate = rx.sample_rate,
-		                              .src_mac = master_src, .master_mac = NULL,
-		                              /* THE FAMILY, as configured. It does NOT come from the
-                               * rate: the two are independent settings and each is
-                               * obeyed as given (see reac_master.h). */
-                              .console_field = mixer->console_field,
-		                              .inst = inst_name, .label = NULL,
-		                              .headamps = n_headamps ? headamps : NULL,
-		                              .n_headamps = n_headamps,
-		                              /* #75: default OFF -> the pacer free-runs on
-		                               * CLOCK_MONOTONIC exactly as it always has. */
-		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
-		                              /* --rate / a conf-file rate is an ASSERTION; only the
-		                               * built-in best-drivable pick is the convention. */
-		                              .rate_asserted = rate_layer != REAC_CONF_BUILTIN
-		                                            && rate_layer != REAC_CONF_NONE,
-		                              /* #77: unset -> nothing is designated and the
-		                               * name heuristic alone grades the reference. */
-		                              .clock_ref = getenv("REACPW_CLOCK_REF"),
-		                              /* Slot-debt budget. Unset -> the measured
-		                               * default; see reac_pacer.h. */
-		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
-		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
-		                                  : 0,
-		                              /* RATE MATCHING SHIPS OFF. OPT IN WITH
-		                               * REACPW_RATE_MATCH=1.
-		                               *
-		                               * NOT because the loop is wrong. Its SIGN is
-		                               * verified on hardware — the correction
-		                               * crosses zero at ~50 frames and reverses,
-		                               * which positive feedback cannot do — and it
-		                               * caused no discard in a 30-minute soak.
-		                               *
-		                               * It is off because its MEASUREMENT PHASE is
-		                               * wrong: the RT callback samples the ring
-		                               * depth BEFORE pushing the quantum's frames,
-		                               * so it reads about one quantum low and the
-		                               * loop holds a standing correction to sit
-		                               * there — +1310..+3810 ppm across the whole
-		                               * soak, 26-76% of its authority spent at
-		                               * rest. The entire reason the applied
-		                               * correction is published is that a large
-		                               * steady one is a fault report; this one is
-		                               * reporting a fault in itself.
-		                               *
-		                               * A default is a mechanical gate; an env var
-		                               * you have to remember to set is a rule you
-		                               * have to remember. Lever 1 removes the
-		                               * cause and is fully measured, so the
-		                               * conservative default costs nothing.
-		                               *
-		                               * QUEUED, NOT CANCELLED: measure the depth
-		                               * AFTER the push, then re-soak with a
-		                               * before/after on the standing correction —
-		                               * "near zero at rest" is the whole claim and
-		                               * it has not been made yet. */
-		                              .rate_match_off =
-		                                  (getenv("REACPW_RATE_MATCH") &&
-		                                   atoi(getenv("REACPW_RATE_MATCH")) != 0)
-		                                  ? 0 : -1 };
-		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
-		 * lock; RX above has been running unlocked, which is correct — observing a
-		 * segment is a copy and must stay safe beside somebody else's master. */
-		static struct reac_seglock seglock;
-		int claimed = reac_seglock_claim(&seglock, tx_if);
-		if (claimed == -1) {
-			fprintf(stderr,
-			    "reac-pw: REFUSING to master '%s' — another process already holds\n"
-			    "         that segment (%s). Two masters on one segment is the\n"
-			    "         fault this lock exists to make impossible; it has cost an\n"
-			    "         evening once and corrupted a live measurement once.\n"
-			    "         Nothing is taken over automatically: stop the holder, or\n"
-			    "         drive a different segment. Who holds it:\n"
-			    "           grep %s /proc/net/unix\n",
-			    tx_if, seglock.name, seglock.name);
-			exit(1);
-		}
-		if (claimed == -2)
-			fprintf(stderr, "reac-pw: could not claim a segment lock for '%s' "
-			        "(interface or netns unreadable); proceeding UNPROTECTED\n",
-			        tx_if);
-
-		sink = reac_sink_node_new(loop, &tx_ring, &scfg); /* encodes + emits REAC */
-		if (!sink) {
-			/* A master with no TX is not a degraded master, it is a silent one:
-			 * it probes nothing, grants nothing and syncs no box, while every
-			 * other sign of health stays green. Refuse instead. */
-			explain_tx_failure(tx_if);
-			exit(1);   /* a refusal, before the loop ever runs */
-		} else {
-			fprintf(stderr, "reac-pw: MASTER role (%s profile) on '%s' — "
-			        "event-driven establishment: probing until the box's "
-			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
-			        "stderr\n", mixer->display, tx_if);
-			if (n_headamps)
-				fprintf(stderr, "reac-pw: head-amp DMX send armed — %d cell(s), "
-				        "re-asserted once established (RIG-GATED: verify 48V at the "
-				        "XLR pins)\n", n_headamps);
-		}
-	} else if (tx_if && role == REAC_ROLE_SLAVE) {
-		/* The slave returns its OWN input channels (a box width) upstream. The PCM
-		 * for them would come from a reac:return sink; for now the ring is the
-		 * carrier and the slave emits silent/own-input FILLER until that sink is
-		 * linked. The engine learns the master MAC from the wire — never set here. */
-		uint8_t box_mac[6];
-		if (src_mac_set) {
-			memcpy(box_mac, src_mac, 6);
-		} else if (reac_mac_default_src(tx_if, box_mac) != 0) {
-			/* NIC hwaddr unreadable — the locally-administered fallback is still
-			 * on-wire safe (no manufacturer carries it), but note it so an
-			 * ambiguous capture is explained. */
-			fprintf(stderr, "reac-pw: could not read %s hardware address for the box "
-			        "source MAC; using the locally-administered fallback\n", tx_if);
-		}
-		const uint8_t *slave_src = box_mac;
-		fprintf(stderr, "reac-pw: slave box source MAC = "
-		        "%02x:%02x:%02x:%02x:%02x:%02x%s\n",
-		        box_mac[0], box_mac[1], box_mac[2], box_mac[3], box_mac[4], box_mac[5],
-		        src_mac_set ? " (--src-mac override)"
-		                    : " (this NIC's own address; --src-mac overrides)");
-		reac_ring_init(&tx_ring, REAC_MAX_CHANNELS, (uint32_t)(rx.sample_rate / 4));
-		tx_ring_init = 1;
-		struct reac_slave_cfg slcfg = { .ifname = tx_if,
-		                                .box_channels = box_channels,
-		                                .sample_rate = rx.sample_rate,
-		                                .src_mac = slave_src };
-		if (reac_slave_open(&slave, &slcfg, &tx_ring) == 0) {
-			slave_open = 1;
-			if (reac_slave_start(&slave) == 0) {
-				reac_slave_set_phy_up(&slave, 1);  /* PHY up: begin the establishment */
-				fprintf(stderr, "reac-pw: SLAVE role on '%s' (%d-ch upstream return) — "
-				        "responding to an external master, locked to its cadence\n",
-				        tx_if, box_channels);
-			} else {
-				fprintf(stderr, "reac-pw: slave engine thread failed to start\n");
-				reac_slave_close(&slave); slave_open = 0;
-			}
-		} else {
-			fprintf(stderr, "reac-pw: slave engine not created (AF_PACKET on '%s' "
-			        "failed — need CAP_NET_RAW?)\n", tx_if);
-		}
-	}
-
-	/* Now that we know whether a recognizer exists (master + a live TX pacer), either
-	 * DEFER the box nodes to autodetect or expose the source at its startup width. */
-	struct autodetect_ctx adc = {0};
-	struct spa_source *ad_timer = NULL;
-	/* #75: the RX feeder is the BOX clock reference's measurement source — it already
-	 * tracks the box's counter slope and publishes a filtered ppm error. The sink's
-	 * existing 200 ms timer forwards it to the pacer's discipline. Wired
-	 * unconditionally; it is only ever read when clock following is enabled. */
-	if (sink)
-		reac_sink_node_set_rate_source(sink, &rx);
-	if (role == REAC_ROLE_MASTER && sink) {
-		/* Pure autodetect: the pacer recognizes the box on the wire; a 200 ms main-
-		 * loop watcher then (re)sizes reac-capture / reac-playback to its widths. No
-		 * box node exists until then (nothing plugged = nothing in the graph). */
-		adc.src = &src;
-		adc.sink = sink;
-		adc.scfg = src_cfg;
-		adc.pin  = box_pin_spec;      /* reported once, if the wire disagrees */
-		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
-		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
-		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
-		reac_sink_node_set_peer_source(sink, &src);
-		ad_timer = pw_loop_add_timer(loop, on_autodetect_timer, &adc);
-		if (ad_timer) {
-			struct timespec first = { 0, 200 * 1000000L };
-			struct timespec interval = { 0, 200 * 1000000L };
-			pw_loop_update_timer(loop, ad_timer, &first, &interval, false);
-		}
-		if (pin_model) {
-			/* The fixed-install pin: put the nodes on the graph NOW, at the pinned
-			 * width and name, so the patch exists before the box is powered. This
-			 * is the same pair of calls the autodetect watcher makes on
-			 * recognition, so a box that later declares something else simply
-			 * re-sizes them — no separate "pinned" code path to diverge. */
-			if (reac_source_node_ensure(&src, &src_cfg, pin_model->in_ch, pin_label) != 0 ||
-			    reac_sink_node_ensure(sink, pin_model->out_ch, pin_label) != 0) {
-				fprintf(stderr, "reac-pw: --box: could not size the nodes to %s\n",
-				        pin_model->display);
+	/* ONE shared loop, N listeners opened against it (auto-spine §5). A lone
+	 * listener that fails to open ends the process exactly as it always has;
+	 * with more than one, a segment's refusal is that segment's problem, not
+	 * every other segment's — the daemon keeps whatever else came up. */
+	int n_opened = 0;
+	for (int i = 0; i < n_listeners; i++) {
+		if (listener_open(&listeners[i], loop) != 0) {
+			if (n_listeners == 1) {
+				pw_main_loop_destroy(g_loop);
+				pw_deinit();
 				return 1;
 			}
-			fprintf(stderr, "reac-pw: MASTER pinned --box %s — reac-capture %d ch / "
-			        "reac-playback %d ch labelled '%s', present from boot. The pin names "
-			        "and sizes the ports; the WIRE still decides what is enrolled, and "
-			        "outranks the pin if a different box declares itself.\n",
-			        pin_model->token, pin_model->in_ch, pin_model->out_ch, pin_label);
-		} else {
-			fprintf(stderr, "reac-pw: MASTER autodetect — reac-capture / reac-playback "
-			        "appear sized to the box once it is recognized on the wire\n");
+			fprintf(stderr, "reac-pw: %sthis segment did not come up; the other "
+			        "listener(s) are unaffected (auto-spine §5: one daemon, "
+			        "independent segments)\n", listeners[i].cfg.tag);
+			continue;
 		}
-	} else {
-		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
-		 * the full 40-slot fabric. With no recognizer there is nothing that could
-		 * honestly narrow it to a box, and nothing may pretend otherwise. */
-		if (reac_source_node_ensure(&src, &src_cfg, 0, NULL) != 0) {
-			fprintf(stderr, "reac-pw: failed to create reac:capture node\n");
-			return 1;
-		}
+		listeners[i].opened = 1;
+		n_opened++;
+	}
+	if (n_opened == 0) {
+		fprintf(stderr, "reac-pw: no segment came up; nothing to run\n");
+		pw_main_loop_destroy(g_loop);
+		pw_deinit();
+		return 1;
 	}
 
-	if (reac_rx_start(&rx) != 0) {
-		fprintf(stderr, "reac-pw: failed to start RX feeder\n");
+	int any_running = 0;
+	for (int i = 0; i < n_listeners; i++) {
+		if (!listeners[i].opened)
+			continue;
+		if (reac_rx_start(&listeners[i].rx) != 0) {
+			fprintf(stderr, "reac-pw: %sfailed to start RX feeder\n", listeners[i].cfg.tag);
+			if (n_listeners == 1) {
+				listener_close(&listeners[0], loop);
+				pw_main_loop_destroy(g_loop);
+				pw_deinit();
+				return 1;
+			}
+			listener_close(&listeners[i], loop);
+			listeners[i].opened = 0;
+			continue;
+		}
+		listeners[i].rx_started = 1;
+		any_running = 1;
+	}
+	if (!any_running) {
+		fprintf(stderr, "reac-pw: no segment is running; nothing to do\n");
+		pw_main_loop_destroy(g_loop);
+		pw_deinit();
 		return 1;
 	}
 
 	pw_main_loop_run(g_loop);
 
-	reac_rx_stop(&rx);
-	if (ad_timer)
-		pw_loop_destroy_source(loop, ad_timer);   /* stop the autodetect watcher first */
-	reac_source_node_destroy(src);                /* may be NULL (never recognized) */
-	reac_sink_node_destroy(sink);
-	if (slave_open) {
-		reac_slave_stop(&slave);
-		reac_slave_close(&slave);
-	}
-	if (tx_ring_init)
-		reac_ring_free(&tx_ring);
-	reac_rx_close(&rx);
-	reac_ring_free(&ring);
+	for (int i = 0; i < n_listeners; i++)
+		if (listeners[i].opened)
+			listener_close(&listeners[i], loop);
+
 	pw_main_loop_destroy(g_loop);
 	pw_deinit();
 	return 0;

@@ -50,9 +50,12 @@ so the declaration and the code cannot drift apart.
    hierarchy. One clock master per segment; boxes follow.
 
 3. **Configuration is PER SEGMENT, because a master is per segment.** One file per
-   interface, named by the interface. Two segments means two files and two units,
-   and any shape that cannot say that is the shape that ends up hand-started in
-   tmux — which is exactly where the rig is now.
+   interface, named by the interface. Two segments means two files — but ONE unit
+   (auto-spine §5, 2026-08-20-reac-auto-spine.md: a single daemon manages every
+   box, spawning an internal listener per interface; a unit-per-segment shape was
+   proposed here and REJECTED there). Any shape that cannot say "one file per
+   segment" is the shape that ends up hand-started in tmux — which is exactly
+   where the rig was before the service existed.
 
 4. **THE PRECEDENCE, HIGHEST FIRST. This is the law.**
 
@@ -121,12 +124,22 @@ accepting an empty value each turn the test red, and restoring turns it green.
   few-second re-handshake rather than a broken rig — see
   `docs/96K-SWITCH-ASSESSMENT.md` — but it is a dropout, and the startup
   provenance line is what makes it visible immediately.
-- **Next:** move the two masters' invocations into `~/.config/reac-pw/<iface>.env`
-  — layer 3, which now exists and is read — and a templated
-  `reac-pw@<iface>.service`, replacing the single-segment unit and the tmux
-  scope. The tmux scope is not a workaround anyone chose; it is what is left when
-  the unit cannot describe the rig. **`~/.config/openmixer/reac.env` stays where
-  it is and keeps what it has**; it is the floor, not a stray.
+- **SUPERSEDED — done, not "Next":** this bullet used to propose a templated
+  `reac-pw@<iface>.service`, one unit instance per segment. That shape was
+  brought to the operator and REJECTED
+  (docs/design/specs/2026-08-20-reac-auto-spine.md §5, the openmixer tree):
+  "a SINGLE daemon manages every box... Not a daemon per NIC." What actually
+  landed is `packaging/reac-pw.service` — ONE unit, no `--live`/`--rate`/
+  `--headamp` at all — opening one internal LISTENER per interface listed in
+  `~/.config/reac-pw/reac-pw.env`'s `REAC_IFACES` (the layer-4 per-host file
+  this section already names), each then reading its OWN
+  REAC_TX/REAC_ROLE/REAC_MIXER/REAC_NAME/REAC_HEADAMP/REAC_RATE from layer 3,
+  `~/.config/reac-pw/<iface>.env` — unchanged from what this file already
+  documented, just consulted by N listeners in one process instead of one
+  process per file. `packaging/reac-pw.conf` is the commented worked example
+  for this rig's own two segments; `docs/RIG-MASTERS.txt` carries the cutover
+  note. **`~/.config/openmixer/reac.env` stays where it is and keeps what it
+  has**; it is the floor, not a stray.
 - **Done:** reac-pw prints the rate with the LAYER that produced it, so a
   disagreement between sources appears in the journal instead of on the wire.
 
