@@ -31,6 +31,7 @@
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
+#include "reac_sink_format.h"    /* the Format pod + renegotiate decision (#4.3) */
 #include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
 #include "reac_link_state.h"
@@ -48,7 +49,6 @@
 #include <spa/param/props.h>
 #include <spa/param/latency-utils.h>
 #include <spa/param/audio/raw.h>
-#include <spa/param/audio/format-utils.h>   /* spa_format_audio_raw_build */
 #include <spa/pod/builder.h>
 #include <spa/pod/iter.h>
 #include <stdlib.h>
@@ -762,6 +762,34 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 	n->rate_reestablishing_last = reest;
 	n->rate_refused_last = refused;
 
+	/* Renegotiate the node's presented Format when the pacer's accepted rate has
+	 * moved past what we last built/pushed — the exact gap docs/design/notes/
+	 * 2026-08-26-rate-change-node-format-gap.md measured: `reac_pacer_apply_rate`
+	 * re-clocks the WIRE, but nothing renegotiated the pw_stream node's Format
+	 * param, so pw-top kept reading the boot rate. MAIN LOOP only, same as this
+	 * whole function — pw_stream_update_params is never safe off the loop thread,
+	 * which is why this reads the pacer's rate_hz ATOMIC on the timer poll rather
+	 * than being invoked FROM the SCHED_FIFO pacer thread that set it (the same
+	 * cross-thread pattern sink_publish_link_props/_disco_props already use).
+	 * reac_sink_format_needs_update is false on a normal single-rate boot (n-
+	 * >sample_rate was seeded from the very same rate at construction) and false
+	 * again the instant this pushes, so a boot or an already-caught-up node never
+	 * calls pw_stream_update_params at all — no format churn where nothing moved.
+	 * Builds from reac_sink_format_build, the ONE function sink_open_filter's
+	 * initial connect also uses, so the pushed shape can never drift from the
+	 * connect-time shape. */
+	if (reac_sink_format_needs_update(n->sample_rate, hz)) {
+		uint8_t fbuf[1024];
+		struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
+		const struct spa_pod *fmt = reac_sink_format_build(&fb, n->channels, hz);
+		pw_stream_update_params(n->stream, &fmt, 1);
+		/* n->sample_rate IS the node's presented rate (sink_open_filter reads it
+		 * for the same purpose at connect, and sink_publish_latency's "at the
+		 * node (wire) rate" depends on it) — updating it here keeps every other
+		 * reader honest about the rate this node now actually presents. */
+		n->sample_rate = hz;
+	}
+
 	char rate_s[16];
 	snprintf(rate_s, sizeof rate_s, "%d", hz);
 	char drivable[32];
@@ -1182,16 +1210,11 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	 * F32 PLANAR keeps the stage's layout; AUX0..AUXN marks each box output as a
 	 * DISCRETE mono send so no graph tool pairs them as stereo. The rate is THE REAC
 	 * PACE, and PipeWire resamples the graph's pace into it: that is the whole point
-	 * of being an adapter, and it is what removes the ring-trim discards. */
+	 * of being an adapter, and it is what removes the ring-trim discards. Built by
+	 * reac_sink_format_build so a later renegotiation (sink_publish_rate_props,
+	 * #4.3) shares this exact shape rather than a second hand-copied one. */
 	uint8_t fbuf[1024];
 	struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
-	struct spa_audio_info_raw finfo = {
-		.format = SPA_AUDIO_FORMAT_F32P,
-		.rate = (uint32_t)n->sample_rate,
-		.channels = (uint32_t)n->channels,
-	};
-	for (int c = 0; c < n->channels; c++)
-		finfo.position[c] = (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c);
 
 	/* Advertise the volume/mute PropInfo + the current (persisted) Props at connect,
 	 * so a controller sees the controls the moment the node appears and standard
@@ -1204,7 +1227,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 
 	const struct spa_pod *sparams[8];
 	uint32_t nsp = 0;
-	sparams[nsp++] = spa_format_audio_raw_build(&fb, SPA_PARAM_EnumFormat, &finfo);
+	sparams[nsp++] = reac_sink_format_build(&fb, n->channels, n->sample_rate);
 	for (uint32_t i = 0; i < ncp && nsp < 8; i++)
 		sparams[nsp++] = cparams[i];
 	if (pw_stream_connect(n->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
