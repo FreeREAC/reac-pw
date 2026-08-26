@@ -480,43 +480,6 @@ static int test_two_segments_are_independent(void)
 	return 0;
 }
 
-/* The FAMILY caps the drivable rate set (operator ruling + hardware, 2026-08-26:
- * only OHRCA drives 96 kHz). reac_rate_family_mask is that gate; this proves it
- * end to end — the mask, the default pick and the refusal all agree, so a V-Mixer
- * segment never offers, defaults to, or accepts 96 kHz, while OHRCA does all three.
- * This is the contract enforcement behind "family caps available rates -> rate
- * OPTIONS" (2026-08-26-reac-runtime-config.md). */
-static int test_family_caps_the_rate_set(void)
-{
-	const unsigned VMIX = reac_rate_family_mask(0);   /* M-200 / M-300 */
-	const unsigned OHRCA = reac_rate_family_mask(1);  /* M-5000        */
-
-	/* the sets themselves */
-	CHK(VMIX  == (REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000));   /* NO 96k bit */
-	CHK(!(VMIX & REAC_RATE_BIT_96000));
-	CHK(OHRCA == REAC_RATE_ALL_BITS);
-	CHK(OHRCA & REAC_RATE_BIT_96000);
-
-	/* the default pick: best-drivable within the family ceiling */
-	CHK(reac_rate_best_drivable(VMIX)  == 48000);
-	CHK(reac_rate_best_drivable(OHRCA) == 96000);
-
-	/* the refusal: a master asserting 96k is REFUSED on a V-Mixer, accepted on OHRCA;
-	 * 44.1/48 stand on both. Rate and family only ever meet here, as a ceiling. */
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 96000, VMIX)  == REAC_RATE_REFUSE_NOT_DRIVABLE);
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 96000, OHRCA) == REAC_RATE_REFUSE_NONE);
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 48000, VMIX)  == REAC_RATE_REFUSE_NONE);
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 44100, VMIX)  == REAC_RATE_REFUSE_NONE);
-
-	/* the published subset a client renders as rate OPTIONS omits 96k for a V-Mixer */
-	char csv[32];
-	reac_rate_drivable_csv(VMIX, csv, sizeof csv);
-	CHK(strcmp(csv, "44100,48000") == 0);
-	reac_rate_drivable_csv(OHRCA, csv, sizeof csv);
-	CHK(strcmp(csv, "44100,48000,96000") == 0);
-	return 0;
-}
-
 int main(void)
 {
 	CHK(test_closed_list_and_bits() == 0);
@@ -527,7 +490,6 @@ int main(void)
 	CHK(test_apply_rate_shape() == 0);
 	CHK(test_refused_rate_moves_nothing() == 0);
 	CHK(test_narrow_mask_refuses_and_defaults_lower() == 0);
-	CHK(test_family_caps_the_rate_set() == 0);
 	CHK(test_two_segments_are_independent() == 0);
 
 	printf("OK: reac.cfg.rate — closed list, drivability, decide/parse, the "

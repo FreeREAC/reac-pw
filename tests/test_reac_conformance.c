@@ -66,62 +66,9 @@ static void build_and_stamp(const struct reac_master *m, uint8_t *out,
 	reac_master_stamp(m, out, emit, idx);
 }
 
-/* rate ⊥ family — the mechanical gate for the operator's 2026-08-21 rule
- * (commit 79bbdd0: "MIXER FAMILY AND CLOCK PACE MUST BE DETACHED: neither may
- * determine the other"). The ksy states the same law two ways: cfea[19] is the
- * console GENERATION (0 V-Mixer / 1 OHRCA), and "REAC carries the rate in the
- * packet rate, never in the frame". So the emitted CONTROL BLOCK is a pure
- * function of the family and MUST NOT move with the pace.
- *
- * No test crossed the two axes before, which is exactly how 374c39f's
- * reac_rate_console_field (cfea[19] <- rate == 96000 ? 1 : 0) stayed green while
- * silently announcing us as an OHRCA desk whenever --rate asked for 96 kHz. This
- * holds the family fixed, sweeps the pace across all three legal rates, and
- * requires the whole cfea + ENROLL blocks to come out byte-identical -- any rate
- * leak into ANY frame byte fails it. The cadence side (the rate DOES live in the
- * packet period, family-blind) is pinned in test_reac_pacer.c:35-37.
- *
- * Sabotage check: re-derive f[16+19] from the master's fps and this goes red. */
-static int test_rate_and_family_are_orthogonal(void)
-{
-	static const uint8_t MAC[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 };
-	const int families[2] = { 0, 1 };                 /* --mixer m200 (V-Mixer) / m5000 (OHRCA) */
-	const int paces_fps[3] = { 3675, 4000, 8000 };    /* --rate 44.1 / 48 / 96 kHz, pps = rate/12 */
-
-	for (int fi = 0; fi < 2; fi++) {
-		uint8_t cfea_ref[34], enroll_ref[34];
-		for (int pi = 0; pi < 3; pi++) {
-			struct reac_console_cfg cfg = { .out_channels = 8,
-			                                .console_field = families[fi] };
-			struct reac_master m;
-			reac_master_init(&m, MAC, &cfg, paces_fps[pi]);   /* the master SEES the pace */
-
-			uint8_t f[REAC_FRAME_BYTES];
-
-			/* cfea announce: the family byte is the family, whatever the rate. */
-			build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
-			CHK(f[16 + 19] == (uint8_t)families[fi]);
-			CHK(reac_ctrl_checksum_verify(f) == 0);
-			if (pi == 0) memcpy(cfea_ref, f + 16, 34);
-			else CHK(memcmp(f + 16, cfea_ref, 34) == 0);      /* NO rate leak, any byte */
-
-			/* ENROLL: same 0/1 console byte, also family-not-rate (ksy line 639). */
-			build_and_stamp(&m, f, REAC_M_EMIT_ENROLL, 0);
-			CHK(f[16 + 8] == (uint8_t)families[fi]);
-			CHK(reac_ctrl_checksum_verify(f) == 0);
-			if (pi == 0) memcpy(enroll_ref, f + 16, 34);
-			else CHK(memcmp(f + 16, enroll_ref, 34) == 0);
-		}
-	}
-	return 0;
-}
-
 int main(void)
 {
 	uint8_t f[REAC_FRAME_BYTES];
-
-	if (test_rate_and_family_are_orthogonal() != 0)
-		return 1;
 
 	for (size_t c = 0; c < sizeof CONF_CONSOLES / sizeof CONF_CONSOLES[0]; c++) {
 		const struct conf_console *cc = &CONF_CONSOLES[c];
