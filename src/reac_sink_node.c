@@ -142,6 +142,7 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
+	struct reac_identity box_identity_last; /* last-published identity, for the change guard */
 
 	/* reac.rate / reac.rate.source / reac.cfg.rate.state / reac.cfg.rate.refused
 	 * (2026-08-26-reac-runtime-config.md): same shadow-and-compare pattern as
@@ -697,10 +698,18 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	const struct reac_box_model *bm =
 		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
 
-	if (ls == n->link_state_last && bm == n->box_model_last)
+	/* The box's OWN identity (firmware / hw block) off the identity-page replies,
+	 * lifted across the seqlock. Folded into the change guard so a firmware
+	 * arriving after establishment re-publishes even when link+model held steady. */
+	struct reac_identity id;
+	reac_pacer_read_identity(&n->pacer, &id);
+
+	if (ls == n->link_state_last && bm == n->box_model_last &&
+	    memcmp(&id, &n->box_identity_last, sizeof id) == 0)
 		return; /* unchanged: do not spam pw_filter_update_properties */
 	n->link_state_last = ls;
 	n->box_model_last = bm;
+	n->box_identity_last = id;
 
 	char width[16];
 	if (bm)
@@ -732,6 +741,19 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	else
 		snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
 
+	/* The identity page (DT1 tag 0x0500): firmware as "D.DDD", the hw block as
+	 * hex. STAMPED EVEN WHEN EMPTY so a box drop (which resets the accumulator)
+	 * CLEARS a stale value — update_properties merges, so an unstamped key would
+	 * keep the departed box's firmware. "" reads as "not answered" to a consumer. */
+	char firmware[REAC_IDENTITY_FW_STR_CAP] = "";
+	if (id.has_fw)
+		reac_identity_fw_str(id.fw_milli, firmware, sizeof firmware);
+	char hwblock[24] = "";
+	if (id.has_hw_block)
+		snprintf(hwblock, sizeof hwblock, "%02x%02x%02x%02x %02x%02x%02x%02x",
+		         id.hw_block[0], id.hw_block[1], id.hw_block[2], id.hw_block[3],
+		         id.hw_block[4], id.hw_block[5], id.hw_block[6], id.hw_block[7]);
+
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
 		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
@@ -739,6 +761,8 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
 		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
 		REAC_PROP_HEADAMP_BASE,    ha_base,
+		REAC_PROP_BOX_FIRMWARE,    firmware,
+		REAC_PROP_BOX_HW,          hwblock,
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);

@@ -297,6 +297,63 @@ int main(void)
 		reac_frame_ring_free(&p3.ring);
 	}
 
+	/* 3a. THE IDENTITY PAGE on the ingest path: a box answers the grant sweep's
+	 * identity poll (DT1 tag 0x0500) with single-record replies, and rx_ingest
+	 * folds them into rx_identity BEFORE the FSM filter drops them as an unknown
+	 * link-4 record. reac_pacer_read_identity lifts a consistent snapshot across
+	 * the seqlock. Values, not shapes — the firmware digits are the S-0808's own. */
+	{
+		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 };
+		struct reac_pacer p4;
+		memset(&p4, 0, sizeof p4);
+		p4.fd = -1;
+		p4.fps = 8000;
+		memcpy(p4.src, OUR, 6);
+		CHK(reac_frame_ring_init(&p4.ring, 8, 2048) == 0);
+		reac_master_init(&p4.master, OUR, NULL, 8000);
+
+		struct reac_identity id0;
+		reac_pacer_read_identity(&p4, &id0);
+		CHK(id0.has_fw == 0 && id0.has_hw_block == 0);   /* nothing answered yet */
+
+		/* Lay a DT1 identity reply into a frame: 88 19 / type cd ea / control block
+		 * whose SysEx is f0 41 0a 00 00 12 12 <tag> <addr_lo> <payload> <ck> f7. */
+		uint8_t frame[REAC_FRAME_BYTES];
+		#define BUILD_ID_REPLY(FR, ADDR, ...) do { \
+			const uint8_t _pl[] = { __VA_ARGS__ }; \
+			size_t _n = sizeof _pl; \
+			memset((FR), 0, REAC_FRAME_BYTES); \
+			memcpy((FR), OUR, 6); memcpy((FR) + 6, BOX, 6); \
+			(FR)[12] = 0x88; (FR)[13] = 0x19; (FR)[16] = 0xcd; (FR)[17] = 0xea; \
+			uint8_t *_b = (FR) + 18; unsigned _sx = (unsigned)(13 + _n); \
+			_b[0] = 0x04; _b[1] = 0x03; _b[3] = (uint8_t)(_sx + 5); \
+			_b[5] = 0x02; _b[7] = 0xfe; _b[8] = (uint8_t)_sx; \
+			_b[9] = 0xf0; _b[10] = 0x41; _b[11] = 0x0a; _b[14] = 0x12; _b[15] = 0x12; \
+			_b[16] = 0x05; _b[17] = 0x00; \
+			_b[18] = (uint8_t)((ADDR) >> 8); _b[19] = (uint8_t)((ADDR) & 0xff); \
+			for (size_t _i = 0; _i < _n; _i++) _b[20 + _i] = _pl[_i]; \
+			_b[20 + _n] = 0x7f; _b[21 + _n] = 0xf7; \
+		} while (0)
+
+		/* firmware addr 0x0000: 01 00 00 03 -> 1.003 */
+		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_FIRMWARE, 0x01, 0x00, 0x00, 0x03);
+		reac_pacer_rx_ingest(&p4, frame, REAC_FRAME_BYTES);
+		/* hw block addr 0x0600: the S-0808's eight bytes */
+		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_HW_BLOCK, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00);
+		reac_pacer_rx_ingest(&p4, frame, REAC_FRAME_BYTES);
+
+		struct reac_identity id1;
+		reac_pacer_read_identity(&p4, &id1);
+		CHK(id1.has_fw == 1 && id1.fw_milli == 1003);
+		CHK(id1.has_hw_block == 1);
+		char fw[REAC_IDENTITY_FW_STR_CAP];
+		CHK(reac_identity_fw_str(id1.fw_milli, fw, sizeof fw) == 5 && strcmp(fw, "1.003") == 0);
+
+		#undef BUILD_ID_REPLY
+		reac_frame_ring_free(&p4.ring);
+	}
+
 	/* 3b. DYNAMIC DETECTION: geometry comes from the box's DECLARATION — the
 	 * config-announce port table (libreac reac_ports_parse) — and the matrix
 	 * only NAMES the model. An unnamed
