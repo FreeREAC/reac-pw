@@ -32,6 +32,7 @@
 #define REAC_RATE_CFG_H
 
 #include <stddef.h>
+#include <string.h>
 
 #include "reac_role.h"
 
@@ -52,6 +53,37 @@ struct spa_pod;
 #define REAC_PROP_RATE_DRIVABLE  "reac.rate.drivable"     /* csv, ascending         */
 #define REAC_PROP_RATE_STATE     "reac.cfg.rate.state"    /* "applied" | "pending"  */
 #define REAC_PROP_RATE_REFUSED   "reac.cfg.rate.refused"  /* code, or "none"        */
+
+/* THE FAMILY knob (2026-08-26-reac-runtime-config.md §4/§5): the emulated console
+ * GENERATION, asserted by the console and applied by re-establishing the segment
+ * (cfea[19] is set at establishment, so it cannot flip live — same as rate). Its
+ * OPTIONS are the closed family set; changing it re-evaluates the rate to the best
+ * drivable under the NEW family (operator ruling 2026-08-26). */
+#define REAC_CFG_PROP_CONSOLE     "reac.cfg.console"     /* write door         */
+#define REAC_PROP_CONSOLE         "reac.console"         /* standing family    */
+#define REAC_PROP_CONSOLE_OPTIONS "reac.console.options" /* csv, the OPTIONS    */
+#define REAC_CONSOLE_VMIXER "vmixer"   /* console_field 0 = M-200 / M-300 */
+#define REAC_CONSOLE_OHRCA  "ohrca"    /* console_field 1 = M-5000        */
+#define REAC_CONSOLE_OPTIONS_CSV (REAC_CONSOLE_VMIXER "," REAC_CONSOLE_OHRCA)
+
+/* token -> console_field (0/1), or -1 if the string names no known family. */
+static inline int reac_console_family_parse(const char *s)
+{
+	if (!s) return -1;
+	if (strcmp(s, REAC_CONSOLE_VMIXER) == 0) return 0;
+	if (strcmp(s, REAC_CONSOLE_OHRCA)  == 0) return 1;
+	return -1;
+}
+/* console_field -> stable token (nonzero = OHRCA, the 96k-capable generation). */
+static inline const char *reac_console_family_name(unsigned console_field)
+{
+	return console_field ? REAC_CONSOLE_OHRCA : REAC_CONSOLE_VMIXER;
+}
+
+/* Parse a `reac.cfg.console` family assertion out of a Props object pod, as
+ * reac_rate_prop_parse does for the rate: 1 + *out_cf (0/1) on a known family,
+ * -1 if the key was present but the value unusable, 0 if none was carried. */
+int reac_console_prop_parse(const struct spa_pod *props, int *out_cf);
 
 #define REAC_RATE_SOURCE_ASSERTED "asserted"
 /* Operator, 2026-08-26: "default is not a valid value — we make the best the default,
