@@ -254,6 +254,9 @@ struct reac_pacer_cfg {
 	 * (today: only a test, standing in for the probe that does not exist yet)
 	 * passes a narrower mask directly. */
 	unsigned drivable_mask;
+	/* 1 when the opening rate was ASSERTED (--rate, a conf file) rather than picked
+	 * by the best-drivable convention — the source label starts truthful either way. */
+	int rate_asserted;
 };
 
 /* Default slot-debt budget, EXPRESSED IN TIME because the thing it bounds is a
@@ -491,7 +494,7 @@ struct reac_pacer {
 	 * never changes after (like p->clock_follow above) — plain, not atomic. */
 	unsigned      drivable_mask;
 	_Atomic int   rate_hz;             /* the standing rate, Hz               */
-	_Atomic int   rate_asserted;       /* 0 = default, 1 = operator-asserted  */
+	_Atomic int   rate_asserted;       /* 0 = convention (best drivable), 1 = asserted */
 	_Atomic int   rate_refused;        /* enum reac_rate_refuse, last refusal */
 	_Atomic int   rate_reestablishing; /* 1 from an accepted request until the
 	                                    * FSM reaches ESTABLISHED again        */

@@ -1462,14 +1462,14 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * a zero-initialised cfg means "declare the whole closed list drivable" —
 	 * the honest default for a daemon with no real probe (see reac_rate_cfg.h).
 	 * The rate the caller opened at (cfg->fps * REAC_SAMPLES_PER_PKT) is
-	 * published as the standing rate, sourced as "default" until an
-	 * assertion changes it — main.c already decides FOR ITSELF whether that
-	 * rate came from the operator's --rate or from auto-detect/the built-in
-	 * default; reac_rate_asserted lets it say which. */
+	 * published as the standing rate. cfg->rate_asserted says whether it was
+	 * ASSERTED (--rate, a conf file) or picked by the best-drivable
+	 * CONVENTION — the source label starts truthful instead of defaulting
+	 * to a word the operator has ruled is not a value. */
 	p->drivable_mask = cfg->drivable_mask ? cfg->drivable_mask : REAC_RATE_ALL_BITS;
 	atomic_store_explicit(&p->rate_hz, cfg->fps * REAC_SAMPLES_PER_PKT,
 	                      memory_order_relaxed);
-	atomic_store_explicit(&p->rate_asserted, 0, memory_order_relaxed);
+	atomic_store_explicit(&p->rate_asserted, cfg->rate_asserted ? 1 : 0, memory_order_relaxed);
 	atomic_store_explicit(&p->rate_refused, REAC_RATE_REFUSE_NONE, memory_order_relaxed);
 	atomic_store_explicit(&p->rate_reestablishing, 0, memory_order_relaxed);
 
