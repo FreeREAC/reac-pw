@@ -1524,7 +1524,8 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * ASSERTED (--rate, a conf file) or picked by the best-drivable
 	 * CONVENTION — the source label starts truthful instead of defaulting
 	 * to a word the operator has ruled is not a value. */
-	p->drivable_mask = cfg->drivable_mask ? cfg->drivable_mask : REAC_RATE_ALL_BITS;
+	p->drivable_mask = (cfg->drivable_mask ? cfg->drivable_mask : REAC_RATE_ALL_BITS)
+	                   & reac_rate_family_mask(cfg->console.console_field);
 	atomic_store_explicit(&p->rate_hz, cfg->fps * REAC_SAMPLES_PER_PKT,
 	                      memory_order_relaxed);
 	atomic_store_explicit(&p->rate_asserted, cfg->rate_asserted ? 1 : 0, memory_order_relaxed);

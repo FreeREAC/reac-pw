@@ -658,7 +658,11 @@ static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_la
 		        c->tag, v, reac_conf_layer_name(got));
 	}
 	*out_layer = REAC_CONF_BUILTIN;
-	return reac_rate_best_drivable(REAC_RATE_ALL_BITS);
+	/* The best-drivable default is bounded by the emulated family: a V-Mixer
+	 * master defaults to 48 kHz, an OHRCA master to 96 kHz (reac_rate_family_mask). */
+	unsigned fam = c->mixer ? reac_rate_family_mask(c->mixer->console_field)
+	                        : REAC_RATE_ALL_BITS;
+	return reac_rate_best_drivable(fam);
 }
 
 /* Bring one segment online: resolve its rate, open the RX feeder, and (role
