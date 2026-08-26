@@ -106,6 +106,7 @@ reac_pw_src = [
   'src/reac_headamp_prop.c',
   'src/reac_rate_cfg.c',
   'src/reac_role_cfg.c',
+  'src/reac_sink_format.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',
@@ -542,6 +543,25 @@ role_cfg_test = executable('test_reac_role_cfg',
   include_directories : [include_directories('src')],
   dependencies : [spa_dep])
 test('reac_role_cfg', role_cfg_test)
+
+# --- unit test: reac_sink_format — the reac-playback node's Format pod and ---
+# the renegotiate decision (2026-08-26-clock-tabs-and-reac-pace-coupling.md
+# §4.3 increment 3). Pure: no pw_stream, no socket. Proves the format-build
+# function returns the asserted rate (parsed back with spa_format_audio_raw_
+# parse, not just re-read from the builder call's own argument) at the boot
+# rate and again after a change, that the channel count clamps into
+# [0, REAC_MAX_CHANNELS], and that reac_sink_format_needs_update fires exactly
+# when the pacer's rate has moved past the node's last-pushed rate — never on
+# a byte-identical boot, never on a refused write (which leaves the pacer's
+# rate_hz untouched), never on a non-positive rate. Sabotage-verified: an
+# inverted needs_update would make a real rate change look like a no-op AND
+# an unrelated poll look like a pending renegotiation — this test drives both
+# arms so flipping the comparison turns a currently-green line red.
+sink_format_test = executable('test_reac_sink_format',
+  ['tests/test_reac_sink_format.c', 'src/reac_sink_format.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [spa_dep, libreac_dep])
+test('reac_sink_format', sink_format_test)
 
 # --- unit test: the GRANT enrollment sweep — allocator + generated group A -----
 # The fix for "link established != channels enrolled" (GRANT-SWEEP.md, 2026-07-17).
