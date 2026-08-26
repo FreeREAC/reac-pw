@@ -54,36 +54,6 @@ struct spa_pod;
 #define REAC_PROP_RATE_STATE     "reac.cfg.rate.state"    /* "applied" | "pending"  */
 #define REAC_PROP_RATE_REFUSED   "reac.cfg.rate.refused"  /* code, or "none"        */
 
-/* THE FAMILY knob (2026-08-26-reac-runtime-config.md §4/§5): the emulated console
- * GENERATION, asserted by the console and applied by re-establishing the segment
- * (cfea[19] is set at establishment, so it cannot flip live — same as rate). Its
- * OPTIONS are the closed family set; changing it re-evaluates the rate to the best
- * drivable under the NEW family (operator ruling 2026-08-26). */
-#define REAC_CFG_PROP_CONSOLE     "reac.cfg.console"     /* write door         */
-#define REAC_PROP_CONSOLE         "reac.console"         /* standing family    */
-#define REAC_PROP_CONSOLE_OPTIONS "reac.console.options" /* csv, the OPTIONS    */
-#define REAC_CONSOLE_VMIXER "vmixer"   /* console_field 0 = M-200 / M-300 */
-#define REAC_CONSOLE_OHRCA  "ohrca"    /* console_field 1 = M-5000        */
-#define REAC_CONSOLE_OPTIONS_CSV (REAC_CONSOLE_VMIXER "," REAC_CONSOLE_OHRCA)
-
-/* token -> console_field (0/1), or -1 if the string names no known family. */
-static inline int reac_console_family_parse(const char *s)
-{
-	if (!s) return -1;
-	if (strcmp(s, REAC_CONSOLE_VMIXER) == 0) return 0;
-	if (strcmp(s, REAC_CONSOLE_OHRCA)  == 0) return 1;
-	return -1;
-}
-/* console_field -> stable token (nonzero = OHRCA, the 96k-capable generation). */
-static inline const char *reac_console_family_name(unsigned console_field)
-{
-	return console_field ? REAC_CONSOLE_OHRCA : REAC_CONSOLE_VMIXER;
-}
-
-/* Parse a `reac.cfg.console` family assertion out of a Props object pod, as
- * reac_rate_prop_parse does for the rate: 1 + *out_cf (0/1) on a known family,
- * -1 if the key was present but the value unusable, 0 if none was carried. */
-int reac_console_prop_parse(const struct spa_pod *props, int *out_cf);
 
 #define REAC_RATE_SOURCE_ASSERTED "asserted"
 /* Operator, 2026-08-26: "default is not a valid value — we make the best the default,
@@ -119,23 +89,6 @@ int reac_rate_is_closed(int hz);
 /* This rate's bit in a drivable_mask, or 0 if hz is not in the closed list at
  * all (so a caller can never test a bit that does not exist). */
 unsigned reac_rate_bit(int hz);
-
-/* The rate ceiling the emulated console GENERATION imposes, as a drivable-mask.
- * VERIFIED on hardware 2026-08-26: only an OHRCA master (M-5000, console_field 1)
- * drives a box at 96 kHz; a V-Mixer master (M-200 / M-300, console_field 0) caps
- * it at 48 kHz — so the family, not just the NIC, bounds what this segment can
- * pace. A DECLARED cap (a property of the family, like the closed list itself),
- * meant to be ANDed into the observed drivable mask so the published subset, the
- * default pick and the refusal all agree: a V-Mixer segment never offers,
- * defaults to, or accepts 96 kHz. cfea[19] stays the family byte — this is the
- * one place family and rate legitimately meet, as a CEILING, never by deriving
- * one byte from the other (see reac-pw's rate-family-orthogonality gate). */
-static inline unsigned reac_rate_family_mask(unsigned console_field)
-{
-	/* OHRCA (1) drives all three; a V-Mixer (0) tops out at 48 kHz. */
-	return console_field ? REAC_RATE_ALL_BITS
-	                     : (REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000);
-}
 
 /* The highest rate whose bit is set, 0 if mask carries none of the closed
  * three (an honest probe, or the all-bits default, never produces this — a

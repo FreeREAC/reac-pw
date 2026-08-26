@@ -1040,6 +1040,10 @@ int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 	 * the SAME table (p->headamp), so the operator's current settings enroll
 	 * again exactly as they would on any other establishment. */
 	struct reac_console_cfg saved_cfg = p->master.cfg;
+	/* cfea[19] is the RATE CLASS the box reads at establishment (tool-verified
+	 * 2026-08-26: the only master byte that differs 48k vs 96k). Derive it from the
+	 * pace here so a rate change flips it and the box re-paces. 96 kHz -> 1, else 0. */
+	saved_cfg.console_field = (fps >= 8000) ? 1 : 0;
 	const struct reac_console_cfg *ccfg = saved_cfg.out_channels ? &saved_cfg : NULL;
 	/* Captured BEFORE reac_master_init overwrites p->master: note_transition and
 	 * sync_published_box normally read the OLD state straight off p->master, but
@@ -1524,8 +1528,7 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * ASSERTED (--rate, a conf file) or picked by the best-drivable
 	 * CONVENTION — the source label starts truthful instead of defaulting
 	 * to a word the operator has ruled is not a value. */
-	p->drivable_mask = (cfg->drivable_mask ? cfg->drivable_mask : REAC_RATE_ALL_BITS)
-	                   & reac_rate_family_mask(cfg->console.console_field);
+	p->drivable_mask = cfg->drivable_mask ? cfg->drivable_mask : REAC_RATE_ALL_BITS;
 	atomic_store_explicit(&p->rate_hz, cfg->fps * REAC_SAMPLES_PER_PKT,
 	                      memory_order_relaxed);
 	atomic_store_explicit(&p->rate_asserted, cfg->rate_asserted ? 1 : 0, memory_order_relaxed);
@@ -1563,9 +1566,13 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 
 	/* A zero out_channels means the caller left the console cfg unset -> the
 	 * S-1608 default (reac_master_init(NULL)). */
-	const struct reac_console_cfg *ccfg =
-		cfg->console.out_channels ? &cfg->console : NULL;
-	reac_master_init(&p->master, p->src, ccfg, cfg->fps);
+	/* cfea[19] = RATE CLASS from the pace (tool-verified 2026-08-26): 96 kHz -> 1,
+	 * else 0. Set here for the opening establishment; apply_rate does the same on a
+	 * live rate change. The emulated generation (--mixer) does not gate the rate. */
+	struct reac_console_cfg ccfg_buf =
+		cfg->console.out_channels ? cfg->console : REAC_CONSOLE_CFG_IDLE;
+	ccfg_buf.console_field = (cfg->fps >= 8000) ? 1 : 0;
+	reac_master_init(&p->master, p->src, &ccfg_buf, cfg->fps);
 
 	/* MASTER head-amp DMX send table (task #155). Off unless the caller passes at
 	 * least one setting: an all-unset table's next() always returns 0, so the
