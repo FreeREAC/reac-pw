@@ -478,31 +478,23 @@ struct reac_pacer {
 	_Atomic uint64_t ha_cmd_drops;              /* commands dropped (ring full) */
 	_Atomic uint64_t ha_cmd_applied;            /* commands drained + applied (diag) */
 
-	/* ---- live rate re-establish (2026-08-26-reac-runtime-config.md,
-	 * in-place resync per 2026-08-26-rate-change-jitter.md) --------------- *
+	/* ---- live rate re-establish (2026-08-26-reac-runtime-config.md) --------- *
 	 * A controller asserts `reac.cfg.rate` on the sink node's Props, same
 	 * channel as head-amp. Deciding whether to accept it is PURE
 	 * (reac_rate_cfg_decide) and happens on the caller's thread (the PipeWire
 	 * main loop) before anything here is touched — a refused rate never
 	 * reaches the pacer thread at all. What DOES need this thread is APPLYING
 	 * an accepted one: p->period_ns, p->fps, the clock discipline and the
-	 * fps-derived fields of `struct reac_master` (cycle_len, grant_dwell,
-	 * ...) are pacer-thread-owned state, exactly like the head-amp TABLE
-	 * above — so the handoff is the same single-writer pattern, simplified to
-	 * one pending cell instead of a ring: unlike a head-amp write (one of up
-	 * to REAC_HEADAMP_MAX_CH*3 independent cells), only the LATEST requested
-	 * rate is ever meaningful, so a second assertion before the first drains
-	 * simply supersedes it — nothing accumulates or replays out of order.
-	 * rate_req_seq is bumped by the producer AFTER the value is stored
-	 * (release), so the consumer's acquire load of the seq is what makes the
-	 * stored value visible; rate_req_seen is PACER-THREAD-ONLY.
-	 *
-	 * APPLYING it does NOT always mean re-enrolling: an already-ESTABLISHED
-	 * master keeps its session (box, channel map, head-amp) and only its
-	 * cadence changes in place — see reac_pacer_apply_rate and
-	 * master_update_fps_derived in reac_pacer.c. A master that has not yet
-	 * established (IDLE/PROBING/GRANTING) still runs the full cold-establish
-	 * path, since there is no live session to protect. */
+	 * whole `struct reac_master` (cycle_len, grant_dwell, ...: all fps-scaled,
+	 * see reac_master_init) are pacer-thread-owned state, exactly like the
+	 * head-amp TABLE above — so the handoff is the same single-writer pattern,
+	 * simplified to one pending cell instead of a ring: unlike a head-amp
+	 * write (one of up to REAC_HEADAMP_MAX_CH*3 independent cells), only the
+	 * LATEST requested rate is ever meaningful, so a second assertion before
+	 * the first drains simply supersedes it — nothing accumulates or replays
+	 * out of order. rate_req_seq is bumped by the producer AFTER the value is
+	 * stored (release), so the consumer's acquire load of the seq is what
+	 * makes the stored value visible; rate_req_seen is PACER-THREAD-ONLY. */
 	_Atomic int      rate_req_hz;
 	_Atomic uint32_t rate_req_seq;
 	uint32_t         rate_req_seen;             /* PACER THREAD ONLY */
@@ -517,11 +509,7 @@ struct reac_pacer {
 	_Atomic int   rate_asserted;       /* 0 = convention (best drivable), 1 = asserted */
 	_Atomic int   rate_refused;        /* enum reac_rate_refuse, last refusal */
 	_Atomic int   rate_reestablishing; /* 1 from an accepted request until the
-	                                    * FSM reaches ESTABLISHED again — an
-	                                    * in-place resync on an already-
-	                                    * ESTABLISHED master never sets this
-	                                    * (the FSM never left), so it stays 0
-	                                    * throughout */
+	                                    * FSM reaches ESTABLISHED again        */
 
 	/* ---- clock discipline (#75) ------------------------------------------- *
 	 * INERT unless clock_follow is set. Publishers (any thread) drop a ppm sample
@@ -632,37 +620,15 @@ void reac_pacer_request_rate(struct reac_pacer *p, int hz);
 
 /* CONSUMER side — apply one already-accepted rate to `p`: recompute
  * period_ns/fps/the clock discipline/the catch-up budget for the new cadence,
- * and re-baseline the health window (reac_pacer_health_poll) so drift_ppm
- * measures against the new nominal instead of reporting a stale-average
- * artifact. Then:
- *
- *   - master ALREADY ESTABLISHED: an IN-PLACE RESYNC
- *     (2026-08-26-rate-change-jitter.md) — master_update_fps_derived (in
- *     reac_pacer.c) recomputes only reac_master's fps-derived cadence fields
- *     (cycle_len, grant_dwell, link_check_reload, ...) with the FSM left
- *     exactly where it was. The session — box identity, channel map,
- *     head-amp — is untouched, and nothing is re-granted: the box re-locks
- *     its frame PLL to the new cadence on its own. Measured motivation: the
- *     old always-re-enrol behaviour stalled tx for ~8 s per change with no
- *     protocol need, since the session never changed. rate_reestablishing
- *     stays 0 (the FSM never left ESTABLISHED, so there is nothing pending).
- *
- *   - master NOT YET ESTABLISHED (IDLE/PROBING/GRANTING): the original
- *     cold-establish path, unchanged — RE-ESTABLISH by re-running
- *     reac_master_init at the new fps (no process restart, no new socket).
- *     The FSM starts at IDLE exactly as reac_pacer_open originally did; the
- *     very next pacer_loop iteration promotes it to PROBING and the box
- *     enrolls through the normal grant/dwell sequence at the new cadence.
- *     The console cfg and head-amp table are NOT reset. rate_reestablishing
- *     is set to 1 until the FSM reaches ESTABLISHED again.
- *
- * PACER-THREAD-ONLY in production; exposed so the offline test can drive it
- * without a live NIC. Returns the fps applied.
- *
- * LIVE-ONLY CLAIM THIS CANNOT PROVE OFFLINE: that a real box re-locks cleanly
- * to the new cadence without a re-grant, and that tx does not stall. Verify
- * on the rig — a PATCH mid-session, watching tx continuity and both nodes'
- * Format follow — before trusting this in service. */
+ * then RE-ESTABLISH by re-running reac_master_init at the new fps (an
+ * INTERNAL re-establish per the spec — no process restart, no new socket).
+ * Re-init starts the FSM at IDLE exactly as reac_pacer_open originally did;
+ * the very next pacer_loop iteration promotes it to PROBING and the box
+ * re-enrolls through the same grant/dwell sequence as a cold start, just at
+ * the new cadence. The console cfg and head-amp table are NOT reset — only
+ * establishment is redone, per the ruling that a rate change re-clocks the
+ * segment and nothing else. PACER-THREAD-ONLY in production; exposed so the
+ * offline test can drive it without a live NIC. Returns the fps applied. */
 int reac_pacer_apply_rate(struct reac_pacer *p, int hz);
 
 /* Drain the latest pending rate request (if its seq is newer than what was
