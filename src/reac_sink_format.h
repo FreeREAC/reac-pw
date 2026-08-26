@@ -18,8 +18,18 @@
  * PURE decision of when a renegotiation is owed.
  *
  * PURE: no PipeWire stream object, no socket, no RT privilege — the pod
- * builder is handed a caller-owned buffer, and the decision function takes
- * two plain ints. Unit-testable offline, same shape as reac_rate_cfg.
+ * builder is handed a caller-owned buffer, and the decision functions take
+ * plain ints. Unit-testable offline, same shape as reac_rate_cfg.
+ *
+ * INCREMENT 4 (this file's second decision, reac_sink_format_rate_after_
+ * attempt): increment 3's `pw_stream_update_params(EnumFormat)` call was
+ * measured live to change nothing — it advertises a new supported set but
+ * does not force an already-streaming adapter to renegotiate its ACTIVE
+ * format. The mechanism fix (reac_sink_node.c's sink_reconnect_rate:
+ * pw_stream_disconnect + pw_stream_connect at the new Format, a graph-side
+ * re-establish) needs a live pw_stream and cannot be proven here; what IS
+ * pure and provable is what n->sample_rate should become given the
+ * attempt's outcome — see the function's own comment.
  *
  * SCOPE: reac-playback (the master TX sink) only. Its presented rate is
  * authoritatively the pacer's rate_hz — the same atomic sink_publish_rate_
@@ -62,5 +72,19 @@ const struct spa_pod *reac_sink_format_build(struct spa_pod_builder *b,
  * nothing has ever diverged, which is what keeps a normal single-rate boot
  * byte-identical (no renegotiation ever fires). */
 int reac_sink_format_needs_update(int node_rate, int pacer_rate);
+
+/* PURE: what should the node's presented sample_rate become after a live
+ * reconnect attempt at `requested_hz`? `connect_ok` is the caller's
+ * pw_stream_connect() outcome for that request (nonzero = succeeded).
+ *
+ * On success the requested rate is what the node now genuinely presents, so
+ * it is adopted. On failure the node's format was never proven to have
+ * moved — `prev_hz` is what it is still known to present (the rate the
+ * caller's own fallback reconnect re-asserts) — so THAT is returned, never
+ * `requested_hz`. Getting this backwards would have the node claim a rate
+ * pw_stream_connect() just refused: the "applied:true for work not done"
+ * failure this project's discipline refuses everywhere else, applied here to
+ * a node's own rate bookkeeping instead of a controller's answer. */
+int reac_sink_format_rate_after_attempt(int requested_hz, int prev_hz, int connect_ok);
 
 #endif /* REAC_SINK_FORMAT_H */

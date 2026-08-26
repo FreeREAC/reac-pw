@@ -151,6 +151,17 @@ struct reac_sink_node {
 	int rate_reestablishing_last;
 	enum reac_rate_refuse rate_refused_last;
 
+	/* Set around sink_reconnect_rate's pw_stream_disconnect/connect pair
+	 * (increment 4). MAIN-LOOP-only write; on_process (RT, a different
+	 * thread under PW_STREAM_FLAG_RT_PROCESS) reads it as the FIRST check,
+	 * relaxed load, as a second, cheap line of defense on top of the
+	 * load-bearing guarantee that already covers this: PipeWire does not
+	 * invoke process() on a disconnected stream (the same guarantee
+	 * reac_sink_node_ensure's destroy+rebuild has relied on since the
+	 * box-width path landed). See sink_reconnect_rate for why this window
+	 * is otherwise harmless even without the flag. */
+	_Atomic int rate_reconnecting;
+
 	/* reac.role / reac.cfg.role.state / reac.cfg.role.refused
 	 * (2026-08-26-reac-runtime-config.md, the ROLE half): MAIN-LOOP-only,
 	 * unlike the rate trio above this needs no cross-thread atomic — this
@@ -221,6 +232,16 @@ static void on_process(void *data)
 {
 	struct reac_sink_node *n = data;
 	if (!n->pacer_open)
+		return;
+	/* Mid a rate reconnect (sink_reconnect_rate, increment 4): the stream is
+	 * disconnected right now, so dequeuing a buffer below would hand back
+	 * nothing anyway and this callback should not even be reached — PipeWire
+	 * does not drive process() on a disconnected stream. This check is
+	 * belt-and-braces documentation of that fact, not the mechanism that
+	 * makes it true. Either way: no dequeue, no encode, no submit to the
+	 * pacer this cycle — it free-runs FILLER exactly as it already does
+	 * whenever nothing is linked (the have == 0 path below). */
+	if (atomic_load_explicit(&n->rate_reconnecting, memory_order_relaxed))
 		return;
 	const struct spa_io_position *position = n->position;
 	if (!position)
@@ -735,6 +756,109 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		                              width);
 }
 
+/* MAIN LOOP: force the live adapter to actually present `hz`, closing the
+ * gap increment 3 left (docs/design/notes/2026-08-26-rate-change-node-format-
+ * gap.md's correction). `pw_stream_update_params(EnumFormat)` on an already-
+ * connected, streaming node advertises a new SUPPORTED set; it does not
+ * renegotiate the ACTIVE format — measured live: the update call ran, `pw-
+ * dump` Format.rate did not move. The robust trigger is the same shape as a
+ * graph-side node re-establish: disconnect, then connect again with the
+ * new-rate Format — the sink's equivalent of the wire's own re-establish the
+ * pacer already performs in reac_pacer_apply_rate.
+ *
+ * SAME STREAM OBJECT, not a destroy+recreate. reac_sink_node_ensure's box-
+ * width path destroys and calls sink_open_filter to build a brand new
+ * pw_stream (a new node identity is correct there — the box itself changed).
+ * A rate change is not that: the node should stay the SAME node (same id,
+ * same reac.link-state/box-model/discovery properties, which live on the
+ * stream object and are set once at pw_stream_new_simple — a destroy+
+ * recreate would flash them back to the "probing"/"none" connect-time seed
+ * for one registry update, which is honest for a box swap and dishonest
+ * here). Disconnect+connect on the SAME object renegotiates only the Format/
+ * Props params and leaves everything else on the node untouched.
+ *
+ * RT FEED SAFETY. on_process runs on the stream's own RT data thread
+ * (PW_STREAM_FLAG_RT_PROCESS); PipeWire does not invoke it while the stream
+ * is disconnected — the same guarantee reac_sink_node_ensure's destroy+
+ * rebuild already depends on ("no RT race" — see reac_sink_node_ensure's own
+ * comment). on_process also carries a belt-and-braces rate_reconnecting
+ * check as its first line (set here, cleared below) for defense in depth.
+ * Either way, a cycle skipped during the reconnect window costs nothing
+ * dangerous: the pacer's frame ring is fed independently of this stream's
+ * lifecycle and simply free-runs FILLER for the gap, exactly the existing
+ * have == 0 fallback already does whenever nothing is linked.
+ *
+ * n->position / n->rate_match are cleared across the gap: they point at SPA_
+ * IO areas the graph handed us via io_changed, and a fresh connect gets a
+ * fresh (possibly different) area — reading the old pointer in the interim
+ * would be reading a stale binding, not a use-after-free (PipeWire owns that
+ * memory for the node's lifetime), but stale all the same until io_changed
+ * fires again on the new connection.
+ *
+ * Returns 0 and adopts `hz` on success. On failure it re-asserts the OLD
+ * rate (`prev_hz`, still known-good) so the sink does not end up silently
+ * disconnected until some unrelated event (a box swap) happens to rebuild
+ * it, and returns -1 — reac_sink_format_rate_after_attempt is what decides
+ * n->sample_rate honestly either way. */
+static int sink_reconnect_rate(struct reac_sink_node *n, int hz)
+{
+	if (!n->stream)
+		return -1;
+	int prev_hz = n->sample_rate;
+
+	atomic_store_explicit(&n->rate_reconnecting, 1, memory_order_relaxed);
+	pw_stream_disconnect(n->stream);
+	n->position = NULL;
+	n->rate_match = NULL;
+
+	uint8_t fbuf[1024];
+	struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
+	uint8_t pbuf[2048];
+	struct spa_pod_builder pb = SPA_POD_BUILDER_INIT(pbuf, sizeof pbuf);
+	const struct spa_pod *cparams[5];
+	uint32_t ncp = sink_build_params(n, &pb, cparams);
+
+	const struct spa_pod *sparams[8];
+	uint32_t nsp = 0;
+	sparams[nsp++] = reac_sink_format_build(&fb, n->channels, hz);
+	for (uint32_t i = 0; i < ncp && nsp < 8; i++)
+		sparams[nsp++] = cparams[i];
+
+	int ok = pw_stream_connect(n->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+	                          PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+	                          sparams, nsp) >= 0;
+	if (!ok) {
+		pw_log_warn("reac:playback — rate reconnect to %d Hz failed; "
+		            "re-asserting %d Hz so the sink is not left disconnected",
+		            hz, prev_hz);
+		uint8_t fbuf2[1024];
+		struct spa_pod_builder fb2 = SPA_POD_BUILDER_INIT(fbuf2, sizeof fbuf2);
+		const struct spa_pod *fallback = reac_sink_format_build(&fb2, n->channels, prev_hz);
+		const struct spa_pod *fsparams[8];
+		uint32_t fnsp = 0;
+		fsparams[fnsp++] = fallback;
+		for (uint32_t i = 0; i < ncp && fnsp < 8; i++)
+			fsparams[fnsp++] = cparams[i];
+		if (pw_stream_connect(n->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+		                      PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+		                      fsparams, fnsp) < 0)
+			pw_log_warn("reac:playback — fallback reconnect to %d Hz ALSO failed; "
+			            "sink is disconnected until the next box/format event", prev_hz);
+	}
+	atomic_store_explicit(&n->rate_reconnecting, 0, memory_order_relaxed);
+
+	/* link/box/disco properties live on the stream object across a same-
+	 * object disconnect+connect (unlike sink_open_filter's destroy+recreate,
+	 * this never resets their shadows, so they need no re-stamp here).
+	 * ProcessLatency IS rate-dependent, but on_log_timer — this function's
+	 * only caller — already calls sink_publish_latency right after
+	 * sink_publish_rate_props on the same 200 ms tick, so the figure is
+	 * re-derived for whichever rate we ended up presenting without a second
+	 * call here. */
+	n->sample_rate = reac_sink_format_rate_after_attempt(hz, prev_hz, ok);
+	return ok ? 0 : -1;
+}
+
 /* MAIN LOOP: stamp reac.rate / reac.rate.source / reac.rate.drivable /
  * reac.cfg.rate.state / reac.cfg.rate.refused (2026-08-26-reac-runtime-
  * config.md §0/§1) — the read side of the `reac.cfg.rate` write door
@@ -765,30 +889,24 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 	/* Renegotiate the node's presented Format when the pacer's accepted rate has
 	 * moved past what we last built/pushed — the exact gap docs/design/notes/
 	 * 2026-08-26-rate-change-node-format-gap.md measured: `reac_pacer_apply_rate`
-	 * re-clocks the WIRE, but nothing renegotiated the pw_stream node's Format
-	 * param, so pw-top kept reading the boot rate. MAIN LOOP only, same as this
-	 * whole function — pw_stream_update_params is never safe off the loop thread,
-	 * which is why this reads the pacer's rate_hz ATOMIC on the timer poll rather
-	 * than being invoked FROM the SCHED_FIFO pacer thread that set it (the same
+	 * re-clocks the WIRE, but a bare `pw_stream_update_params(EnumFormat)` never
+	 * renegotiated the pw_stream node's ACTIVE format, so pw-top kept reading the
+	 * boot rate (increment 3, measured not-working live). sink_reconnect_rate is
+	 * increment 4's fix: a disconnect+connect re-establish, the trigger that
+	 * actually forces it. MAIN LOOP only, same as this whole function —
+	 * pw_stream_disconnect/connect are never safe off the loop thread, which is
+	 * why this reads the pacer's rate_hz ATOMIC on the timer poll rather than
+	 * being invoked FROM the SCHED_FIFO pacer thread that set it (the same
 	 * cross-thread pattern sink_publish_link_props/_disco_props already use).
 	 * reac_sink_format_needs_update is false on a normal single-rate boot (n-
 	 * >sample_rate was seeded from the very same rate at construction) and false
-	 * again the instant this pushes, so a boot or an already-caught-up node never
-	 * calls pw_stream_update_params at all — no format churn where nothing moved.
-	 * Builds from reac_sink_format_build, the ONE function sink_open_filter's
-	 * initial connect also uses, so the pushed shape can never drift from the
-	 * connect-time shape. */
-	if (reac_sink_format_needs_update(n->sample_rate, hz)) {
-		uint8_t fbuf[1024];
-		struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
-		const struct spa_pod *fmt = reac_sink_format_build(&fb, n->channels, hz);
-		pw_stream_update_params(n->stream, &fmt, 1);
-		/* n->sample_rate IS the node's presented rate (sink_open_filter reads it
-		 * for the same purpose at connect, and sink_publish_latency's "at the
-		 * node (wire) rate" depends on it) — updating it here keeps every other
-		 * reader honest about the rate this node now actually presents. */
-		n->sample_rate = hz;
-	}
+	 * again once sink_reconnect_rate has caught the node up, so a boot or an
+	 * already-caught-up node never reconnects at all — no churn where nothing
+	 * moved. n->sample_rate is updated INSIDE sink_reconnect_rate, honestly
+	 * (reac_sink_format_rate_after_attempt), only once the attempt's outcome is
+	 * known — never optimistically ahead of what pw_stream_connect actually did. */
+	if (reac_sink_format_needs_update(n->sample_rate, hz))
+		sink_reconnect_rate(n, hz);
 
 	char rate_s[16];
 	snprintf(rate_s, sizeof rate_s, "%d", hz);
@@ -1277,6 +1395,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		n->chan_cur[c] = 1.0f;
 		atomic_init(&n->chan_target[c], 1.0f);
 	}
+	atomic_init(&n->rate_reconnecting, 0);
 
 	/* reac.cfg.role's standing answer: nothing has been asserted yet, so the
 	 * fact is simply "applied" (we are already what we are) with no refusal.

@@ -35,3 +35,8 @@ int reac_sink_format_needs_update(int node_rate, int pacer_rate)
 		return 0;
 	return node_rate != pacer_rate;
 }
+
+int reac_sink_format_rate_after_attempt(int requested_hz, int prev_hz, int connect_ok)
+{
+	return connect_ok ? requested_hz : prev_hz;
+}
