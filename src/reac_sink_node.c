@@ -35,6 +35,7 @@
 #include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
 #include "reac_link_state.h"
+#include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
 #include "reac_arbitration.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
@@ -1513,7 +1514,8 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 		return -1;
 	char want_label[64];
 	snprintf(want_label, sizeof want_label, "%s", label ? label : "");
-	if (n->stream && n->channels == want && strcmp(want_label, n->label) == 0)
+	if (!reac_node_ensure_needs_rebuild(n->stream != NULL, n->channels, n->label,
+	                                    want, want_label))
 		return 0;   /* identical box (same width AND label): nothing to do */
 	/* Absent, or a box change — either a different width OR a same-out-width swap that
 	 * only changes the label (e.g. S-1608 -> S-4000S, both 8 out). Either way REBUILD
@@ -1524,8 +1526,18 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	 * sink_open_filter re-stamps all of them. The pacer/recognizer is UNTOUCHED
 	 * (pw_filter_destroy quiesces the data thread's process() before it returns, so
 	 * n->channels / n->ports are swapped in a clean gap — no RT race), and the
-	 * per-channel gain state persists across the rebuild. */
+	 * per-channel gain state persists across the rebuild.
+	 *
+	 * The old stream is EXPLICITLY disconnected before it is destroyed (not left to
+	 * pw_stream_destroy's own implicit disconnect) so the server sees a distinct
+	 * "this node is going away" request before this function goes on, in this same
+	 * call, to queue the replacement's connect — the two requests reach the daemon
+	 * over the same connection in the order sent, so the old global's removal is
+	 * always processed ahead of the new one's creation. This closes the ordering gap
+	 * docs/design/notes/2026-08-26-duplicate-reac-node.md flagged as unverified; a
+	 * live pw-dump count is still what proves the graph itself never shows both. */
 	if (n->stream) {
+		pw_stream_disconnect(n->stream);
 		pw_stream_destroy(n->stream);
 		n->stream = NULL;
 	}
