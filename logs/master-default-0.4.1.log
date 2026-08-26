@@ -1,0 +1,104 @@
+reac-pw: REAC rate = 48000 Hz (4000 pps), from the command line
+reac-pw: recovered REAC rate = 48000 Hz (4000 pps), rx stream = box upstream return (box-width)
+reac-pacer: slot-debt catch-up ON (4 slots = 1000 us at 4000 fps)
+reac-pw: MASTER role (M-200 profile) on 'enp128s20f0u6' — event-driven establishment: probing until the box's cold-connect (cdea 04 03) arrives; FSM/RX transcript on stderr
+reac-pw: MASTER autodetect — reac-capture / reac-playback appear sized to the box once it is recognized on the wire
+reac-master: [150314.442802] IDLE -> PROBING (timer)
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=791 tx_errors=0 late_wakes=0 catchup=0 dropped_slots=0
+reac-disco: [150315.142289] box 00:40:ab:c4:dc:9c model=s0808
+reac-master: [150315.142291] recognized box = S-0808 (8 in / 8 out) from 00:40:ab:c4:dc:9c
+reac-master: [150315.142291] box presence GAINED (CONFIG from 00:40:ab:c4:dc:9c)
+reac-master: [150315.142291] rx CONFIG from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [150315.142292] PROBING -> GRANTING (rx CONFIG)
+reac-master: [150315.142538] rx UNICAST from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-pw: autodetected S-0808 (8 in / 8 out) -> reac-capture 8 in / reac-playback 8 out
+reac-master: [150315.293288] box presence LOST (600 frames silent)
+reac-master: [150315.345791] box presence GAINED (UNICAST from 00:40:ab:c4:dc:9c)
+reac-master: [150315.894289] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030014000200fe 0ff0410a00001212 01000600010078f7 0000000000000000 
+reac-master: [150315.894557] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030013000200fe 0ef0410a00001212 03020001007af700 0000000000000002 
+reac-master: [150315.894788] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [150316.838290] GRANTING -> ESTABLISHED (timer)
+reac-master: [150316.838538] rx UNICAST from 00:40:ab:c4:dc:9c (state ESTABLISHED, 946.0 ms after last chanmap)
+reac-disco: [150317.142547] box 00:40:ab:c4:dc:9c model=s0808 (ours)
+reac-master: [150317.590045] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state ESTABLISHED)
+reac-pacer: ring depth 27 frames (6.75 ms) [interval min 0 (0.00 ms) max 35 (8.75 ms)] | guard trims=0 dropped=0 frames | tx=41592 tx_errors=0 late_wakes=1 catchup=1 dropped_slots=0
+reac-health: drift -16.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 27 frames (6.75 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 19 frames (4.75 ms) [interval min 0 (0.00 ms) max 37 (9.25 ms)] | guard trims=0 dropped=0 frames | tx=82391 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-master: [150335.469801] ESTABLISHED -> IDLE (rx ?)
+reac-master: [150335.469802] IDLE -> PROBING (timer)
+reac-master: [150335.469802] box presence LOST (600 frames silent)
+reac-master: [150335.470062] box presence GAINED (UNICAST from 00:40:ab:c4:dc:9c)
+reac-master: [150335.470062] rx UNICAST from 00:40:ab:c4:dc:9c (state PROBING, 881.8 ms after last chanmap)
+reac-master: [150335.633870] box presence LOST (600 frames silent)
+reac-health: drift -86902.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 85 frames (23.13 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 272 frames (74.01 ms) [interval min 4 (1.09 ms) max 513 (139.59 ms)] | guard trims=1 dropped=257 frames | tx=89881 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 275 frames (74.83 ms) [interval min 239 (65.03 ms) max 513 (139.59 ms)] | guard trims=2 dropped=514 frames | tx=92821 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 276 frames (75.10 ms) [interval min 235 (63.95 ms) max 515 (140.14 ms)] | guard trims=3 dropped=773 frames | tx=95761 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-master: [150338.831977] recognized box = S-0808 (8 in / 8 out) from 00:40:ab:c4:dc:9c
+reac-master: [150338.831978] box presence GAINED (CONFIG from 00:40:ab:c4:dc:9c)
+reac-master: [150338.831978] rx CONFIG from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [150338.831978] PROBING -> GRANTING (rx CONFIG)
+reac-master: [150338.832239] rx UNICAST from 00:40:ab:c4:dc:9c (state GRANTING, 1872.9 ms after last chanmap)
+reac-master: [150338.996055] box presence LOST (600 frames silent)
+reac-master: [150339.035513] box presence GAINED (UNICAST from 00:40:ab:c4:dc:9c)
+reac-pacer: ring depth 277 frames (75.37 ms) [interval min 235 (63.95 ms) max 515 (140.14 ms)] | guard trims=4 dropped=1032 frames | tx=98701 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-master: [150339.584077] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030014000200fe 0ff0410a00001212 01000600010078f7 0000000000000000 
+reac-master: [150339.584355] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030013000200fe 0ef0410a00001212 03020001007af700 0000000000000002 
+reac-master: [150339.584627] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-pacer: ring depth 279 frames (75.92 ms) [interval min 237 (64.49 ms) max 514 (139.86 ms)] | guard trims=5 dropped=1290 frames | tx=101641 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-master: [150340.536459] GRANTING -> ESTABLISHED (timer)
+reac-master: [150340.536737] rx UNICAST from 00:40:ab:c4:dc:9c (state ESTABLISHED, 954.3 ms after last chanmap)
+reac-pacer: ring depth 282 frames (76.73 ms) [interval min 236 (64.22 ms) max 513 (139.59 ms)] | guard trims=6 dropped=1547 frames | tx=104581 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-master: [150341.287479] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state ESTABLISHED)
+reac-pacer: ring depth 284 frames (77.28 ms) [interval min 236 (64.22 ms) max 514 (139.86 ms)] | guard trims=7 dropped=1805 frames | tx=107521 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 287 frames (78.10 ms) [interval min 235 (63.95 ms) max 513 (139.59 ms)] | guard trims=8 dropped=2062 frames | tx=110461 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 289 frames (78.64 ms) [interval min 236 (64.22 ms) max 514 (139.86 ms)] | guard trims=9 dropped=2320 frames | tx=113401 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 292 frames (79.46 ms) [interval min 235 (63.95 ms) max 513 (139.59 ms)] | guard trims=10 dropped=2577 frames | tx=116341 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 295 frames (80.27 ms) [interval min 237 (64.49 ms) max 513 (139.59 ms)] | guard trims=11 dropped=2834 frames | tx=119281 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 296 frames (80.54 ms) [interval min 238 (64.76 ms) max 515 (140.14 ms)] | guard trims=12 dropped=3093 frames | tx=122221 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-health: drift -14.5 ppm | discard 303.240 frames/s (82.514 ms/s) | ring 296 frames (80.54 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 298 frames (81.09 ms) [interval min 235 (63.95 ms) max 514 (139.86 ms)] | guard trims=13 dropped=3351 frames | tx=125161 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 301 frames (81.90 ms) [interval min 239 (65.03 ms) max 513 (139.59 ms)] | guard trims=14 dropped=3608 frames | tx=128101 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 304 frames (82.72 ms) [interval min 235 (63.95 ms) max 513 (139.59 ms)] | guard trims=15 dropped=3865 frames | tx=131041 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 252 frames (68.57 ms) [interval min 253 (68.84 ms) max 514 (139.86 ms)] | guard trims=16 dropped=4123 frames | tx=133246 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 255 frames (69.39 ms) [interval min 235 (63.95 ms) max 513 (139.59 ms)] | guard trims=17 dropped=4380 frames | tx=136186 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 257 frames (69.93 ms) [interval min 237 (64.49 ms) max 514 (139.86 ms)] | guard trims=18 dropped=4638 frames | tx=139126 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 258 frames (70.20 ms) [interval min 237 (64.49 ms) max 515 (140.14 ms)] | guard trims=19 dropped=4897 frames | tx=142066 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 260 frames (70.75 ms) [interval min 235 (63.95 ms) max 514 (139.86 ms)] | guard trims=20 dropped=5155 frames | tx=145006 tx_errors=0 late_wakes=3 catchup=3 dropped_slots=0
+reac-pacer: ring depth 263 frames (71.56 ms) [interval min 238 (64.76 ms) max 513 (139.59 ms)] | guard trims=21 dropped=5412 frames | tx=147946 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-pacer: ring depth 266 frames (72.38 ms) [interval min 238 (64.76 ms) max 513 (139.59 ms)] | guard trims=22 dropped=5669 frames | tx=150886 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-pacer: ring depth 268 frames (72.93 ms) [interval min 235 (63.95 ms) max 514 (139.86 ms)] | guard trims=23 dropped=5927 frames | tx=153826 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-pacer: ring depth 271 frames (73.74 ms) [interval min 238 (64.76 ms) max 513 (139.59 ms)] | guard trims=24 dropped=6184 frames | tx=156766 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-health: drift -9.4 ppm | discard 309.094 frames/s (84.107 ms/s) | ring 454 frames (123.54 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 274 frames (74.56 ms) [interval min 236 (64.22 ms) max 513 (139.59 ms)] | guard trims=25 dropped=6441 frames | tx=159706 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-pacer: ring depth 275 frames (74.83 ms) [interval min 237 (64.49 ms) max 515 (140.14 ms)] | guard trims=26 dropped=6700 frames | tx=162646 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-pacer: ring depth 277 frames (75.37 ms) [interval min 238 (64.76 ms) max 514 (139.86 ms)] | guard trims=27 dropped=6958 frames | tx=165586 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-master: [150357.963138] ESTABLISHED -> IDLE (rx ?)
+reac-master: [150357.963138] IDLE -> PROBING (timer)
+reac-master: [150357.963138] box presence LOST (600 frames silent)
+reac-master: [150357.963384] box presence GAINED (UNICAST from 00:40:ab:c4:dc:9c)
+reac-master: [150357.963384] rx UNICAST from 00:40:ab:c4:dc:9c (state PROBING, 676.7 ms after last chanmap)
+reac-master: [150358.114384] box presence LOST (600 frames silent)
+reac-master: [150361.357387] recognized box = S-0808 (8 in / 8 out) from 00:40:ab:c4:dc:9c
+reac-master: [150361.357388] box presence GAINED (CONFIG from 00:40:ab:c4:dc:9c)
+reac-master: [150361.357388] rx CONFIG from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [150361.357388] PROBING -> GRANTING (rx CONFIG)
+reac-master: [150361.357634] rx UNICAST from 00:40:ab:c4:dc:9c (state GRANTING, 1905.0 ms after last chanmap)
+reac-master: [150361.508384] box presence LOST (600 frames silent)
+reac-master: [150361.560886] box presence GAINED (UNICAST from 00:40:ab:c4:dc:9c)
+reac-master: [150362.109634] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030014000200fe 0ff0410a00001212 01000600010078f7 0000000000000000 
+reac-master: [150362.109884] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:dc:9c) -> GRANTING
+  blk: 04030013000200fe 0ef0410a00001212 03020001007af700 0000000000000002 
+reac-master: [150362.110134] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state GRANTING)
+reac-master: [150363.053385] GRANTING -> ESTABLISHED (timer)
+reac-master: [150363.053634] rx UNICAST from 00:40:ab:c4:dc:9c (state ESTABLISHED, 946.0 ms after last chanmap)
+reac-master: [150363.805136] rx HEARTBEAT from 00:40:ab:c4:dc:9c (state ESTABLISHED)
+reac-health: drift +16928.2 ppm | discard 75.883 frames/s (18.971 ms/s) | ring 382 frames (95.50 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 382 frames (95.50 ms) [interval min 263 (65.75 ms) max 388 (97.00 ms)] | guard trims=27 dropped=6958 frames | tx=205481 tx_errors=0 late_wakes=4 catchup=4 dropped_slots=0
+reac-health: drift -12.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 371 frames (92.75 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 371 frames (92.75 ms) [interval min 354 (88.50 ms) max 388 (97.00 ms)] | guard trims=27 dropped=6958 frames | tx=246281 tx_errors=0 late_wakes=6 catchup=6 dropped_slots=0

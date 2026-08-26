@@ -742,6 +742,10 @@ int main(int argc, char **argv)
 		                              /* #75: default OFF -> the pacer free-runs on
 		                               * CLOCK_MONOTONIC exactly as it always has. */
 		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
+		                              /* --rate / a conf-file rate is an ASSERTION; only the
+		                               * built-in best-drivable pick is the convention. */
+		                              .rate_asserted = rate_layer != REAC_CONF_BUILTIN
+		                                            && rate_layer != REAC_CONF_NONE,
 		                              /* #77: unset -> nothing is designated and the
 		                               * name heuristic alone grades the reference. */
 		                              .clock_ref = getenv("REACPW_CLOCK_REF"),

@@ -48,13 +48,17 @@ struct spa_pod;
  * this codebase's established sentinel for "no value applies" (see
  * reac.master.mac in reac_link_state.h). */
 #define REAC_PROP_RATE           "reac.rate"
-#define REAC_PROP_RATE_SOURCE    "reac.rate.source"      /* "asserted" | "default" */
+#define REAC_PROP_RATE_SOURCE    "reac.rate.source"      /* "asserted" | "convention" */
 #define REAC_PROP_RATE_DRIVABLE  "reac.rate.drivable"     /* csv, ascending         */
 #define REAC_PROP_RATE_STATE     "reac.cfg.rate.state"    /* "applied" | "pending"  */
 #define REAC_PROP_RATE_REFUSED   "reac.cfg.rate.refused"  /* code, or "none"        */
 
 #define REAC_RATE_SOURCE_ASSERTED "asserted"
-#define REAC_RATE_SOURCE_DEFAULT  "default"
+/* Operator, 2026-08-26: "default is not a valid value — we make the best the default,
+ * it is a convention." A rate the operator gave (--rate, a conf file, a console
+ * assertion over the graph) is ASSERTED; with no assertion standing the daemon runs
+ * the best drivable rate BY CONVENTION, and that is what this value says. */
+#define REAC_RATE_SOURCE_CONVENTION "convention"
 #define REAC_RATE_STATE_APPLIED   "applied"
 #define REAC_RATE_STATE_PENDING   "pending"
 

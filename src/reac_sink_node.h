@@ -49,6 +49,8 @@ struct reac_sink_cfg {
 	 * free-runs on CLOCK_MONOTONIC exactly as before and no reference is even
 	 * read. See docs/ENV-KNOBS.md (REACPW_CLOCK_FOLLOW). */
 	int clock_follow;
+	/* 1 when the opening rate was ASSERTED (--rate / conf) — see reac_pacer_cfg. */
+	int rate_asserted;
 	/* Operator-DESIGNATED clock reference (#77): a case-insensitive SUBSTRING of
 	 * the device name ("Babyface"), from REACPW_CLOCK_REF. A device that matches
 	 * outranks every name heuristic — the operator knows their hardware and we do

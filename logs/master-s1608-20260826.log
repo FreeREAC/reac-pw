@@ -1,0 +1,139 @@
+reac-pw: REAC rate = 48000 Hz (4000 pps), from the command line
+reac-pw: recovered REAC rate = 48000 Hz (4000 pps), rx stream = box upstream return (box-width)
+reac-pacer: slot-debt catch-up ON (4 slots = 1000 us at 4000 fps)
+reac-pw: MASTER role (M-5000 profile) on 'enp131s0' — event-driven establishment: probing until the box's cold-connect (cdea 04 03) arrives; FSM/RX transcript on stderr
+reac-pw: head-amp DMX send armed — 32 cell(s), re-asserted once established (RIG-GATED: verify 48V at the XLR pins)
+reac-pw: MASTER autodetect — reac-capture / reac-playback appear sized to the box once it is recognized on the wire
+reac-disco: [149761.396724] box 00:40:ab:c4:80:41 model=unknown
+reac-master: [149761.396725] box presence GAINED (UNICAST from 00:40:ab:c4:80:41)
+reac-master: [149761.396725] rx UNICAST from 00:40:ab:c4:80:41 (state PROBING)
+reac-master: [149761.396729] IDLE -> PROBING (timer)
+reac-master: [149761.396962] rx UNICAST from 00:40:ab:c4:80:41 (state PROBING)
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=791 tx_errors=0 late_wakes=0 catchup=0 dropped_slots=0
+reac-master: [149763.548712] box presence LOST (600 frames silent)
+reac-master: [149765.185215] box presence GAINED (BCAST-FILLER from 00:40:ab:c4:80:41)
+reac-disco: [149766.549963] box 00:40:ab:c4:80:41 model=s1608
+reac-master: [149766.549967] recognized box = S-1608 (16 in / 8 out) from 00:40:ab:c4:80:41
+reac-master: [149766.549978] rx CONFIG from 00:40:ab:c4:80:41 (state GRANTING)
+reac-master: [149766.549978] PROBING -> GRANTING (rx CONFIG)
+reac-master: [149766.550212] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:80:41) -> GRANTING
+  blk: 04030014000200fe 0ff0410a00001212 01000600010078f7 0000000000000000 
+reac-disco: [149766.550462] master 00:40:ab:c4:80:41 model=unknown
+reac-disco: [149766.550712] box 00:40:ab:c4:80:41 model=unknown
+reac-master: [149766.550712] box JOIN seen (cdea 04 03, unicast from 00:40:ab:c4:80:41) -> GRANTING
+  blk: 04030013000200fe 0ef0410a00001212 03020001007af700 0000000000000002 
+reac-master: [149766.550963] rx HEARTBEAT from 00:40:ab:c4:80:41 (state GRANTING)
+reac-master: [149766.551212] rx UNICAST from 00:40:ab:c4:80:41 (state GRANTING, 970.5 ms after last chanmap)
+reac-pw: autodetected S-1608 (16 in / 8 out) -> reac-capture 16 in / reac-playback 8 out
+reac-master: [149768.317964] GRANTING -> ESTABLISHED (timer)
+reac-master: [149768.318212] rx UNICAST from 00:40:ab:c4:80:41 (state ESTABLISHED, 4.2 ms after last chanmap)
+reac-disco: [149768.550962] box 00:40:ab:c4:80:41 model=s1608 (ours)
+reac-master: [149769.069212] rx HEARTBEAT from 00:40:ab:c4:80:41 (state ESTABLISHED)
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=41591 tx_errors=0 late_wakes=1 catchup=1 dropped_slots=0
+reac-health: drift -6.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=82391 tx_errors=0 late_wakes=7 catchup=7 dropped_slots=0
+reac-health: drift +153.3 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 2.84/s (catchup 2.75/s, dropped 0.49/s, worst debt 5 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=122386 tx_errors=0 late_wakes=32 catchup=31 dropped_slots=5
+reac-health: drift +11.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=163185 tx_errors=0 late_wakes=35 catchup=34 dropped_slots=5
+reac-health: drift -11.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.29/s (catchup 0.29/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=203185 tx_errors=0 late_wakes=35 catchup=34 dropped_slots=5
+reac-health: drift +0.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=243985 tx_errors=0 late_wakes=36 catchup=35 dropped_slots=5
+reac-health: drift -0.3 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.29/s (catchup 0.29/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=284786 tx_errors=0 late_wakes=38 catchup=37 dropped_slots=5
+reac-health: drift +1.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=325580 tx_errors=0 late_wakes=57 catchup=55 dropped_slots=10
+reac-health: drift +131.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 2.00/s (catchup 1.90/s, dropped 0.50/s, worst debt 5 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=366379 tx_errors=0 late_wakes=58 catchup=56 dropped_slots=10
+reac-health: drift +16.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=407180 tx_errors=0 late_wakes=60 catchup=58 dropped_slots=10
+reac-health: drift +171.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.59/s (catchup 0.49/s, dropped 0.59/s, worst debt 6 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=447972 tx_errors=0 late_wakes=65 catchup=62 dropped_slots=16
+reac-health: drift -12.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.30/s (catchup 0.30/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=488773 tx_errors=0 late_wakes=71 catchup=68 dropped_slots=16
+reac-health: drift +487.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 3.63/s (catchup 3.43/s, dropped 1.76/s, worst debt 13 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=529553 tx_errors=0 late_wakes=109 catchup=104 dropped_slots=34
+reac-health: drift -9.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.08/s (catchup 1.08/s, dropped 0.00/s, worst debt 3 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=569553 tx_errors=0 late_wakes=116 catchup=111 dropped_slots=34
+reac-health: drift +0.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=610353 tx_errors=0 late_wakes=129 catchup=124 dropped_slots=34
+reac-health: drift -0.9 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.27/s (catchup 1.27/s, dropped 0.00/s, worst debt 3 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=651153 tx_errors=0 late_wakes=180 catchup=175 dropped_slots=34
+reac-health: drift +0.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 6.60/s (catchup 6.60/s, dropped 0.00/s, worst debt 3 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=691953 tx_errors=0 late_wakes=196 catchup=191 dropped_slots=34
+reac-health: drift -0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=732753 tx_errors=0 late_wakes=198 catchup=193 dropped_slots=34
+reac-health: drift -0.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=772753 tx_errors=0 late_wakes=199 catchup=194 dropped_slots=34
+reac-health: drift -0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 2.55/s (catchup 2.55/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=812753 tx_errors=0 late_wakes=225 catchup=220 dropped_slots=34
+reac-health: drift +0.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.20/s (catchup 1.20/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=852753 tx_errors=0 late_wakes=237 catchup=232 dropped_slots=34
+reac-health: drift +7.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.69/s (catchup 0.69/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=892753 tx_errors=0 late_wakes=244 catchup=239 dropped_slots=34
+reac-health: drift -7.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.29/s (catchup 0.29/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=932753 tx_errors=0 late_wakes=246 catchup=241 dropped_slots=34
+reac-health: drift -0.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=973553 tx_errors=0 late_wakes=246 catchup=241 dropped_slots=34
+reac-health: drift +0.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1013553 tx_errors=0 late_wakes=246 catchup=241 dropped_slots=34
+reac-health: drift +12.6 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1054353 tx_errors=0 late_wakes=246 catchup=241 dropped_slots=34
+reac-health: drift -0.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1094354 tx_errors=0 late_wakes=246 catchup=241 dropped_slots=34
+reac-health: drift -10.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.18/s (catchup 1.18/s, dropped 0.00/s, worst debt 3 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1135153 tx_errors=0 late_wakes=258 catchup=253 dropped_slots=34
+reac-health: drift -1.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.29/s (catchup 0.29/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1175153 tx_errors=0 late_wakes=263 catchup=258 dropped_slots=34
+reac-health: drift -0.9 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.39/s (catchup 0.39/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1215953 tx_errors=0 late_wakes=267 catchup=262 dropped_slots=34
+reac-health: drift +0.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1256753 tx_errors=0 late_wakes=267 catchup=262 dropped_slots=34
+reac-health: drift +0.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.30/s (catchup 0.30/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1296753 tx_errors=0 late_wakes=271 catchup=266 dropped_slots=34
+reac-health: drift -10.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1336748 tx_errors=0 late_wakes=280 catchup=274 dropped_slots=39
+reac-health: drift +132.3 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.98/s (catchup 0.88/s, dropped 0.49/s, worst debt 5 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1377548 tx_errors=0 late_wakes=282 catchup=276 dropped_slots=39
+reac-health: drift +9.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.40/s (catchup 0.40/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1417548 tx_errors=0 late_wakes=285 catchup=279 dropped_slots=39
+reac-health: drift -2.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1458349 tx_errors=0 late_wakes=287 catchup=281 dropped_slots=39
+reac-health: drift -7.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1499148 tx_errors=0 late_wakes=288 catchup=282 dropped_slots=39
+reac-health: drift +0.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.40/s (catchup 0.40/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1539148 tx_errors=0 late_wakes=291 catchup=285 dropped_slots=39
+reac-health: drift -6.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1579948 tx_errors=0 late_wakes=299 catchup=293 dropped_slots=39
+reac-health: drift +6.8 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.78/s (catchup 0.78/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1619948 tx_errors=0 late_wakes=299 catchup=293 dropped_slots=39
+reac-health: drift +1.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1660748 tx_errors=0 late_wakes=302 catchup=296 dropped_slots=39
+reac-health: drift -2.0 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.20/s (catchup 0.20/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1700748 tx_errors=0 late_wakes=303 catchup=297 dropped_slots=39
+reac-health: drift +14.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1741548 tx_errors=0 late_wakes=307 catchup=301 dropped_slots=39
+reac-health: drift -22.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.59/s (catchup 0.59/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1781548 tx_errors=0 late_wakes=310 catchup=304 dropped_slots=39
+reac-health: drift +9.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.49/s (catchup 0.49/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1822348 tx_errors=0 late_wakes=334 catchup=328 dropped_slots=39
+reac-health: drift +9.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.96/s (catchup 1.96/s, dropped 0.00/s, worst debt 3 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1862348 tx_errors=0 late_wakes=336 catchup=330 dropped_slots=39
+reac-health: drift +1.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.10/s (catchup 1.10/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1902348 tx_errors=0 late_wakes=347 catchup=341 dropped_slots=39
+reac-health: drift -12.2 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1943148 tx_errors=0 late_wakes=347 catchup=341 dropped_slots=39
+reac-health: drift +0.5 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.00/s (catchup 0.00/s, dropped 0.00/s, worst debt 0 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=1983948 tx_errors=0 late_wakes=347 catchup=341 dropped_slots=39
+reac-health: drift +0.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=2023948 tx_errors=0 late_wakes=360 catchup=354 dropped_slots=39
+reac-health: drift +0.1 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 1.30/s (catchup 1.30/s, dropped 0.00/s, worst debt 3 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=2064748 tx_errors=0 late_wakes=361 catchup=355 dropped_slots=39
+reac-health: drift -0.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.10/s (catchup 0.10/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=2104748 tx_errors=0 late_wakes=362 catchup=356 dropped_slots=39
+reac-health: drift +0.4 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.40/s (catchup 0.40/s, dropped 0.00/s, worst debt 2 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=2144748 tx_errors=0 late_wakes=367 catchup=361 dropped_slots=39
+reac-health: drift +1.7 ppm | discard 0.000 frames/s (0.000 ms/s) | ring 0 frames (0.00 ms) | late 0.50/s (catchup 0.50/s, dropped 0.00/s, worst debt 1 slots) | tx_errors 0 | rate-match n/a ppm
+reac-pacer: ring depth 0 frames (0.00 ms) [interval min 0 (0.00 ms) max 0 (0.00 ms)] | guard trims=0 dropped=0 frames | tx=2184748 tx_errors=0 late_wakes=374 catchup=368 dropped_slots=39
+reac-master: shutdown in ESTABLISHED — tx=2208012 err=0 late=379 | rx_box_frames=2200930 rx_box_ctrl=551 rx_joins=2 grant_attempts=1 | drops: peer-gone=0 bye=0 mac-change=0 grant-timeout=0 | log-drops=0

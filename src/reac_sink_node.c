@@ -722,7 +722,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_RATE,          rate_s,
-		REAC_PROP_RATE_SOURCE,   asserted ? REAC_RATE_SOURCE_ASSERTED : REAC_RATE_SOURCE_DEFAULT,
+		REAC_PROP_RATE_SOURCE,   asserted ? REAC_RATE_SOURCE_ASSERTED : REAC_RATE_SOURCE_CONVENTION,
 		REAC_PROP_RATE_DRIVABLE, drivable,
 		REAC_PROP_RATE_STATE,    reest ? REAC_RATE_STATE_PENDING : REAC_RATE_STATE_APPLIED,
 		REAC_PROP_RATE_REFUSED,  reac_rate_refuse_code(refused),
@@ -1197,6 +1197,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */
 	pcfg.n_headamps = cfg->n_headamps;
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
+	pcfg.rate_asserted = cfg->rate_asserted; /* the source label starts truthful */
 	pcfg.catchup_max_slots = cfg->catchup_max_slots;  /* 0 = the measured default */
 	n->rate_match_off = cfg->rate_match_off != 0;
 	if (cfg->clock_ref) {                    /* #77; "" = designate nothing */
