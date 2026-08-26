@@ -105,6 +105,7 @@ reac_pw_src = [
   'src/reac_headamp_tx.c',
   'src/reac_headamp_prop.c',
   'src/reac_rate_cfg.c',
+  'src/reac_role_cfg.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',
@@ -520,6 +521,27 @@ rate_cfg_test = executable('test_reac_rate_cfg',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep, spa_dep])
 test('reac_rate_cfg', rate_cfg_test)
+
+# --- unit test: reac.cfg.role — the ROLE half of runtime config ---------------
+# (2026-08-26-reac-runtime-config.md). Pure decision core only (reac_role_cfg.c:
+# the parse, the same-role-is-a-no-op detection, the state string a request
+# publishes) — there is no pacer-level re-establish to exercise here at all,
+# because this increment's own honesty clause (reac_role_cfg.h) is that the
+# cross-engine swap a role CHANGE would need (master's reac_sink_node+
+# reac_pacer vs. a slave's reac_slave — two different engines, each owning its
+# own AF_PACKET socket) is a documented stub: it is decided and answered, never
+# silently dropped and never faked as applied, but not actually carried out
+# without a real NIC to prove the re-attach against. Proves: role 0/1 parse
+# (Int and the Float-bridge tolerance), a malformed value refuses, a same-role
+# assertion is an idempotent "applied" no-op, and a role-changing assertion
+# answers "role_reestablish_pending" — and stays there, sabotage-verified by
+# flipping the state string comparison in reac_role_cfg_apply_state to prove
+# the shape-identity test actually distinguishes the two answers.
+role_cfg_test = executable('test_reac_role_cfg',
+  ['tests/test_reac_role_cfg.c', 'src/reac_role_cfg.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [spa_dep])
+test('reac_role_cfg', role_cfg_test)
 
 # --- unit test: the GRANT enrollment sweep — allocator + generated group A -----
 # The fix for "link established != channels enrolled" (GRANT-SWEEP.md, 2026-07-17).

@@ -32,6 +32,7 @@
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
 #include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
+#include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
 #include "reac_link_state.h"
 #include "reac_arbitration.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
@@ -149,6 +150,22 @@ struct reac_sink_node {
 	int rate_asserted_last;
 	int rate_reestablishing_last;
 	enum reac_rate_refuse rate_refused_last;
+
+	/* reac.role / reac.cfg.role.state / reac.cfg.role.refused
+	 * (2026-08-26-reac-runtime-config.md, the ROLE half): MAIN-LOOP-only,
+	 * unlike the rate trio above this needs no cross-thread atomic — this
+	 * increment's role apply never touches the pacer/RT thread at all (see
+	 * reac_role_cfg.h's HONESTY note), so on_param_changed (which decides the
+	 * answer) and sink_publish_role_props (which stamps it) are both
+	 * main-loop-only and can share plain fields, the same way chan_vol/muted
+	 * already do. role_state/role_refused are the CURRENT answer;
+	 * *_last are the shadow sink_publish_role_props compares against, seeded
+	 * to values the real answer can never equal so the very first publish
+	 * always fires. */
+	const char *role_state;
+	enum reac_role_refuse role_refused;
+	const char *role_state_last;
+	enum reac_role_refuse role_refused_last;
 
 	/* #208: the peer reac-capture node's SLOT (main's `&src`), so the same log-timer
 	 * that keeps THIS sink's badge live also drives the source's — that node has no
@@ -424,8 +441,10 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_params),
 		SPA_PROP_INFO_description, SPA_POD_String(
 			"REAC head-amp: \"reac.headamp.<ch>.{phantom,pad,sens}\" = value; "
-			"REAC rate: \"reac.cfg.rate\" = 44100|48000|96000"),
-		SPA_PROP_INFO_type,        SPA_POD_String("reac.headamp.<ch>.<param> | reac.cfg.rate"));
+			"REAC rate: \"reac.cfg.rate\" = 44100|48000|96000; "
+			"REAC role: \"reac.cfg.role\" = 0 (master) | 1 (slave)"),
+		SPA_PROP_INFO_type,        SPA_POD_String(
+			"reac.headamp.<ch>.<param> | reac.cfg.rate | reac.cfg.role"));
 
 	/* Current state. The channelMap mirrors the AUX ports (playback_NN -> AUXc),
 	 * so a controller's per-channel sliders line up with the box outputs; `volume`
@@ -563,6 +582,34 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		/* A refusal moves nothing: no request reaches the pacer, so fps,
 		 * period_ns and the master FSM are untouched — the refused prop
 		 * above is the only thing that changes. */
+	}
+
+	/* LIVE role control (2026-08-26-reac-runtime-config.md, the ROLE half):
+	 * the same Props object may carry a `reac.cfg.role` assertion under
+	 * SPA_PROP_params. This node exists ONLY in the master role
+	 * (reac_sink_node_new is never called for a slave), so REAC_ROLE_MASTER
+	 * is a fact of this call site exactly as it is for rate above — a
+	 * slave's own answer is exercised at the decision-core level
+	 * (test_reac_role_cfg.c), because a slave has no props-carrying node to
+	 * assert it through at all yet.
+	 *
+	 * Unlike rate, applying the decision never reaches the pacer/RT thread:
+	 * asserting the role we already are is a genuine no-op answered
+	 * "applied"; asserting the other role is accepted as well-formed but the
+	 * cross-engine swap it would take (tear down this master engine, bring
+	 * up a slave one) is not performed here — see reac_role_cfg.h's HONESTY
+	 * note for why, and REAC_ROLE_STATE_REESTABLISH_PENDING for the answer
+	 * that says so instead of a fake "applied". */
+	enum reac_role req_role;
+	int role_parsed = reac_role_prop_parse(param, &req_role);
+	if (role_parsed != 0) {
+		n->role_refused = role_parsed < 0 ? REAC_ROLE_REFUSE_MALFORMED
+		                                  : REAC_ROLE_REFUSE_NONE;
+		if (n->role_refused == REAC_ROLE_REFUSE_NONE)
+			n->role_state = reac_role_cfg_apply_state(REAC_ROLE_MASTER, req_role);
+		/* A refusal leaves role_state exactly as it was: the malformed write
+		 * changed nothing about the running role, so its answer should not
+		 * look like it did either. */
 	}
 
 	if (changed)
@@ -726,6 +773,45 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 		REAC_PROP_RATE_DRIVABLE, drivable,
 		REAC_PROP_RATE_STATE,    reest ? REAC_RATE_STATE_PENDING : REAC_RATE_STATE_APPLIED,
 		REAC_PROP_RATE_REFUSED,  reac_rate_refuse_code(refused),
+		NULL);
+	if (props) {
+		pw_stream_update_properties(n->stream, &props->dict);
+		pw_properties_free(props);
+	}
+}
+
+/* MAIN LOOP: stamp reac.role / reac.cfg.role.state / reac.cfg.role.refused
+ * (2026-08-26-reac-runtime-config.md, the ROLE half) — the read side of the
+ * `reac.cfg.role` write door on_param_changed answers below. Plain-field
+ * shadow-and-compare, same pattern as sink_publish_rate_props above; no
+ * cross-thread atomic to read because this increment's role apply never
+ * reaches the pacer/RT thread at all (reac_role_cfg.h's HONESTY note).
+ *
+ * reac.role reports the FACT that this node is running, not the console's
+ * latest reac.cfg.role request: this node exists ONLY in the master role
+ * (reac_sink_node_new is never called for a slave), and the cross-engine
+ * swap a role-changing assertion would need is exactly what this increment
+ * does not perform — so the observed role stays master, honestly, even while
+ * reac.cfg.role.state says a change is pending. Publishing anything else
+ * here would be the "fake success" this module's header explicitly refuses
+ * to produce. */
+static void sink_publish_role_props(struct reac_sink_node *n)
+{
+	if (!n->stream)
+		return;
+
+	if (n->role_state == n->role_state_last && n->role_refused == n->role_refused_last)
+		return;                          /* unchanged: do not spam the update */
+	n->role_state_last = n->role_state;
+	n->role_refused_last = n->role_refused;
+
+	char role_s[4];
+	snprintf(role_s, sizeof role_s, "%d", REAC_CFG_ROLE_VALUE_MASTER);
+
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_ROLE,         role_s,
+		REAC_PROP_ROLE_STATE,   n->role_state,
+		REAC_PROP_ROLE_REFUSED, reac_role_refuse_code(n->role_refused),
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);
@@ -1000,6 +1086,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	reac_pacer_log_drain(&n->pacer, stderr);
 	sink_publish_link_props(n);
 	sink_publish_rate_props(n);
+	sink_publish_role_props(n);
 	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
 	sink_publish_latency(n);
 	sink_publish_health(n);
@@ -1133,6 +1220,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	 * state immediately). */
 	sink_publish_link_props(n);
 	sink_publish_rate_props(n);
+	sink_publish_role_props(n);
 	sink_publish_disco_props(n);
 	sink_publish_latency(n);
 	return 0;
@@ -1166,6 +1254,16 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		n->chan_cur[c] = 1.0f;
 		atomic_init(&n->chan_target[c], 1.0f);
 	}
+
+	/* reac.cfg.role's standing answer: nothing has been asserted yet, so the
+	 * fact is simply "applied" (we are already what we are) with no refusal.
+	 * *_last is seeded to values the real answer can never equal (calloc left
+	 * role_state_last NULL, which no REAC_ROLE_STATE_* string pointer is, and
+	 * -1 is not a valid enum reac_role_refuse) so sink_publish_role_props's
+	 * first call always publishes rather than reading a coincidental match. */
+	n->role_state = REAC_ROLE_STATE_APPLIED;
+	n->role_refused = REAC_ROLE_REFUSE_NONE;
+	n->role_refused_last = (enum reac_role_refuse)-1;
 
 	/* Our master src MAC. The caller (main.c master path) supplies the impersonated
 	 * desk's MAC; absent that, derive the Roland-OUI + this-NIC's-host-part default
