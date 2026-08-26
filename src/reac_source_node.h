@@ -57,11 +57,15 @@ struct reac_source_node_cfg {
  *   0 (slave role) omits the three keys entirely: the slave-side link state
  *   is a DIFFERENT state machine (reac_fsm/reac_ctrl) this task does not
  *   cover, and stamping a value from the wrong FSM would mislead a consumer.
- *   LIVE UPDATES ARE NOT WIRED HERE (follow-up): this node is constructed
+ *   LINK-STATE LIVE UPDATES ARE NOT WIRED HERE: this node is constructed
  *   before reac_sink_node/reac_pacer exist (see main.c) and has no reference
  *   to the pacer or a timer of its own — see reac_sink_node.c's
- *   sink_publish_link_props for the live-update pattern reac-capture would
- *   need a pacer handle + its own (or a shared) main-loop timer to reuse.
+ *   sink_publish_link_props for the live-update pattern reac-capture needs a
+ *   pacer handle + a (shared) main-loop timer to reuse. The RATE half of live
+ *   update IS wired this way — see reac_source_node_publish_rate below — via
+ *   the same borrowed-timer pattern: the sink's peer_src slot reaches this
+ *   node from the sink's own 200 ms poll, so no timer of this node's own is
+ *   needed either.
  * Returns the node or NULL. */
 struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               struct reac_ring *ring,
@@ -87,6 +91,38 @@ void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
                                    const char *box_model,
                                    const char *box_width);
+
+/* Live-update the reac-capture node's presented Format rate — the RATE half of
+ * #208/2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b ("a rate is ONE
+ * wire rate — capture AND playback follow it together"). Mirrors reac_sink_
+ * node.c's sink_reconnect_rate exactly: a same-object pw_stream_disconnect +
+ * pw_stream_connect at a fresh Format pod (reac_sink_format_build, shared with
+ * the sink — see reac_sink_format.h), on the SAME main-loop thread that already
+ * owns this node, adopting `hz` only on a successful reconnect and
+ * re-asserting the previous rate on failure (reac_sink_format_rate_after_
+ * attempt decides which, honestly, either way). No-op when `hz` already
+ * matches what this node presents (reac_sink_format_needs_update), so a
+ * caller can call this on every poll tick with no churn when nothing moved.
+ *
+ * CALLER AND RATE SOURCE: this node has no pacer handle of its own (see the
+ * LINK-STATE note above), so it does not decide when to reconnect — it is
+ * PUSHED the rate to present. Today the only pusher is reac_sink_node.c's
+ * sink_publish_rate_props, reached only via the sink's peer_src slot (main.c
+ * wires that only for c->role == REAC_ROLE_MASTER — see reac_sink_node_set_
+ * peer_source), so this function is exercised only for a MASTER's reac-
+ * capture, following the pacer's rate_hz atomic: for a master that IS the
+ * wire rate, so pushing it here is the same fact reaching the peer node, not
+ * a second decision.
+ *
+ * SLAVE TODO: a slave's reac-capture rate is `reac_rx`'s own recovered/forced
+ * wire rate (set once at reac_rx_open), and nothing today re-detects or
+ * pushes a change to it live — there is no reac_sink_node/pacer on a slave's
+ * side to drive a shared timer from at all. Wiring a slave rate change would
+ * need reac_rx itself to notice + publish a new recovered rate first; that is
+ * a reac_rx change, out of scope here, and not currently exercised by any
+ * operator-facing control (a slave follows a foreign master; it does not get
+ * asserted a rate the way `reac.cfg.rate` asserts one on a master). */
+void reac_source_node_publish_rate(struct reac_source_node *n, int hz);
 
 /* Bring *slot to a reac-capture node of `channels` output ports labelled `label`.
  * ONE entry point the library owns, callable from startup AND the recognition

@@ -3,9 +3,11 @@
 
 #include "reac_source_node.h"
 #include "reac_link_state.h"
+#include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
+                                 * (task #4.3 extension: "one wire, one rate" — see
+                                 * reac_sink_format.h's revised SCOPE note) */
 
 #include <reac/reac.h>
-#include <spa/param/audio/format-utils.h>
 #include <spa/param/latency-utils.h>
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
@@ -43,6 +45,15 @@ struct reac_source_node {
 	int channels;
 	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
 	float scratch[REAC_MAX_QUANTUM]; /* sink for absent planes; never read back */
+
+	/* Set around source_reconnect_rate's pw_stream_disconnect/connect pair —
+	 * the same belt-and-braces pattern as reac_sink_node.c's rate_reconnecting
+	 * (see that field's comment for the full reasoning: on_process is not
+	 * invoked by PipeWire on a disconnected stream, so this is a second, cheap
+	 * line of defense on top of that guarantee, not the mechanism that makes
+	 * a skipped cycle safe). MAIN-LOOP-only write; on_process (RT) reads it as
+	 * the first check, relaxed load. */
+	_Atomic int rate_reconnecting;
 };
 
 /* REALTIME. Pull one quantum per channel from the ring into the port buffers,
@@ -50,6 +61,17 @@ struct reac_source_node {
 static void on_process(void *data)
 {
 	struct reac_source_node *n = data;
+	/* Mid a rate reconnect (source_reconnect_rate): the stream is disconnected
+	 * right now, so dequeuing a buffer below would hand back nothing anyway and
+	 * this callback should not even be reached — PipeWire does not drive
+	 * process() on a disconnected stream. Belt-and-braces documentation of that
+	 * fact, not the mechanism that makes it true (see reac_sink_node.c's
+	 * identical guard on rate_reconnecting for the full reasoning). A skipped
+	 * cycle costs nothing dangerous: the ring keeps filling from the RX feeder
+	 * independently of this stream's lifecycle and simply holds the frames for
+	 * the next cycle once reconnected. */
+	if (atomic_load_explicit(&n->rate_reconnecting, memory_order_relaxed))
+		return;
 	struct pw_buffer *pwb = pw_stream_dequeue_buffer(n->stream);
 	if (!pwb)
 		return;                 /* no buffer this cycle — leave the ring untouched */
@@ -177,6 +199,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	n->channels = (channels > 0 && channels <= REAC_MAX_CHANNELS)
 	              ? channels : REAC_MAX_CHANNELS;
 	n->debug = getenv("REAC_DEBUG") != NULL;
+	atomic_init(&n->rate_reconnecting, 0);
 
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", sample_rate);
@@ -231,18 +254,15 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	 * DISCRETE mono mic so no graph tool guesses FL/FR and pairs them as stereo.
 	 * PipeWire names the resulting ports capture_AUX0.. — which is why the physical
 	 * input a port carries is DECLARED in openmixer's contract rather than parsed
-	 * out of the name (same spec). */
+	 * out of the name (same spec). Built by reac_sink_format_build (shared with
+	 * reac:playback) so a later renegotiation (source_reconnect_rate) produces
+	 * the exact same pod shape as this initial connect, rather than a second
+	 * hand-copied one — the same reasoning reac_sink_node.c's sink_open_filter
+	 * already documents for the sink side. */
 	uint8_t fbuf[1024];
 	struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
-	struct spa_audio_info_raw info = {
-		.format = SPA_AUDIO_FORMAT_F32P,
-		.rate = (uint32_t)n->sample_rate,   /* THE REAC PACE — the adapter resamples */
-		.channels = (uint32_t)n->channels,
-	};
-	for (int c = 0; c < n->channels; c++)
-		info.position[c] = (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c);
 	const struct spa_pod *params[1] = {
-		spa_format_audio_raw_build(&fb, SPA_PARAM_EnumFormat, &info),
+		reac_sink_format_build(&fb, n->channels, n->sample_rate),
 	};
 
 	if (pw_stream_connect(n->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
@@ -285,6 +305,79 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
+}
+
+/* MAIN LOOP: force the live adapter to actually present `hz`, the reac-
+ * capture mirror of reac_sink_node.c's sink_reconnect_rate — see that
+ * function's comment for the full reasoning (a bare pw_stream_update_params
+ * advertises a new supported set but never renegotiates the ACTIVE format;
+ * the robust trigger is a same-object disconnect + connect at a fresh Format
+ * pod). Same-stream-object, not a destroy+recreate, for the same reason: a
+ * rate change is not a box change, so the node identity (name, description,
+ * badge props seeded at create) must not flash back to a connect-time seed.
+ *
+ * RT FEED SAFETY mirrors the sink exactly: on_process runs on the stream's
+ * own RT data thread under PW_STREAM_FLAG_RT_PROCESS, PipeWire does not
+ * invoke it while disconnected, and rate_reconnecting is the belt-and-braces
+ * second check on top of that guarantee. A skipped cycle costs nothing
+ * dangerous — the ring keeps filling independently of this stream and simply
+ * holds the frames for the next cycle.
+ *
+ * Adopts `hz` only on a successful reconnect (reac_sink_format_rate_after_
+ * attempt, shared with the sink); on failure it re-asserts the OLD rate so
+ * the node is not left silently disconnected, and returns -1. */
+static int source_reconnect_rate(struct reac_source_node *n, int hz)
+{
+	if (!n->stream)
+		return -1;
+	int prev_hz = n->sample_rate;
+
+	atomic_store_explicit(&n->rate_reconnecting, 1, memory_order_relaxed);
+	pw_stream_disconnect(n->stream);
+	n->rate_match = NULL;   /* a fresh connect gets a fresh (possibly different)
+	                         * SPA_IO_RateMatch area; the old pointer is stale
+	                         * until on_io_changed fires again. */
+
+	uint8_t fbuf[1024];
+	struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof fbuf);
+	const struct spa_pod *params[1] = {
+		reac_sink_format_build(&fb, n->channels, hz),
+	};
+
+	int ok = pw_stream_connect(n->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+	                          PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+	                          params, 1) >= 0;
+	if (!ok) {
+		pw_log_warn("reac:capture — rate reconnect to %d Hz failed; "
+		            "re-asserting %d Hz so the source is not left disconnected",
+		            hz, prev_hz);
+		uint8_t fbuf2[1024];
+		struct spa_pod_builder fb2 = SPA_POD_BUILDER_INIT(fbuf2, sizeof fbuf2);
+		const struct spa_pod *fallback[1] = {
+			reac_sink_format_build(&fb2, n->channels, prev_hz),
+		};
+		if (pw_stream_connect(n->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+		                      PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+		                      fallback, 1) < 0)
+			pw_log_warn("reac:capture — fallback reconnect to %d Hz ALSO failed; "
+			            "source is disconnected until the next box/format event", prev_hz);
+	}
+	atomic_store_explicit(&n->rate_reconnecting, 0, memory_order_relaxed);
+
+	n->sample_rate = reac_sink_format_rate_after_attempt(hz, prev_hz, ok);
+	return ok ? 0 : -1;
+}
+
+void reac_source_node_publish_rate(struct reac_source_node *n, int hz)
+{
+	if (!n || !n->stream)
+		return;
+	/* False on a byte-identical poll (hz already matches what this node
+	 * presents) and on a non-positive hz (never a real accepted rate) — same
+	 * pure decision the sink already relies on, so a normal single-rate boot
+	 * or an already-caught-up node never reconnects at all. */
+	if (reac_sink_format_needs_update(n->sample_rate, hz))
+		source_reconnect_rate(n, hz);
 }
 
 int reac_source_node_ensure(struct reac_source_node **slot,
