@@ -2,17 +2,17 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_sink_format — the reac-playback node's Format pod, and the pure
- * decision to renegotiate it
- * (docs/design/specs/2026-08-26-clock-tabs-and-reac-pace-coupling.md §4.3
- * increment 3). Pure: no pw_stream, no socket, no pacer.
+ * decisions around renegotiating it
+ * (docs/design/specs/2026-08-26-clock-tabs-and-reac-pace-coupling.md §4.3,
+ * increments 3 and 4). Pure: no pw_stream, no socket, no pacer.
  *
  * Proves:
  *   1. reac_sink_format_build's pod round-trips (parsed with
  *      spa_format_audio_raw_parse, not merely re-read from the builder call's
  *      own argument) to the exact rate/channels/position asked for, at the
  *      boot rate and again after a change — the half the offline suite CAN
- *      prove: the pod that reaches pw_stream_update_params carries the
- *      asserted rate.
+ *      prove: the pod that reaches pw_stream_connect carries the asserted
+ *      rate.
  *   2. channel count clamps into [0, REAC_MAX_CHANNELS] rather than walking
  *      the position array out of bounds.
  *   3. reac_sink_format_needs_update fires exactly when the node's
@@ -20,14 +20,21 @@
  *      a byte-identical boot (node_rate == pacer_rate), true on an accepted
  *      change, and false again once caught up — and a REFUSED write (which
  *      never touches the pacer's rate_hz, so pacer_rate stays exactly what it
- *      was) leaves it false throughout, proving a refusal never renegotiates
- *      the format either.
+ *      was) leaves it false throughout, proving a refusal never triggers
+ *      reac_sink_node.c's reconnect either.
+ *   4. reac_sink_format_rate_after_attempt (increment 4) reports the rate the
+ *      node ACTUALLY presents after a live reconnect attempt: the requested
+ *      rate on success, the previous (fallback-reasserted) rate on failure —
+ *      never the requested rate on a failed connect, which would be the
+ *      "applied:true for work not done" bug applied to the node's own rate
+ *      bookkeeping.
  *
  * What this does NOT and CANNOT prove: that PipeWire actually renegotiates a
- * live node's Format when pw_stream_update_params is called with this pod —
- * that needs a running graph and is the operator's live verification
- * (pw-dump's Format.rate after a PATCH), exactly the gap this increment
- * closes and exactly what an offline test structurally cannot observe. */
+ * live node's ACTIVE Format when reac_sink_node.c's sink_reconnect_rate calls
+ * pw_stream_disconnect + pw_stream_connect with this pod — that needs a
+ * running graph and is the operator's live verification (pw-dump's
+ * Format.rate after a PATCH), exactly the gap increment 3 left open and
+ * exactly what an offline test structurally cannot observe. */
 #include "reac_sink_format.h"
 
 #include <reac/reac.h>   /* REAC_MAX_CHANNELS */
@@ -169,6 +176,42 @@ static int test_sabotage_inverted_comparison_would_fail(void)
 	return 0;
 }
 
+/* INCREMENT 4: reac_sink_format_rate_after_attempt — what n->sample_rate
+ * becomes after sink_reconnect_rate's pw_stream_connect() outcome. A
+ * successful reconnect adopts the requested (new) rate. */
+static int test_rate_after_attempt_success_adopts_requested(void)
+{
+	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 1) == 96000);
+	CHK(reac_sink_format_rate_after_attempt(44100, 96000, 1) == 44100);
+	return 0;
+}
+
+/* A FAILED reconnect must keep reporting the rate the node is still known to
+ * present (the fallback reconnect's target) — never the rate that was just
+ * refused. This is the exact bug shape the discipline calls "applied:true
+ * for work not done": claiming the new rate here would make every later
+ * reader (sink_publish_latency's "at the node rate", the next poll's
+ * needs_update comparison) believe a renegotiation that never happened. */
+static int test_rate_after_attempt_failure_keeps_previous(void)
+{
+	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 0) == 48000);
+	CHK(reac_sink_format_rate_after_attempt(44100, 96000, 0) == 96000);
+	return 0;
+}
+
+/* SABOTAGE: swapping the ternary's branches (returning prev_hz on success and
+ * requested_hz on failure) is the inversion that would silently reintroduce
+ * the exact "claims a rate it does not have" bug. Prove the real function
+ * disagrees with that inversion on both arms, by hand. */
+static int test_sabotage_inverted_rate_after_attempt_would_fail(void)
+{
+	int inverted_success = 48000;   /* the WRONG answer for success (want 96000) */
+	int inverted_failure = 96000;   /* the WRONG answer for failure (want 48000) */
+	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 1) != inverted_success);
+	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 0) != inverted_failure);
+	return 0;
+}
+
 int main(void)
 {
 	int failed = 0;
@@ -180,6 +223,9 @@ int main(void)
 	failed |= test_no_update_after_a_refusal();
 	failed |= test_no_update_on_non_positive_pacer_rate();
 	failed |= test_sabotage_inverted_comparison_would_fail();
+	failed |= test_rate_after_attempt_success_adopts_requested();
+	failed |= test_rate_after_attempt_failure_keeps_previous();
+	failed |= test_sabotage_inverted_rate_after_attempt_would_fail();
 	if (failed) {
 		fprintf(stderr, "test_reac_sink_format: FAILED\n");
 		return 1;
