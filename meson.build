@@ -107,6 +107,7 @@ reac_pw_src = [
   'src/reac_rate_cfg.c',
   'src/reac_role_cfg.c',
   'src/reac_sink_format.c',
+  'src/reac_node_ensure.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',
@@ -580,6 +581,22 @@ source_format_test = executable('test_reac_source_format',
   include_directories : [include_directories('src')],
   dependencies : [spa_dep, libreac_dep])
 test('reac_source_format', source_format_test)
+
+# --- unit test: reac_node_ensure — the shared same-box-or-rebuild decision ---
+# (docs/design/notes/2026-08-26-duplicate-reac-node.md). Pure: no pw_stream, no
+# socket. Proves the identity comparison both reac_sink_node_ensure and
+# reac_source_node_ensure now share: no existing node always rebuilds, an
+# identical width+label is a no-op, a width change rebuilds, and — the bug
+# this closes — a same-width LABEL change rebuilds too (reac_source_node_
+# ensure used to compare width only, so a re-enrolled same-width box or a
+# relabelled pin left reac-capture's node.description/badges stamped with the
+# old box's identity forever). Sabotage-verified: the width-only comparison
+# reac_source_node_ensure used to make is proven to disagree with the real
+# function on the label-only-change case.
+node_ensure_test = executable('test_reac_node_ensure',
+  ['tests/test_reac_node_ensure.c', 'src/reac_node_ensure.c'],
+  include_directories : [include_directories('src')])
+test('reac_node_ensure', node_ensure_test)
 
 # --- unit test: the GRANT enrollment sweep — allocator + generated group A -----
 # The fix for "link established != channels enrolled" (GRANT-SWEEP.md, 2026-07-17).

@@ -3,6 +3,7 @@
 
 #include "reac_source_node.h"
 #include "reac_link_state.h"
+#include "reac_node_ensure.h"  /* the shared same-box-or-rebuild decision */
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
                                  * (task #4.3 extension: "one wire, one rate" — see
                                  * reac_sink_format.h's revised SCOPE note) */
@@ -43,6 +44,9 @@ struct reac_source_node {
 	struct reac_rx *rx;
 	int sample_rate;
 	int channels;
+	char label[64];   /* effective box label on node.description, "" = none (mirrors
+	                   * reac_sink_node's own n->label — the ensure() identity check
+	                   * needs it to tell a width-preserving relabel from a no-op) */
 	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
 	float scratch[REAC_MAX_QUANTUM]; /* sink for absent planes; never read back */
 
@@ -198,6 +202,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	/* Expose the box's real input width; fall back to the full fabric. */
 	n->channels = (channels > 0 && channels <= REAC_MAX_CHANNELS)
 	              ? channels : REAC_MAX_CHANNELS;
+	snprintf(n->label, sizeof n->label, "%s", label ? label : "");
 	n->debug = getenv("REAC_DEBUG") != NULL;
 	atomic_init(&n->rate_reconnecting, 0);
 
@@ -279,8 +284,14 @@ void reac_source_node_destroy(struct reac_source_node *n)
 {
 	if (!n)
 		return;
-	if (n->stream)
+	if (n->stream) {
+		/* Explicit disconnect before destroy — see reac_sink_node.c's ensure()
+		 * comment for why this ordering matters when a caller (reac_source_node_
+		 * ensure below) immediately queues a replacement stream's connect in the
+		 * same call: the two requests must reach the daemon in the order sent. */
+		pw_stream_disconnect(n->stream);
 		pw_stream_destroy(n->stream);
+	}
 	free(n);
 }
 
@@ -387,18 +398,29 @@ int reac_source_node_ensure(struct reac_source_node **slot,
 	if (!slot || !cfg)
 		return -1;
 	/* Normalise to the same width reac_source_node_new would settle on, so the
-	 * "same width?" test compares like with like (a startup channels=0 becomes 40).
-	 * A REAC box input width is model-unique (8=S-0808, 16=S-1608, 32=S-4000S), so a
-	 * same-width re-recognition is the same box — nothing to do. */
+	 * "same box?" test compares like with like (a startup channels=0 becomes 40).
+	 * A REAC box input width is USUALLY model-unique (8=S-0808, 16=S-1608,
+	 * 32=S-4000S), but width alone is not the whole identity: reac_sink_node_
+	 * ensure has always also compared the LABEL (a same-width swap to a
+	 * differently-labelled box, or a re-enrolled pin with a new operator label,
+	 * is still a real change) — this one drifted to width-only, so a label-only
+	 * change left reac-capture's node.description/badges stamped with the OLD
+	 * box's identity forever (reac_node_ensure.h's own header documents this as
+	 * the bug the shared decision fixes). want_label mirrors reac_sink_node_
+	 * ensure's own want_label seeding (label ? label : ""). */
 	int want = (channels > 0 && channels <= REAC_MAX_CHANNELS) ? channels
 	                                                           : REAC_MAX_CHANNELS;
+	char want_label[64];
+	snprintf(want_label, sizeof want_label, "%s", label ? label : "");
 	struct reac_source_node *cur = *slot;
-	if (cur && cur->channels == want)
+	if (!reac_node_ensure_needs_rebuild(cur != NULL, cur ? cur->channels : 0,
+	                                    cur ? cur->label : NULL, want, want_label))
 		return 0;
-	/* Absent, or a real width change (a live box swap): the old box's inputs no
-	 * longer exist, so tear the stale node down first, then build fresh at the new
-	 * width via the unchanged create API. The RX ring is shared + unchanged, so the
-	 * new node reads the same planes the feeder keeps filling. */
+	/* Absent, or a real change (a live box swap, or a same-width relabel): the old
+	 * box's identity no longer applies, so tear the stale node down first, then
+	 * build fresh at the new width/label via the unchanged create API. The RX ring
+	 * is shared + unchanged, so the new node reads the same planes the feeder keeps
+	 * filling. */
 	if (cur) {
 		reac_source_node_destroy(cur);
 		*slot = NULL;
