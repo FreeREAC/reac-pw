@@ -1630,10 +1630,11 @@ static void sink_on_session(void *ctx, const uint8_t mac[6], unsigned session)
 
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx)
 {
-	if (n)
+	if (n) {
 		n->rate_src = rx;
 		/* Reset the receiver AT the re-establishment, not a tick later. */
 		n->pacer.session_ctx = rx;
+	}
 		n->pacer.on_session  = sink_on_session;
 }
 
