@@ -18,4 +18,7 @@ TOP=$(readlink -f "${RPM_TOPDIR:-$HOME/rpmbuild}")
 sh "$ROOT/packaging/make-tarball.sh" "$@"
 mkdir -p "$TOP/SOURCES"
 cp "$ROOT"/*.tar.gz "$TOP/SOURCES/"
-rpmbuild -ba --define "_topdir $TOP" "$SPEC"
+# Single-source the version from meson.build (or $1), and PASS it to rpmbuild — without
+# this the spec fell back to its 0.3.0 default whatever meson said (found 2026-08-27).
+V="${1:-$(sed -n "s/^ *version *: *'\([^']*\)'.*/\1/p" "$ROOT/meson.build" | head -1)}"
+rpmbuild -ba --define "_topdir $TOP" --define "version_override $V" "$SPEC"
