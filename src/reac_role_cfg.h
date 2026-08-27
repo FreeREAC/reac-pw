@@ -45,8 +45,7 @@
  *     answer) is complete and fully unit-tested here;
  *   - the actual cross-engine swap is a documented STUB:
  *     reac_role_cfg_apply_state never returns REAC_ROLE_STATE_APPLIED for a
- *     role-CHANGING assertion — it returns REAC_ROLE_STATE_REESTABLISH_PENDING /* now REAL: main's poll timer applies the
- *   change as a clean listener re-open (master engine down, slave up) — 2026-08-27 */
+ *     role-CHANGING assertion — it returns REAC_ROLE_STATE_REESTABLISH_PENDING
  *     and stays there, because nothing runs afterward to move it further.
  *     Never a silent no-op (the write is parsed, decided and answered), never
  *     a fake success (the answer never claims the swap happened).
