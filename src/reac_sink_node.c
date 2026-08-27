@@ -97,6 +97,10 @@ struct reac_sink_node {
 	int pacer_open;
 	int channels;             /* current filter port count; 0 = no filter yet */
 	int sample_rate;
+	_Atomic int reopen_role;  /* accepted reac.cfg.role change awaiting main's clean
+	                           * segment re-open, stored as role+1 (0 = none). The
+	                           * master<->slave engine swap is a full listener re-open,
+	                           * exactly like a rate change (2026-08-27). */
 	_Atomic int reopen_rate;  /* accepted reac.cfg.rate awaiting main's clean
 	                           * segment re-open (0 = none); see param_changed */
 	uint8_t src[6];           /* our master MAC */
@@ -636,8 +640,14 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 	if (role_parsed != 0) {
 		n->role_refused = role_parsed < 0 ? REAC_ROLE_REFUSE_MALFORMED
 		                                  : REAC_ROLE_REFUSE_NONE;
-		if (n->role_refused == REAC_ROLE_REFUSE_NONE)
+		if (n->role_refused == REAC_ROLE_REFUSE_NONE) {
 			n->role_state = reac_role_cfg_apply_state(REAC_ROLE_MASTER, req_role);
+			/* A role CHANGE is the cross-engine swap: stash it for main's poll timer to
+			 * apply as a clean listener re-open (master engine down, slave engine up).
+			 * This node exists only in the master role, so a change is always -> slave. */
+			if (reac_role_cfg_changes(REAC_ROLE_MASTER, req_role))
+				atomic_store_explicit(&n->reopen_role, (int)req_role + 1, memory_order_relaxed);
+		}
 		/* A refusal leaves role_state exactly as it was: the malformed write
 		 * changed nothing about the running role, so its answer should not
 		 * look like it did either. */
@@ -1421,6 +1431,14 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n)
 {
 	return n ? atomic_exchange_explicit(&n->reopen_rate, 0, memory_order_relaxed) : 0;
+}
+
+/* Take (read+clear) the pending accepted reac.cfg.role for a clean listener re-open in
+ * the other engine (master<->slave). Returns the reac_role, or -1 if none pending. */
+int reac_sink_node_take_reopen_role(struct reac_sink_node *n)
+{
+	int r = n ? atomic_exchange_explicit(&n->reopen_role, 0, memory_order_relaxed) : 0;
+	return r ? r - 1 : -1;
 }
 
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,

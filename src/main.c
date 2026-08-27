@@ -978,6 +978,32 @@ static void listener_reopen_at_rate(struct listener *L, struct pw_loop *loop, in
 	L->rx_started = 1;
 }
 
+/* A clean segment re-open in the OTHER engine (master<->slave), #5's cross-engine swap.
+ * Same fresh-launch teardown+rebuild as the rate re-open; listener_open branches the engine
+ * off L->cfg.role, so the master pacer goes down and the slave engine comes up (or back). */
+static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, enum reac_role role)
+{
+	fprintf(stderr, "reac-pw: %sREAC role -> %s: clean segment re-open (cross-engine swap)\n",
+	        L->cfg.tag, role == REAC_ROLE_MASTER ? "master" : "slave");
+	if (L->opened)
+		listener_close(L, loop);
+	L->opened = 0;
+	L->rx_started = 0;
+	L->cfg.role = role;
+	if (listener_open(L, loop) != 0) {
+		fprintf(stderr, "reac-pw: %srole re-open FAILED — segment down\n", L->cfg.tag);
+		return;
+	}
+	L->opened = 1;
+	if (reac_rx_start(&L->rx) != 0) {
+		fprintf(stderr, "reac-pw: %srole re-open RX start FAILED — segment down\n", L->cfg.tag);
+		listener_close(L, loop);
+		L->opened = 0;
+		return;
+	}
+	L->rx_started = 1;
+}
+
 struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
 
 /* ONE main-loop poll (200 ms) for every segment, not per-listener: a
@@ -992,6 +1018,11 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		struct listener *L = &c->listeners[i];
 		if (!L->opened || !L->sink)
 			continue;
+		int role = reac_sink_node_take_reopen_role(L->sink);
+		if (role >= 0) {
+			listener_reopen_at_role(L, c->loop, (enum reac_role)role);
+			continue;   /* the master sink is gone after a swap to slave; nothing more this tick */
+		}
 		int hz = reac_sink_node_take_reopen_rate(L->sink);
 		if (hz > 0)
 			listener_reopen_at_rate(L, c->loop, hz);
