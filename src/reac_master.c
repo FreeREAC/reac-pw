@@ -569,6 +569,27 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	 * cannot simply be deleted yet. */
 	memcpy(m->scene, reac_scene_placeholder, REAC_SCENE_BYTES);
 	reac_ctrl_scene_set_mac(m->scene, sizeof m->scene, m->src);
+	/* THE SCENE MUST DECLARE THE SAME GENERATION THE ANNOUNCE DOES. `revision`
+	 * (u2le at +0x14) is 0 on a V-Mixer desk and 1 on an M-5000, and the box CACHES
+	 * it and compares before it will re-read the scene's three sub-objects — a body
+	 * whose revision DIFFERS is treated as changed with no further comparison
+	 * (reac.ksy, evidenced in the firmware image and across the corpus). The
+	 * placeholder was recovered from an M-200i, so it carries 0.
+	 *
+	 * Deriving it from console_field settles both halves at once. The scene stops
+	 * contradicting cfea[19] — we announced OHRCA over a V-Mixer scene, and the box
+	 * believed the scene — and because the byte MOVES with the pace, a rate change
+	 * is itself the cache miss that makes the box re-read. Measured on the rig
+	 * 2026-08-29, S-1608 firmware 2.200, which had never followed reac-pw to 96 kHz:
+	 * revision 1 -> box 8004 pps at 96 k, 0 mismatches, drift -5.8 ppm, no jitter;
+	 * revision 0 -> box 4002 pps at 48 k, both clean. A STATIC 1 is not enough — the
+	 * box then latched 96 k and no assertion, not even a daemon restart at 48 k,
+	 * brought it back down, because the revision never changed. */
+	/* Offset lives here until libreac's next release carries it beside
+	 * REAC_SCENE_MAC_OFF, where it belongs (libreac owns the encode). */
+	enum { REAC_SCENE_REVISION_OFF = 0x14 };   /* u2le `revision`, reac.ksy */
+	m->scene[REAC_SCENE_REVISION_OFF]     = m->cfg.console_field ? 0x01 : 0x00;
+	m->scene[REAC_SCENE_REVISION_OFF + 1] = 0x00;
 
 	/* Seed the descriptor from the header so FILLER frames carry a valid one from
 	 * the very first slot, before any step fires. */
