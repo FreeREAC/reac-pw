@@ -387,6 +387,11 @@ struct reac_master {
 	 * rebuilt on box recognition (reac_master_set_box) and whenever the head-amp
 	 * source changes (reac_master_set_headamp_src). */
 	int      grant_ticks;     /* slots elapsed in the current grant window */
+	/* GRANT-ON-DECLARE (REACPW_GRANT_ON_DECLARE=1): slot at which the width-correct
+	 * ENROLL went out during GRANTING, or 0 when it has not. The dwell ends a short
+	 * settle after that instead of running its full length — the box is ready once it
+	 * has DECLARED and been armed, and the wall-clock dwell is only imitating a desk. */
+	int      enroll_sent_tick;
 	int      enroll_pending;  /* set by reac_master_set_box when the box's DECLARED
 	                           * width narrowed enroll_blk after the initial ENROLL;
 	                           * the GRANTING dwell re-emits ONE ENROLL at the new
