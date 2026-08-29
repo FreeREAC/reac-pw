@@ -68,6 +68,21 @@ struct reac_rx {
 	pthread_t thread;
 	_Atomic int running;
 
+	/* The ifindex the capture socket is ACTUALLY bound to, read back from the
+	 * socket itself (getsockname on AF_PACKET) rather than re-derived from the
+	 * name — the binding is the thing under test, so observe it, not its label.
+	 * 0 until the feeder opens the socket.
+	 *
+	 * `iface_lost` latches when that binding is broken (see
+	 * reac_rx_binding_lost). It is a ONE-WAY latch: the socket cannot be
+	 * un-broken, and a re-enumerated NIC coming back under the old name must
+	 * never look like a recovery. The main loop polls it and terminates the
+	 * process — detection without exit is what let a dead segment sit for four
+	 * minutes on 2026-08-29 telling the operator to bounce a healthy box.
+	 * Written by the feeder thread, read by the main loop: both atomic. */
+	_Atomic unsigned bound_ifindex;
+	_Atomic int iface_lost;
+
 	/* rate-slope estimator (counter-vs-monotonic), filtered ppm error vs the
 	 * nominal recovered rate; the source node reads this for io_rate_match. */
 	_Atomic int ppm_error_milli;  /* ppm * 1000, signed; 0 until enough samples */
@@ -177,6 +192,27 @@ void reac_rx_session_end(struct reac_rx *rx);
  * netlink syscall); never called from the audio path. Exposed for its own
  * unit test, which needs no capability and no live traffic. */
 int reac_rx_iface_present(const char *ifname);
+
+/* The ifindex `ifname` currently resolves to, or 0 if it resolves to nothing.
+ * 0 is if_nametoindex()'s own "no such interface" sentinel, so it can never be
+ * a legitimate index — which is what lets one unsigned carry both answers. */
+unsigned reac_rx_iface_index(const char *ifname);
+
+/* Has the binding been broken? An AF_PACKET socket is bound to an IFINDEX; the
+ * name is only how we found that index once, at open. So the honest mid-run
+ * question is not "does the name still resolve" but "does it still resolve to
+ * THE INTERFACE I AM BOUND TO".
+ *
+ * That distinction is the whole point. A USB NIC that re-enumerates comes back
+ * under the SAME name with a NEW index (measured 2026-08-29: the AX88179 on the
+ * S-0808 segment, unplugged 22:14:20, re-registered 22:17:00, same name and
+ * same MAC). A name-only check calls that healthy and falls silent while the
+ * socket is deaf and mute — the failure this predicate exists to end. It also
+ * subsumes the plain rename/removal case, where `current` is simply 0.
+ *
+ * `bound == 0` means we never learned an index, so there is nothing to compare
+ * and nothing is lost. Pure; unit-tested in tests/test_reac_rx_live_iface.c. */
+int reac_rx_binding_lost(unsigned bound_ifindex, unsigned current_ifindex);
 
 int reac_rx_start(struct reac_rx *rx);
 

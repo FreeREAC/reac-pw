@@ -11,7 +11,8 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <net/if.h>   /* if_nametoindex — the vanished-interface check */
+#include <net/if.h>   /* if_nametoindex — resolving the --live name to an index */
+#include <netpacket/packet.h>  /* sockaddr_ll — the index the socket is BOUND to */
 
 #include <reac/reac.h>
 /* the downstream (40-ch braided) decode + the two wire sources, reused as-is */
@@ -30,9 +31,38 @@ static uint64_t mono_ns(void)
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+unsigned reac_rx_iface_index(const char *ifname)
+{
+	return ifname ? if_nametoindex(ifname) : 0;
+}
+
 int reac_rx_iface_present(const char *ifname)
 {
-	return ifname && if_nametoindex(ifname) != 0;
+	return reac_rx_iface_index(ifname) != 0;
+}
+
+int reac_rx_binding_lost(unsigned bound_ifindex, unsigned current_ifindex)
+{
+	if (bound_ifindex == 0)
+		return 0;   /* no baseline learned yet: nothing to compare */
+	return current_ifindex != bound_ifindex;
+}
+
+/* The ifindex an open AF_PACKET socket is bound to, straight from the socket
+ * (getsockname fills sockaddr_ll.sll_ifindex), or 0 if it cannot be read.
+ *
+ * Deliberately NOT if_nametoindex(name) a second time: that would re-derive the
+ * baseline from the same name we are about to test it against, so a NIC that
+ * re-enumerated between open and this call would be recorded as its own new
+ * index and the mismatch could never be seen. Ask the socket what it is bound
+ * to; that is the fact the alarm is about. */
+static unsigned capture_bound_ifindex(int fd)
+{
+	struct sockaddr_ll sll;
+	socklen_t len = sizeof sll;
+	if (getsockname(fd, (struct sockaddr *)&sll, &len) != 0)
+		return 0;
+	return (unsigned)sll.sll_ifindex;
 }
 
 /* Decode one gate-accepted frame into the ring (planar float, ring-width x 12
@@ -207,6 +237,11 @@ static void *rx_loop(void *arg)
 		 * SO_RCVTIMEO comment). */
 		struct timeval tv = { 0, 200000 }; /* 200 ms: well under the shutdown budget */
 		setsockopt(cap.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+		/* Remember WHICH INTERFACE this socket is bound to, asked of the socket
+		 * itself. Everything the alarm below decides is a comparison against
+		 * this number. */
+		atomic_store_explicit(&rx->bound_ifindex, capture_bound_ifindex(cap.fd),
+		                      memory_order_release);
 	} else {
 		if (pcap_source_open(&ps, rx->cfg.source) != 0)
 			return NULL;
@@ -223,24 +258,52 @@ static void *rx_loop(void *arg)
 		long n;
 		uint64_t pcap_ts = 0;
 		if (live) {
-			/* THE LOUD ALTERNATIVE TO SILENT PROBING. recv() on a socket bound
-			 * to an interface that vanished mid-run (USB re-enumeration, a
-			 * rename) does not reliably error — it can just keep timing out on
-			 * SO_RCVTIMEO exactly like a genuinely idle wire, so the master
-			 * pacer above logs "still PROBING" forever with nothing to tell
-			 * the two apart. Ask directly, every ~2 s: does the NAME we bound
-			 * to still resolve to an interface at all? This is the same check
-			 * reac_rx_open() makes at startup, repeated here because the
-			 * interface can leave AFTER that check passed. */
+			/* THE LOUD ALTERNATIVE TO SILENT PROBING. recv() on a socket whose
+			 * interface went away mid-run does not reliably error — it can just
+			 * keep timing out on SO_RCVTIMEO exactly like a genuinely idle wire,
+			 * so the master pacer above logs "still PROBING" forever with
+			 * nothing to tell the two apart. Ask directly, every ~2 s.
+			 *
+			 * Ask about the BINDING, not the name. This check used to be
+			 * `!reac_rx_iface_present(source)` — "does the name still resolve to
+			 * anything?" — and that is a false negative in the exact case that
+			 * matters most. 2026-08-29, the S-0808 segment: the AX88179 was
+			 * unplugged at 22:14:20 and came back at 22:17:00 under the SAME
+			 * name and SAME MAC with a NEW ifindex. The alarm fired while the
+			 * name was absent, then FELL SILENT when it returned, while this
+			 * socket stayed bound to the dead index — deaf, and mute on TX. The
+			 * operator was left with "still PROBING ... bounce the box PHY" and
+			 * spent the outage replugging a box that was never at fault.
+			 *
+			 * Comparing indices covers the rename and the removal too: both make
+			 * the name resolve to something that is not what we bound. */
 			uint64_t chk_now = mono_ns();
 			if (chk_now - last_iface_check_ns >= 2000000000ull) {
 				last_iface_check_ns = chk_now;
-				if (!reac_rx_iface_present(rx->cfg.source))
-					fprintf(stderr, "reac-pw: LIVE INTERFACE '%s' VANISHED — it no "
-					        "longer exists (removed, renamed, or a USB NIC "
-					        "re-enumerated). The capture socket is deaf: no packet "
-					        "can arrive on it again. This is NOT a dead box; fix "
-					        "the interface name and restart.\n", rx->cfg.source);
+				unsigned bound = atomic_load_explicit(&rx->bound_ifindex,
+				                                      memory_order_acquire);
+				unsigned now_idx = reac_rx_iface_index(rx->cfg.source);
+				if (reac_rx_binding_lost(bound, now_idx)) {
+					/* Say it ONCE and stop: this is fatal, not a condition to
+					 * narrate every 2 s. The old alarm repeated forever because
+					 * it had no way to end the process; now it does. */
+					if (now_idx == 0)
+						fprintf(stderr, "reac-pw: LIVE INTERFACE '%s' (ifindex %u) IS "
+						        "GONE — the name no longer resolves to any interface "
+						        "(removed, or renamed). ", rx->cfg.source, bound);
+					else
+						fprintf(stderr, "reac-pw: LIVE INTERFACE '%s' WAS REPLACED — "
+						        "the name now resolves to ifindex %u, but this socket "
+						        "is bound to %u (a USB NIC re-enumerated: same name, "
+						        "different interface). ", rx->cfg.source, now_idx, bound);
+					fprintf(stderr, "The capture socket is deaf and its TX is mute: no "
+					        "packet can arrive on it or leave it again, and NO BOX CAN "
+					        "ANSWER A MASTER THAT IS NOT TRANSMITTING. This is NOT a "
+					        "dead box — do not bounce the box. Exiting so the service "
+					        "manager restarts us onto the live interface.\n");
+					atomic_store_explicit(&rx->iface_lost, 1, memory_order_release);
+					break;   /* the main loop polls the latch and terminates */
+				}
 			}
 			n = reac_capture_next(&cap, frame, sizeof frame);
 		} else {

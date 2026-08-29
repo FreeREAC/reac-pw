@@ -1006,6 +1006,11 @@ static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, en
 
 struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
 
+/* Set when a segment's capture socket lost its interface (see reac_rx.h's
+ * bound_ifindex). main() turns it into a non-zero exit so the service manager
+ * restarts us; read only on the loop thread after pw_main_loop_run returns. */
+static int g_iface_lost;
+
 /* ONE main-loop poll (200 ms) for every segment, not per-listener: a
  * listener_close from inside a per-listener timer would free that very timer.
  * Runs on the loop thread, never inside a node callback, so the destroy+rebuild
@@ -1016,7 +1021,30 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 	struct rate_reopen_ctx *c = data;
 	for (int i = 0; i < c->n; i++) {
 		struct listener *L = &c->listeners[i];
-		if (!L->opened || !L->sink)
+		if (!L->opened)
+			continue;
+		/* A LOST INTERFACE IS FATAL — TERMINATE, DO NOT NARRATE.
+		 *
+		 * The feeder can only detect and latch; ending the process is the main
+		 * loop's job, and until it did, detection bought nothing. On 2026-08-29
+		 * the S-0808's daemon spotted the vanish, logged it every 2 s for three
+		 * minutes, then went quiet when the NIC came back under the same name —
+		 * and kept "running" for four more minutes with a dead socket, telling
+		 * the operator to bounce a healthy box. A daemon whose socket cannot be
+		 * repaired must die so something can restart it: the socket is bound to
+		 * an interface that no longer exists, and no amount of waiting rebinds
+		 * it. (The units carry Restart=always for exactly this — see
+		 * docs/NIC-PIN-BY-MAC.md.)
+		 *
+		 * Checked before the reopen work below because none of it can succeed
+		 * on a segment whose interface is gone. */
+		if (L->rx_started &&
+		    atomic_load_explicit(&L->rx.iface_lost, memory_order_acquire)) {
+			g_iface_lost = 1;
+			pw_main_loop_quit(g_loop);
+			return;
+		}
+		if (!L->sink)
 			continue;
 		int role = reac_sink_node_take_reopen_role(L->sink);
 		if (role >= 0) {
@@ -1436,5 +1464,7 @@ int main(int argc, char **argv)
 
 	pw_main_loop_destroy(g_loop);
 	pw_deinit();
-	return 0;
+	/* Non-zero so a Restart=always unit brings us back on the live interface;
+	 * a clean SIGTERM shutdown still returns 0. */
+	return g_iface_lost ? 1 : 0;
 }

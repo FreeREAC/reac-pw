@@ -1,5 +1,19 @@
 # Pinning the REAC NIC by MAC, not by name — a proposal (not implemented)
 
+> **CORRECTED 2026-08-29 — MAC pinning would NOT have caught the fault below.**
+> This note was written against a NIC that came back under a *different* name.
+> On 2026-08-29 the AX88179 carrying the S-0808 came back under the **same** name
+> and the **same MAC**, with a **new ifindex**. Resolving a MAC to a name would
+> have returned the same name it already had, and the "if the name changed" test
+> proposed under *Resolution timing* below would not have fired. What actually
+> breaks is the **binding**: an `AF_PACKET` socket holds an **ifindex**, and no
+> name- or MAC-based check observes that. The fix that landed
+> (`fix/the-binding-is-an-ifindex`) compares the socket's own bound ifindex
+> against what the name resolves to now, and **exits** so the unit restarts.
+> Pinning by MAC remains worth doing — it removes a *different* failure, the
+> rename across a reboot — but it is not a substitute for the index check, and
+> nothing below should be read as covering re-enumeration.
+
 `--live IFNAME` and `--tx IFNAME` name the REAC NIC by its **kernel-assigned
 interface name** (`enp131s0`, `eth0`, ...). That name is not a property of the
 NIC — it is assigned by udev's persistent-naming rules from bus topology
@@ -48,9 +62,36 @@ than trusting a name that was correct once.
   (replacing/feeding the name `reac_capture_open()` binds to), and again on
   the periodic vanished-interface check in `rx_loop` — if the name changed
   since the last check, that is itself the "it moved" case succeeding instead
-  of failing, and is worth its own loud, distinct log line (this is a strictly
-  better outcome than today's alarm, which can currently only say the old name
-  is gone, never that a still-present NIC picked up a new one).
+  of failing, and is worth its own loud, distinct log line.
+
+  **But note what this does not cover** (2026-08-29): when the NIC returns under
+  the SAME name, "the name changed" is false and this branch never runs, while
+  the socket is just as dead. The periodic check must compare the **bound
+  ifindex** — which is what `reac_rx_binding_lost()` now does, independently of
+  whether the name was pinned by MAC or given literally. Re-resolving a MAC is
+  how you *recover* the right name; comparing indices is how you *notice* you
+  need to.
+
+## What DID land, and what it leaves to this proposal
+
+`fix/the-binding-is-an-ifindex` (2026-08-29) makes the mid-run check honest and
+terminal:
+
+- the feeder reads the ifindex **from the capture socket itself**
+  (`getsockname` on `AF_PACKET`) at open, rather than re-deriving it from the
+  name — the binding is the thing under test, so it is the thing observed;
+- every ~2 s it compares that against what the name resolves to *now*, so a
+  removal, a rename and a **same-name re-enumeration** are all caught, and the
+  message distinguishes them;
+- on loss it **exits non-zero** instead of logging forever. Detection without
+  exit was the expensive half of the 2026-08-29 outage: the daemon knew, said
+  so for three minutes, fell silent when the name returned, and then sat there
+  for four more minutes with a dead socket while the operator replugged a
+  healthy box. The units carry `Restart=always` so a restart lands on the live
+  interface.
+
+This proposal is still the right next step for the *other* half — surviving a
+name that changes across a reboot, so the restart has a correct name to bind.
 
 ## Why this is a proposal, not a fix landed here
 
