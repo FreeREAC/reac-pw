@@ -87,8 +87,15 @@ terminal:
   exit was the expensive half of the 2026-08-29 outage: the daemon knew, said
   so for three minutes, fell silent when the name returned, and then sat there
   for four more minutes with a dead socket while the operator replugged a
-  healthy box. The units carry `Restart=always` so a restart lands on the live
-  interface.
+  healthy box. `packaging/reac-pw.service` already carries
+  `Restart=on-failure` + `RestartSec=2`, so the non-zero exit is all that was
+  missing for the packaged path to heal itself.
+
+  **The transient units this rig runs by hand do not have that.** The two
+  segments are started with `systemd-run --user`, which defaults to
+  `Restart=no` — so on 2026-08-29 nothing would have restarted the daemon even
+  if it had exited. Pass `-p Restart=on-failure -p RestartSec=2` when starting a
+  segment that way, or run the packaged unit.
 
 This proposal is still the right next step for the *other* half — surviving a
 name that changes across a reboot, so the restart has a correct name to bind.

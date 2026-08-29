@@ -206,6 +206,22 @@ rx_live_iface_test = executable('test_reac_rx_live_iface',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_live_iface', rx_live_iface_test)
 
+# --- integration: a lost --live interface must TERMINATE the daemon ----------
+# The unit test above pins the PREDICATE; this drives the whole binary and
+# checks the consequence, because detection without exit is not recovery (the
+# 2026-08-29 S-0808 outage: the daemon knew, said so, and kept running with a
+# dead socket while the operator replugged a healthy box). Two scenarios, the
+# second being the one a name-only check cannot see: the interface returns
+# under the SAME NAME with a new ifindex.
+#
+# Runs inside an unprivileged user+net namespace on its own dummy interfaces,
+# so it cannot perturb a live REAC segment; skips where that or PipeWire is
+# unavailable. Timeout covers 2 x (5 s settle + 6 s observe) plus startup.
+test('reac_iface_vanish_exits',
+  find_program('tests/iface-vanish-exits.sh'),
+  args : [reac_pw_exe],
+  timeout : 60)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],

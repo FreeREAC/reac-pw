@@ -1033,8 +1033,9 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		 * the operator to bounce a healthy box. A daemon whose socket cannot be
 		 * repaired must die so something can restart it: the socket is bound to
 		 * an interface that no longer exists, and no amount of waiting rebinds
-		 * it. (The units carry Restart=always for exactly this — see
-		 * docs/NIC-PIN-BY-MAC.md.)
+		 * it. packaging/reac-pw.service carries Restart=on-failure + RestartSec=2,
+		 * so a non-zero exit is already a restart; a clean SIGTERM returns 0 and
+		 * is left alone.
 		 *
 		 * Checked before the reopen work below because none of it can succeed
 		 * on a segment whose interface is gone. */
