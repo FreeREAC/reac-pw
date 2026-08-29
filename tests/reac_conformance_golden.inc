@@ -20,9 +20,13 @@
  *           0x08, count 1) — an S-0808 instead.
  *
  * THE FINDING this pins: three real consoles (M-200, M-300, M-5000) differ
- * on the wire in exactly TWO bytes — the source MAC (the L2 identity) and
- * this cfea console_field byte (+ the ENROLL console byte, which carries the
- * same 0/1). Every other downstream template (chanmap, probe, SUB01/SUB02,
+ * on the wire in the source MAC (the L2 identity), this cfea console_field
+ * byte, the ENROLL console byte (same 0/1) — and, CORRECTED 2026-08-29, the
+ * chanmap section marker's family byte (`fe 01 00` on an M-5000, `fe 00 00`
+ * on an M-200/M-300; measured across 5 captures, see test_reac_conformance.c).
+ * This comment previously read "exactly TWO bytes"; that held only because the
+ * chanmap arm compared our M-200-shaped map against an M-200 golden for every
+ * profile. Every other downstream template (probe, SUB01/SUB02,
  * ENROLL head, grant sweep) is shared code, unparameterized by mixer profile
  * (see struct reac_mixer_profile's doc comment in reac_master.h).
  *
