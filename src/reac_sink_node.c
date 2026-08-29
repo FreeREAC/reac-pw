@@ -887,8 +887,86 @@ static void sink_publish_link_props(struct reac_sink_node *n)
  * disconnected until some unrelated event (a box swap) happens to rebuild
  * it, and returns -1 — reac_sink_format_rate_after_attempt is what decides
  * n->sample_rate honestly either way. */
+/* PROBE KNOB (default UNSET = today's behaviour, byte-identical): with
+ * REACPW_RATE_VIA_PROPS=1 a rate change is announced as the `node.rate` PROPERTY
+ * instead of renegotiating the Format, and the stream is never disconnected.
+ *
+ * The operator's question, 2026-08-29: the pace might be settable through props
+ * or params rather than the format. It is cheap to answer and the file already
+ * updates properties this way. What it must show to be a fix, on pw-dump: the
+ * node OBJECT ID unchanged AND the negotiated Format.rate actually moved. The
+ * doubt is that the audioadapter derives its conversion from the negotiated
+ * FORMAT, and node.rate is documented as a REQUEST about the graph's rate — the
+ * 2026-08-21 contract already records that on a filter it is only a request an
+ * RME-driven graph refuses. If Format.rate does not move, this is not the lever
+ * and the answer lies in SPA_PARAM_PortConfig instead. */
+static int rate_via_props(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_RATE_VIA_PROPS");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
+/* PROBE KNOB (default UNSET = today's behaviour, byte-identical): with
+ * REACPW_RATE_VIA_ACTIVE=1 a rate change DEACTIVATES the stream, re-advertises
+ * the Format at the new rate, and reactivates — instead of disconnecting.
+ *
+ * Why this shape. The audioadapter refuses a Format change on a running node:
+ * spa/plugins/audioconvert/audioadapter.c, impl_node_set_param
+ *     case SPA_PARAM_Format:
+ *         if (this->started) ... return -EIO;
+ * so the node must be STOPPED for the rate to move — but stopped is not the same
+ * as disconnected. pw_stream_set_active(false) stops it while the stream, its
+ * ports and (we are testing this) their links stay in place. It is the only
+ * remaining way to change the pace without tearing the graph face down, after
+ * node.rate-as-a-property was measured not to move the negotiated format and
+ * PortConfig was found to zero the rate out on purpose (audioadapter.c:862).
+ *
+ * What it must show to be a fix, all three: the node object id unchanged, the
+ * negotiated Format.rate actually moved, and the console's link into the node
+ * still there afterwards. The third is the one that decides whether the players
+ * on a fed segment survive, and only the S-0808 with music playing can answer it. */
+static int rate_via_set_active(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_RATE_VIA_ACTIVE");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
 static int sink_reconnect_rate(struct reac_sink_node *n, int hz)
 {
+	if (rate_via_set_active()) {
+		uint8_t abuf[1024];
+		struct spa_pod_builder ab = SPA_POD_BUILDER_INIT(abuf, sizeof abuf);
+		const struct spa_pod *ap[1] = { reac_sink_format_build(&ab, n->channels, hz) };
+		n->rate_reconnecting = 1;
+		pw_stream_set_active(n->stream, false);
+		int rc = pw_stream_update_params(n->stream, ap, 1);
+		pw_stream_set_active(n->stream, true);
+		n->rate_reconnecting = 0;
+		n->sample_rate = reac_sink_format_rate_after_attempt(hz, n->sample_rate, rc >= 0);
+		fprintf(stderr, "reac-pw: rate via set_active: %d Hz, update_params=%d (no disconnect)\n",
+		        hz, rc);
+		return rc >= 0 ? 0 : -1;
+	}
+	if (rate_via_props()) {
+		char rate[32];
+		snprintf(rate, sizeof rate, "1/%d", hz);
+		struct spa_dict_item it[] = { { PW_KEY_NODE_RATE, rate } };
+		struct spa_dict d = SPA_DICT_INIT(it, 1);
+		pw_stream_update_properties(n->stream, &d);
+		fprintf(stderr, "reac-pw: rate via props: node.rate -> %s (no reconnect)\n", rate);
+		n->sample_rate = hz;
+		return 0;
+	}
 	if (!n->stream)
 		return -1;
 	int prev_hz = n->sample_rate;

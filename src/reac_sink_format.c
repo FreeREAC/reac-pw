@@ -12,6 +12,61 @@
 #include <spa/param/audio/format-utils.h>
 #include <spa/pod/builder.h>
 
+/* PROBE (REACPW_RATE_CHOICE=1): declare the rate as a CHOICE at connect —
+ * default `rate`, alternatives the closed REAC set — instead of one fixed value.
+ *
+ * The point is to find out whether an already-negotiated stream can be moved to
+ * another rate INSIDE its declared choice without its ports being destroyed. The
+ * adapter refuses a Format change on a started node
+ * (audioconvert/audioadapter.c: `if (this->started) return -EIO`), so this pairs
+ * with REACPW_RATE_VIA_ACTIVE, which stops the node without disconnecting it.
+ *
+ * Success is FIVE things, not one: the rate moves, the node id survives, the PORT
+ * ids survive, the consumer's links survive, and the RT thread never dies. Only
+ * the last three decide whether players on a fed segment keep playing. */
+static int rate_choice(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_RATE_CHOICE");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
+static const struct spa_pod *build_rate_choice_format(struct spa_pod_builder *b,
+                                                      int channels, int rate)
+{
+	static const int REAC_RATES[] = { 44100, 48000, 96000 };
+	struct spa_pod_frame f[2];
+
+	spa_pod_builder_push_object(b, &f[0], SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
+	spa_pod_builder_add(b,
+		SPA_FORMAT_mediaType,      SPA_POD_Id(SPA_MEDIA_TYPE_audio),
+		SPA_FORMAT_mediaSubtype,   SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+		SPA_FORMAT_AUDIO_format,   SPA_POD_Id(SPA_AUDIO_FORMAT_F32P),
+		SPA_FORMAT_AUDIO_channels, SPA_POD_Int(channels),
+		0);
+
+	/* rate: Enum choice, default first (SPA's convention), then the alternatives. */
+	spa_pod_builder_prop(b, SPA_FORMAT_AUDIO_rate, 0);
+	spa_pod_builder_push_choice(b, &f[1], SPA_CHOICE_Enum, 0);
+	spa_pod_builder_int(b, rate);
+	for (size_t i = 0; i < sizeof REAC_RATES / sizeof REAC_RATES[0]; i++)
+		spa_pod_builder_int(b, REAC_RATES[i]);
+	spa_pod_builder_pop(b, &f[1]);
+
+	if (channels > 0) {
+		uint32_t pos[REAC_MAX_CHANNELS];
+		for (int c = 0; c < channels; c++)
+			pos[c] = (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c);
+		spa_pod_builder_prop(b, SPA_FORMAT_AUDIO_position, 0);
+		spa_pod_builder_array(b, sizeof(uint32_t), SPA_TYPE_Id, (uint32_t)channels, pos);
+	}
+	return spa_pod_builder_pop(b, &f[0]);
+}
+
 const struct spa_pod *reac_sink_format_build(struct spa_pod_builder *b,
                                              int channels, int rate)
 {
@@ -19,6 +74,9 @@ const struct spa_pod *reac_sink_format_build(struct spa_pod_builder *b,
 		channels = 0;
 	if (channels > REAC_MAX_CHANNELS)
 		channels = REAC_MAX_CHANNELS;
+
+	if (rate_choice())
+		return build_rate_choice_format(b, channels, rate);
 
 	struct spa_audio_info_raw finfo = {
 		.format = SPA_AUDIO_FORMAT_F32P,
