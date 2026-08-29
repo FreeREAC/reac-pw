@@ -392,6 +392,82 @@ const char *reac_master_drop_name(enum reac_master_drop_reason r)
  * override in SECONDS, or -1 when UNSET / non-numeric / non-positive (leave the
  * built-in dwell untouched). Read once + cached, matching the file's other
  * getenv knobs. */
+/* EXPERIMENT KNOB (default UNSET = today's behaviour, byte-identical):
+ * REACPW_GRANT_DWELL_MS sets the ENROLL->grant dwell in MILLISECONDS, so it can
+ * be made SHORTER than the built-in 1.6 s — which REACPW_GRANT_DWELL_S cannot
+ * express, being whole seconds and meant for the opposite case (a ~30 s hold for
+ * a box that needs longer).
+ *
+ * WHY. Measured 2026-08-29: a pace change costs ~6.5 s before audio returns, and
+ * the box's own return dominates it. The 1.6 s dwell is a large, deliberate slice
+ * of that — chosen to match a real M-200 (delta 1.503 s and 1.717 s on the two
+ * goldens). The open question is whether the box REQUIRES that hold or merely
+ * tolerates it. If it enrols just as reliably at a shorter dwell, the pace change
+ * gets shorter by the difference, on both boxes and every re-enrol.
+ *
+ * NOT A DEFAULT UNTIL PROVEN. Granting too fast is a KNOWN failure mode: the
+ * comment below records a box that needed ~27 s, and reac-pw's normal 1.6 s
+ * "grants too fast for the box to react" there. So a short dwell must be proven
+ * per firmware, on the wire, before anyone changes the built-in. Takes precedence
+ * over REACPW_GRANT_DWELL_S when both are set. */
+/* EXPERIMENT KNOB (default UNSET = today's behaviour, byte-identical):
+ * REACPW_GRANT_ON_DECLARE=1 ends the ENROLL->grant dwell as soon as the box has
+ * DECLARED and been armed at its declared width, instead of running the full
+ * ~1.6 s.
+ *
+ * MEASURED ON THE WIRE, 2026-08-29, S-1608 re-enrolling after a pace change
+ * (tcpdump, op 04 03 records):
+ *     t=5.19  box declares      dt1 tags 0100 / 0000 / 0302
+ *     t=6.79  WE grant          1.60 s later — exactly grant_dwell
+ * The box is sitting there declared for the whole gap. Granting at 5.2 s instead
+ * of 6.8 s is the whole 1.6 s, on every re-enrol and every pace change.
+ *
+ * WHY AN EVENT AND NOT A SHORTER TIMER. docs/REAC-BOX-STATE-DIAGRAM.md: the box
+ * leaves COLD_CONNECT *on receipt of the master GRANT*, not after elapsed time —
+ * the protocol is a frame exchange and the dwell is a wall-clock imitation of one
+ * desk's observed gap. A shorter constant would still be the wrong model: it
+ * breaks the box that needs ~27 s (reac_master.c's REACPW_GRANT_DWELL_S note),
+ * where waiting for the DECLARATION is exactly right. So this keeps grant_dwell
+ * as the CAP for a box that has not declared, and ends it early for one that has.
+ *
+ * The settle keeps the ordering the golden shows: the width-correct ENROLL goes
+ * out first (enroll_pending, ~1 ms after recognition), then the grant burst. */
+static int grant_on_declare(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_GRANT_ON_DECLARE");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
+/* Slots to hold after the width-correct ENROLL before the grant burst — 50 ms,
+ * fps-scaled. Long enough that the ENROLL is on the wire ahead of the burst
+ * (the ordering the M-200 golden shows), short enough to be invisible. */
+static int declare_settle_slots(const struct reac_master *m)
+{
+	int slots = m->fps / 20;
+	return slots < 1 ? 1 : slots;
+}
+
+static int grant_dwell_override_ms(void)
+{
+	static int cached = -2;
+	if (cached == -2) {
+		const char *v = getenv("REACPW_GRANT_DWELL_MS");
+		cached = -1;
+		if (v && *v) {
+			char *end = NULL;
+			long ms = strtol(v, &end, 10);
+			if (end && *end == '\0' && ms > 0 && ms < 600000)
+				cached = (int)ms;
+		}
+	}
+	return cached;
+}
+
 static int grant_dwell_override_s(void)
 {
 	static int cached = -2;   /* -2 = unread, -1 = unset/invalid, >0 = seconds */
@@ -516,9 +592,15 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	 * same as the default above — so the box gets the ~27 s hold a real M-200 gives
 	 * it. UNSET leaves the default exactly as computed (byte-identical). */
 	{
-		int dwell_s = grant_dwell_override_s();
-		if (dwell_s > 0)
+		int dwell_ms = grant_dwell_override_ms();
+		int dwell_s  = grant_dwell_override_s();
+		if (dwell_ms > 0) {
+			m->grant_dwell = (int)(((long long)m->fps * dwell_ms) / 1000);
+			if (m->grant_dwell < 1)
+				m->grant_dwell = 1;
+		} else if (dwell_s > 0) {
 			m->grant_dwell = m->fps * dwell_s;
+		}
 	}
 	/* NO BOX YET — the correct startup state, not a degraded one (see this
 	 * function's header comment). There is nothing to allocate and nothing to
@@ -551,6 +633,7 @@ void reac_master_init(struct reac_master *m, const uint8_t src[6],
 	 * recognition (reac_master_set_box). set_enroll_width re-checksums. */
 	set_enroll_width(m->enroll_blk, REAC_ENROLL_DEFAULT_WIDTH);
 	m->enroll_pending = 0;
+	m->enroll_sent_tick = 0;
 
 	/* The body we push. STILL THE CAPTURE-DERIVED ONE, and the rig is why.
 	 *
@@ -641,6 +724,7 @@ void reac_master_forget_box(struct reac_master *m)
 	m->alloc.width     = 0;
 	m->grant_burst_len = 0;
 	m->enroll_pending  = 0;
+	m->enroll_sent_tick = 0;
 	memset(m->box_mac, 0, sizeof m->box_mac);
 	/* Back to the wide-safe ENROLL and the idle cfea width byte: everything we
 	 * advertise about "the box" must go when the box does, or the next one inherits
@@ -683,11 +767,13 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch,
 	 * the sweep's last row and the box would be established with nothing enrolled. */
 	if (!had_box && m->state == REAC_M_GRANTING) {
 		m->grant_ticks    = 0;
+		m->enroll_sent_tick = 0;
 		m->announce_tick  = 0;
 		/* The restarted window's own tick-0 ENROLL already carries the declared
 		 * width, so the mid-dwell re-ENROLL has nothing left to correct. Emitting
 		 * both would put two enrols on the wire where every golden shows one. */
 		m->enroll_pending = 0;
+	m->enroll_sent_tick = 0;
 	}
 
 	m->cfg.out_channels = (uint8_t)in_ch;    /* cfea width byte := box input width */
@@ -760,6 +846,7 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 {
 	m->state = REAC_M_GRANTING;
 	m->grant_ticks = 0;
+	m->enroll_sent_tick = 0;
 	m->grant_attempts++;
 	memcpy(m->box_mac, box_src, 6);
 	if (blk32)
@@ -1177,7 +1264,10 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 		if (m->grant_ticks == 0) {
 			if (!no_enroll())
 				emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
-		} else if (m->grant_ticks <= m->grant_dwell) {
+		} else if (m->grant_ticks <= m->grant_dwell &&
+		           !(grant_on_declare() && !m->enroll_pending &&
+		             m->enroll_sent_tick > 0 &&
+		             m->grant_ticks >= m->enroll_sent_tick + declare_settle_slots(m))) {
 			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
 			 * config-announce is parsed ~1ms into GRANTING, see reac_pacer.c): deliver
 			 * ONE fresh ENROLL at the now-DECLARED width before the grant burst, so the
@@ -1186,6 +1276,8 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			 * frame, taken from an announce/filler slot — the burst is unchanged. */
 			if (m->enroll_pending) {
 				m->enroll_pending = 0;
+	m->enroll_sent_tick = 0;
+				m->enroll_sent_tick = m->grant_ticks;
 				if (!no_enroll())
 					emit = REAC_M_EMIT_ENROLL;
 			} else if (granting_chanmap_due(m, &idx)) {
