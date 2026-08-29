@@ -246,7 +246,8 @@ static void gen_cfea(uint8_t out[34], const uint8_t src[6],
  * capture too SHORT to hold the whole rotation; the live M-200 shows the true 49.
  * The master advertises the FABRIC, never the console width: cfg is unused.
  *
- * Slot encoding: the 0xfe marker -> (fe 00 00); a channel ch -> (ch, val, 00) with
+ * Slot encoding: the 0xfe marker -> (fe <family> 00), family 0 for V-Mixer and 1
+ * for OHRCA (see gen_chanmap); a channel ch -> (ch, val, 00) with
  * val 0x28 for ch <= 0x27 and 0x38 for the high bank 0x28..0x2f. apply_block
  * re-checksums at emit time, so only the slot bytes matter here; stamp_block_cksum
  * keeps the stored template self-consistent too. This generator reproduces the
@@ -277,11 +278,24 @@ static int chanmap_start(int f)
 }
 
 /* Populate `frames` with the full 49-window fabric sweep (returns the count).
- * cfg is unused: the master advertises the whole FABRIC, never the console's own
- * width (see the block comment above). */
+ * The master advertises the whole FABRIC, never the console's own width (see the
+ * block comment above) — cfg is read for ONE byte only, the marker's family.
+ *
+ * THE MARKER'S SECOND BYTE IS THE CONSOLE FAMILY (2026-08-29). A real M-5000 writes
+ * the section marker `fe 01 00` where an M-200/M-300 writes `fe 00 00` — measured
+ * across reac-captures (m5000-s1608-96k / m5000-s0808-96k vs the m200i 48k
+ * sessions). reac-pw emitted the V-Mixer form at every rate, so a box driven under
+ * our OHRCA impersonation saw an OHRCA cfea[19] over an M-200's channel map.
+ *
+ * WHY IT MIGHT MATTER: the S-1608 (fw 2.200) LATCHES its pace and has never
+ * followed our cfea[19]=1 to 96 kHz, while the S-0808 (fw 1.003) follows the byte
+ * live. §4's recognition path (FUN_0c003548) reads this map, so the marker is one
+ * of the two frames a real M-5000 sends that we did not. UNPROVEN — this is the
+ * candidate, not the confirmed cause. Gated on the family so V-Mixer output stays
+ * byte-identical (tests/test_reac_s1608.c pins the captured windows). */
 static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 {
-	(void)cfg;
+	const uint8_t marker_family = (cfg && cfg->console_field) ? 0x01 : 0x00;
 	for (int f = 0; f < REAC_M_CHANMAP_RING; f++) {
 		uint8_t *blk = frames[f];
 		memset(blk, 0, 34);
@@ -294,7 +308,7 @@ static int gen_chanmap(uint8_t frames[][34], const struct reac_console_cfg *cfg)
 			uint8_t ch = ring_at(start + s);
 			uint8_t *t = blk + 7 + s * 3;     /* 3-byte slot */
 			if (ch == REAC_CHANMAP_MARKER) {
-				t[0] = 0xfe; t[1] = 0x00; t[2] = 0x00;  /* section marker */
+				t[0] = 0xfe; t[1] = marker_family; t[2] = 0x00; /* section marker */
 			} else {
 				t[0] = ch;
 				/* 0x38 for the high bank (0x28..0x2f), else 0x28. */
@@ -418,6 +432,40 @@ static int no_enroll(void)
 	static int cached = -1;
 	if (cached < 0) {
 		const char *v = getenv("REACPW_NO_ENROLL");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
+/* TEST KNOB (default UNSET = today's behaviour, byte-identical): REACPW_EST_SCENE=1
+ * keeps the scene push (cdea 01 01 / 01 00 / 01 02) running once ESTABLISHED,
+ * instead of stopping at the locked cfea+chanmap cadence.
+ *
+ * DEFAULT OFF ON PURPOSE — the goldens do not support making this the behaviour.
+ * Measured 2026-08-29 over reac-captures, counting master ops after the head-amp
+ * sweep that marks establishment:
+ *
+ *   M-5000 -> S-1608 (coldboot)    op 0100 after establish:    0   (of 3097)
+ *   M-5000 -> S-1608 (alltraffic)  op 0100 after establish:    0   (of 6469)
+ *   M-5000 -> S-0808               op 0100 after establish: 1253   (of 1623)
+ *
+ * So a real M-5000 STOPS the scene stream toward an S-1608 and CONTINUES it toward
+ * an S-0808 — the opposite of what a 2026-07-18 note assumed ("reac-pw emits no
+ * cdea 0100 once ESTABLISHED while a real M-5000 streams it continuously"; that
+ * observation was of an S-0808 session). Toward the box we are trying to move,
+ * our locked cadence already matches the M-5000. The knob exists so the operator
+ * can falsify that on the rig in one run rather than on this paragraph's say-so.
+ *
+ * Setting it only ever ADDS scene frames in slots the locked cadence left as
+ * FILLER: the 1/s cfea and chanmap heartbeats are evaluated first and keep their
+ * slots, so the two runs differ by exactly the added push. Read once + cached like
+ * the file's other getenv knobs. */
+static int est_scene_stream(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_EST_SCENE");
 		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
 		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
 	}
@@ -983,8 +1031,26 @@ static enum reac_master_emit control_cadence(struct reac_master *m, int *idx)
 			m->chanmap_cursor = (m->chanmap_cursor + 1) % m->chanmap_nframes;
 			return REAC_M_EMIT_CHANMAP;
 		}
-		/* NOTE: the locked cadence emits NOTHING else — no SUB01/SUB02 (the
-		 * "0 sub01/sub02 established" invariant a real M-200 holds; the
+		/* OPT-IN (REACPW_EST_SCENE=1): keep the scene push running, the way a
+		 * real M-5000 does toward an S-0808 — same slot arithmetic as the HUNT
+		 * cadence below, so the frames are the ones a hunting master would send.
+		 * Off by default: toward an S-1608 a real M-5000 stops it (est_scene_stream). */
+		if (est_scene_stream()) {
+			if (pos <= m->burst_end && pos % m->probe_stride == 0) {
+				m->scene_step = 1 + pos / m->probe_stride;
+				return REAC_M_EMIT_SCENE_CHUNK;
+			}
+			if (pos == m->sub02_off) {
+				m->scene_step = REAC_SCENE_STEPS - 1;
+				return REAC_M_EMIT_SCENE_TAIL;
+			}
+			if (pos == m->sub01_off) {
+				m->scene_step = 0;
+				return REAC_M_EMIT_SCENE_HEAD;
+			}
+		}
+		/* NOTE: the locked cadence otherwise emits NOTHING else — no SUB01/SUB02
+		 * (the "0 sub01/sub02 established" invariant a real M-200 holds; the
 		 * REACPW_EST_COMMIT scene-commit experiment that emitted the pair here
 		 * was debunked by the 2026-07-22 protocol audit and removed). */
 		return REAC_M_EMIT_FILLER;

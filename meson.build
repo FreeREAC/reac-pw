@@ -256,6 +256,16 @@ master_no_enroll_test = executable('test_reac_master_no_enroll',
   dependencies : [libreac_dep, m_dep])
 test('reac_master_no_enroll', master_no_enroll_test)
 
+# --- the chanmap section marker carries the console family (fe 01 vs fe 00) ----
+# Pins both halves: OHRCA emits the M-5000 form, V-Mixer stays byte-identical.
+ohrca_chanmap_test = executable('test_reac_ohrca_chanmap',
+  ['tests/test_reac_ohrca_chanmap.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
+   'src/reac_tx.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, m_dep])
+test('reac_ohrca_chanmap', ohrca_chanmap_test)
+
 # --- unit test: the MASTER establishment decision core (pure table) ------------
 # Every (state, event) pair of the transition table — all 4 x 11 = 44, ignores
 # included — asserted against docs/MASTER-FSM.md, plus the classifier fold

@@ -108,12 +108,51 @@ int main(void)
 		                                                      * REAC_ENROLL_CONSOLE_IDX, private) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
-		/* ---- (b) console-INDEPENDENT chanmap: identical for EVERY profile ---- */
+		/* ---- (b) chanmap: the M-200 sweep, EXCEPT the marker's family byte ----
+		 *
+		 * This arm used to assert a console-INDEPENDENT chanmap — every profile
+		 * byte-equal to GOLD_CHANMAP_SWEEP. That claim could not fail: the golden
+		 * is an M-200 capture (reac_m200_golden.inc) and the generator emitted the
+		 * M-200 map for every profile, so the test compared our M-200 map against
+		 * an M-200 map and passed for the M-5000 profile without ever seeing one.
+		 *
+		 * Measured 2026-08-29 over reac-captures, counting marker slots directly on
+		 * the wire (frames cd ea 01 03 00 19, slot bytes at [23 + 3s]):
+		 *
+		 *   M-5000 -> S-1608 coldboot    fe 01 00 x6     M-200i -> S-1608   fe 00 00 x5
+		 *   M-5000 -> S-1608 alltraffic  fe 01 00 x7     M-200i establish   fe 00 00 x35
+		 *   M-5000 -> S-0808             fe 01 00 x14
+		 *
+		 * 3 captures to 3: the section marker carries the CONSOLE FAMILY. So the
+		 * per-console difference is THREE bytes, not two — cfea[19], ENROLL_BLK[8]
+		 * and this one. V-Mixer profiles must still equal the golden exactly; the
+		 * OHRCA profile must differ in exactly the marker family byte and the block
+		 * checksum that covers it. */
 		CHK(m.chanmap_nframes == GOLD_CHANMAP_WINDOWS);
+		int marker_slots = 0;
 		for (int w = 0; w < GOLD_CHANMAP_WINDOWS; w++) {
 			build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, w);
-			CHK(memcmp(f + 16, GOLD_CHANMAP_SWEEP[w], 34) == 0);
+			const uint8_t *got = f + 16, *want = GOLD_CHANMAP_SWEEP[w];
+			for (int i = 0; i < 34; i++) {
+				if (got[i] == want[i])
+					continue;
+				/* Only an OHRCA console may differ, and only here. */
+				CHK(cc->console_field == 0x01);
+				int is_marker_family = 0;
+				for (int sl = 0; sl < 8; sl++)
+					if (i == 7 + sl * 3 + 1 && want[7 + sl * 3] == 0xfe)
+						is_marker_family = 1;
+				if (is_marker_family) {
+					CHK(want[i] == 0x00 && got[i] == 0x01);
+					marker_slots++;
+				} else {
+					CHK(i == 33);   /* the checksum that covers it */
+				}
+			}
 		}
+		/* The marker is REACHED — a generator that stopped emitting it would
+		 * otherwise satisfy every arm above vacuously. */
+		CHK(cc->console_field == 0x01 ? marker_slots > 0 : marker_slots == 0);
 
 		/* ---- (b) console-INDEPENDENT scene push: the body is the DESK's, not the
 		 * console profile's, so every step is identical across all profiles. A
