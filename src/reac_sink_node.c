@@ -57,6 +57,23 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
+/* EXPERIMENT KNOB (default UNSET = today's behaviour, byte-identical): with
+ * REACPW_INPLACE_RATE=1 an accepted reac.cfg.rate is applied by the pacer IN
+ * PLACE — no listener close+open, no socket teardown — instead of main's clean
+ * segment re-open. See the accepted-rate branch below for the evidence that
+ * makes this worth measuring again. Read once + cached like the other knobs. */
+static int inplace_rate_change(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *v = getenv("REACPW_INPLACE_RATE");
+		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
+		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+	}
+	return cached;
+}
+
+
 /* Volume ramp length: how long a level change (or mute/unmute) glides so it does
  * not zipper. ~15 ms is the usual de-click window — long enough to be inaudible
  * as a step, short enough that an operator move feels immediate. Converted to a
@@ -606,14 +623,41 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 			? REAC_RATE_REFUSE_MALFORMED
 			: reac_rate_cfg_decide(REAC_ROLE_MASTER, req_hz, n->pacer.drivable_mask);
 		atomic_store_explicit(&n->pacer.rate_refused, (int)refusal, memory_order_relaxed);
-		if (refusal == REAC_RATE_REFUSE_NONE && req_hz != n->sample_rate)
+		if (refusal == REAC_RATE_REFUSE_NONE && req_hz != n->sample_rate) {
 			/* Accepted REAC pace change: re-clocks the segment, box re-enrolls
 			 * (operator 2026-08-26: re-establishment is acceptable). Stash it for
 			 * main's poll timer to apply as a CLEAN segment re-open (listener
 			 * close+open at the new rate = fresh pacer/ring/nodes, the fresh-launch
 			 * state) instead of the in-place reconnect that left the ring deep and
-			 * jittering ~1 min (2026-08-26-rate-change-jitter). */
-			atomic_store_explicit(&n->reopen_rate, req_hz, memory_order_relaxed);
+			 * jittering ~1 min (2026-08-26-rate-change-jitter).
+			 *
+			 * EXPERIMENT (REACPW_INPLACE_RATE=1, default OFF and byte-identical
+			 * when unset): take the in-place path instead — hand the rate to the
+			 * pacer, which re-establishes at the new fps WITHOUT closing the
+			 * socket or the listener (reac_pacer_apply_rate). The format
+			 * renegotiation is unaffected either way: it is driven off the
+			 * pacer's own rate_hz on the timer poll, so the node catches up once
+			 * the pacer has moved.
+			 *
+			 * WHY IT IS WORTH RE-TESTING. The 2026-08-26 revert blamed "stale
+			 * pacing/buffer state" for a ring running 25 ms deep and a minute of
+			 * dropped slots. But at that commit the scene's `revision` was static,
+			 * so the box could NOT follow a rate change at all — we re-paced while
+			 * it held its old rate, and that mismatch is what a deep ring and
+			 * dropped slots look like from our side. With revision derived from
+			 * the announced generation the box re-reads and re-clocks, so the
+			 * measurement that justified the revert may have been of the bug
+			 * fixed on 2026-08-29 rather than of in-place reuse.
+			 *
+			 * MEASURED PRIZE (rig, 0.4.7, 96->48 k on an S-1608): a clean re-open
+			 * costs 4.8 s of node absence, of which only ~1.6 s is the box going
+			 * quiet — the rest is our teardown and rebuild. So this can save
+			 * ~3 s and no more; the box's own re-lock is irreducible. */
+			if (inplace_rate_change())
+				reac_pacer_request_rate(&n->pacer, req_hz);
+			else
+				atomic_store_explicit(&n->reopen_rate, req_hz, memory_order_relaxed);
+		}
 		/* A refusal moves nothing: no request reaches the pacer, so fps,
 		 * period_ns and the master FSM are untouched — the refused prop
 		 * above is the only thing that changes. */
