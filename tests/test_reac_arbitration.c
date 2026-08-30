@@ -9,6 +9,7 @@
  * the segment. So the tests below are mostly about what must NOT become a master.
  */
 #include "reac_arbitration.h"
+#include <reac/reac.h>   /* the geometry that outranks the control plane */
 
 #include <stdio.h>
 #include <string.h>
@@ -129,6 +130,21 @@ int main(void)
 	reac_arbitrate(&t, OURS, REAC_M_ESTABLISHED, REAC_PACE_GRAPH_REF, now, &a);
 	CHK(a.pace == REAC_PACE_GRAPH_REF);
 	CHK(strcmp(reac_pace_source_name(a.pace), "graph-ref") == 0);
+
+	/* THE ROLE IS THE GEOMETRY. A peer that classifies MASTER while emitting a box
+	 * width is a stagebox strapped to master mode, and a master never joins another
+	 * master — so arbitration reads the length, not only the control plane. The
+	 * widths are the chassis we own; 1494 carries the FCS residue and is no geometry. */
+	CHK(reac_frame_is_master_downstream(REAC_FRAME_BYTES));
+	CHK(!reac_frame_is_master_downstream(1204));
+	CHK(!reac_frame_is_master_downstream(628));
+	CHK(!reac_frame_is_master_downstream(340));
+	CHK(!reac_frame_is_master_downstream(REAC_FRAME_BYTES_OHRCA));
+	CHK(reac_frame_channels(1204) == 32);   /* S-4000S */
+	CHK(reac_frame_channels(628) == 16);    /* S-1608  */
+	CHK(reac_frame_channels(340) == 8);     /* S-0808  */
+	CHK(reac_frame_channels(REAC_FRAME_BYTES) == 40);
+	CHK(reac_frame_channels(REAC_FRAME_BYTES_OHRCA) == 0);
 
 	printf("test_reac_arbitration: OK\n");
 	return 0;
