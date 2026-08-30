@@ -1,6 +1,6 @@
 # REAC stagebox establishment — state diagram (capture-verified)
 
-> **✅ VALIDATED ON THE WIRE (M-200, 2026-07-11).** reac-pw ran as a 16-ch slave
+> **VALIDATED ON THE WIRE (M-200, 2026-07-11).** reac-pw ran as a 16-ch slave
 > against a real, cold-booted **M-200** (V-Mixer, 48 kHz) and the desk **enrolled
 > it as a stagebox in its REAC menu** and held the connection: master `GRANT`
 > burst → `PROBE 0/s` for the full run → steady `3999` fill/s both directions,
@@ -145,10 +145,10 @@ reac-pw → M-5000 (commit 57117c7):
 
 | protocol state | reac-pw FSM state | status |
 | --- | --- | --- |
-| FLOOD | `FSM_FLOOD_ANNOUNCE` | ✓ ~5460-frame bounded flood |
-| COLD_CONNECT | `FSM_COLDCONNECT` | ✓ escalation + config + hb (6-phase cycle) |
-| (grant→settle) | `FSM_TX_MUTE` | ✓ dwell, on GRANT rx |
-| ESTABLISHED | `FSM_ESTABLISHED` | ✓ fill + hb |
+| FLOOD | `FSM_FLOOD_ANNOUNCE` | ~5460-frame bounded flood |
+| COLD_CONNECT | `FSM_COLDCONNECT` | escalation + config + hb (6-phase cycle) |
+| (grant→settle) | `FSM_TX_MUTE` | dwell, on GRANT rx |
+| ESTABLISHED | `FSM_ESTABLISHED` | fill + hb |
 
 reac-pw reproduces every phase, emits the byte-identical frame set, and **is
 granted**. Frame content is not the gap.
@@ -247,9 +247,9 @@ All three rows below are LIVE-VERIFIED on a real M-200 (2026-07-12): reac-pw
 
 | model | selector | name frame | 0402000d | in / out | audio width | desk shows |
 | --- | --- | --- | --- | --- | --- | --- |
-| S-1608 | `0x82` | (none — named by selector) | no | 16 / 8 | 628 B | **S-1608** ✅ |
-| S-0808 | `0x84` | `04 01 001b` "S-0808" | yes | 8 / 8 | 340 B | **S-0808** ✅ |
-| S-4000S | `0x84` | (none — see below) | no | 32 / 8 | 1204 B | **S-4000S** ✅ |
+| S-1608 | `0x82` | (none — named by selector) | no | 16 / 8 | 628 B | **S-1608** |
+| S-0808 | `0x84` | `04 01 001b` "S-0808" | yes | 8 / 8 | 340 B | **S-0808** |
+| S-4000S | `0x84` | (none — see below) | no | 32 / 8 | 1204 B | **S-4000S** |
 
 **The `0x84` family default IS "S-4000S" (VERIFIED 2026-07-12).** The real S-4000S
 (`s4000s-coldboot-m5000-...`, box `c4:06:80`) sends selector `0x84` with **no name
