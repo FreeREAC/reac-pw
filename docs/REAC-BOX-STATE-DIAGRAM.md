@@ -45,6 +45,22 @@ is in the same frame of reference. Frame labels are keyed by L2 source (box
 `00:40:ab:c4:80:3b` vs master `00:40:ab:ca:15:4c`) — critical, because BOTH sides
 use `cdea 04 03` (box = cold-connect JOIN, master = GRANT).
 
+
+## The role is the geometry, and it outranks this diagram
+
+Every transition below is read from the control plane. The frame LENGTH is the one claim that
+cannot be misconfigured: a master's downstream is always the 40-channel solution (1492 B), a
+stagebox's upstream its own declared width (S-4000S 1204 B, S-1608 628 B, S-0808 340 B), all
+`52 + n*36`. libreac exposes both questions — `reac_frame_is_master_downstream()` and
+`reac_frame_channels()`.
+
+**A stagebox strapped to MASTER never enters this diagram at all.** It broadcasts continuously,
+sends no cold-connect, and classifies as a master by every rule in the control plane, while
+still emitting a box geometry. A master does not join another master, so no amount of probing,
+re-pacing or link bouncing will move it. Read the length, report the misconfiguration, and check
+the box's rear switch before deriving anything from its silence.
+
+
 ## State machines — the ARROWS are packets (TX = we send, RX = from master)
 
 ### BOX (what reac-pw must be)
