@@ -64,10 +64,47 @@ is not what defeated the knob. The burst anchor was.
 superseded as a route to the same saving: it is a blunter constant and breaks the box that
 needs a long hold, which is exactly why `25d1853` chose an event. Keep the knob as the CAP.
 
+
+## AUDIO MEASURED — the gate this file said was owed (2026-08-30 03:40)
+
+`tools/omx-oracle.py` from the openmixer checkout, self-test first (an unlinked capture reads
+digitally silent, so the probe can report ABSENCE). Physical loopback on the S-1608: box
+**output 1 -> input 9**, i.e. `reac-playback:playback_AUX0` -> `reac-capture:capture_AUX8`. The
+path measured is the whole chain: console -> REAC downstream -> box DAC -> cable -> box ADC ->
+REAC upstream -> console.
+
+| | control (established 1.684 s) | fast (established 0.134 s) |
+|---|---|---|
+| tone @1 kHz, nothing playing | -110.1 dBFS | -100.6 dBFS |
+| tone @1 kHz, tone playing | **+0.6 dBFS** | **+0.3 dBFS** |
+| bin/rms | 1.123 | 1.092 |
+| separation | 110.7 dB | **100.9 dB** |
+
+`bin/rms` near 1 means the energy IS the tone at its own frequency, not broadband noise, and the
+silent baseline is what makes the signal reading mean anything. **A box granted 1.55 s earlier
+carries audio identically.** The verdict this file previously withheld is now measured, for the
+S-1608.
+
+Caveat kept: the loop CLIPS (peak 1.000, rms -0.4 dBFS) — a line output into a mic input is very
+hot. That is fine for pass/fail and useless as a gain measurement; a level test needs a pad or a
+lower send.
+
+**S-4000S: noise floor only, not a tone.** All 32 capture ports read a consistent -83.1..-83.7
+dBFS analogue noise floor, which shows its ADC path is live across the full declared width, but
+no loopback was available on that box. Its tone measurement is still owed.
+
+## A HARDWARE FACT THAT CHANGES HOW TO READ THIS BOX
+
+The S-1608's **first 7-8 inputs are physically broken** (operator, 2026-08-30). Measured:
+`capture_AUX0..7` read EXACTLY 0.000000 while `capture_AUX8..15` carry a live ~-87 dBFS floor.
+So an exact digital zero on that half is the hardware, not an enrolment or mapping defect — and
+a head-amp gain change on a console channel fed from those ports proves nothing about the
+actuator. Test the gain door on a channel fed from `capture_AUX8..15`.
+
 ## NOT PROVEN — what a default change still needs
 
-- **No audio was measured.** Ports and packet rate are not audio through the box. Run the
-  oracle before promoting this to the default.
+- **Audio is measured on the S-1608 (above) and still owed on the S-4000S** — that box has only
+  a noise floor, for want of a loopback.
 - Two boxes and two firmwares, three trials each. The file's own warning stands: a box
   elsewhere needed ~27 s, and 1.6 s already grants too fast for it. Grant-on-declare is
   event-driven and so should be correct there — `grant_dwell` remains the cap for a box that
