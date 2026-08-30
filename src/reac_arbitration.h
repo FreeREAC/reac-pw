@@ -65,6 +65,18 @@ enum reac_pace_source {
 	REAC_PACE_BOX_SLOPE,
 };
 
+/** What a rival master turned out to be. The strings are the published prop values. */
+enum reac_rival_kind {
+	REAC_RIVAL_NONE = 0,
+	/** The 40-channel downstream — a real desk. Joinable per §2. */
+	REAC_RIVAL_DESK,
+	/** A box width from something claiming master: a stagebox in the wrong mode. REFUSE. */
+	REAC_RIVAL_BOX,
+	/** No legal geometry heard yet. Refused too — §4's catch-all conservatism: a frame kind
+	 *  nobody has captured must not flip the segment's topology. */
+	REAC_RIVAL_UNKNOWN,
+};
+
 /** The segment aggregate, as the props carry it. */
 struct reac_arbitration {
 	enum reac_segment_master state;
@@ -84,7 +96,33 @@ struct reac_arbitration {
 	 * it has not.
 	 */
 	int conflict;
+	/**
+	 * WHAT THE RIVAL IS, decided by its frame GEOMETRY rather than by its control frames
+	 * (spec §2b). A desk drives with the 40-channel downstream; a stagebox emits its own,
+	 * smaller declared width — and a stagebox strapped to master mode claims master while
+	 * emitting a box geometry. The two want opposite responses, so they cannot share a name.
+	 * REAC_RIVAL_NONE when there is no rival at all.
+	 */
+	enum reac_rival_kind rival;
 };
+
+
+/**
+ * Classify a rival by the width its frames carry.
+ *
+ * 40 channels is the master downstream and nothing else is; every smaller legal geometry is a
+ * box upstream of that width. 0 means no legal `52 + n*36` frame has been heard from the peer,
+ * which is UNKNOWN rather than narrow — and unknown is refused, per §4's rule that a frame kind
+ * nobody has captured must not flip the segment's topology.
+ */
+enum reac_rival_kind reac_rival_kind_from_channels(unsigned channels);
+
+/** Wire name for a rival kind — `none` | `desk` | `box` | `unknown`. */
+const char *reac_rival_kind_name(enum reac_rival_kind k);
+
+/** The refusal code for a rival kind, or `"none"` when nothing is refused (no rival, or a
+ *  desk, which is JOINED rather than refused). */
+const char *reac_rival_refusal(enum reac_rival_kind k);
 
 /** Wire names, stable across versions — these strings ARE the published prop values. */
 const char *reac_segment_master_name(enum reac_segment_master s);

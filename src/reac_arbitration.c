@@ -4,6 +4,7 @@
 // reac_arbitration — see reac_arbitration.h for what this decides (nothing) and why.
 
 #include "reac_arbitration.h"
+#include <reac/reac.h>   /* REAC_MAX_CHANNELS — the master downstream width */
 
 #include <string.h>
 
@@ -87,6 +88,9 @@ void reac_arbitrate(const struct reac_disco_table *table,
 		 * reported separately and acted on by nobody until Q1 is answered. */
 		out->state = REAC_SEGMENT_US;
 		out->conflict = rival != NULL;
+		/* WHAT the rival is travels with the fact that there IS one: a surface told only
+		 * "conflict" cannot tell a desk to join from a box to fix. */
+		out->rival = rival ? reac_rival_kind_from_channels(rival->channels) : REAC_RIVAL_NONE;
 		if (our_mac) {
 			memcpy(out->mac, our_mac, 6);
 			out->have_mac = 1;
@@ -100,6 +104,9 @@ void reac_arbitrate(const struct reac_disco_table *table,
 		out->state = REAC_SEGMENT_FOREIGN;
 		memcpy(out->mac, rival->mac, 6);
 		out->have_mac = 1;
+		/* §2b: a DESK here is joined; a stagebox strapped to master claims exactly the same
+		 * thing and must be refused instead, and only the geometry separates them. */
+		out->rival = reac_rival_kind_from_channels(rival->channels);
 		/* The foreign master times the stream; whatever WE would have disciplined to is
 		 * not what the wire is running on. */
 		out->pace = REAC_PACE_FOREIGN_MASTER;
@@ -119,4 +126,34 @@ void reac_arbitrate(const struct reac_disco_table *table,
 	/* Nothing established, nothing probing, no master evidence: the wire is silent. Reported
 	 * as NONE with no MAC, which is honestly different from "we drive". */
 	out->state = REAC_SEGMENT_NONE;
+}enum reac_rival_kind reac_rival_kind_from_channels(unsigned channels)
+{
+	if (channels == 0)
+		return REAC_RIVAL_UNKNOWN;
+	return channels >= REAC_MAX_CHANNELS ? REAC_RIVAL_DESK : REAC_RIVAL_BOX;
 }
+
+const char *reac_rival_kind_name(enum reac_rival_kind k)
+{
+	switch (k) {
+	case REAC_RIVAL_DESK:    return "desk";
+	case REAC_RIVAL_BOX:     return "box";
+	case REAC_RIVAL_UNKNOWN: return "unknown";
+	case REAC_RIVAL_NONE:    break;
+	}
+	return "none";
+}
+
+const char *reac_rival_refusal(enum reac_rival_kind k)
+{
+	switch (k) {
+	/* A desk is JOINED (§2), so it is not a refusal — only the cases we decline carry a code. */
+	case REAC_RIVAL_BOX:     return "rival-master-box";
+	case REAC_RIVAL_UNKNOWN: return "rival-master-unknown";
+	case REAC_RIVAL_DESK:
+	case REAC_RIVAL_NONE:    break;
+	}
+	return "none";
+}
+
+

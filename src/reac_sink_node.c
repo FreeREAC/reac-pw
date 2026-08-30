@@ -1088,6 +1088,8 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		REAC_PROP_MASTER_MAC,    master_mac,
 		REAC_PROP_PACE_SOURCE,   reac_pace_source_name(arb.pace),
 		REAC_PROP_MASTER_CONFLICT, arb.conflict ? "1" : "0",
+		REAC_PROP_RIVAL_KIND,    reac_rival_kind_name(arb.rival),
+		REAC_PROP_REFUSAL,       reac_rival_refusal(arb.rival),
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);

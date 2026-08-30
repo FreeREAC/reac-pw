@@ -59,6 +59,11 @@ struct reac_disco_sighting {
 	 * reac_box_model_by_channels: that silently defaults an unknown width to S-1608
 	 * (reac_ctrl.c:394), which is a sane audio-path fallback and a LIE in a device list. */
 	const struct reac_box_model *model;
+	/* The peer's DATA-FRAME WIDTH in channels, from the frame length alone; 0 when the frame
+	 * carried no legal `52 + n*36` geometry. The role field says what the peer CLAIMS; this
+	 * says what it IS, and a stagebox strapped to master mode claims master while emitting a
+	 * box width. Absence is 0 and means unknown, never "zero channels". */
+	unsigned channels;
 };
 
 /* Classify one raw frame into a sighting, blind to whether we own the peer.
@@ -109,6 +114,10 @@ struct reac_disco_entry {
 	uint8_t mac[6];
 	enum reac_disco_role role;
 	const struct reac_box_model *model;
+	/* The widest geometry heard from this peer; 0 while none was legal. Kept as a MAX rather
+	 * than last-wins: a control frame carries no audio geometry, so a peer's data frames are
+	 * what answer, and one stray short frame must not erase them. */
+	unsigned channels;
 	int owned;                 /* the peer THIS master established with */
 	uint64_t first_seen_ns;
 	uint64_t last_seen_ns;

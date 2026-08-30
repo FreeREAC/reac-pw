@@ -292,6 +292,17 @@ int main(void)
 	CHK(memcmp(s.mac, SPLIT, 6) == 0);
 	CHK(s.model == NULL);
 
+	/* ---- (e) THE GEOMETRY RIDES THE SIGHTING (arbitration §2b).
+	 *
+	 * A classifier reads what a peer SAYS; the frame length says what it IS. Recording the
+	 * width here is what lets arbitration tell a desk (40 ch) from a stagebox strapped to
+	 * master mode (its own, smaller width) — the two want opposite responses, and no control
+	 * frame distinguishes them. 0 means the frame carried no legal geometry, which is a fact,
+	 * not a zero width. */
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
+	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
+	CHK(s.channels == reac_frame_channels((size_t)n));
+
 	printf("OK: disco — presence only from real 0x8819 Roland frames, role from the full "
 	       "signature (never the kind), model never inferred, stale devices withdrawn, "
 	       "JSON all-or-nothing, S-4000 goldens replay byte-verbatim\n");

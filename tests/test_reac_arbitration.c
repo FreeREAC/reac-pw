@@ -146,6 +146,30 @@ int main(void)
 	CHK(reac_frame_channels(REAC_FRAME_BYTES) == 40);
 	CHK(reac_frame_channels(REAC_FRAME_BYTES_OHRCA) == 0);
 
+	/* ---- §2b: WHAT the rival is, decided by geometry, not by what it claims.
+	 *
+	 * The measured case: a stagebox whose rear switch is in MASTER position broadcasts, never
+	 * cold-connects, and classifies MASTER by every control-frame rule — while emitting 1204 B,
+	 * a 32-channel BOX upstream. A master never joins another master, so that peer is a
+	 * misconfigured box to REPORT, not a master to follow. */
+	CHK(reac_rival_kind_from_channels(40) == REAC_RIVAL_DESK);
+	CHK(reac_rival_kind_from_channels(32) == REAC_RIVAL_BOX);   /* S-4000S */
+	CHK(reac_rival_kind_from_channels(16) == REAC_RIVAL_BOX);   /* S-1608  */
+	CHK(reac_rival_kind_from_channels(8)  == REAC_RIVAL_BOX);   /* S-0808  */
+	CHK(reac_rival_kind_from_channels(0)  == REAC_RIVAL_UNKNOWN); /* no legal geometry heard */
+
+	/* The names ARE the published prop values, so they are pinned here. */
+	CHK(strcmp(reac_rival_kind_name(REAC_RIVAL_NONE), "none") == 0);
+	CHK(strcmp(reac_rival_kind_name(REAC_RIVAL_DESK), "desk") == 0);
+	CHK(strcmp(reac_rival_kind_name(REAC_RIVAL_BOX), "box") == 0);
+	CHK(strcmp(reac_rival_kind_name(REAC_RIVAL_UNKNOWN), "unknown") == 0);
+
+	/* A DESK is joined per §2, so it is never a refusal; a box and an unreadable geometry are. */
+	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_NONE), "none") == 0);
+	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_DESK), "none") == 0);
+	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_BOX), "rival-master-box") == 0);
+	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_UNKNOWN), "rival-master-unknown") == 0);
+
 	printf("test_reac_arbitration: OK\n");
 	return 0;
 }

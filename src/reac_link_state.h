@@ -94,6 +94,11 @@
  * yielding drops a box mid-audio, holding breaks the one-master law, and the choice is the
  * operator's). "1" or "0". */
 #define REAC_PROP_MASTER_CONFLICT "reac.master.conflict"
+/* WHAT a rival master is, by its frame GEOMETRY, and why it was not joined (§2b). A desk is
+ * joined and carries no refusal; a stagebox strapped to master claims master while emitting a
+ * box width, and only the length tells them apart. `none` when there is no rival. */
+#define REAC_PROP_RIVAL_KIND    "reac.master.rival.kind"  /* none | desk | box | unknown */
+#define REAC_PROP_REFUSAL       "reac.master.refusal"     /* none | rival-master-{box,unknown} */
 
 /* ---- HEALTH (workstream CLK, 2026-08-23) --------------------------------- *
  *

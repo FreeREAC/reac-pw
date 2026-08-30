@@ -3,6 +3,7 @@
 
 /* Passive REAC sighting classifier + table. See reac_disco.h for the why. */
 #include "reac_disco.h"
+#include <reac/reac.h>   /* reac_frame_channels / reac_frame_clean_len */
 
 #include <stdio.h>
 #include <string.h>
@@ -118,6 +119,8 @@ int reac_disco_classify(const uint8_t *frame, size_t len, const uint8_t our_mac[
 	/* Byte-exact config-block match or NULL. Never reac_box_model_by_channels: its
 	 * S-1608 default (reac_ctrl.c:394) would name a box that was never identified. */
 	out->model = reac_ctrl_identify_box(frame, len);
+	/* The geometry, straight off the length: what the peer IS, beside what it claims. */
+	out->channels = reac_frame_channels(reac_frame_clean_len(len));
 	return 0;
 }
 
@@ -224,6 +227,12 @@ int reac_disco_table_observe(struct reac_disco_table *t,
 		}
 		if (s->model && e->model != s->model) {
 			e->model = s->model;
+		if (s->channels > e->channels) {
+			/* WIDEST WINS. Control frames carry no audio geometry, so a peer's data frames
+			 * are what answer; last-wins would let one short control frame erase them. */
+			e->channels = s->channels;
+			changed = 1;
+		}
 			changed = 1;
 		}
 		if (owned && !e->owned) {
@@ -251,6 +260,7 @@ int reac_disco_table_observe(struct reac_disco_table *t,
 	memcpy(e->mac, s->mac, 6);
 	e->role = s->role;
 	e->model = s->model;
+	e->channels = s->channels;
 	e->owned = owned ? 1 : 0;
 	e->first_seen_ns = now_ns;
 	e->last_seen_ns = now_ns;
