@@ -452,6 +452,31 @@ static int declare_settle_slots(const struct reac_master *m)
 	return slots < 1 ? 1 : slots;
 }
 
+/* Where the grant burst's timeline starts. The dwell ends either by running its full
+ * length (grant_dwell) or early on the box's declaration (grant-on-declare), and the
+ * burst must start from WHICHEVER HAPPENED — anchoring it to the constant makes an
+ * early exit inert: the cursor goes negative, no grant slot is ever taken, and
+ * grant_delivered() waits out a window nobody is using any more. */
+static int grant_dwell_anchor(const struct reac_master *m)
+{
+	return m->dwell_ended_tick > 0 ? m->dwell_ended_tick : m->grant_dwell;
+}
+
+/* Does the ENROLL->grant dwell end at this slot because the box has DECLARED and been
+ * armed? Latches dwell_ended_tick the first time it is true, so the burst timeline and
+ * grant_delivered() anchor to the real end rather than to grant_dwell. Not const: the
+ * latch is the point. */
+static int dwell_ends_now(struct reac_master *m)
+{
+	if (m->dwell_ended_tick > 0)
+		return 1;
+	if (!(grant_on_declare() && !m->enroll_pending && m->enroll_sent_tick > 0 &&
+	      m->grant_ticks >= m->enroll_sent_tick + declare_settle_slots(m)))
+		return 0;
+	m->dwell_ended_tick = m->grant_ticks;
+	return 1;
+}
+
 static int grant_dwell_override_ms(void)
 {
 	static int cached = -2;
@@ -768,6 +793,7 @@ void reac_master_set_box(struct reac_master *m, int in_ch, int out_ch,
 	if (!had_box && m->state == REAC_M_GRANTING) {
 		m->grant_ticks    = 0;
 		m->enroll_sent_tick = 0;
+		m->dwell_ended_tick = 0;   /* the restarted window re-runs its own dwell */
 		m->announce_tick  = 0;
 		/* The restarted window's own tick-0 ENROLL already carries the declared
 		 * width, so the mid-dwell re-ENROLL has nothing left to correct. Emitting
@@ -847,6 +873,7 @@ static void enter_granting(struct reac_master *m, const uint8_t box_src[6],
 	m->state = REAC_M_GRANTING;
 	m->grant_ticks = 0;
 	m->enroll_sent_tick = 0;
+	m->dwell_ended_tick = 0;   /* a fresh window's dwell has not ended */
 	m->grant_attempts++;
 	memcpy(m->box_mac, box_src, 6);
 	if (blk32)
@@ -944,7 +971,7 @@ static int grant_delivered(const struct reac_master *m)
 	if (!reac_master_has_box(m))
 		return 0;
 	return m->grant_ticks >=
-	       m->grant_dwell + m->grant_burst_len * m->grant_stride + 1;
+	       grant_dwell_anchor(m) + m->grant_burst_len * m->grant_stride + 1;
 }
 
 /* Is the scene push in a state where the box has the WHOLE scene? True only
@@ -1265,9 +1292,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 			if (!no_enroll())
 				emit = REAC_M_EMIT_ENROLL;   /* the pre-grant arm frame, once */
 		} else if (m->grant_ticks <= m->grant_dwell &&
-		           !(grant_on_declare() && !m->enroll_pending &&
-		             m->enroll_sent_tick > 0 &&
-		             m->grant_ticks >= m->enroll_sent_tick + declare_settle_slots(m))) {
+		           !dwell_ends_now(m)) {
 			/* Recognition landed AFTER the tick-0 ENROLL (the common case: the box's
 			 * config-announce is parsed ~1ms into GRANTING, see reac_pacer.c): deliver
 			 * ONE fresh ENROLL at the now-DECLARED width before the grant burst, so the
@@ -1299,7 +1324,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 				emit = REAC_M_EMIT_FILLER;
 			}
 		} else {
-			int gt = m->grant_ticks - 1 - m->grant_dwell; /* burst timeline starts after enroll+dwell */
+			int gt = m->grant_ticks - 1 - grant_dwell_anchor(m); /* burst timeline starts when the dwell ENDED */
 			int is_grant_slot = 0;
 			if (gt % m->grant_stride == 0) {
 				int k = gt / m->grant_stride;
