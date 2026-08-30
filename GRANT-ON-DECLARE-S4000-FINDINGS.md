@@ -1,72 +1,75 @@
-# grant-on-declare is INERT on the S-4000S, and the dwell it targets is safe to shorten
+# Establishment time: 1.7 s -> 0.2 s on both boxes, and why the knob shipped inert
 
-Measured 2026-08-30 02:15-02:30 on the live rig, S-4000S `00:40:ab:c4:08:bc` on `enp131s0`,
-96 kHz. Branch `test/grant-on-declare-on-rig-base` = the rig's own
-`fix/the-binding-is-an-ifindex` plus a cherry-pick of `25d1853`, so the only difference from
-what the rig runs is grant-on-declare itself. Suite on this build: 44 Ok / 0 Fail / 1 skip.
+Measured on the live rig 2026-08-30 02:15-03:10. Branch `test/grant-on-declare-on-rig-base`
+= the branch the rig runs (`fix/the-binding-is-an-ifindex`) + a cherry-pick of `25d1853`
++ the fix in `8000142`, so the only difference from the rig's own daemon is this work.
 
 ## Result
 
-| run | knob | grant dwell | ended by |
-|---|---|---|---|
-| live binary (tonight's cold-connect) | — | **1.756 s** | timer |
-| test binary | unset | **1.756 s** | timer |
-| test binary | `REACPW_GRANT_ON_DECLARE=1` | **1.756 s** | timer |
-| test binary | `REACPW_GRANT_DWELL_MS=300` | **0.456 s** x4 trials | timer |
+| box | code path | control | `REACPW_GRANT_ON_DECLARE=1` | saved |
+|---|---|---|---|---|
+| S-1608 16/8 `…80:3b` | no window restart | 1.684 s | **0.134 s** | 1.55 s |
+| S-4000S 32/8 `…08:bc` | window restart | 1.756 s | **0.206 s** | 1.55 s |
 
-Knob-off reproduces the live binary to the millisecond, so "default off and byte-identical
-unset" holds. **`REACPW_GRANT_ON_DECLARE=1` changes nothing on this box.** The box declares at
-+0.852 s and we still grant at +1.756 s — 0.904 s left on the table, the exact gap the knob
-exists to close.
+Three trials per arm, identical to the millisecond. Full port count every time (16 and 32
+capture ports), wire at 8007-8010 pkt/s, `/stagebox` `ready` for both. **Control reproduced
+each box's live baseline exactly**, so the fix does not move the default.
 
-## Why — `0` is both a valid tick and the "never sent" sentinel
+## Why the knob did nothing before
 
-`reac_master.c`, the block that runs when a box declares while we are holding an ungranted
-window (`!had_box && state == REAC_M_GRANTING`):
+`25d1853` ends the dwell on the box's declaration. It worked — instrumenting the predicate
+showed it TRUE from slot 401 with a 5 s cap. But the master still reached ESTABLISHED at the
+full 5.16 s, because the grant burst was anchored to the dwell CONSTANT:
 
 ```c
-m->grant_ticks      = 0;
-m->enroll_sent_tick = 0;
-m->enroll_pending   = 0;   /* the restarted window's tick-0 ENROLL carries the width */
+gt = grant_ticks - 1 - grant_dwell;                                  /* negative when skipped */
+grant_delivered = grant_ticks >= grant_dwell + burst_len*stride + 1;  /* waits out the cap */
 ```
 
-The restarted window then emits its ENROLL through the `grant_ticks == 0` branch, and **that
-branch never sets `enroll_sent_tick`**. So it stays `0` for the rest of the session, and the
-early-exit test
+Skipping the dwell drops into the burst branch with a negative cursor, so no grant slot is
+ever taken and the FSM waits out a window nobody is using. **Emitting a grant early and
+ARRIVING early are different things, and only the second one is audio.**
 
-```c
-grant_on_declare() && !m->enroll_pending && m->enroll_sent_tick > 0 && ...
-```
+`dwell_ended_tick` latches the slot the dwell really ended at; `grant_dwell_anchor()` feeds
+both call sites and falls back to `grant_dwell` when the dwell ran its full length. It resets
+with the grant window (`enter_granting`, and `set_box`'s restart) so a stale anchor cannot
+leak into a later session.
 
-can never be true. The ENROLL really is sent at tick 0, so the honest value and the absence
-marker collide.
+## What the test had to get right
 
-**The S-1608 does not take the window-restart path and the S-4000S does**, which is why the
-branch measured green on the S-1608 and is dead here — on the box class that actually REQUIRES
-ENROLL (its FSM needs subtype 0x10 to leave state 3; the S-1608 self-places).
+`tests/test_reac_grant_dwell.c` drives the rig's sequence as a pure FSM and runs twice under
+different env (the knob getters cache in statics, so one process = one configuration).
 
-The fix is to record "an enrol was sent" in something that can express absence — a flag, or a
-sentinel that is not a reachable tick. Do not simply set `enroll_sent_tick = m->grant_ticks` in
-the tick-0 branch: that writes `0` and changes nothing.
+**Two earlier versions of this test passed before the fix**, which is the part worth keeping:
 
-**The knob logs nothing when it fires or fails to.** An experiment knob that can silently do
-nothing is unfalsifiable — an hour of it being inert looked exactly like success. Whatever the
-fix, it should say which path ended the dwell; `GRANTING -> ESTABLISHED (timer)` vs `(declared)`
-would have made this measurable in one run instead of a code read.
+1. asserting on the first GRANT emission rather than on reaching ESTABLISHED — the grant DOES
+   go out early, so the test measured something adjacent to the claim;
+2. omitting the box's REPEATED announce. The live log carries two `box JOIN seen` lines 250 us
+   apart, and `reac_pacer` calls `set_box` on each. The FIRST call restarts the grant window
+   and clears `enroll_pending`; LATER calls re-arm it WITHOUT restarting. Without the second
+   call the early-exit predicate can never arm and the harness exercises a path the rig never
+   takes.
 
-## The dwell itself is safe to shorten on this box — 1.300 s, available without the fix
+Sabotage-verified: reverting `grant_dwell_anchor()` to `grant_dwell` puts the fast arm red.
+Suite 46 Ok / 0 Fail / 1 pre-existing skip.
 
-`REACPW_GRANT_DWELL_MS=300` gave **0.456 s, four trials, identical to the millisecond**, and the
-box enrolled at FULL WIDTH every time: 32 capture + 8 playback ports, `/stagebox` `S-4000S
-in=32 out=8 ready`, `/reac/segment` `seg2: established 96000Hz model=s4000s`, wire 8005 pkt/s.
-That answers this file's own open question for this firmware — the box TOLERATES the short
-dwell, it does not require the 1.6 s hold.
+## SUPERSEDED — the earlier conclusion in this file was wrong
 
-**Not yet proven, and needed before this becomes a default:**
+An earlier revision claimed `enroll_sent_tick` was stuck at 0 because 0 is both a valid tick
+and the "never sent" sentinel. **That was a code reading, and the rig refuted it**: the probe
+printed `enroll_sent_tick=1`, `would_exit=1`. The sentinel collision is real in the source but
+is not what defeated the knob. The burst anchor was.
 
-- **No audio was measured.** Ports existing is not audio flowing, and this file records the
-  S-4000 once being stuck at 8ch. Run the oracle before believing the width.
-- Four trials is a reliability signal, not a proof, and only for THIS firmware. The comment's
-  warning stands: a box elsewhere needed ~27 s and reac-pw's 1.6 s already "grants too fast" for
-  it. Per-firmware proof, as the file says.
-- The S-1608 was not tested with a short dwell; it ran throughout on the rig's own daemon.
+`REACPW_GRANT_DWELL_MS=300` (measured earlier the same night, 0.456 s on the S-4000S) is
+superseded as a route to the same saving: it is a blunter constant and breaks the box that
+needs a long hold, which is exactly why `25d1853` chose an event. Keep the knob as the CAP.
+
+## NOT PROVEN — what a default change still needs
+
+- **No audio was measured.** Ports and packet rate are not audio through the box. Run the
+  oracle before promoting this to the default.
+- Two boxes and two firmwares, three trials each. The file's own warning stands: a box
+  elsewhere needed ~27 s, and 1.6 s already grants too fast for it. Grant-on-declare is
+  event-driven and so should be correct there — `grant_dwell` remains the cap for a box that
+  has not declared — but that box has not been tested.
+- The knob is still default-off. Promoting it is a separate decision with its own rig run.
