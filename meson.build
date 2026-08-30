@@ -403,6 +403,19 @@ courtship_test = executable('test_reac_courtship',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
 
+grant_dwell_test = executable('test_reac_grant_dwell',
+  ['tests/test_reac_grant_dwell.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
+   'src/reac_headamp_tx.c', 'src/reac_mac.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+# The knob getters cache in statics, so each arm gets its own process.
+test('reac_grant_dwell_default', grant_dwell_test,
+     env : {'REACPW_GRANT_DWELL_MS': '5000'})
+test('reac_grant_dwell_on_declare', grant_dwell_test,
+     env : {'REACPW_GRANT_DWELL_MS': '5000', 'REACPW_GRANT_ON_DECLARE': '1'})
+
+
 # --- unit test: the output-gain staging kernel (pure ramp, no PipeWire) --------
 # Exercises reac_gain_ramp_block directly: unity is a no-op, a target is reached
 # within the expected sample count, mute ramps to zero, and two channels ramp

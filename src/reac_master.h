@@ -392,6 +392,15 @@ struct reac_master {
 	 * settle after that instead of running its full length — the box is ready once it
 	 * has DECLARED and been armed, and the wall-clock dwell is only imitating a desk. */
 	int      enroll_sent_tick;
+	/* The slot at which the ENROLL->grant dwell ACTUALLY ended, or 0 while it has not.
+	 * The burst timeline and grant_delivered() are anchored to THIS, not to grant_dwell:
+	 * ending the dwell early is only half the job, because a burst cursor computed from
+	 * the dwell CONSTANT goes negative when the dwell is skipped, so no grant slot is
+	 * ever taken and the FSM waits out a window it no longer needs. Measured on the rig
+	 * 2026-08-30: with the early exit firing from slot 401, the S-4000S still reached
+	 * ESTABLISHED at the full 5 s cap. 0 = the dwell is still running; readers use
+	 * grant_dwell_anchor(). */
+	int      dwell_ended_tick;
 	int      enroll_pending;  /* set by reac_master_set_box when the box's DECLARED
 	                           * width narrowed enroll_blk after the initial ENROLL;
 	                           * the GRANTING dwell re-emits ONE ENROLL at the new
