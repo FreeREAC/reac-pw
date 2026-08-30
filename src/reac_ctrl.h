@@ -11,6 +11,16 @@
  *
  * See reac-firmware-re/REAC-CONNECTION-FSM.md for the full spec + evidence grades.
  *
+ * ROLE IS SETTLED BY GEOMETRY, NOT BY THE CONTROL PLANE. A classifier here reads
+ * what a peer SAYS; the frame length says what it IS. A master's downstream is
+ * always the 40-channel solution (1492 B), a stagebox's upstream its own smaller
+ * declared width — libreac's reac_frame_is_master_downstream() /
+ * reac_frame_channels(). A stagebox strapped to master mode broadcasts and
+ * classifies MASTER by every rule below while still emitting a box geometry, and
+ * a master never joins another master: that peer is a misconfigured box to
+ * report, not a master to follow. Take the length as the arbiter whenever the
+ * two disagree.
+ *
  * Direction discipline: the master BROADCASTS downstream; we (a virtual stagebox)
  * UNICAST upstream to the learned master MAC with our Roland-OUI src. Control
  * block is the 32 bytes [18:50]; cdea/cfea carry a checksum at [49] such that
