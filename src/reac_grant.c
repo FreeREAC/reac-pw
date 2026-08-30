@@ -70,6 +70,12 @@
  * always straps 2. A master cannot move where a head-amp write lands by granting
  * differently; nothing in the box consumes a granted base.
  *
+ * THE CELL INDEX IS base + (input - 1). A head-amp record addresses one cell of
+ * that space, and cell (base + N - 1) is the box's input N — verified on the wire
+ * by arming a SINGLE cell and reading the box's phantom LEDs: base 32, cell 35,
+ * input 4 lit. Arm one cell at a time to re-verify; a whole sweep tells you
+ * nothing about addressing because only its final state is observable.
+ *
  * So what is left here is not allocation, it is ADMISSION: the box states its
  * base, and we check the slots it claims fit the head-amp space. They may not —
  * width 32 at base 0x20 runs to 0x3f, past the 0x2f ceiling — and a box that
