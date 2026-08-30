@@ -89,7 +89,7 @@ Consequence: there is **nothing to crack and nothing to emit** — the Ethernet 
 is computed by the NIC hardware, so reac-pw's frames already carry a valid one.
 Do NOT reintroduce a "per-frame CRC-16 trailer" gate or emitter.
 
-✅ **SETTLED 2026-07-29 in favour of the paragraph above (#82).** The competing
+**SETTLED 2026-07-29 in favour of the paragraph above (#82).** The competing
 record — libreac's `<reac/reac.h>` reading `REAC_FRAME_BYTES_OHRCA` as a real
 per-frame OHRCA trailer — was retired by FreeREAC/libreac#15 and the corpus sweep
 behind it. Numbers, over the whole private capture corpus (83 pcaps):
@@ -115,7 +115,7 @@ a bespoke counter-seeded CRC-16. Standard CRC-16 sweeps missed because it was ne
 a CRC-16; it was 2 bytes of the CRC-32 FCS. Lesson: verify capture ground-truth
 (mirror/SPAN byte-faithfulness) before RE-ing a "trailer".
 
-**(b) ✅ CLOSED (2026-07-29, #80): the downstream decodes the BRAID, like
+**(b) CLOSED (2026-07-29, #80): the downstream decodes the BRAID, like
 everything else.** This item originally read "plain-LE is CORRECT for the M-5000
 (OHRCA) but WRONG for M-200/M-300", i.e. a per-generation switch. That split is
 dead: the zoneA/zoneB goldens are the M-5000's OWN two REAC ports carrying program
@@ -174,7 +174,7 @@ half is blocked on W1 (nothing fills `tx_ring` in the slave role yet).
 - **W2 phase-lock** — the clock piece; tractable (desk owns clock) but slips
   must be avoided (downstream frame-slip injects a 12-sample phase step).
 
-## W5 CONNECTED (2026-07-11): real M-200 enrolls reac-pw in its REAC menu ✅
+## W5 CONNECTED (2026-07-11): real M-200 enrolls reac-pw in its REAC menu 
 
 **Milestone reached.** reac-pw ran as a 16-ch S-1608 slave against a real,
 cold-booted **M-200** (V-Mixer, 48 kHz) and the desk **showed it as a connected
