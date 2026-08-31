@@ -170,6 +170,19 @@ int main(void)
 	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_BOX), "rival-master-box") == 0);
 	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_UNKNOWN), "rival-master-unknown") == 0);
 
+	/* §3b: "present, not joining" is a REFUSAL THE OPERATOR MUST SEE. A REAC box
+	 * cold-connects only on link-up, so a box heard but never joining sits there
+	 * forever — waiting is not a remedy, bouncing its link is. */
+	CHK(strcmp(reac_segment_refusal(REAC_RIVAL_NONE, 1, 1, 0), "box-present-not-joining") == 0);
+	/* Joined: nothing is refused. */
+	CHK(strcmp(reac_segment_refusal(REAC_RIVAL_NONE, 1, 1, 3), "none") == 0);
+	/* A silent wire is not this fault — there is no box to bounce. */
+	CHK(strcmp(reac_segment_refusal(REAC_RIVAL_NONE, 1, 0, 0), "none") == 0);
+	/* Established: not probing, so not this state whatever the counters say. */
+	CHK(strcmp(reac_segment_refusal(REAC_RIVAL_NONE, 0, 1, 0), "none") == 0);
+	/* A RIVAL always wins the report: it is why nothing else can happen. */
+	CHK(strcmp(reac_segment_refusal(REAC_RIVAL_BOX, 1, 1, 0), "rival-master-box") == 0);
+
 	printf("test_reac_arbitration: OK\n");
 	return 0;
 }
