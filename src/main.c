@@ -444,7 +444,14 @@ static void usage(const char *p)
 	  "                graph/wire difference instead of the depth guard discarding\n"
 	  "                it. Default OFF: the loop's sign is verified but its\n"
 	  "                measurement phase is not, so it spends most of its\n"
-	  "                authority on a standing correction. See ENV-KNOBS.md.\n",
+	  "                authority on a standing correction. See ENV-KNOBS.md.\n"
+	  "  REACPW_RT_PRIO=<1..99>  SCHED_FIFO priority for the wire-clock threads\n"
+	  "                (the master pacer, the slave upstream engine). Unset = the\n"
+	  "                built-in, which sits BELOW the PipeWire graph on purpose: a\n"
+	  "                wire clock that outranks the audio driver preempts the cycle\n"
+	  "                that fills its own ring, and the xruns land on the audio\n"
+	  "                interface, not here. Raise it only on a host whose graph runs\n"
+	  "                somewhere else; see src/reac_rt.h for the ladder.\n",
 	  p, REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX);
 }
 

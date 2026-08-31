@@ -93,6 +93,7 @@ reac_pw_src = [
   'src/reac_seglock.c',
   'src/reac_arbitration.c',
   'src/reac_conf.c',
+  'src/reac_rt.c',
   'src/reac_tx.c',
   'src/reac_ctrl.c', 'src/reac_scene_body.c',
   'src/reac_fsm.c',
@@ -132,6 +133,29 @@ conf_test = executable('test_reac_conf',
   ['tests/test_reac_conf.c', 'src/reac_conf.c'],
   include_directories : [include_directories('src')])
 test('reac_conf', conf_test)
+
+# --- unit test: WHERE reac-pw's RT threads sit (issue #31) --------------------
+# reac-pw ran its wire clocks at SCHED_FIFO 79 over a PipeWire graph whose driver
+# runs at 60 and whose clients run at 55 — it preempted the audio cycle that
+# feeds it, and the damage showed up as ~1500 xruns on the RME with nothing
+# wrong on reac-pw's own side. This pins the header's tier constants against the
+# priorities MEASURED on the rig, so the law is checked against the machine it
+# describes and not against itself, and pins the REACPW_RT_PRIO knob: honoured
+# where usable, refused (never coerced) where not, and always reporting which
+# layer decided.
+rt_test = executable('test_reac_rt',
+  ['tests/test_reac_rt.c', 'src/reac_rt.c', 'src/reac_conf.c'],
+  include_directories : [include_directories('src')])
+test('reac_rt', rt_test)
+
+# --- source sweep: ONE DOOR TO SCHED_FIFO ------------------------------------
+# The ladder above only holds while reac_rt.c is the only place that changes a
+# thread's scheduling class; a third RT thread spelling its own literal would
+# reopen #31 with every unit test still green. The sweep proves it can see the
+# call in the file that legitimately has it before it reports absence anywhere.
+test('reac_rt_single_door',
+  find_program('tests/rt-prio-single-door.sh'),
+  args : [meson.current_source_dir()])
 
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',
@@ -335,7 +359,7 @@ test('reac_lat', lat_test)
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
-  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
+  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -372,7 +396,7 @@ test('reac_clock', clock_test)
 # losing to the box, an operator-designated reference reported by tier as well as by
 # name, and a measurably jittery one flagged rather than ejected.
 pacer_clock_test = executable('test_reac_pacer_clock',
-  ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_clock.c',
+  ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_clock.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
@@ -388,7 +412,7 @@ test('reac_pacer_clock', pacer_clock_test)
 # byte layout as the captured M-5000 in reac-captures), so the establishment is
 # exercised correct-by-construction against the capture-derived control kinds.
 slave_test = executable('test_reac_slave',
-  ['tests/test_reac_slave.c', 'src/reac_slave.c', 'src/reac_fsm.c',
+  ['tests/test_reac_slave.c', 'src/reac_slave.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_ring.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -399,7 +423,7 @@ test('reac_slave', slave_test)
 # audio (a virtual box has no preamp). Pins the gain model, the wire-CH -> input
 # mapping, and the RT multiply-only apply. Same link set as slave_test.
 vboxgain_test = executable('test_reac_vboxgain',
-  ['tests/test_reac_vboxgain.c', 'src/reac_slave.c', 'src/reac_fsm.c',
+  ['tests/test_reac_vboxgain.c', 'src/reac_slave.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_ring.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -414,7 +438,7 @@ test('reac_vboxgain', vboxgain_test)
 # -> HOLD -> peer-gone at 600) AND the matcher/builder mutual compatibility.
 courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_slave.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
+   'src/reac_slave.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
    'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
@@ -551,7 +575,7 @@ test('reac_headamp_prop', headamp_prop_test)
 # directly (no socket/RT privilege): functional queue->drain->emit, ring-full
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
-  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_disco.c',
+  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c',
    'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -572,7 +596,7 @@ test('reac_headamp_live', headamp_live_test)
 # drivability probe exists yet to supply that mask from the wire (see
 # reac_rate_cfg.h's honesty clause).
 rate_cfg_test = executable('test_reac_rate_cfg',
-  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_link.c',
+  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
    'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c',
    'src/reac_clock.c'],
@@ -694,7 +718,7 @@ test('reac_conformance', conformance_test)
 # drift the moment either one changed.
 bench_hotpath = executable('bench_hotpath',
   ['tools/bench_hotpath.c', 'src/reac_ring.c', 'src/reac_pace_watch.c',
-   'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
+   'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src'), include_directories('tests')],

@@ -9,7 +9,8 @@
  * eventually drops the link. The PipeWire graph thread cannot guarantee that: its
  * quantum is bursty and a sendto() syscall on the RT graph thread adds wake
  * jitter. So we move emission onto a dedicated thread, exactly the reac_repacer.c
- * pattern: mlockall, SCHED_FIFO ~prio 79, CPU-pinned, woken every slot period by
+ * pattern: mlockall, SCHED_FIFO in the wire-clock band BELOW the PipeWire graph
+ * (reac_rt.h; REACPW_RT_PRIO to move it), CPU-pinned, woken every slot period by
  * clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME) on an absolute deadline that
  * advances by period_ns each tick (no drift accumulation).
  *
@@ -37,6 +38,7 @@
 #include "reac_headamp_tx.h"
 #include "reac_clock.h"
 #include "reac_rate_cfg.h"
+#include "reac_rt.h"
 #include <reac/reac_identity.h>   /* the box identity-page decode (DT1 tag 0x0500) */
 
 struct reac_box_model;   /* reac_ctrl.h — master-side box recognition */
@@ -223,7 +225,9 @@ struct reac_pacer_event {
 struct reac_pacer_cfg {
 	const char *ifname;   /* TX NIC (raw AF_PACKET 0x8819) */
 	int fps;              /* slot cadence: 3675 / 4000 / 8000 */
-	int prio;             /* SCHED_FIFO priority (0 -> default 79) */
+	int prio;             /* SCHED_FIFO priority; 0 -> resolved by reac_rt.h
+                       * (REACPW_RT_PRIO, else the built-in that sits
+                       * BELOW the PipeWire graph) */
 	int cpu;              /* CPU to pin to (<0 -> no affinity) */
 	const uint8_t *src_mac;   /* our master MAC (Roland OUI); NULL -> a stand-in */
 	struct reac_console_cfg console;  /* box I/O advertised downstream; a zero
@@ -368,6 +372,8 @@ struct reac_pacer {
 	                                  * number behind (see resolve_catchup_slots
 	                                  * in reac_pacer.c). */
 	int prio, cpu;
+	enum reac_rt_prio_source prio_src;  /* which layer chose prio; reported
+                                     * when the thread goes SCHED_FIFO */
 	uint8_t src[6];
 
 	pthread_t thread;
@@ -565,11 +571,12 @@ struct reac_pacer {
 long reac_pacer_period_ns(int fps);
 
 /* Open the TX socket + size the frame ring (~250 ms deep). Does NOT start the
- * thread or touch scheduling. Returns 0 / -1. */
+ * thread, but DOES resolve its priority (reac_rt.h reads config files, which the
+ * RT thread must never do). Returns 0 / -1. */
 int  reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg);
 
-/* Spawn the SCHED_FIFO pacer thread (mlockall + affinity + sched_setscheduler are
- * done inside the thread). Returns 0 / -1. */
+/* Spawn the pacer thread; it locks memory, pins itself and enters the wire-clock
+ * SCHED_FIFO band (reac_rt_thread_go) as its first act. Returns 0 / -1. */
 int  reac_pacer_start(struct reac_pacer *p);
 
 /* PRODUCER side (call from the graph thread): hand one encoded downstream frame

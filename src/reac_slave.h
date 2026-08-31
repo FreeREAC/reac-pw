@@ -44,6 +44,7 @@
 
 #include "reac_fsm.h"
 #include "reac_ring.h"
+#include "reac_rt.h"
 
 struct reac_ctrl_parsed;   /* reac_ctrl.h — a parsed received frame */
 
@@ -57,6 +58,9 @@ struct reac_slave_cfg {
 	int sample_rate;          /* the master's rate (locked from the wire, not set
 	                           * by us); informational for the box frame geometry */
 	const uint8_t *src_mac;   /* our stable Roland-OUI src MAC; NULL -> a stand-in */
+	int prio;                 /* SCHED_FIFO priority for the engine thread; 0 ->
+	                           * resolved by reac_rt.h (REACPW_RT_PRIO, else the
+	                           * built-in that sits BELOW the PipeWire graph) */
 };
 
 /* The slave engine. The FSM is the brain; everything else is the I/O the FSM's
@@ -70,6 +74,9 @@ struct reac_slave {
 
 	int fd;                       /* AF_PACKET RX+TX socket, -1 if not open */
 	int ifindex;
+	int prio;                     /* the engine thread's SCHED_FIFO priority */
+	enum reac_rt_prio_source prio_src;  /* which layer chose it; reported when
+	                                     * the thread goes SCHED_FIFO */
 
 	struct reac_ring *tx_ring;    /* our input channels (planar f32), filled by the
 	                               * PipeWire sink; NULL -> emit silent upstream */
