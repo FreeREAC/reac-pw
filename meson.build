@@ -279,6 +279,20 @@ test('reac_iface_vanish_exits',
   args : [reac_pw_exe],
   timeout : 60)
 
+# --- whole-binary test: a cable edge re-establishes the master (#95) ---------
+# The unit tests prove the watcher reports edges and the pacer re-establishes
+# when asked. Neither proves the lines that JOIN them — the netlink fd on the
+# main loop, the callback, the request across to the pacer thread — which is
+# exactly the path a green suite hides: every part works, nothing calls
+# anything. This drives the real binary against real `ip link` toggles and
+# requires the FSM transcript to attribute the transition to the WIRE.
+# Own dummy interface inside an unprivileged user+net namespace, so it cannot
+# perturb a live REAC segment. Timeout covers 5 s settle + 3 s of toggles.
+test('reac_link_up_reestablishes',
+  find_program('tests/link-up-reestablishes.sh'),
+  args : [reac_pw_exe],
+  timeout : 60)
+
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
 # auto-spine §5 gives the unit no flags and has it read REAC_IFACES from the
