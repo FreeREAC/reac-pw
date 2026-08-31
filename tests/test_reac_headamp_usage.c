@@ -7,7 +7,7 @@
  * who trusted "0..39" could never reach its upper bank from this flag, even
  * though parse_headamp() itself already accepts the full 0..47 range.
  *
- * Runs the built reac-pw binary with no arguments (which prints usage() to
+ * Runs the built reac-pw binary with --help (which prints usage() to
  * stderr and exits 2) and reads its own output back, so this is checking what
  * an operator actually sees, not a copy of the string kept in the test. */
 #include <stdio.h>
@@ -22,7 +22,13 @@ int main(int argc, char **argv)
 	}
 
 	char cmd[4096];
-	snprintf(cmd, sizeof cmd, "%s 2>&1", argv[1]);
+	/* ASK FOR HELP EXPLICITLY. This used to run the binary with no arguments and
+	 * rely on that printing usage — which stopped being true when the packaged
+	 * (no-argument) shape started reading REAC_IFACES from the layered conf: on a
+	 * host that HAS a segment configured, a bare run is a real start. `--help` is
+	 * the question this test is actually asking, and its answer is the same text
+	 * on every host. */
+	snprintf(cmd, sizeof cmd, "%s --help 2>&1", argv[1]);
 	FILE *p = popen(cmd, "r");
 	if (!p) {
 		fprintf(stderr, "FAIL: could not run '%s'\n", cmd);
