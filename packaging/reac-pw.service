@@ -4,6 +4,11 @@ Documentation=https://github.com/FreeREAC/reac-aes67
 After=pipewire.service
 Wants=pipewire.service
 
+# ONE MASTER PER SEGMENT IS REAC LAW, and two masters on one wire go mute. Any
+# hand-run or per-NIC unit must be stopped and DISABLED before this one starts;
+# an enabled leftover is a second master waiting for the next login.
+Conflicts=reac-pw-master.service
+
 [Service]
 Type=simple
 # ONE daemon, N listeners (docs/design/specs/2026-08-20-reac-auto-spine.md §5,
