@@ -112,3 +112,19 @@ The rig procedure that decides it:
 
 Offline, the whole decision core is already pinned by `test_reac_clock` and the
 wiring (including the inertness proof) by `test_reac_pacer_clock`.
+
+## Why `REACPW_GRANT_ON_DECLARE` is not the default (decided 2026-08-31)
+
+It earns 1.55 s on both boxes we own, audio-verified through a physical loopback, and it is
+event-driven rather than a shorter constant — `grant_dwell` stays the CAP for a box that has
+not declared, so it does not break a slow box the way `REACPW_GRANT_DWELL_MS` would.
+
+It stays OFF anyway, for one reason: **the case it could break has never been on this rig.** A
+real M-200 holds a cold box ungranted ~27 s while the box climbs its op0403/TAG0100 JOIN field
+`01 -> 05 -> 0d`, and reac-pw's built-in 1.6 s is already documented as granting too fast for
+that box to react. Grant-on-declare keys on OUR ENROLL plus a settle, not on that climb, so a
+box that declares early and still needs the hold would be granted sooner, not later.
+
+To promote it, one measurement is needed: that box, establishing with the knob on. Until then
+the saving is available per-rig by setting the knob, and the default stays the timing every
+box we cannot test has always seen.
