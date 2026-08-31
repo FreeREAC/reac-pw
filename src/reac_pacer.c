@@ -5,6 +5,7 @@
 #define _GNU_SOURCE   /* clock_nanosleep / TIMER_ABSTIME, sched_setscheduler */
 #endif
 #include "reac_pacer.h"
+#include "reac_link.h"   /* the wire before the protocol */
 #include "reac_ctrl.h"     /* reac_ctrl_classify_box_frame */
 #include "reac_mac.h"
 
@@ -663,9 +664,34 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			                                       memory_order_relaxed);
 			uint64_t joins  = atomic_load_explicit(&p->rx_joins,
 			                                       memory_order_relaxed);
-			if (frames == 0)
+			/* CARRIER FIRST — the wire before the protocol. "Bounce the box PHY"
+			 * is the right remedy only when there IS a link; with the cable out it
+			 * sends the operator to the wrong end of the room. And a box leaves
+			 * BOOT for ANNOUNCE on PHY LINK-UP and nothing else (reac-firmware-re
+			 * REAC-PROTOCOL-FROM-SOURCE §10.2), so no-carrier explains the silence
+			 * completely and no amount of waiting resolves it. -1 is UNKNOWN and
+			 * says nothing: an unreadable probe is never evidence of a dead link. */
+			int carrier = reac_link_carrier(p->ifname[0] ? p->ifname : NULL);
+			if (carrier == 0)
+				fprintf(out, "reac-master: [%.6f] still PROBING: NO CARRIER on %s "
+				        "— the cable is out or the peer is down. A box only "
+				        "cold-connects on link-up, so this cannot resolve until "
+				        "the link returns.\n", ts, p->ifname[0] ? p->ifname : "?");
+			else if (frames == 0 && carrier < 0)
+				/* The kernel would not say. An interface that is administratively
+				 * DOWN answers EINVAL on carrier, not 0 — so this is also what a
+				 * `ip link set <if> down` looks like from here. Report the not
+				 * knowing; a guess would be the same defect as reporting "down". */
 				fprintf(out, "reac-master: [%.6f] still PROBING: rx_box_frames=0 "
-				        "rx_joins=0 (wire silent — check the RX path)\n", ts);
+				        "rx_joins=0 (carrier UNKNOWN on %s — the interface may be "
+				        "administratively down, or gone. The box is emitting "
+				        "nothing either way.)\n", ts,
+				        p->ifname[0] ? p->ifname : "?");
+			else if (frames == 0)
+				fprintf(out, "reac-master: [%.6f] still PROBING: rx_box_frames=0 "
+				        "rx_joins=0 (carrier is up — the box is emitting NOTHING, "
+				        "so it is in BOOT and believes its OWN link is down: check "
+				        "the cable AT THE BOX)\n", ts);
 			else
 				fprintf(out, "reac-master: [%.6f] still PROBING: "
 				        "rx_box_frames=%llu rx_joins=%llu (%s — bounce the box "
@@ -1563,6 +1589,13 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 		memcpy(p->src, cfg->src_mac, 6);
 	else
 		reac_mac_default_src(cfg->ifname, p->src);
+
+	/* The TX NIC's name, copied for diagnostics — the watchdog asks the kernel
+	 * whether this link still has carrier, and the caller's cfg need not outlive us. */
+	if (cfg->ifname) {
+		strncpy(p->ifname, cfg->ifname, sizeof p->ifname - 1);
+		p->ifname[sizeof p->ifname - 1] = '\0';
+	}
 
 	/* A zero out_channels means the caller left the console cfg unset -> the
 	 * S-1608 default (reac_master_init(NULL)). */
