@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #endif
 #include "reac_slave.h"
+#include "reac_rt.h"
 #include "reac_ctrl.h"
 #include "reac_mac.h"
 
@@ -384,14 +385,13 @@ static void *slave_loop(void *arg)
 	 * memory, go SCHED_FIFO, block signals, so our upstream emission has low,
 	 * consistent latency. A real box's PLL-clocked upstream is jitter-free and the
 	 * master locks its word clock to it before granting. Best-effort — without
-	 * CAP_SYS_NICE/rtprio we run SCHED_OTHER (jittery, may not link). */
+	 * CAP_SYS_NICE/rtprio we run SCHED_OTHER (jittery, may not link).
+	 *
+	 * The priority is the wire-clock band of reac_rt.h, resolved in
+	 * reac_slave_open: an upstream engine that outranks the PipeWire graph
+	 * preempts the very cycle that fills the ring it sends from. */
 	mlockall(MCL_CURRENT | MCL_FUTURE);
-	struct sched_param sp = { .sched_priority = 79 };
-	if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0)
-		fprintf(stderr, "reac_slave: SCHED_FIFO denied (need CAP_SYS_NICE/rtprio) — "
-		                "SCHED_OTHER, upstream may jitter and the master may not link\n");
-	else
-		fprintf(stderr, "reac_slave: SCHED_FIFO prio %d — low-jitter upstream\n", sp.sched_priority);
+	reac_rt_thread_go("reac_slave", s->prio, s->prio_src);
 	sigset_t allsig; sigfillset(&allsig); pthread_sigmask(SIG_BLOCK, &allsig, NULL);
 
 	struct sockaddr_ll bcast_sll, uni_sll;
@@ -530,6 +530,9 @@ int reac_slave_open(struct reac_slave *s, const struct reac_slave_cfg *cfg,
 {
 	reac_slave_fsm_init(s, cfg);
 	s->tx_ring = tx_ring;
+	/* Resolved HERE, on the caller's thread: reac_rt_prio_resolve reads the
+	 * layered config files, which the engine thread must never do. */
+	s->prio = reac_rt_prio_resolve(cfg->prio, NULL, &s->prio_src);
 
 	int fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 	if (fd < 0)

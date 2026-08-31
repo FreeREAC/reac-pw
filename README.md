@@ -109,7 +109,8 @@ the packet rate (pps = rate/12), never on the wire.
   `process()` encodes each 12-sample group with libreac's `reac_downstream_build`
   and submits it to
   a lock-free TX frame ring (no syscall on the graph thread). A dedicated
-  SCHED_FIFO pacer thread (mlockall, prio ~79, `clock_nanosleep` TIMER_ABSTIME)
+  SCHED_FIFO pacer thread (mlockall, prio below the PipeWire graph — see
+  `src/reac_rt.h` and `REACPW_RT_PRIO`, `clock_nanosleep` TIMER_ABSTIME)
   emits one frame per slot at a fixed pps (125 µs @96 k) and stamps the master
   JOIN/HOLD sequence — probe → `cdea 04 03` grant → established `cdea 01 03`
   channel-map + `cfea` announce ~1/s — onto the broadcast, so a real desk links.

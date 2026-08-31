@@ -5,6 +5,7 @@
 #define _GNU_SOURCE   /* clock_nanosleep / TIMER_ABSTIME, sched_setscheduler */
 #endif
 #include "reac_pacer.h"
+#include "reac_rt.h"
 #include "reac_link.h"   /* the wire before the protocol */
 #include "reac_ctrl.h"     /* reac_ctrl_classify_box_frame */
 #include "reac_mac.h"
@@ -1281,7 +1282,9 @@ static void *pacer_loop(void *arg)
 
 	/* RT setup (the reac_repacer.c recipe): lock memory, pin, go SCHED_FIFO.
 	 * Best-effort — if we lack privilege the thread still runs at SCHED_OTHER
-	 * (jittery but functional for the loopback demo). */
+	 * (jittery but functional for the loopback demo). The priority itself, and
+	 * why it sits UNDER the PipeWire graph rather than over it, is reac_rt.h;
+	 * it was resolved in reac_pacer_open, on the thread that can read files. */
 	mlockall(MCL_CURRENT | MCL_FUTURE);
 	if (p->cpu >= 0) {
 		cpu_set_t set;
@@ -1289,10 +1292,7 @@ static void *pacer_loop(void *arg)
 		CPU_SET(p->cpu, &set);
 		sched_setaffinity(0, sizeof set, &set);
 	}
-	struct sched_param sp = { .sched_priority = p->prio };
-	if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0)
-		fprintf(stderr, "reac_pacer: SCHED_FIFO denied (need CAP_SYS_NICE / rtprio); "
-		                "running SCHED_OTHER — cadence may jitter\n");
+	reac_rt_thread_go("reac_pacer", p->prio, p->prio_src);
 
 	/* Block all signals on this thread. SIGINT/SIGTERM are serviced by the pw/main
 	 * loop, not here; a signal delivered to this thread would only cut the slot
@@ -1529,7 +1529,9 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	/* No box yet, and 0 is a REAL base (the S-0808's), so the zeroed struct
 	 * would otherwise publish a base for a box that is not there. */
 	atomic_store_explicit(&p->recognized_headamp_base, -1, memory_order_relaxed);
-	p->prio = cfg->prio > 0 ? cfg->prio : 79;
+	/* reac_rt.h owns the ladder: a caller's explicit prio wins, then
+	 * REACPW_RT_PRIO, then the built-in that sits below the audio graph. */
+	p->prio = reac_rt_prio_resolve(cfg->prio, NULL, &p->prio_src);
 	p->cpu  = cfg->cpu;
 	p->fps  = cfg->fps > 0 ? cfg->fps : 8000;
 	p->period_ns = reac_pacer_period_ns(cfg->fps);

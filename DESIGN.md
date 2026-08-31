@@ -316,7 +316,8 @@ interval, so the downstream broadcast MUST leave at a rock-steady pps or the box
 hears rate jitter and drops the link. The PipeWire graph thread can't guarantee
 that (bursty quantum + a `sendto()` syscall on the RT thread = wake jitter). So
 emission moves to a dedicated thread, the **reac_repacer.c recipe**: `mlockall`,
-`SCHED_FIFO` prio ~79, CPU-pinnable, woken every slot period by
+`SCHED_FIFO` in the wire-clock band below the PipeWire graph (`reac_rt.h`,
+`REACPW_RT_PRIO`), CPU-pinnable, woken every slot period by
 `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)` on an absolute deadline that
 advances by `period_ns` each tick (125.0/250.0/272.1 µs; no drift accumulation,
 snap-forward on a late wake so we never burst-catch-up).
