@@ -1066,9 +1066,21 @@ int main(int argc, char **argv)
 	 * yet — answering that with the CAP_NET_RAW refusal hides the very sentence
 	 * that tells them how to fix it. Answered before the preflight, which then
 	 * guards every real start unchanged. */
+	/* NO ARGUMENTS IS THE PACKAGED SHAPE, NOT AN ERROR — but it is only a start when
+	 * something is CONFIGURED. auto-spine §5 gives the unit no flags at all and has
+	 * it read REAC_IFACES from the layered conf; refusing an empty command line
+	 * outright made that shape unreachable and the config-once design dead on
+	 * arrival. Asking the conf HERE keeps the property the old guard protected:
+	 * an operator running `reac-pw` on a box with nothing set up gets the usage
+	 * text, not the CAP_NET_RAW refusal — help is pure text and must never need a
+	 * capability. With REAC_IFACES set we fall through into the ordinary path and
+	 * the preflight guards the real start unchanged. */
 	if (argc < 2) {
-		usage(argv[0]);
-		return 2;
+		char probe[512];
+		if (reac_conf_lookup("REAC_IFACES", NULL, NULL, probe, sizeof probe) == REAC_CONF_NONE) {
+			usage(argv[0]);
+			return 2;
+		}
 	}
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {

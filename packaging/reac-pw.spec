@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.3.0}
+Version:        %{?version_override}%{!?version_override:0.4.8}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,7 +17,7 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 0.7.0
+BuildRequires:  pkgconfig(libreac) >= 0.7.1
 Requires:       pipewire
 
 %description
@@ -92,6 +92,23 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Mon Aug 31 2026 Pau Aliagas <linuxnow@gmail.com> - 0.4.8-1
+- The binding is an IFINDEX. An AF_PACKET socket binds to an index resolved once
+  from the name, so a USB NIC re-enumerating under the SAME name and MAC left the
+  daemon deaf AND mute while every name-based check stayed happy. The feeder now
+  records the index it is actually bound to and exits non-zero when it moves, so
+  the unit restarts instead of narrating a dead segment.
+- Grant on the box's DECLARATION rather than a wall-clock dwell
+  (REACPW_GRANT_ON_DECLARE=1, default off). Establishment measured 1.684 s ->
+  0.134 s on an S-1608 and 1.756 s -> 0.206 s on an S-4000S, audio-verified
+  through a physical loopback in both conditions. The dwell stays the CAP for a
+  box that has not declared.
+- A rival master is classified by its frame GEOMETRY and published as
+  reac.master.rival.kind / reac.master.refusal. A stagebox strapped to master
+  mode claims master by every control-frame rule while emitting a box width, and
+  a master never joins another master, so it is reported as a misconfiguration
+  rather than followed.
+- Requires libreac >= 0.7.1 for the geometry helpers.
 * Sun Aug 23 2026 Pau Aliagas <linuxnow@gmail.com> - 0.3.0-1
 - Builds against the SYSTEM libreac >= 0.7.0, and the version moves so that
   installing it is not a no-op. libreac 0.7.0 removed
