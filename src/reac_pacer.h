@@ -25,6 +25,7 @@
 #ifndef REAC_PACER_H
 #define REAC_PACER_H
 
+#include <net/if.h>   /* IFNAMSIZ */
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -337,6 +338,10 @@ int reac_clock_label_set(struct reac_clock_label *l, const char *name);
 int reac_clock_label_get(const struct reac_clock_label *l, char *out, size_t cap);
 
 struct reac_pacer {
+	/* The TX NIC's name, COPIED at open (never the cfg's pointer: the caller's
+	 * cfg need not outlive us). Only for diagnostics — asking the kernel whether
+	 * this link still has carrier, which the watchdog reports. */
+	char ifname[IFNAMSIZ];
 	struct reac_frame_ring ring;     /* graph -> pacer */
 	struct reac_master master;       /* the establishment state machine */
 	/* Announced the instant a session is (re)established, so a consumer can drop

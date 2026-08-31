@@ -214,6 +214,7 @@ unsigned reac_rx_iface_index(const char *ifname);
  * and nothing is lost. Pure; unit-tested in tests/test_reac_rx_live_iface.c. */
 int reac_rx_binding_lost(unsigned bound_ifindex, unsigned current_ifindex);
 
+
 int reac_rx_start(struct reac_rx *rx);
 
 /* Signal stop and join. */

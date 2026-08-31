@@ -99,7 +99,7 @@ reac_pw_src = [
   'src/reac_grant.c',
   'src/reac_master.c',
   'src/reac_master_fsm.c',
-  'src/reac_pacer.c',
+  'src/reac_pacer.c', 'src/reac_link.c',
   'src/reac_slave.c',
   'src/reac_mac.c',
   'src/reac_headamp_tx.c',
@@ -199,6 +199,11 @@ test('reac_rx_dup', rx_dup_test)
 # that case. The deployed unit always passes --rate. No privilege or live
 # traffic needed: a made-up interface name is refused the same way as a
 # genuinely dead one.
+link_test = executable('test_reac_link',
+  ['tests/test_reac_link.c', 'src/reac_link.c'],
+  include_directories : [include_directories('src')])
+test('reac_link', link_test)
+
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
    'src/reac_pace_watch.c'],
@@ -330,7 +335,7 @@ test('reac_lat', lat_test)
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
-  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
+  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -367,7 +372,7 @@ test('reac_clock', clock_test)
 # losing to the box, an operator-designated reference reported by tier as well as by
 # name, and a measurably jittery one flagged rather than ejected.
 pacer_clock_test = executable('test_reac_pacer_clock',
-  ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_clock.c',
+  ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_clock.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
@@ -546,7 +551,7 @@ test('reac_headamp_prop', headamp_prop_test)
 # directly (no socket/RT privilege): functional queue->drain->emit, ring-full
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
-  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_disco.c',
+  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_disco.c',
    'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -567,7 +572,7 @@ test('reac_headamp_live', headamp_live_test)
 # drivability probe exists yet to supply that mask from the wire (see
 # reac_rate_cfg.h's honesty clause).
 rate_cfg_test = executable('test_reac_rate_cfg',
-  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c',
+  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_link.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
    'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c',
    'src/reac_clock.c'],
@@ -689,7 +694,7 @@ test('reac_conformance', conformance_test)
 # drift the moment either one changed.
 bench_hotpath = executable('bench_hotpath',
   ['tools/bench_hotpath.c', 'src/reac_ring.c', 'src/reac_pace_watch.c',
-   'src/reac_pacer.c', 'src/reac_disco.c', 'src/reac_master.c',
+   'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src'), include_directories('tests')],
