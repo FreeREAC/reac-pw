@@ -577,4 +577,17 @@ const char *reac_master_drop_name(enum reac_master_drop_reason r);
  * the 48 kHz slot, which is why the pacer's late-wake budget matters MORE at
  * 96 k and not less. See docs/RATE-AND-CLOCK-CONFIG.md. */
 
+/* Where the grant burst's timeline starts: the slot the ENROLL->grant dwell ACTUALLY
+ * ended at. The dwell ends either on the box's declaration (the default, spec §3c) or by
+ * running out its full length as the CAP for a box that has not declared, and the burst
+ * must start from whichever happened.
+ *
+ * Shared with the tests deliberately: a test that re-derives this pins the dwell POLICY
+ * as a side effect of testing something else, and then a policy change reads as an
+ * unrelated regression. The dwell's own behaviour is pinned by test_reac_grant_dwell. */
+static inline int reac_master_grant_anchor(const struct reac_master *m)
+{
+	return m->dwell_ended_tick > 0 ? m->dwell_ended_tick : m->grant_dwell;
+}
+
 #endif /* REAC_MASTER_H */

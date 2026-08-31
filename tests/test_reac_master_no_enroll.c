@@ -110,12 +110,14 @@ int main(void)
 		CHK(e != (enum reac_master_emit)-1);
 		if (e == REAC_M_EMIT_ENROLL)
 			saw_enroll = 1;
-		CHK(e != REAC_M_EMIT_GRANT || i > m.grant_dwell);   /* no grant before the dwell */
+		/* No grant before the dwell ENDS — the real invariant, and the one that holds
+		 * whether the dwell ended on the declaration or ran out its cap. */
+		CHK(e != REAC_M_EMIT_GRANT || i > reac_master_grant_anchor(&m));
 		if (e == REAC_M_EMIT_GRANT) {
 			if (last_grant_slot >= 0)
 				CHK(i - last_grant_slot == REAC_M_GRANT_STRIDE);
 			else
-				CHK(i == m.grant_dwell + 1);
+				CHK(i == reac_master_grant_anchor(&m) + 1);
 			last_grant_slot = i;
 			CHK(idx == grants);              /* blocks emitted in order, same as unset */
 			grants++;

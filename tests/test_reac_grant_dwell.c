@@ -43,7 +43,7 @@ static const uint8_t B_SRC[6] = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };  /* the 
 int main(void)
 {
 	const char *v = getenv("REACPW_GRANT_ON_DECLARE");
-	const int fast = (v && v[0] == '1');
+	const int fast = !(v && v[0] == '0');
 	struct reac_master m;
 
 	reac_master_init(&m, M_SRC, NULL, FPS);
@@ -110,8 +110,8 @@ int main(void)
 		       established, (double)established / FPS,
 		       (double)dwell_slots / FPS);
 	} else {
-		/* The default must still hold the full dwell — this is the arm that keeps a
-		 * fix from quietly becoming a behaviour change for every box. */
+		/* The opt-out must still hold the full dwell — the escape hatch for a box whose
+		 * firmware needs the long hold, and the proof the cap itself still works. */
 		CHK(first_grant >= dwell_slots);
 		CHK(established >= dwell_slots);
 		printf("OK: default holds the dwell — first grant slot %d, ESTABLISHED slot %d (%.3f s)\n",

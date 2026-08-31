@@ -11,7 +11,7 @@ resolved).
 |---|---|---|
 | `REACPW_GRANT_DWELL_S` | Master role: hold the recognized-but-ungranted dwell (ENROLL -> grant burst) for N whole seconds. A real M-200 holds a cold box ungranted ~27 s while it climbs its JOIN field; the built-in dwell is ~1.6 s (`REAC_M_GRANT_DWELL_SECONDS_X10`). Only the dwell LENGTH changes — the FSM sequence is untouched. | unset (built-in ~1.6 s) |
 | `REACPW_GRANT_DWELL_MS` | Master role: the same dwell in MILLISECONDS, so it can be made SHORTER than the built-in ~1.6 s. Takes precedence over `REACPW_GRANT_DWELL_S`. Measured on an S-4000S: 300 ms establishes in 0.456 s at full declared width, 4/4 trials. Per-firmware — the ~27 s box above is the reason this is not a default. | unset (built-in ~1.6 s) |
-| `REACPW_GRANT_ON_DECLARE` | Master role: `1` ends the ENROLL -> grant dwell a short settle after the box has DECLARED and been armed, instead of running the dwell out; `grant_dwell` stays as the CAP for a box that has not declared. Event-driven, so it is also correct for a box that needs a long hold. Measured: S-1608 1.684 s -> 0.134 s, S-4000S 1.756 s -> 0.206 s, both audio-verified through a physical loopback. | off (byte-identical unset) |
+| `REACPW_GRANT_ON_DECLARE` | Master role: `0` opts OUT of ending the ENROLL -> grant dwell a short settle after the box has DECLARED and been armed, instead of running the dwell out; `grant_dwell` stays as the CAP for a box that has not declared. Event-driven, so it is also correct for a box that needs a long hold. Measured: S-1608 1.684 s -> 0.134 s, S-4000S 1.756 s -> 0.206 s, both audio-verified through a physical loopback. | **on** (spec §3c) |
 | `REAC_DEBUG` | Opt-in diagnostic telemetry on stderr, ~every 2 s: RX feeder counters (ok/dup/other/bad/gaps, locked box MAC) in `reac_rx.c` and source-node ring stats (active channels, peak, fill) in `reac_source_node.c`. Set to any value to enable. | unset (silent) |
 | `REACPW_CLOCK_FOLLOW` | Master role: DISCIPLINE the TX cadence to a clock reference instead of free-running on `CLOCK_MONOTONIC` (issue #75). Best available wins: NIC/external PHC > the PipeWire graph clock when driven by locked hardware > the box's counter slope. The slot period is steered continuously by a bounded DLL and the phase is never stepped; the reference in use is printed on every change — with its QUALITY tier since #77, see `REACPW_CLOCK_REF` below — and with none available reac-pw free-runs and says so. Unset = the pacer advances its deadline by the fixed nominal period exactly as before — the discipline is never consulted, so emission and timing are identical. **RIG-GATED — see below.** | unset (free-run) |
 
@@ -113,18 +113,27 @@ The rig procedure that decides it:
 Offline, the whole decision core is already pinned by `test_reac_clock` and the
 wiring (including the inertness proof) by `test_reac_pacer_clock`.
 
-## Why `REACPW_GRANT_ON_DECLARE` is not the default (decided 2026-08-31)
+## `REACPW_GRANT_ON_DECLARE` is the DEFAULT (ruled 2026-08-31, spec §3c)
 
-It earns 1.55 s on both boxes we own, audio-verified through a physical loopback, and it is
-event-driven rather than a shorter constant — `grant_dwell` stays the CAP for a box that has
-not declared, so it does not break a slow box the way `REACPW_GRANT_DWELL_MS` would.
+**The dwell is a CAP for a box that has not declared, not a wait.** We do not wait for what the
+box has already confirmed. It earns 1.55 s on both boxes we own — S-1608 1.684 s -> 0.134 s,
+S-4000S 1.756 s -> 0.206 s — each audio-verified through a physical loopback, which is the
+acceptance criterion: the box ends up enrolled and passing signal.
 
-It stays OFF anyway, for one reason: **the case it could break has never been on this rig.** A
-real M-200 holds a cold box ungranted ~27 s while the box climbs its op0403/TAG0100 JOIN field
-`01 -> 05 -> 0d`, and reac-pw's built-in 1.6 s is already documented as granting too fast for
-that box to react. Grant-on-declare keys on OUR ENROLL plus a settle, not on that climb, so a
-box that declares early and still needs the hold would be granted sooner, not later.
+Set `REACPW_GRANT_ON_DECLARE=0` to opt out and restore the full wall-clock hold.
 
-To promote it, one measurement is needed: that box, establishing with the knob on. Until then
-the saving is available per-rig by setting the knob, and the default stays the timing every
-box we cannot test has always seen.
+**Why this is not the risky change.** A shorter CONSTANT (`REACPW_GRANT_DWELL_MS`) fires whether
+or not the box is ready, so it breaks the box that needs a long hold. Ending on the declaration
+frame cannot fire early by construction — the box has already said it is there. The two were
+argued as one for a while; they are not the same mechanism.
+
+### The residue: a declaration is not the whole ladder
+
+`dwell_ends_now` keys on OUR ENROLL plus a 50 ms settle after the box declared. It does not read
+the box's `op0403`/`TAG0100` **JOIN field**, which climbs `01 -> 05 -> 0d` — nothing in this
+daemon parses it; it exists only in a comment.
+
+So the settle is a small constant standing in for a confirmation we could read directly. The full
+form of §3c is to advance **on the rung the box confirms**, which needs that field parsed and a
+golden to pin it. Until then the constant is the approximation, and it is named here rather than
+left to look like a measurement.
