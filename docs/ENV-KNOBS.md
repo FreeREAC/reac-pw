@@ -118,28 +118,36 @@ wiring (including the inertness proof) by `test_reac_pacer_clock`.
 **The dwell is a CAP for a box that has not declared, not a wait.** We do not wait for what the
 box has already confirmed.
 
-Verified as the DEFAULT on the rig, 2026-08-31 (no env set):
+Verified as the DEFAULT on the rig, 2026-08-31 (no env set), both boxes COLD, operator watching
+the hardware cycle:
 
-| box | recognized -> ESTABLISHED | kind | audio through a physical loopback |
+| box | GRANTING -> ESTABLISHED | was | audio, physical loopback |
 |---|---|---|---|
-| S-4000S `c4:08:bc` | **0.206 s** (was 1.756 s) | COLD | out1->in25: -150.1 -> -35.4 dBFS, 115 dB |
-| S-1608 `c4:80:3b` | 0.134 s (was 1.684 s) | **WARM** | out1->in9: -105.5 -> 0.0 dBFS, 105 dB, bin/rms 1.06 |
+| S-4000S `c4:08:bc` | **0.206 s** | 1.756 s | out1->in25: 99 dB separation, bin/rms 0.58 |
+| S-1608 `c4:80:3b` | **0.134 s** | 1.684 s | out1->in9: 121 dB separation, bin/rms 0.37 |
 
-**Only the S-4000S figure is a cold connect.** The operator watched it do the physical cycle —
-relays audible, REAC LED blinking — while the S-1608 sat silent through the same restart. A
-daemon restart does not bounce the BOX's PHY, and a REAC box cold-connects only on link-up
-(arbitration spec §3b), so a box that never dropped is re-adopted rather than re-enrolled. The
-journal cannot tell those apart: both print `PROBING -> GRANTING -> ESTABLISHED`.
+The 72 ms difference between them is the grant burst scaling with channel count (32 vs 16), not a
+firmware difference; both figures held when the two boxes were swapped between NICs.
 
-The acceptance criterion — enrolled and passing signal — is met on BOTH boxes. The TIMING claim
-is proven cold on one.
+### The cap still governs, and it was watched doing it
 
-Set `REACPW_GRANT_ON_DECLARE=0` to opt out and restore the full wall-clock hold.
+On one restart the S-4000S entered GRANTING via a bare `rx JOIN` — it never sent its CONFIG
+announce, so it never DECLARED. Grant-on-declare had nothing to fire on and the dwell ran its
+full **1.756 s** cap. Same daemon, same box, four restarts apart: 0.206 s when it declared,
+1.756 s when it did not. **The slow-box case this knob was parked for is protected by
+construction, and it has now been observed rather than argued.**
 
-**Why this is not the risky change.** A shorter CONSTANT (`REACPW_GRANT_DWELL_MS`) fires whether
-or not the box is ready, so it breaks the box that needs a long hold. Ending on the declaration
-frame cannot fire early by construction — the box has already said it is there. The two were
-argued as one for a while; they are not the same mechanism.
+### THE ENROLMENT LOG LIED ON A USB NIC
+
+Both boxes first measured on a USB AX88179 (`enp128s20f0u2`). There the S-1608 logged a complete
+`PROBING -> GRANTING -> ESTABLISHED` in 0.134 s **for a box that never physically re-enrolled** —
+no relays, no REAC LED, confirmed by the operator, and confirmed as meaningful because that box
+does click its relays on a per-channel pad switch. Moved to the PCIe r8169, the same box cycles
+visibly on every restart.
+
+**Every enrolment measurement taken on that NIC is suspect**, and the daemon cannot detect the
+difference: the journal prints the same three transitions either way. Measure enrolment on a real
+NIC, with eyes on the box.
 
 ### The residue: a declaration is not the whole ladder
 
