@@ -1089,7 +1089,18 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		REAC_PROP_PACE_SOURCE,   reac_pace_source_name(arb.pace),
 		REAC_PROP_MASTER_CONFLICT, arb.conflict ? "1" : "0",
 		REAC_PROP_RIVAL_KIND,    reac_rival_kind_name(arb.rival),
-		REAC_PROP_REFUSAL,       reac_rival_refusal(arb.rival),
+		/* The segment's coded refusal, not only the rival's: a box heard but never joining is
+		 * the state auto-spine §3b insists the operator must SEE rather than watch a spinner
+		 * for. Read from the pacer's own counters — the same facts the journal line uses. */
+		REAC_PROP_REFUSAL,       reac_segment_refusal(
+		                             arb.rival,
+		                             (enum reac_master_state)atomic_load_explicit(
+		                                 &n->pacer.fsm_state, memory_order_acquire)
+		                                 == REAC_M_PROBING,
+		                             atomic_load_explicit(&n->pacer.rx_box_frames,
+		                                                  memory_order_relaxed) > 0,
+		                             atomic_load_explicit(&n->pacer.rx_joins,
+		                                                  memory_order_relaxed)),
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);

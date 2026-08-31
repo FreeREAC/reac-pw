@@ -124,6 +124,22 @@ const char *reac_rival_kind_name(enum reac_rival_kind k);
  *  desk, which is JOINED rather than refused). */
 const char *reac_rival_refusal(enum reac_rival_kind k);
 
+/**
+ * The segment's coded refusal — why this segment is not carrying audio, in one word the
+ * surface can render a remedy for.
+ *
+ * A rival always wins the report: a stagebox strapped to master is why nothing else can
+ * happen. Otherwise the case auto-spine §3b names — a box HEARD but not joining, which a REAC
+ * box does only on link-up, so it will sit there forever and no amount of waiting fixes it.
+ * That state was a journal line every ten seconds and an eternal spinner on the surface; a
+ * control refuses VISIBLY or it has not refused.
+ *
+ * `probing` is the master FSM's own answer about itself, `box_present` whether any box frame
+ * has been classified on this wire, `joins` how many validated JOINs arrived. Pure.
+ */
+const char *reac_segment_refusal(enum reac_rival_kind rival, int probing,
+                                 int box_present, uint64_t joins);
+
 /** Wire names, stable across versions — these strings ARE the published prop values. */
 const char *reac_segment_master_name(enum reac_segment_master s);
 const char *reac_pace_source_name(enum reac_pace_source p);

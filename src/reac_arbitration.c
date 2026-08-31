@@ -7,6 +7,7 @@
 #include <reac/reac.h>   /* REAC_MAX_CHANNELS — the master downstream width */
 
 #include <string.h>
+#include <stdint.h>
 
 const char *reac_segment_master_name(enum reac_segment_master s)
 {
@@ -153,6 +154,19 @@ const char *reac_rival_refusal(enum reac_rival_kind k)
 	case REAC_RIVAL_DESK:
 	case REAC_RIVAL_NONE:    break;
 	}
+	return "none";
+}
+
+const char *reac_segment_refusal(enum reac_rival_kind rival, int probing,
+                                 int box_present, uint64_t joins)
+{
+	const char *r = reac_rival_refusal(rival);
+	if (strcmp(r, "none") != 0)
+		return r;                    /* a rival is why nothing else can happen */
+	/* Heard but never joining. A box cold-connects only on LINK-UP, so this does not
+	 * resolve by waiting — the operator has to bounce the box's link, and has to be told. */
+	if (probing && box_present && joins == 0)
+		return "box-present-not-joining";
 	return "none";
 }
 
