@@ -35,6 +35,7 @@
 #include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
 #include "reac_link_state.h"
+#include "reac_linkmon.h"   /* the RTM_NEWLINK carrier watch (#95) */
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
 #include "reac_arbitration.h"
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
@@ -112,6 +113,16 @@ struct reac_sink_node {
 	                           * the RT graph thread on every quantum. Const after
 	                           * construction, so no synchronisation is needed. */
 	struct spa_source *log_timer;  /* 200 ms event-log drain on the main loop */
+	/* THE CABLE WATCH (#95). A stagebox leaves BOOT for ANNOUNCE on PHY LINK-UP and on
+	 * nothing else (REAC-PROTOCOL-FROM-SOURCE §10.2), so carrier returning is the one
+	 * instant a box ever enrols on — and the instant this FSM is least likely to be ready,
+	 * because it may still hold a departed peer and an ESTABLISHED badge for hardware that
+	 * is not there. Netlink, not the 200 ms poll beside it: a PHY that bounces inside one
+	 * poll interval is invisible to a poll, and the kernel will simply hand us the edge.
+	 * Read on the MAIN LOOP — a socket read is not RT-safe and never touches the pacer
+	 * thread; the re-establish crosses over as a lock-free request. */
+	struct reac_linkmon linkmon;
+	struct spa_source *link_src;   /* netlink readability on the main loop; NULL = no watch */
 	/* SPA_IO_Position, captured via io_changed — the stream's equivalent of the
 	 * argument pw_filter handed process(). */
 	const struct spa_io_position *position;
@@ -1280,6 +1291,40 @@ static void sink_publish_box_clock(struct reac_sink_node *n)
 	                         reac_pacer_mono_ns());
 }
 
+/* Carrier changed on our own segment. Both edges drive the SAME internal re-establish
+ * (reac_pacer_request_reestablish -> reac_pacer_apply_rate), because both leave the master
+ * holding a peer it no longer has: on DOWN the box is gone whatever the badge says, and on
+ * UP the box is about to announce itself and must arrive into a clean establishment rather
+ * than into a grant sweep sized for the box that left.
+ *
+ * BEFORE #95 NEITHER EDGE PRODUCED ANYTHING AT ALL. `ip link set <nic> down; sleep 3; ip
+ * link set <nic> up` logged nothing on either a USB AX88179 or a PCIe r8169, the FSM stayed
+ * ESTABLISHED across it, and a box that had gone quiet needed a daemon restart — so the
+ * console was told a segment was healthy for hardware that was not there. */
+static void on_link_io(void *data, int fd, uint32_t mask)
+{
+	(void)fd;
+	struct reac_sink_node *n = data;
+	if (!(mask & SPA_IO_IN))
+		return;
+	enum reac_link_edge e = reac_linkmon_drain(&n->linkmon);
+	if (e == REAC_LINK_EDGE_NONE)
+		return;
+	const char *ifname = n->linkmon.ifname;
+	if (e == REAC_LINK_EDGE_UP) {
+		fprintf(stderr, "reac-master: LINK-UP on %s — re-establishing. A box leaves "
+		        "BOOT only on its own PHY link-up, so this is the instant it enrols; "
+		        "the FSM restarts at IDLE so its announce meets a clean master.\n",
+		        ifname);
+		reac_pacer_request_reestablish(&n->pacer, REAC_PEV_CAUSE_LINK_UP);
+	} else {
+		fprintf(stderr, "reac-master: LINK-DOWN on %s — the peer is gone whatever the "
+		        "last badge said. Dropping to PROBING; the cable is out at OUR end, so "
+		        "nothing resolves until it returns.\n", ifname);
+		reac_pacer_request_reestablish(&n->pacer, REAC_PEV_CAUSE_LINK_DOWN);
+	}
+}
+
 static void on_log_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
@@ -1570,6 +1615,23 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		pw_loop_update_timer(loop, n->log_timer, &first, &interval, false);
 	}
 
+	/* The cable watch (#95). A failure here costs one reaction, not a wire: the master
+	 * still probes, still grants, still carries audio — it simply goes back to needing a
+	 * restart after a box power-cycle. So it is reported and stepped over, never fatal.
+	 * `close=false`: reac_linkmon_close owns the descriptor. */
+	if (reac_linkmon_open(&n->linkmon, cfg->ifname) == 0) {
+		n->link_src = pw_loop_add_io(loop, reac_linkmon_fd(&n->linkmon),
+		                             SPA_IO_IN, false, on_link_io, n);
+		if (!n->link_src) {
+			reac_linkmon_close(&n->linkmon);
+			pw_log_warn("reac:playback — could not watch link state on '%s'; a box "
+			            "power-cycle will need a daemon restart", cfg->ifname);
+		}
+	} else {
+		pw_log_warn("reac:playback — no netlink link watch on '%s'; a box power-cycle "
+		            "will need a daemon restart", cfg->ifname);
+	}
+
 	pw_log_info("reac:playback MASTER engine on '%s' (%d Hz, %d fps pacer) — probing; "
 	            "the reac-playback graph node appears sized to the box on recognition",
 	            cfg->ifname, n->sample_rate, n->sample_rate / REAC_SAMPLES_PER_PKT);
@@ -1657,6 +1719,11 @@ void reac_sink_node_destroy(struct reac_sink_node *n)
 		return;
 	if (n->log_timer)
 		pw_loop_destroy_source(n->loop, n->log_timer);
+	/* Source first, then the descriptor: the loop must stop polling an fd before it is
+	 * closed, or a recycled number is polled as if it were still the netlink socket. */
+	if (n->link_src)
+		pw_loop_destroy_source(n->loop, n->link_src);
+	reac_linkmon_close(&n->linkmon);
 	if (n->stream)
 		pw_stream_destroy(n->stream);   /* stops process() submits first */
 	if (n->pacer_open) {

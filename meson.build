@@ -244,6 +244,18 @@ linkmon_test = executable('test_reac_linkmon',
   include_directories : [include_directories('src')])
 test('reac_linkmon', linkmon_test)
 
+# --- integration: does the watch SEE a real carrier change? ------------------
+# The unit test feeds bytes this repo wrote; a socket that joined no multicast
+# group would pass every one of them and still see nothing on a live NIC, which
+# IS the bug. This drives real `ip link` toggles inside an unprivileged user+net
+# namespace, on its own dummy interface, and requires exactly three edges in
+# order. It cannot perturb a live REAC segment; it skips (77) where the
+# namespace or iproute2 is unavailable.
+test('reac_link_edge_observed',
+  find_program('tests/link-edge-observed.sh'),
+  args : [linkmon_test],
+  timeout : 30)
+
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
    'src/reac_pace_watch.c'],

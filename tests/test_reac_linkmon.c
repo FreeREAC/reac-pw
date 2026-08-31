@@ -24,7 +24,9 @@
  */
 #include "reac_linkmon.h"
 
+#include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -115,8 +117,47 @@ static int live_dump_sees_loopback(void)
 	return 0;
 }
 
-int main(void)
+/* ---- --watch: the edges, live, for the netns integration test -------------------------- *
+ *
+ * Prints one line per EDGE on `ifname` until `ms` elapses. The shell test drives real
+ * `ip link` toggles at the other end, so this arm proves the whole path — socket, multicast
+ * membership, parser, edge logic — against kernel events nobody in this repo synthesised.
+ * It is the only place the watch is exercised as a WATCH rather than as a parser. */
+static int watch_mode(const char *ifname, int ms)
 {
+	struct reac_linkmon m;
+	if (reac_linkmon_open(&m, ifname) != 0) {
+		fprintf(stderr, "watch: cannot open netlink on %s\n", ifname);
+		return 2;
+	}
+	printf("READY carrier=%d\n", reac_linkmon_carrier(&m));
+	fflush(stdout);
+
+	int waited = 0;
+	while (waited < ms) {
+		struct pollfd p = { .fd = reac_linkmon_fd(&m), .events = POLLIN };
+		int pr = poll(&p, 1, 50);
+		waited += 50;
+		if (pr <= 0)
+			continue;
+		enum reac_link_edge e = reac_linkmon_drain(&m);
+		if (e == REAC_LINK_EDGE_UP)
+			printf("EDGE UP\n");
+		else if (e == REAC_LINK_EDGE_DOWN)
+			printf("EDGE DOWN\n");
+		fflush(stdout);
+	}
+	printf("DONE msgs=%lu ups=%lu downs=%lu\n", m.msgs, m.ups, m.downs);
+	fflush(stdout);
+	reac_linkmon_close(&m);
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	if (argc == 4 && strcmp(argv[1], "--watch") == 0)
+		return watch_mode(argv[2], atoi(argv[3]));
+
 	int skipped = live_dump_sees_loopback();
 
 	struct reac_linkmon m;
@@ -192,14 +233,22 @@ int main(void)
 	feed_one(&m, RTM_NEWLINK, IF_A, 1, -1);
 	CHK(reac_linkmon_take(&m) == REAC_LINK_EDGE_UP);
 
-	/* (8) IFLA_CARRIER OUTRANKS IFF_LOWER_UP. The attribute is the kernel's direct answer;
-	 * the flag bit is the fallback for messages that omit it. A message carrying both must
-	 * be read by the attribute, or a disagreement resolves the wrong way silently. */
+	/* (8) IFF_LOWER_UP IS THE PREDICATE, AND IFLA_CARRIER IS DELIBERATELY IGNORED. They
+	 * look interchangeable and are not: the kernel builds IFF_LOWER_UP as
+	 * `netif_running(dev) && netif_carrier_ok(dev)`, while IFLA_CARRIER is netif_carrier_ok
+	 * alone. An ADMINISTRATIVELY-DOWN interface with the cable still in therefore reports
+	 * IFLA_CARRIER 1 — and `ip link set <nic> down` is this issue's own repro, the case
+	 * that must read as a loss. A NIC that cannot pass a frame is down to a master whatever
+	 * its PHY thinks.
+	 *
+	 * Not a guess: preferring the attribute made the netns integration test observe ZERO
+	 * edges, because a dummy device never calls netif_carrier_off and its IFLA_CARRIER
+	 * reads 1 through every admin transition. */
 	reac_linkmon_init(&m, IF_A);
 	feed_one(&m, RTM_NEWLINK, IF_A, 1, 0);         /* LOWER_UP set, CARRIER says 0 */
-	CHK(reac_linkmon_carrier(&m) == 0);
-	feed_one(&m, RTM_NEWLINK, IF_A, 0, 1);         /* LOWER_UP clear, CARRIER says 1 */
 	CHK(reac_linkmon_carrier(&m) == 1);
+	feed_one(&m, RTM_NEWLINK, IF_A, 0, 1);         /* LOWER_UP clear, CARRIER says 1 */
+	CHK(reac_linkmon_carrier(&m) == 0);
 
 	/* (9) A TRUNCATED DATAGRAM IS DROPPED, NOT GUESSED. Half a message that read as a
 	 * carrier value would be an invented verdict, and the invented one is always cheap to
