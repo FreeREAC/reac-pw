@@ -480,6 +480,78 @@ static int test_two_segments_are_independent(void)
 	return 0;
 }
 
+/* ---- part 4: THE SAME DOOR, DRIVEN BY THE CABLE (#95) --------------------
+ *
+ * A box leaves BOOT for ANNOUNCE on PHY LINK-UP and on nothing else
+ * (REAC-PROTOCOL-FROM-SOURCE §10.2), so the master has to meet that edge with a
+ * clean establishment. It does it through reac_pacer_request_reestablish, which
+ * is the rate door with a different cause byte and NOT a second FSM re-entry:
+ * apply_rate already ends the session, forgets the box, drops the recognizer and
+ * restarts the grant/dwell sequence, and a parallel copy of that would be one
+ * more thing to keep in step forever.
+ *
+ * Two things are pinned here that a cable must never do. It must not change the
+ * PACE — a returning cable says nothing about the rate, and a link bounce that
+ * silently re-paced a segment the operator had set by hand would be a fault with
+ * no visible cause. And the transcript must name the CABLE, not a rate change:
+ * the cause byte is what stops a room event being reported to whoever last
+ * touched the console. */
+static int test_link_edge_reestablishes_at_the_standing_rate(void)
+{
+	struct reac_console_cfg cfg = { .out_channels = 16, .console_field = 1 };
+	struct reac_pacer p;
+	bare_pacer_init(&p, 4000, &cfg);   /* 48 kHz, asserted by nobody */
+
+	struct establish_shape before;
+	CHK(run_establish(&p.master, &before) == 0);
+	CHK(before.reached_established);
+	CHK(reac_master_has_box(&p.master) == 1);
+
+	/* The main loop's side: request, then the pacer thread's own drain. */
+	reac_pacer_request_reestablish(&p, REAC_PEV_CAUSE_LINK_UP);
+	CHK(atomic_load_explicit(&p.reestab_cause, memory_order_relaxed) ==
+	    REAC_PEV_CAUSE_LINK_UP);
+	CHK(reac_pacer_rate_drain(&p) == 1);
+
+	/* THE PACE IS UNTOUCHED. */
+	CHK(p.fps == 4000);
+	CHK(p.period_ns == reac_pacer_period_ns(4000));
+	CHK(atomic_load_explicit(&p.rate_hz, memory_order_relaxed) == 48000);
+
+	/* THE ESTABLISHMENT IS REDONE: back to IDLE with no box, exactly a cold
+	 * start, which is the state a box's ANNOUNCE needs to arrive into. */
+	CHK(p.master.state == REAC_M_IDLE);
+	CHK(reac_master_has_box(&p.master) == 0);
+	CHK(atomic_load_explicit(&p.fsm_state, memory_order_relaxed) == REAC_M_IDLE);
+	CHK(p.master.cfg.out_channels == 16);   /* the console cfg survives */
+
+	/* And it re-enrols through the identical sequence. */
+	struct establish_shape after;
+	CHK(run_establish(&p.master, &after) == 0);
+	CHK(shapes_equal(&before, &after));
+
+	/* A SECOND, INDEPENDENT REQUEST IS APPLIED. The seq counter is what makes a
+	 * link that bounces twice re-establish twice rather than once — if the drain
+	 * deduplicated on the VALUE, every re-establish after the first would be
+	 * swallowed, because the rate never changes. */
+	reac_pacer_request_reestablish(&p, REAC_PEV_CAUSE_LINK_DOWN);
+	CHK(reac_pacer_rate_drain(&p) == 1);
+	CHK(p.master.state == REAC_M_IDLE);
+	CHK(p.fps == 4000);
+	/* Nothing pending: a drain with no new request applies nothing. */
+	CHK(reac_pacer_rate_drain(&p) == 0);
+
+	/* A RATE CHANGE STILL SAYS "RATE CHANGE". The cause is per-request, so a
+	 * link edge cannot leave its label standing on the next operator action. */
+	reac_pacer_request_rate(&p, 96000);
+	CHK(atomic_load_explicit(&p.reestab_cause, memory_order_relaxed) ==
+	    REAC_PEV_CAUSE_RATE_CHANGE);
+	CHK(reac_pacer_rate_drain(&p) == 1);
+	CHK(p.fps == 8000);
+
+	return 0;
+}
+
 int main(void)
 {
 	CHK(test_closed_list_and_bits() == 0);
@@ -491,11 +563,13 @@ int main(void)
 	CHK(test_refused_rate_moves_nothing() == 0);
 	CHK(test_narrow_mask_refuses_and_defaults_lower() == 0);
 	CHK(test_two_segments_are_independent() == 0);
+	CHK(test_link_edge_reestablishes_at_the_standing_rate() == 0);
 
 	printf("OK: reac.cfg.rate — closed list, drivability, decide/parse, the "
 	       "pacer-level internal re-establish (shape-identical at a new rate; a "
 	       "refused rate moves nothing; a narrowed segment defaults lower), and "
 	       "two segments (auto-spine §5's N listeners) staying independent under "
-	       "a rate change\n");
+	       "a rate change; and a CABLE edge (#95) re-establishing through the "
+	       "same door at the STANDING rate, named as a link event\n");
 	return 0;
 }

@@ -585,6 +585,25 @@ static void fmt_blk(char *out, const uint8_t blk[32])
 		sprintf(out + 2 * i + (i / 8), "%02x%s", blk[i], ((i & 7) == 7) ? " " : "");
 }
 
+/* WHY a state transition happened, as a phrase an operator can act on. Naming the
+ * codes matters more than it looks: a bare `rx ?` is what a rate change printed
+ * before #95 (the cause byte is out of the rx-event enum's range), and a cable
+ * fault reported as anything but a cable sends the operator to the wrong end of
+ * the room — the same defect the PROBING watchdog's carrier line exists to stop. */
+static const char *pev_cause_phrase(uint8_t c, char *buf, size_t sz)
+{
+	switch (c) {
+	case REAC_PEV_CAUSE_TIMER:       return "timer";
+	case REAC_PEV_CAUSE_RATE_CHANGE: return "rate change";
+	case REAC_PEV_CAUSE_LINK_UP:     return "LINK-UP on the wire";
+	case REAC_PEV_CAUSE_LINK_DOWN:   return "LINK-DOWN on the wire";
+	default:
+		snprintf(buf, sz, "rx %s",
+		         reac_master_rx_event_name((enum reac_master_rx_event)c));
+		return buf;
+	}
+}
+
 int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 {
 	int count = 0;
@@ -601,15 +620,14 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 		double ts = (double)e.mono_ns / 1e9;
 		fmt_mac(mac, e.src);
 		switch (e.kind) {
-		case REAC_PEV_STATE:
-			fprintf(out, "reac-master: [%.6f] %s -> %s (%s%s)\n", ts,
+		case REAC_PEV_STATE: {
+			char cbuf[48];
+			fprintf(out, "reac-master: [%.6f] %s -> %s (%s)\n", ts,
 			        reac_master_state_name((enum reac_master_state)e.a),
 			        reac_master_state_name((enum reac_master_state)e.b),
-			        e.blk[0] == REAC_PEV_CAUSE_TIMER ? "timer"
-			            : "rx ",
-			        e.blk[0] == REAC_PEV_CAUSE_TIMER ? ""
-			            : reac_master_rx_event_name((enum reac_master_rx_event)e.blk[0]));
+			        pev_cause_phrase(e.blk[0], cbuf, sizeof cbuf));
 			break;
+		}
 		case REAC_PEV_JOIN:
 			fmt_blk(hex, e.blk);
 			fprintf(out, "reac-master: [%.6f] box JOIN seen (cdea 04 03, %s from %s)"
@@ -1037,8 +1055,21 @@ static uint32_t resolve_catchup_slots(int cfg_val, int fps)
 void reac_pacer_request_rate(struct reac_pacer *p, int hz)
 {
 	atomic_store_explicit(&p->rate_req_hz, hz, memory_order_relaxed);
+	atomic_store_explicit(&p->reestab_cause, REAC_PEV_CAUSE_RATE_CHANGE,
+	                      memory_order_relaxed);
 	/* Release: publish the value store before the consumer can observe the
 	 * new seq (pairs with the acquire load in reac_pacer_rate_drain). */
+	atomic_fetch_add_explicit(&p->rate_req_seq, 1, memory_order_release);
+}
+
+void reac_pacer_request_reestablish(struct reac_pacer *p, int cause)
+{
+	/* THE STANDING RATE, not a new one. A cable coming back says nothing about
+	 * the pace, and re-deriving one here would let a link bounce silently
+	 * re-pace a segment the operator had set by hand. */
+	int hz = atomic_load_explicit(&p->rate_hz, memory_order_acquire);
+	atomic_store_explicit(&p->rate_req_hz, hz, memory_order_relaxed);
+	atomic_store_explicit(&p->reestab_cause, cause, memory_order_relaxed);
 	atomic_fetch_add_explicit(&p->rate_req_seq, 1, memory_order_release);
 }
 
@@ -1110,9 +1141,15 @@ int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 	p->declared_in = p->declared_out = 0;
 
 	{
-		uint8_t blk[32] = { REAC_PEV_CAUSE_RATE_CHANGE };
+		/* NAME THE REASON. A caller that drove this directly (the offline test,
+		 * and every path before #95) set no cause and means the historical one. */
+		int cause = atomic_load_explicit(&p->reestab_cause, memory_order_relaxed);
+		if (cause == 0)
+			cause = REAC_PEV_CAUSE_RATE_CHANGE;
+		uint8_t blk[32] = { (uint8_t)cause };
 		pev_push(p, REAC_PEV_STATE, (uint8_t)old_state, (uint8_t)REAC_M_IDLE,
 		        old_box_mac, blk);
+		atomic_store_explicit(&p->reestab_cause, 0, memory_order_relaxed);
 	}
 
 	atomic_store_explicit(&p->rate_hz, hz, memory_order_release);

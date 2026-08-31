@@ -194,9 +194,18 @@ enum reac_pacer_evkind {
  * fired the transition; REAC_PEV_CAUSE_TIMER = a safety-fallback timer;
  * REAC_PEV_CAUSE_RATE_CHANGE = an accepted `reac.cfg.rate` re-establish
  * (reac_pacer_apply_rate), so the transcript tells a rate change apart from
- * an ordinary drop. */
+ * an ordinary drop.
+ *
+ * LINK_UP / LINK_DOWN are the same re-establish driven by the CABLE (#95). They
+ * are distinct codes because the three read completely differently to an
+ * operator: a rate change is something a controller asked for, a link edge is
+ * something the room did, and a plain drop is the box's own doing. A transcript
+ * that called all of them "rate change" would send a cable fault to whoever
+ * touched the console last. */
 #define REAC_PEV_CAUSE_TIMER        0xff
 #define REAC_PEV_CAUSE_RATE_CHANGE  0xfe
+#define REAC_PEV_CAUSE_LINK_UP      0xfd
+#define REAC_PEV_CAUSE_LINK_DOWN    0xfc
 
 struct reac_pacer_event {
 	uint64_t mono_ns;
@@ -509,6 +518,12 @@ struct reac_pacer {
 	_Atomic int      rate_req_hz;
 	_Atomic uint32_t rate_req_seq;
 	uint32_t         rate_req_seen;             /* PACER THREAD ONLY */
+	/* WHY the pending re-establish was asked for, as a REAC_PEV_CAUSE_* byte, so
+	 * the transcript names the real reason. Stored BEFORE rate_req_seq is bumped,
+	 * so the release/acquire pair that publishes the rate publishes this with it.
+	 * 0 = the historical default (a rate change), which is what a caller that
+	 * drives reac_pacer_apply_rate directly gets. */
+	_Atomic int      reestab_cause;
 
 	/* What is currently standing, for the property poll (sink_publish_link_
 	 * props's rate-props analogue) to publish. Written by the pacer thread at
@@ -629,6 +644,19 @@ int  reac_pacer_headamp_drain(struct reac_pacer *p);
  * safe from the PipeWire main loop. Only the latest request matters (see the
  * struct's rate_req_seq comment), so there is no "ring full" case. */
 void reac_pacer_request_rate(struct reac_pacer *p, int hz);
+
+/* Request a re-establish AT THE STANDING RATE, attributed to `cause` (a
+ * REAC_PEV_CAUSE_* byte). This is the SAME door as a rate change and lands in the
+ * same reac_pacer_apply_rate — deliberately, because that function already is the
+ * internal re-establish: it re-runs reac_master_init in place, ends the old
+ * session, forgets the box and drops the recognizer, and the box re-enrols
+ * through the identical grant/dwell sequence a cold start uses. A second path
+ * that did the same thing for a cable instead of a rate would be a second FSM
+ * re-entry to keep in step with this one, forever.
+ *
+ * Non-blocking and lock-free: safe from the PipeWire main loop, which is where
+ * the link watcher runs (reac_linkmon is a socket read and is not RT-safe). */
+void reac_pacer_request_reestablish(struct reac_pacer *p, int cause);
 
 /* CONSUMER side — apply one already-accepted rate to `p`: recompute
  * period_ns/fps/the clock discipline/the catch-up budget for the new cadence,
