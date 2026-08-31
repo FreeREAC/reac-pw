@@ -92,8 +92,6 @@ static int msg_link(const struct nlmsghdr *nh, char *name, size_t namesz)
 	const char *end = (const char *)nh + nh->nlmsg_len;
 
 	name[0] = '\0';
-	int carrier = -1;
-	int have_carrier = 0;
 
 	while ((size_t)(end - a) >= sizeof(struct rtattr)) {
 		const struct rtattr *rta = (const struct rtattr *)a;
@@ -105,9 +103,6 @@ static int msg_link(const struct nlmsghdr *nh, char *name, size_t namesz)
 		if (rta->rta_type == IFLA_IFNAME && vlen > 0 && vlen <= namesz) {
 			memcpy(name, v, vlen);
 			name[vlen - 1] = '\0';        /* the kernel NUL-terminates; insist */
-		} else if (rta->rta_type == IFLA_CARRIER && vlen >= 1) {
-			carrier = *(const unsigned char *)v ? 1 : 0;
-			have_carrier = 1;
 		}
 		a += RTA_ALIGN(rta->rta_len);
 	}
@@ -120,13 +115,20 @@ static int msg_link(const struct nlmsghdr *nh, char *name, size_t namesz)
 	if (nh->nlmsg_type == RTM_DELLINK)
 		return -1;
 
-	/* IFLA_CARRIER is the kernel's direct answer. IFF_LOWER_UP is the same bit reachable
-	 * from flags alone, kept because it is present in EVERY RTM_NEWLINK and the attribute
-	 * is not guaranteed to be. Both read 0 for an administratively-down interface — which
-	 * is the state /sys/class/net/<if>/carrier answers EINVAL for, so the watch sees a
-	 * transition the poll must report as UNKNOWN. That is the whole reason to watch. */
-	if (have_carrier)
-		return carrier;
+	/* IFF_LOWER_UP, and DELIBERATELY NOT IFLA_CARRIER. They look interchangeable and are
+	 * not: the kernel builds IFF_LOWER_UP as `netif_running(dev) && netif_carrier_ok(dev)`
+	 * (dev_get_flags), while IFLA_CARRIER is netif_carrier_ok alone. So an
+	 * ADMINISTRATIVELY-DOWN interface with the cable still in reports IFLA_CARRIER 1 — and
+	 * `ip link set <nic> down` is issue #95's own repro, the case that must read as a loss.
+	 * A NIC that cannot pass a frame is down to a master whatever its PHY thinks.
+	 *
+	 * Measured, not assumed: a dummy device never calls netif_carrier_off at all, so its
+	 * IFLA_CARRIER reads 1 through every admin transition while IFF_LOWER_UP follows them
+	 * exactly. Preferring the attribute made the integration test below see zero edges.
+	 *
+	 * This is also where the watch outruns the poll: /sys/class/net/<if>/carrier answers
+	 * EINVAL for an admin-down interface, so reac_link_carrier must report UNKNOWN there
+	 * and cannot call it down. The flags say plainly what the file may not. */
 	return (ifi->ifi_flags & IFF_LOWER_UP) ? 1 : 0;
 }
 
