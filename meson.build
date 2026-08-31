@@ -100,7 +100,7 @@ reac_pw_src = [
   'src/reac_grant.c',
   'src/reac_master.c',
   'src/reac_master_fsm.c',
-  'src/reac_pacer.c', 'src/reac_link.c',
+  'src/reac_pacer.c', 'src/reac_link.c', 'src/reac_linkmon.c',
   'src/reac_slave.c',
   'src/reac_mac.c',
   'src/reac_headamp_tx.c',
@@ -227,6 +227,22 @@ link_test = executable('test_reac_link',
   ['tests/test_reac_link.c', 'src/reac_link.c'],
   include_directories : [include_directories('src')])
 test('reac_link', link_test)
+
+# --- unit test: the WATCH half of #95 ----------------------------------------
+# The poll above closed half the issue: the master could ASK whether there was a
+# cable. It still never noticed the answer CHANGING, so a box that went quiet
+# needed a daemon restart — measured repeatedly on the rig, the kernel logging
+# `Link status is: 0` then `1` for every box power-cycle while reac-pw logged
+# nothing and stayed in PROBING. A stagebox leaves BOOT for ANNOUNCE on PHY
+# LINK-UP and on nothing else (REAC-PROTOCOL-FROM-SOURCE 10.2), so that edge is
+# the one instant a master has to be ready for.
+# The live arm runs an RTM_GETLINK dump of the real host through the same parser
+# every later edge uses, so the synthetic cases cannot pass over a parser that
+# reads nothing. No privilege: RTNLGRP_LINK is unprivileged.
+linkmon_test = executable('test_reac_linkmon',
+  ['tests/test_reac_linkmon.c', 'src/reac_linkmon.c'],
+  include_directories : [include_directories('src')])
+test('reac_linkmon', linkmon_test)
 
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
