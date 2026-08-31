@@ -116,9 +116,23 @@ wiring (including the inertness proof) by `test_reac_pacer_clock`.
 ## `REACPW_GRANT_ON_DECLARE` is the DEFAULT (ruled 2026-08-31, spec §3c)
 
 **The dwell is a CAP for a box that has not declared, not a wait.** We do not wait for what the
-box has already confirmed. It earns 1.55 s on both boxes we own — S-1608 1.684 s -> 0.134 s,
-S-4000S 1.756 s -> 0.206 s — each audio-verified through a physical loopback, which is the
-acceptance criterion: the box ends up enrolled and passing signal.
+box has already confirmed.
+
+Verified as the DEFAULT on the rig, 2026-08-31 (no env set):
+
+| box | recognized -> ESTABLISHED | kind | audio through a physical loopback |
+|---|---|---|---|
+| S-4000S `c4:08:bc` | **0.206 s** (was 1.756 s) | COLD | out1->in25: -150.1 -> -35.4 dBFS, 115 dB |
+| S-1608 `c4:80:3b` | 0.134 s (was 1.684 s) | **WARM** | out1->in9: -105.5 -> 0.0 dBFS, 105 dB, bin/rms 1.06 |
+
+**Only the S-4000S figure is a cold connect.** The operator watched it do the physical cycle —
+relays audible, REAC LED blinking — while the S-1608 sat silent through the same restart. A
+daemon restart does not bounce the BOX's PHY, and a REAC box cold-connects only on link-up
+(arbitration spec §3b), so a box that never dropped is re-adopted rather than re-enrolled. The
+journal cannot tell those apart: both print `PROBING -> GRANTING -> ESTABLISHED`.
+
+The acceptance criterion — enrolled and passing signal — is met on BOTH boxes. The TIMING claim
+is proven cold on one.
 
 Set `REACPW_GRANT_ON_DECLARE=0` to opt out and restore the full wall-clock hold.
 
