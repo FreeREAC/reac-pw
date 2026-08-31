@@ -26,7 +26,12 @@ ExecStart=/usr/bin/reac-pw
 # cannot grant ambient capabilities anyway, and the line was inert on this
 # unit even before that). The bounding set must include everything the file
 # capabilities grant — narrower than that silently drops what setcap gave.
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_NICE
+# NO CapabilityBoundingSet. This is a USER unit — `%h` and the PipeWire socket
+# require it — and a user manager cannot set one: systemd refuses the unit with
+# 218/CAPABILITIES before the binary ever runs. Privilege comes from the FILE
+# capabilities rpm applies (%caps in the spec), which need no help from systemd
+# and survive `rpm -V`. Measured 2026-08-31: with this line present the service
+# never started once.
 # run in the operator's PipeWire session bus
 Restart=on-failure
 RestartSec=2

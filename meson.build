@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '0.4.7',
+  version: '0.4.8',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -54,7 +54,7 @@ m_dep        = cc.find_library('m', required : false)
 # and the mismatch surfaced only when the installed binary hit `undefined
 # symbol` at exec. A floor that accepts both sides of an API break is not a
 # floor. Raising it to 0.7.0 makes the wrong library fail at CONFIGURE.
-libreac_dep = dependency('libreac', version : '>=0.7.0',
+libreac_dep = dependency('libreac', version : '>=0.7.1',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -221,6 +221,18 @@ test('reac_iface_vanish_exits',
   find_program('tests/iface-vanish-exits.sh'),
   args : [reac_pw_exe],
   timeout : 60)
+
+# --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
+#
+# auto-spine §5 gives the unit no flags and has it read REAC_IFACES from the
+# layered conf. An `argc < 2` guard answered before the conf was consulted, so
+# that shape was unreachable and the packaged service could never start. Needs
+# no NIC: it asserts help still works with nothing configured, and that
+# REAC_IFACES gets the daemon past argument handling.
+test('reac_packaged_shape',
+  find_program('tests/packaged-shape-starts.sh'),
+  args : [reac_pw_exe],
+  timeout : 30)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
