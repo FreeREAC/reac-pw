@@ -410,35 +410,29 @@ const char *reac_master_drop_name(enum reac_master_drop_reason r)
  * "grants too fast for the box to react" there. So a short dwell must be proven
  * per firmware, on the wire, before anyone changes the built-in. Takes precedence
  * over REACPW_GRANT_DWELL_S when both are set. */
-/* EXPERIMENT KNOB (default UNSET = today's behaviour, byte-identical):
- * REACPW_GRANT_ON_DECLARE=1 ends the ENROLL->grant dwell as soon as the box has
- * DECLARED and been armed at its declared width, instead of running the full
- * ~1.6 s.
+/* THE DWELL IS A CAP, NOT A WAIT (spec 2026-08-20-reac-master-arbitration §3c).
  *
- * MEASURED ON THE WIRE, 2026-08-29, S-1608 re-enrolling after a pace change
- * (tcpdump, op 04 03 records):
- *     t=5.19  box declares      dt1 tags 0100 / 0000 / 0302
- *     t=6.79  WE grant          1.60 s later — exactly grant_dwell
- * The box is sitting there declared for the whole gap. Granting at 5.2 s instead
- * of 6.8 s is the whole 1.6 s, on every re-enrol and every pace change.
+ * The grant ends as soon as the box has DECLARED and been armed at its declared width.
+ * grant_dwell remains the ceiling for a box that has NOT declared.
  *
- * WHY AN EVENT AND NOT A SHORTER TIMER. docs/REAC-BOX-STATE-DIAGRAM.md: the box
- * leaves COLD_CONNECT *on receipt of the master GRANT*, not after elapsed time —
- * the protocol is a frame exchange and the dwell is a wall-clock imitation of one
- * desk's observed gap. A shorter constant would still be the wrong model: it
- * breaks the box that needs ~27 s (reac_master.c's REACPW_GRANT_DWELL_S note),
- * where waiting for the DECLARATION is exactly right. So this keeps grant_dwell
- * as the CAP for a box that has not declared, and ends it early for one that has.
+ * WHY AN EVENT AND NOT A SHORTER TIMER. docs/REAC-BOX-STATE-DIAGRAM.md: the box leaves
+ * COLD_CONNECT *on receipt of the master GRANT*, not after elapsed time. A shorter
+ * constant fires whether or not the box is ready, so it breaks the box that needs a long
+ * hold (see REACPW_GRANT_DWELL_S); ending on the declaration frame cannot fire early by
+ * construction, because the box has already said it is there.
  *
- * The settle keeps the ordering the golden shows: the width-correct ENROLL goes
- * out first (enroll_pending, ~1 ms after recognition), then the grant burst. */
+ * REACPW_GRANT_ON_DECLARE=0 opts out, restoring the full wall-clock dwell for firmware
+ * that proves to need it.
+ *
+ * The settle keeps the ordering the golden shows: the width-correct ENROLL goes out
+ * first (enroll_pending, ~1 ms after recognition), then the grant burst. */
 static int grant_on_declare(void)
 {
 	static int cached = -1;
 	if (cached < 0) {
 		const char *v = getenv("REACPW_GRANT_ON_DECLARE");
-		cached = (v && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' ||
-		                v[0] == 't' || v[0] == 'T')) ? 1 : 0;
+		cached = (v && (v[0] == '0' || v[0] == 'n' || v[0] == 'N' ||
+		                v[0] == 'f' || v[0] == 'F')) ? 0 : 1;
 	}
 	return cached;
 }
@@ -450,16 +444,6 @@ static int declare_settle_slots(const struct reac_master *m)
 {
 	int slots = m->fps / 20;
 	return slots < 1 ? 1 : slots;
-}
-
-/* Where the grant burst's timeline starts. The dwell ends either by running its full
- * length (grant_dwell) or early on the box's declaration (grant-on-declare), and the
- * burst must start from WHICHEVER HAPPENED — anchoring it to the constant makes an
- * early exit inert: the cursor goes negative, no grant slot is ever taken, and
- * grant_delivered() waits out a window nobody is using any more. */
-static int grant_dwell_anchor(const struct reac_master *m)
-{
-	return m->dwell_ended_tick > 0 ? m->dwell_ended_tick : m->grant_dwell;
 }
 
 /* Does the ENROLL->grant dwell end at this slot because the box has DECLARED and been
@@ -971,7 +955,7 @@ static int grant_delivered(const struct reac_master *m)
 	if (!reac_master_has_box(m))
 		return 0;
 	return m->grant_ticks >=
-	       grant_dwell_anchor(m) + m->grant_burst_len * m->grant_stride + 1;
+	       reac_master_grant_anchor(m) + m->grant_burst_len * m->grant_stride + 1;
 }
 
 /* Is the scene push in a state where the box has the WHOLE scene? True only
@@ -1324,7 +1308,7 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 				emit = REAC_M_EMIT_FILLER;
 			}
 		} else {
-			int gt = m->grant_ticks - 1 - grant_dwell_anchor(m); /* burst timeline starts when the dwell ENDED */
+			int gt = m->grant_ticks - 1 - reac_master_grant_anchor(m); /* burst timeline starts when the dwell ENDED */
 			int is_grant_slot = 0;
 			if (gt % m->grant_stride == 0) {
 				int k = gt / m->grant_stride;

@@ -300,7 +300,7 @@ static int run_establish(struct reac_master *m, struct establish_shape *out)
 				else if (d != out->stride)
 					return -1;          /* stride must be constant */
 			} else {
-				out->first_grant_slot = i - m->grant_dwell;
+				out->first_grant_slot = i - reac_master_grant_anchor(m);
 			}
 			last_grant_slot = i;
 			out->grants++;

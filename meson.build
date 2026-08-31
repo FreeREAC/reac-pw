@@ -422,10 +422,10 @@ grant_dwell_test = executable('test_reac_grant_dwell',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 # The knob getters cache in statics, so each arm gets its own process.
-test('reac_grant_dwell_default', grant_dwell_test,
+test('reac_grant_dwell_default_on_declare', grant_dwell_test,
      env : {'REACPW_GRANT_DWELL_MS': '5000'})
-test('reac_grant_dwell_on_declare', grant_dwell_test,
-     env : {'REACPW_GRANT_DWELL_MS': '5000', 'REACPW_GRANT_ON_DECLARE': '1'})
+test('reac_grant_dwell_opt_out_holds_cap', grant_dwell_test,
+     env : {'REACPW_GRANT_DWELL_MS': '5000', 'REACPW_GRANT_ON_DECLARE': '0'})
 
 
 # --- unit test: the output-gain staging kernel (pure ramp, no PipeWire) --------
