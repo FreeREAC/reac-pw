@@ -124,6 +124,31 @@ void reac_source_node_publish_link(struct reac_source_node *n,
  * asserted a rate the way `reac.cfg.rate` asserts one on a master). */
 void reac_source_node_publish_rate(struct reac_source_node *n, int hz);
 
+/* --- the SLAVE role's `reac.cfg.role` door + answer ------------------------
+ * A slave has no reac-playback node (main.c builds reac_sink_node for the master
+ * branch alone), so this capture node carries both halves for a recorder: the
+ * Props write door that accepts an assertion, and the reac.role /
+ * reac.cfg.role.state / reac.cfg.role.refused answer. In the MASTER role the sink
+ * node owns both and none of these is called. */
+
+struct reac_role_swap;
+
+/* Wire the SEGMENT's role lifecycle record (reac_role_swap.h), owned by the
+ * listener because a swap destroys whichever node it started on. NULL detaches,
+ * and the door is then inert. */
+void reac_source_node_set_role_swap(struct reac_source_node *n, struct reac_role_swap *swap);
+
+/* Take (read+clear) the pending accepted reac.cfg.role for a clean re-open in the
+ * other engine, or -1 if none. Main's poll timer calls this. */
+int reac_source_node_take_reopen_role(struct reac_source_node *n);
+
+/* Stamp the role trio. A NULL arg skips that key; the update MERGES, like
+ * reac_source_node_publish_link. */
+void reac_source_node_publish_role(struct reac_source_node *n,
+                                   const char *role,
+                                   const char *state,
+                                   const char *refused);
+
 /* Bring *slot to a reac-capture node of `channels` output ports labelled `label`.
  * ONE entry point the library owns, callable from startup AND the recognition
  * path — it decides create vs. rebuild internally:

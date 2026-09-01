@@ -7,8 +7,11 @@
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
                                  * (task #4.3 extension: "one wire, one rate" — see
                                  * reac_sink_format.h's revised SCOPE note) */
+#include "reac_role_cfg.h"    /* the `reac.cfg.role` parse + refusal codes */
+#include "reac_role_swap.h"   /* the swap's lifecycle answer (arbitration §8) */
 
 #include <reac/reac.h>
+#include <spa/param/param.h>   /* SPA_PARAM_Props — the role write door */
 #include <spa/param/latency-utils.h>
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
@@ -58,6 +61,23 @@ struct reac_source_node {
 	 * a skipped cycle safe). MAIN-LOOP-only write; on_process (RT) reads it as
 	 * the first check, relaxed load. */
 	_Atomic int rate_reconnecting;
+
+	/* THE SLAVE ROLE'S ONLY DOOR. A slave has no reac-playback node — main.c's
+	 * listener_open builds reac_sink_node for the master branch alone — so this
+	 * capture node is the one place a `reac.cfg.role` assertion can reach a
+	 * recorder, and the one place its answer can be published. The record is the
+	 * listener's (reac_role_swap.h); NULL when none is wired, and then this door
+	 * is inert and reads nothing.
+	 *
+	 * WHAT THE CONSOLE CAN AND CANNOT REACH THROUGH IT: openmixer addresses a
+	 * segment by its `reac-playback[.<inst>]` node, so it can drive a swap TO
+	 * the recorder end but cannot yet drive one back — the return door needs the
+	 * slave-side playback node that docs/SLAVE-EMULATION-SCOPE.md's W1 owns.
+	 * The mechanism below is complete and reversible; its console reach is not,
+	 * and nothing here pretends otherwise. */
+	struct reac_role_swap *role_swap;
+	_Atomic int reopen_role;   /* accepted reac.cfg.role awaiting main's clean
+	                            * segment re-open, as role+1 (0 = none) */
 };
 
 /* REALTIME. Pull one quantum per channel from the ring into the port buffers,
@@ -178,10 +198,33 @@ static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 		n->rate_match = (size >= sizeof(struct spa_io_rate_match)) ? area : NULL;
 }
 
+/* MAIN LOOP. The Props write door — the slave role's only one (see the struct's
+ * role_swap comment). A `reac.cfg.role` assertion is DECIDED by the pure core
+ * and FILED against the segment's record; carrying it out is main's poll timer,
+ * as a clean listener re-open in the other engine, exactly as the master's own
+ * door does it. Nothing here touches the RT path.
+ *
+ * A malformed value is refused and changes nothing — the running role is
+ * untouched, so its answer must not move either. */
+static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
+{
+	struct reac_source_node *n = data;
+	if (id != SPA_PARAM_Props || !param || !n->role_swap)
+		return;
+
+	enum reac_role req_role;
+	int parsed = reac_role_prop_parse(param, &req_role);
+	if (parsed <= 0)
+		return;                  /* absent, or unusable: nothing asserted here */
+	if (reac_role_swap_request(n->role_swap, req_role))
+		atomic_store_explicit(&n->reopen_role, (int)req_role + 1, memory_order_relaxed);
+}
+
 static const struct pw_stream_events stream_events = {
 	PW_VERSION_STREAM_EVENTS,
 	.process = on_process,
 	.io_changed = on_io_changed,
+	.param_changed = on_param_changed,
 };
 
 struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
@@ -316,6 +359,47 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
+}
+
+/* MAIN LOOP: the role trio on the capture node. In the MASTER role the sink
+ * publishes these on reac-playback and this is never called; in the SLAVE role
+ * there is no sink node at all, so this is the only place the segment's own
+ * answer appears at all. Same merge semantics as publish_link above. */
+void reac_source_node_publish_role(struct reac_source_node *n,
+                                   const char *role,
+                                   const char *state,
+                                   const char *refused)
+{
+	if (!n || !n->stream)
+		return;
+	struct pw_properties *props = pw_properties_new(NULL, NULL);
+	if (!props)
+		return;
+	if (role)
+		pw_properties_set(props, REAC_PROP_ROLE, role);
+	if (state)
+		pw_properties_set(props, REAC_PROP_ROLE_STATE, state);
+	if (refused)
+		pw_properties_set(props, REAC_PROP_ROLE_REFUSED, refused);
+	pw_stream_update_properties(n->stream, &props->dict);
+	pw_properties_free(props);
+}
+
+/* Wire the SEGMENT's role lifecycle record — see the struct's own comment for
+ * why the slave's door lives on this node. NULL detaches. */
+void reac_source_node_set_role_swap(struct reac_source_node *n, struct reac_role_swap *swap)
+{
+	if (n)
+		n->role_swap = swap;
+}
+
+/* Take (read+clear) the pending accepted reac.cfg.role for a clean listener
+ * re-open in the other engine, or -1 if none. Main's poll timer calls this —
+ * the capture-node twin of reac_sink_node_take_reopen_role. */
+int reac_source_node_take_reopen_role(struct reac_source_node *n)
+{
+	int r = n ? atomic_exchange_explicit(&n->reopen_role, 0, memory_order_relaxed) : 0;
+	return r ? r - 1 : -1;
 }
 
 /* MAIN LOOP: force the live adapter to actually present `hz`, the reac-

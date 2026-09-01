@@ -51,6 +51,8 @@
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
 #include "reac_slave.h"
+#include "reac_role_cfg.h"   /* the reac.cfg.role vocabulary + refusal codes */
+#include "reac_role_swap.h"  /* the role swap's lifecycle answer (arbitration §8) */
 #include "reac_role.h"
 #include "reac_rate_cfg.h"
 #include "reac_mac.h"
@@ -560,6 +562,14 @@ struct listener {
 
 	struct reac_seglock seglock;
 
+	/* THE SEGMENT'S ROLE LIFECYCLE, and the reason it lives HERE. A role change
+	 * closes one engine and opens the other, so every per-engine home for this
+	 * record is destroyed halfway through the answer it owes. The listener is
+	 * what a segment IS across both engines; the record rides it, the nodes
+	 * borrow it to publish, and reac_role_swap_state derives the answer from it
+	 * (reac_role_swap.h). MAIN-LOOP-ONLY, like every writer that touches it. */
+	struct reac_role_swap role_swap;
+
 	struct autodetect_ctx adc;
 	struct spa_source *ad_timer;
 };
@@ -668,6 +678,32 @@ static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_la
 	}
 	*out_layer = REAC_CONF_BUILTIN;
 	return reac_rate_best_drivable(REAC_RATE_ALL_BITS);
+}
+
+/* Publish the segment's ROLE ANSWER on the node that exists in the role it is
+ * running (reac_role_swap.h): the master's reac-playback carries it from the
+ * sink's own badge timer, so this is the SLAVE half — its reac-capture node is
+ * the only node a recorder has. The answer is derived on every call from the
+ * segment's record plus the slave engine's own ESTABLISHED flag, so a recorder
+ * hunting a desk that is not there says `role_hunting` for as long as that is
+ * true, and never `applied`.
+ *
+ * A slave never emits head-amp (a box is told what its preamps do, it does not
+ * tell its desk), which is true by construction — reac_slave's emit vocabulary
+ * has no head-amp member — and asserted here so the property is re-checked on
+ * the side the swap just moved to. */
+static void listener_publish_role(struct listener *L)
+{
+	if (!L->src)
+		return;
+	int established = L->slave_open
+		? atomic_load_explicit(&L->slave.established, memory_order_relaxed) : 0;
+	const char *state = reac_role_swap_state(
+		&L->role_swap, reac_role_engine_of_slave(L->slave_open, established));
+	char role_s[4];
+	snprintf(role_s, sizeof role_s, "%d", REAC_CFG_ROLE_VALUE_SLAVE);
+	reac_source_node_publish_role(L->src, role_s, state,
+	                              reac_role_refuse_code(REAC_ROLE_REFUSE_NONE));
 }
 
 /* Bring one segment online: resolve its rate, open the RX feeder, and (role
@@ -883,6 +919,11 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * unconditionally; it is only ever read when clock following is enabled. */
 	if (L->sink)
 		reac_sink_node_set_rate_source(L->sink, &L->rx);
+	/* The master node publishes reac.cfg.role.state off the SEGMENT's record, so
+	 * the answer is derived from the engine that is actually up rather than
+	 * frozen at the moment an assertion was parsed. */
+	if (L->sink)
+		reac_sink_node_set_role_swap(L->sink, &L->role_swap);
 	if (c->role == REAC_ROLE_MASTER && L->sink) {
 		/* Pure autodetect: the pacer recognizes the box on the wire; a 200 ms main-
 		 * loop watcher then (re)sizes reac-capture / reac-playback to its widths. No
@@ -934,6 +975,19 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		}
 	}
 
+	/* THIS ROLE'S ENGINE NOW OWNS THE SEGMENT. Recorded on the only success
+	 * path, so a refused open leaves the record saying the segment is down —
+	 * which is what it is. */
+	reac_role_swap_opened(&L->role_swap, c->role);
+	/* The slave has no reac-playback node, so its capture node carries BOTH
+	 * halves — the write door and the answer (see listener_publish_role and
+	 * reac_source_node.h). Wired in the slave role only: in the master role the
+	 * sink owns them, and a second door onto the same fact is exactly what the
+	 * one-store law refuses. */
+	if (c->role == REAC_ROLE_SLAVE) {
+		reac_source_node_set_role_swap(L->src, &L->role_swap);
+		listener_publish_role(L);
+	}
 	return 0;
 }
 
@@ -956,6 +1010,9 @@ static void listener_close(struct listener *L, struct pw_loop *loop)
 	reac_rx_close(&L->rx);
 	reac_ring_free(&L->ring);
 	reac_seglock_release(&L->seglock);
+	/* Socket, thread and (for a master) the segment lock are gone: nothing owns
+	 * this segment until the next open, and the role answer says exactly that. */
+	reac_role_swap_closed(&L->role_swap);
 }
 
 /* --- clean segment re-open on a REAC rate change (2026-08-26) ----------------
@@ -987,20 +1044,43 @@ static void listener_reopen_at_rate(struct listener *L, struct pw_loop *loop, in
 	L->rx_started = 1;
 }
 
-/* A clean segment re-open in the OTHER engine (master<->slave), #5's cross-engine swap.
- * Same fresh-launch teardown+rebuild as the rate re-open; listener_open branches the engine
- * off L->cfg.role, so the master pacer goes down and the slave engine comes up (or back). */
+/* A clean segment re-open in the OTHER engine (master<->slave) — the cross-engine
+ * swap, on the rate re-open's own pattern (request atom -> main-loop drain ->
+ * re-open) but strictly larger, because the two roles are two ENGINES rather
+ * than one engine at a different cadence. listener_close takes down the running
+ * engine's AF_PACKET socket, its thread (the SCHED_FIFO pacer for a master, the
+ * emitter for a slave) and — master only — the segment lock; listener_open then
+ * brings the other one up through the SAME seam a cold start uses, so nothing
+ * about the new engine is a special swap path that a fresh launch does not
+ * exercise.
+ *
+ * THE ANSWER NEVER RUNS AHEAD OF THE ENGINE. The record says the segment is down
+ * from the moment the old engine closes, and `applied` is unreachable until the
+ * NEW engine is doing its role's own job — for a master, pacing its wire; for a
+ * slave, having been enrolled by a desk. A slave that comes up on a quiet wire
+ * therefore answers `role_hunting` and keeps answering it (reac_role_swap.h).
+ *
+ * NOT CLAIMED HERE: that a real box or desk re-attaches across this. No capture
+ * in the corpus shows a desk ceding a segment or a box under a master that
+ * changes role, so that half is an operator-present rig test and nothing in this
+ * file's transcript may be read as evidence for it. */
 static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, enum reac_role role)
 {
-	fprintf(stderr, "reac-pw: %sREAC role -> %s: clean segment re-open (cross-engine swap)\n",
-	        L->cfg.tag, role == REAC_ROLE_MASTER ? "master" : "slave");
+	fprintf(stderr, "reac-pw: %sREAC role -> %s: clean segment re-open (cross-engine swap; "
+	        "head-amp is emitted by the %s engine only)\n",
+	        L->cfg.tag, reac_role_name(role),
+	        reac_role_emits_headamp(role) ? "running master" : "master — this one sends none");
 	if (L->opened)
 		listener_close(L, loop);
 	L->opened = 0;
 	L->rx_started = 0;
 	L->cfg.role = role;
 	if (listener_open(L, loop) != 0) {
-		fprintf(stderr, "reac-pw: %srole re-open FAILED — segment down\n", L->cfg.tag);
+		/* The record still says the segment is down, so the answer stays
+		 * `role_reestablish_pending` — which is the truth: the role was
+		 * accepted and nothing is performing it. */
+		fprintf(stderr, "reac-pw: %srole re-open FAILED — segment down, role still owed\n",
+		        L->cfg.tag);
 		return;
 	}
 	L->opened = 1;
@@ -1011,6 +1091,12 @@ static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, en
 		return;
 	}
 	L->rx_started = 1;
+	fprintf(stderr, "reac-pw: %s%s engine up; role state = %s\n", L->cfg.tag,
+	        reac_role_name(role),
+	        reac_role_swap_state(&L->role_swap,
+	                             role == REAC_ROLE_MASTER
+	                               ? REAC_ROLE_ENGINE_HUNTING   /* IDLE until the first frame */
+	                               : reac_role_engine_of_slave(L->slave_open, 0)));
 }
 
 struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
@@ -1054,8 +1140,21 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 			pw_main_loop_quit(g_loop);
 			return;
 		}
-		if (!L->sink)
+		/* THE SLAVE HALF, and it is polled here for the same reason the master
+		 * half is: main's loop thread is the only place a listener may be torn
+		 * down and rebuilt. A recorder's door and its answer both live on its
+		 * capture node (reac_source_node.h), so this drains that door and
+		 * re-publishes the answer — which MOVES while nothing is asserted, as
+		 * the hunt ends or a desk drops. */
+		if (!L->sink) {
+			int back = reac_source_node_take_reopen_role(L->src);
+			if (back >= 0) {
+				listener_reopen_at_role(L, c->loop, (enum reac_role)back);
+				continue;   /* the capture node was rebuilt; nothing more this tick */
+			}
+			listener_publish_role(L);
 			continue;
+		}
 		int role = reac_sink_node_take_reopen_role(L->sink);
 		if (role >= 0) {
 			listener_reopen_at_role(L, c->loop, (enum reac_role)role);
@@ -1408,6 +1507,11 @@ int main(int argc, char **argv)
 			        listeners[i].cfg.rxcfg.source ? listeners[i].cfg.rxcfg.source : "?");
 		else
 			listeners[i].cfg.tag[0] = '\0';
+		/* SEED THE ROLE RECORD FROM THE ROLE THIS SEGMENT BOOTS IN, before any
+		 * engine exists. Seeded here and not inside listener_open, which runs
+		 * again on every re-open and would overwrite the console's assertion
+		 * with the role it happens to be re-opening as. */
+		reac_role_swap_init(&listeners[i].role_swap, listeners[i].cfg.role);
 	}
 
 	pw_init(&argc, &argv);

@@ -113,6 +113,15 @@ int reac_sink_node_take_reopen_rate(struct reac_sink_node *n);
  * (master<->slave), or -1 if none. Main's poll timer calls this. */
 int reac_sink_node_take_reopen_role(struct reac_sink_node *n);
 
+/* Wire the SEGMENT's role lifecycle record (reac_role_swap.h), owned by the
+ * listener. A role change destroys this node, so the record that answers for the
+ * swap has to outlive it; this node borrows it to publish
+ * reac.cfg.role.state and to file an accepted assertion against it. NULL detaches
+ * — the node then answers with the decision core alone, which never claims a swap
+ * happened. */
+struct reac_role_swap;
+void reac_sink_node_set_role_swap(struct reac_sink_node *n, struct reac_role_swap *swap);
+
 /* Wire the peer reac-capture node's SLOT (#208) so the sink's main-loop badge timer
  * also keeps the source node's reac.link-state / box-model / box-width in sync — the
  * capture node has no pacer handle of its own. Pass the address of main's source-node

@@ -36,23 +36,36 @@
  * ROLE change is a different order of invasiveness: master and slave are TWO
  * DIFFERENT ENGINES (reac_sink_node + reac_pacer vs. reac_slave — see
  * main.c's listener_open), each opening its own AF_PACKET socket, claiming or
- * not claiming the segment lock, and running its own thread. Tearing one down
- * and building the other up LIVE, with no real NIC and box on hand to prove
- * the re-attach against, is not a change this increment can responsibly claim
- * to have performed. So this module splits cleanly in two:
+ * not claiming the segment lock, and running its own thread. So the work
+ * splits in two, and THIS MODULE IS ONLY THE FIRST HALF:
  *
- *   - the DECISION core (parse, same-role-is-a-no-op detection, the prop
- *     answer) is complete and fully unit-tested here;
- *   - the actual cross-engine swap is a documented STUB:
- *     reac_role_cfg_apply_state never returns REAC_ROLE_STATE_APPLIED for a
- *     role-CHANGING assertion — it returns REAC_ROLE_STATE_REESTABLISH_PENDING
- *     and stays there, because nothing runs afterward to move it further.
- *     Never a silent no-op (the write is parsed, decided and answered), never
- *     a fake success (the answer never claims the swap happened).
+ *   - the DECISION core lives here — parse, same-role-is-a-no-op detection, and
+ *     the answer a request publishes when nothing is carrying it out. Pure, and
+ *     fully unit-tested (tests/test_reac_role_cfg.c);
+ *   - the SWAP and its LIFECYCLE live in reac_role_swap.h. main.c performs the
+ *     change as a clean listener close + open in the other engine, and the
+ *     answer is DERIVED on every publish from the segment's own record plus the
+ *     running engine's state — never frozen at the moment the assertion was
+ *     parsed, because the node that parsed it is destroyed by the very swap it
+ *     accepted.
+ *
+ * reac_role_cfg_apply_state below is therefore the answer for a caller with NO
+ * segment record behind it (a unit harness): a same-role assertion is already
+ * the fact and reads `applied`, a role-CHANGING one reads
+ * REAC_ROLE_STATE_REESTABLISH_PENDING and stays there, because nothing in this
+ * module moves it further. Never a silent no-op, never a fake success.
+ *
+ * WHAT REMAINS UNPROVEN, on either side of that split: that a real Roland box
+ * or desk RE-ATTACHES across a live swap. No capture in reac-captures shows a
+ * desk ceding a segment or a box under a master that changes role, so the
+ * daemon's own transcript is evidence about OUR engines and about nothing else.
+ * That half is an operator-present rig test.
  *
  * PURE decision core, no I/O, no PipeWire, no engine touched — same shape as
- * reac_rate_cfg and reac_headamp_prop: unit-testable offline. One caller:
- * reac_sink_node's param_changed, exactly where `reac.cfg.rate` is read. */
+ * reac_rate_cfg and reac_headamp_prop: unit-testable offline. Two callers:
+ * reac_sink_node's param_changed (the master's door, where `reac.cfg.rate` is
+ * read) and reac_source_node's (a slave's only door — it has no playback
+ * node). */
 #ifndef REAC_ROLE_CFG_H
 #define REAC_ROLE_CFG_H
 
@@ -82,11 +95,13 @@ struct spa_pod;
 /* A same-role assertion is genuinely, immediately true: nothing needed to
  * change, so nothing is left undone. */
 #define REAC_ROLE_STATE_APPLIED "applied"
-/* The honest answer for a role-CHANGING assertion (see this header's HONESTY
- * note): the request is well-formed and accepted, but the cross-engine swap
- * this increment cannot yet perform live never lands, so this state is
- * published INSTEAD OF ever claiming "applied" for it — and stays published,
- * because nothing downstream exists yet to move it further. */
+/* The answer while the cross-engine swap is OWED or IN FLIGHT: the request is
+ * well-formed and accepted, and either nothing owns the segment right now or the
+ * engine that does is not the one asked for. Published INSTEAD OF ever claiming
+ * "applied" for a change that has not finished. reac_role_swap_state is what
+ * moves it on, and only when the NEW engine is performing its role — for a
+ * slave that means enrolled by a desk, which on a quiet wire never happens and
+ * reads REAC_ROLE_STATE_HUNTING for as long as the hunt lasts. */
 #define REAC_ROLE_STATE_REESTABLISH_PENDING "role_reestablish_pending"
 
 /* Why a `reac.cfg.role` assertion was refused. REFUSE_NONE doubles as the
