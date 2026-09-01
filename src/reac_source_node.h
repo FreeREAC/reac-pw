@@ -124,30 +124,46 @@ void reac_source_node_publish_link(struct reac_source_node *n,
  * asserted a rate the way `reac.cfg.rate` asserts one on a master). */
 void reac_source_node_publish_rate(struct reac_source_node *n, int hz);
 
-/* --- the SLAVE role's `reac.cfg.role` door + answer ------------------------
+/* --- the SLAVE role's segment door + answer --------------------------------
  * A slave has no reac-playback node (main.c builds reac_sink_node for the master
  * branch alone), so this capture node carries both halves for a recorder: the
- * Props write door that accepts an assertion, and the reac.role /
- * reac.cfg.role.state / reac.cfg.role.refused answer. In the MASTER role the sink
- * node owns both and none of these is called. */
+ * Props write door that accepts an assertion, and the segment's whole published
+ * answer — identity, role trio, and the reac.master.* aggregate a mixer's sink
+ * publishes on its own node. In the MASTER role the sink owns both and none of
+ * these is called.
+ *
+ * THE IDENTITY IS STAMPED AT CREATE, in the slave role only: reac.segment names
+ * the segment on the ONE node that carries its door, which is what lets a console
+ * key a row on it and get one row per segment in either role
+ * (reac_segment_ident.h). A master's reac-capture carries the same audio and is
+ * NOT that segment's doorway, so it deliberately carries no reac.segment — one
+ * store, one writer, and no de-duplication rule for a reader to get wrong. */
 
 struct reac_role_swap;
+struct reac_segment_answer;
 
 /* Wire the SEGMENT's role lifecycle record (reac_role_swap.h), owned by the
  * listener because a swap destroys whichever node it started on. NULL detaches,
  * and the door is then inert. */
 void reac_source_node_set_role_swap(struct reac_source_node *n, struct reac_role_swap *swap);
 
+/* Publish the SLAVE segment's whole answer in ONE property update: the role trio
+ * (`reac.role`, `reac.cfg.role.state`, `reac.cfg.role.refused`) and the
+ * reac.master.* / reac.rate aggregate `answer` carries. One update rather than
+ * two because these facts change together and a reader must never catch a role
+ * that has moved against an aggregate that has not — the same consistency
+ * reac.discovery.seq buys the sink's own set. A NULL `answer` publishes the role
+ * trio alone. Main-loop thread only; same MERGE semantics as publish_link. */
+void reac_source_node_publish_segment(struct reac_source_node *n,
+                                      const char *role,
+                                      const char *state,
+                                      const char *refused,
+                                      const struct reac_segment_answer *answer);
+
 /* Take (read+clear) the pending accepted reac.cfg.role for a clean re-open in the
  * other engine, or -1 if none. Main's poll timer calls this. */
 int reac_source_node_take_reopen_role(struct reac_source_node *n);
 
-/* Stamp the role trio. A NULL arg skips that key; the update MERGES, like
- * reac_source_node_publish_link. */
-void reac_source_node_publish_role(struct reac_source_node *n,
-                                   const char *role,
-                                   const char *state,
-                                   const char *refused);
 
 /* Bring *slot to a reac-capture node of `channels` output ports labelled `label`.
  * ONE entry point the library owns, callable from startup AND the recognition

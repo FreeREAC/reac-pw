@@ -28,6 +28,8 @@
 #include "reac_role_swap.h"
 #include "reac_role_cfg.h"
 #include "reac_seglock.h"
+#include "reac_segment_ident.h"   /* W1: the segment's identity + a slave's answer */
+#include "reac_arbitration.h"     /* the vocabulary those answers must BE */
 
 #include <stdio.h>
 #include <string.h>
@@ -287,6 +289,197 @@ static int test_only_the_master_holds_the_segment(void)
 	return 0;
 }
 
+/* ======== W1: THE SEGMENT IS THE SAME ADDRESSABLE FACT IN BOTH ROLES ========
+ *
+ * docs/SLAVE-EMULATION-SCOPE.md W1. The console addressed a segment by parsing
+ * its reac-playback node name, and a recorder has no reac-playback node — so a
+ * role could be driven one way and never back. The identity is now DECLARED, and
+ * a recorder answers with the same aggregate a mixer does. These pin the pieces
+ * that decide both. */
+
+/* The identity is the instance name, and the bare segment is named rather than
+ * left as an empty string a reader would have to interpret. */
+static int test_segment_names_itself(void)
+{
+	CHK(strcmp(reac_segment_name("enp131s0"), "enp131s0") == 0);
+	CHK(strcmp(reac_segment_name(NULL), REAC_SEGMENT_NAME_DEFAULT) == 0);
+	CHK(strcmp(reac_segment_name(""), REAC_SEGMENT_NAME_DEFAULT) == 0);
+	/* The value a node stamps is EXACTLY what a reader keys its row on, so the
+	 * default must be the literal the console addresses, not a near-miss. */
+	CHK(strcmp(REAC_SEGMENT_NAME_DEFAULT, "default") == 0);
+	CHK(strcmp(REAC_PROP_SEGMENT, "reac.segment") == 0);
+	return 0;
+}
+
+/* THE LATCH DECAYS, and that is the whole reason it is a latch. reac_rx counts
+ * cumulatively and never counts down, so "we once decoded a master frame" would
+ * report a desk that was unplugged an hour ago — reac_disco ages its sightings
+ * for exactly this and the two must decay on the same rule. */
+static int test_heard_decays_when_the_desk_goes_quiet(void)
+{
+	struct reac_segment_heard h;
+	reac_segment_heard_init(&h, 0);
+	CHK(h.heard == 0);              /* nothing heard yet, whatever the counter reads */
+
+	/* PRESENCE BEFORE ABSENCE: prove the latch can SEE a master before any
+	 * assertion about it going quiet means anything. */
+	CHK(reac_segment_heard_step(&h, 1, 5) == 1);
+	CHK(reac_segment_heard_step(&h, 4000, 5) == 1);
+
+	/* The count stops moving. The claim must survive a tick or two of jitter and
+	 * then go — never stand on the frozen number for ever. */
+	for (int i = 0; i < 4; i++)
+		CHK(reac_segment_heard_step(&h, 4000, 5) == 1);
+	CHK(reac_segment_heard_step(&h, 4000, 5) == 0);
+	CHK(reac_segment_heard_step(&h, 4000, 5) == 0);   /* and stays gone */
+
+	/* The desk comes back: one new frame is enough, and it is heard again. */
+	CHK(reac_segment_heard_step(&h, 4001, 5) == 1);
+
+	/* A seeded latch does not inherit the previous engine's evidence: seeding at
+	 * a non-zero count is "we have heard nothing YET", not "we heard 4001". */
+	reac_segment_heard_init(&h, 4001);
+	CHK(h.heard == 0);
+	CHK(reac_segment_heard_step(&h, 4001, 5) == 0);   /* unmoved: still nothing */
+	CHK(reac_segment_heard_step(&h, 4002, 5) == 1);   /* moved: now something */
+
+	/* The shipped bar is reac_disco's own 5 s withdrawal, at main's 200 ms poll. */
+	CHK(REAC_SEGMENT_HEARD_QUIET_TICKS == 25);
+	return 0;
+}
+
+/* THE PARITY TABLE. Every value is asserted against reac_arbitration's OWN
+ * namers, never against a string literal spelled a second time here — a test
+ * that re-spelled them would pass while the two vocabularies drifted apart. */
+static int test_slave_answers_the_segment_aggregate(void)
+{
+	struct reac_segment_answer a;
+	const uint8_t desk[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
+	uint64_t mac48 = reac_mac48_pack(desk);
+
+	/* HUNTING: a recorder on a quiet wire. Nothing is mastering, nothing paces,
+	 * and there is no MAC to name — every one of those is a fact, not a gap. */
+	reac_segment_answer_slave(&a, 0, 0, 96000);
+	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_NONE)) == 0);
+	CHK(strcmp(a.master_mac, "none") == 0);
+	CHK(strcmp(a.pace_source, reac_pace_source_name(REAC_PACE_FREE_RUN)) == 0);
+	CHK(strcmp(a.rival_kind, reac_rival_kind_name(REAC_RIVAL_NONE)) == 0);
+	CHK(strcmp(a.refusal, reac_rival_refusal(REAC_RIVAL_NONE)) == 0);
+	CHK(strcmp(a.conflict, "0") == 0);
+	CHK(strcmp(a.rate, "96000") == 0);
+
+	/* ENROLLED: a desk is heard. The gate that passed those frames accepts the
+	 * 40-channel downstream and nothing else, so the geometry is a DESK by the
+	 * master's own classifier — and that matters beyond tidiness, because the
+	 * console's role policy joins a desk and refuses everything else. A recorder
+	 * that answered `none` here would be reported as refusing the very master it
+	 * is happily joined to. */
+	reac_segment_answer_slave(&a, 1, mac48, 48000);
+	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
+	CHK(strcmp(a.master_mac, "00:40:ab:c4:80:3b") == 0);
+	CHK(strcmp(a.pace_source, reac_pace_source_name(REAC_PACE_FOREIGN_MASTER)) == 0);
+	CHK(strcmp(a.rival_kind, reac_rival_kind_name(REAC_RIVAL_DESK)) == 0);
+	CHK(strcmp(a.refusal, reac_rival_refusal(REAC_RIVAL_DESK)) == 0);
+	CHK(strcmp(a.rate, "48000") == 0);
+
+	/* A joined desk is not a refusal and not a conflict: the first is what
+	 * reac_rival_refusal says of a desk, the second is definitional — the flag
+	 * means a foreign master is live WHILE WE MASTER, and a slave does not. */
+	CHK(strcmp(a.refusal, "none") == 0);
+	CHK(strcmp(a.conflict, "0") == 0);
+
+	/* Heard, but no MAC learned yet (the grant burst has not named a master):
+	 * the presence is reported and the identity is honestly absent. */
+	reac_segment_answer_slave(&a, 1, 0, 48000);
+	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
+	CHK(strcmp(a.master_mac, "none") == 0);
+
+	/* No rate published is "0", which a consumer reads as no rate — never a
+	 * guess at one. */
+	reac_segment_answer_slave(&a, 0, 0, 0);
+	CHK(strcmp(a.rate, "0") == 0);
+	reac_segment_answer_slave(&a, 0, 0, -1);
+	CHK(strcmp(a.rate, "0") == 0);
+	return 0;
+}
+
+/* The packed MAC is a ROUND TRIP, not a formatting convenience: the engine
+ * thread stores it and the publish timer reads it, so a byte lost in the pack
+ * would be a wrong master silently published. */
+static int test_mac48_round_trips(void)
+{
+	const uint8_t in[6] = { 0xc4, 0x06, 0x80, 0x00, 0xff, 0x01 };
+	uint8_t out[6];
+	reac_mac48_unpack(reac_mac48_pack(in), out);
+	CHK(memcmp(in, out, 6) == 0);
+
+	/* The high byte must survive: a 48-bit value shifted through a 32-bit
+	 * intermediate would lose exactly this one. */
+	const uint8_t high[6] = { 0xff, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	reac_mac48_unpack(reac_mac48_pack(high), out);
+	CHK(memcmp(high, out, 6) == 0);
+	CHK(reac_mac48_pack(high) == 0xff0000000000ull);
+
+	/* An unlearned master packs to 0, which is what "none" is published from. */
+	const uint8_t zero[6] = { 0, 0, 0, 0, 0, 0 };
+	CHK(reac_mac48_pack(zero) == 0);
+	return 0;
+}
+
+/* THE ROUND TRIP, ANSWER BY ANSWER, ACROSS BOTH NODES. The swap test above walks
+ * the role state; this walks what a CONSOLE reads at each phase — which is the
+ * half W1 was missing. The point is that at no phase is the segment unaddressable:
+ * whichever node exists carries the identity and an answer. */
+static int test_the_segment_answers_in_both_roles(void)
+{
+	struct reac_role_swap sw;
+	struct reac_segment_answer a;
+	const char *inst = "enp131s0";
+
+	/* MIXER. The identity is on the reac-playback sink; the aggregate comes from
+	 * the pacer's arbitration, which this module does not compute — what W1 pins
+	 * here is that the segment is NAMED, by the same function both nodes call. */
+	reac_role_swap_init(&sw, REAC_ROLE_MASTER);
+	reac_role_swap_opened(&sw, REAC_ROLE_MASTER);
+	CHK_STATE(&sw, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_APPLIED);
+	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
+
+	/* -> RECORDER. The sink is destroyed, so the identity and the answer move to
+	 * the capture node — the SAME name, which is the whole point: a console that
+	 * keyed on it addresses the same segment across the swap. */
+	CHK(reac_role_swap_request(&sw, REAC_ROLE_SLAVE) != 0);
+	reac_role_swap_closed(&sw);
+	CHK_STATE(&sw, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	reac_role_swap_opened(&sw, REAC_ROLE_SLAVE);
+	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
+
+	/* Quiet wire: hunting, and the aggregate says why — nothing masters it. */
+	reac_segment_answer_slave(&a, 0, 0, 96000);
+	CHK_STATE(&sw, reac_role_engine_of_slave(1, 0), REAC_ROLE_STATE_HUNTING);
+	CHK(strcmp(a.master_state, "none") == 0);
+
+	/* A desk arrives and enrols us: applied, and the aggregate names the desk. */
+	reac_segment_answer_slave(&a, 1, reac_mac48_pack((const uint8_t[]){
+		0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }), 96000);
+	CHK_STATE(&sw, reac_role_engine_of_slave(1, 1), REAC_ROLE_STATE_APPLIED);
+	CHK(strcmp(a.master_state, "foreign") == 0);
+	CHK(strcmp(a.rival_kind, "desk") == 0);
+
+	/* -> BACK TO MIXER. This is the gesture W1 exists to make reachable: the
+	 * write lands on whichever node carries the door, and the segment re-opens
+	 * as a master under the same name. */
+	CHK(reac_role_swap_request(&sw, REAC_ROLE_MASTER) != 0);
+	reac_role_swap_closed(&sw);
+	CHK_STATE(&sw, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	reac_role_swap_opened(&sw, REAC_ROLE_MASTER);
+	CHK_STATE(&sw, reac_role_engine_of_master(1, REAC_M_PROBING), REAC_ROLE_STATE_APPLIED);
+	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
+
+	/* Head-amp went with the role, not with the node it used to hang off. */
+	CHK(reac_role_emits_headamp(REAC_ROLE_MASTER) != 0);
+	return 0;
+}
+
 int main(void)
 {
 	if (test_answer_table()) return 1;
@@ -299,8 +492,14 @@ int main(void)
 	if (test_headamp_is_master_only()) return 1;
 	if (test_segment_lock_changes_hands()) return 1;
 	if (test_only_the_master_holds_the_segment()) return 1;
+	if (test_segment_names_itself()) return 1;
+	if (test_heard_decays_when_the_desk_goes_quiet()) return 1;
+	if (test_slave_answers_the_segment_aggregate()) return 1;
+	if (test_mac48_round_trips()) return 1;
+	if (test_the_segment_answers_in_both_roles()) return 1;
 	printf("OK: reac_role_swap — the swap answers honestly in every window, "
 	       "the slave hunt never reads as applied, head-amp stays the master's, "
-	       "and the segment lock really changes hands\n");
+	       "the segment lock really changes hands, and the segment names itself "
+	       "and answers the aggregate in BOTH roles (W1)\n");
 	return 0;
 }

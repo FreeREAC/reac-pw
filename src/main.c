@@ -53,6 +53,7 @@
 #include "reac_slave.h"
 #include "reac_role_cfg.h"   /* the reac.cfg.role vocabulary + refusal codes */
 #include "reac_role_swap.h"  /* the role swap's lifecycle answer (arbitration §8) */
+#include "reac_segment_ident.h"  /* the segment identity + a slave's own answer set */
 #include "reac_role.h"
 #include "reac_rate_cfg.h"
 #include "reac_mac.h"
@@ -570,6 +571,13 @@ struct listener {
 	 * (reac_role_swap.h). MAIN-LOOP-ONLY, like every writer that touches it. */
 	struct reac_role_swap role_swap;
 
+	/* IS A MASTER STILL BEING HEARD? The slave role's half of the segment
+	 * aggregate, latched here because it is a fact about the SEGMENT over time
+	 * and the RX only counts frames (reac_segment_ident.h). Stepped from the same
+	 * 200 ms poll that publishes, so the claim decays when a desk is unplugged
+	 * instead of standing on a counter that never goes back down. */
+	struct reac_segment_heard heard;
+
 	struct autodetect_ctx adc;
 	struct spa_source *ad_timer;
 };
@@ -680,19 +688,29 @@ static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_la
 	return reac_rate_best_drivable(REAC_RATE_ALL_BITS);
 }
 
-/* Publish the segment's ROLE ANSWER on the node that exists in the role it is
- * running (reac_role_swap.h): the master's reac-playback carries it from the
- * sink's own badge timer, so this is the SLAVE half — its reac-capture node is
- * the only node a recorder has. The answer is derived on every call from the
- * segment's record plus the slave engine's own ESTABLISHED flag, so a recorder
- * hunting a desk that is not there says `role_hunting` for as long as that is
- * true, and never `applied`.
+/* Publish the SEGMENT'S WHOLE ANSWER on the node that exists in the role it is
+ * running: the master's reac-playback carries it from the sink's own badge
+ * timer, so this is the SLAVE half — its reac-capture node is the only node a
+ * recorder has, and therefore both its door and its voice.
+ *
+ * PARITY IS THE POINT (docs/SLAVE-EMULATION-SCOPE.md W1). A recorder used to
+ * publish the role trio and nothing else, so the same segment answered a console
+ * richly as a mixer and almost not at all as a recorder — which is why the role
+ * round trip only went one way. It now answers with the identity
+ * (stamped at create, reac_source_node.c) plus the reac.master.* aggregate and
+ * the wire pace, so a segment is the same addressable fact in either role.
+ *
+ * Everything here is DERIVED on every call — the role from the segment's record
+ * plus the slave engine's own ESTABLISHED flag, the aggregate from the RX's
+ * accepted-frame evidence — so a recorder hunting a desk that is not there says
+ * `role_hunting` and `master.state=none` for as long as both are true, and a desk
+ * that is unplugged stops being reported rather than standing on a stale count.
  *
  * A slave never emits head-amp (a box is told what its preamps do, it does not
  * tell its desk), which is true by construction — reac_slave's emit vocabulary
  * has no head-amp member — and asserted here so the property is re-checked on
  * the side the swap just moved to. */
-static void listener_publish_role(struct listener *L)
+static void listener_publish_segment(struct listener *L)
 {
 	if (!L->src)
 		return;
@@ -702,8 +720,27 @@ static void listener_publish_role(struct listener *L)
 		&L->role_swap, reac_role_engine_of_slave(L->slave_open, established));
 	char role_s[4];
 	snprintf(role_s, sizeof role_s, "%d", REAC_CFG_ROLE_VALUE_SLAVE);
-	reac_source_node_publish_role(L->src, role_s, state,
-	                              reac_role_refuse_code(REAC_ROLE_REFUSE_NONE));
+
+	/* THE SEGMENT AGGREGATE, from what this engine actually witnessed. The
+	 * evidence is the RX's accepted-frame count: in the slave role the gate
+	 * passes the 40-channel master downstream and nothing else, so a moving
+	 * count is both "a master is here" and "its geometry is a desk's" — the same
+	 * two facts a master's arbitration derives from its sighting table, and
+	 * derived here through the SAME classifier rather than a second one. */
+	int heard = reac_segment_heard_step(
+		&L->heard,
+		L->rx_started ? atomic_load_explicit(&L->rx.frames_ok, memory_order_relaxed) : 0,
+		REAC_SEGMENT_HEARD_QUIET_TICKS);
+	struct reac_segment_answer answer;
+	reac_segment_answer_slave(&answer, heard,
+	                          L->slave_open
+	                            ? atomic_load_explicit(&L->slave.master_mac48,
+	                                                   memory_order_relaxed) : 0,
+	                          L->rx.sample_rate);
+
+	reac_source_node_publish_segment(L->src, role_s, state,
+	                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
+	                                 &answer);
 }
 
 /* Bring one segment online: resolve its rate, open the RX feeder, and (role
@@ -980,13 +1017,17 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * which is what it is. */
 	reac_role_swap_opened(&L->role_swap, c->role);
 	/* The slave has no reac-playback node, so its capture node carries BOTH
-	 * halves — the write door and the answer (see listener_publish_role and
+	 * halves — the write door and the answer (see listener_publish_segment and
 	 * reac_source_node.h). Wired in the slave role only: in the master role the
 	 * sink owns them, and a second door onto the same fact is exactly what the
 	 * one-store law refuses. */
 	if (c->role == REAC_ROLE_SLAVE) {
 		reac_source_node_set_role_swap(L->src, &L->role_swap);
-		listener_publish_role(L);
+		/* Fresh evidence for a fresh engine: a re-opened segment must not
+		 * inherit the previous one's "a master was heard" (the RX and its
+		 * counter are new here anyway, and seeding from 0 says so). */
+		reac_segment_heard_init(&L->heard, 0);
+		listener_publish_segment(L);
 	}
 	return 0;
 }
@@ -1152,7 +1193,7 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 				listener_reopen_at_role(L, c->loop, (enum reac_role)back);
 				continue;   /* the capture node was rebuilt; nothing more this tick */
 			}
-			listener_publish_role(L);
+			listener_publish_segment(L);
 			continue;
 		}
 		int role = reac_sink_node_take_reopen_role(L->sink);

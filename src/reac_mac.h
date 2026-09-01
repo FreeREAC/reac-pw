@@ -31,4 +31,18 @@ int reac_mac_compose(int hw_family, const uint8_t hwaddr[6], uint8_t out[6]);
  * filled with a usable MAC regardless of the return value. */
 int reac_mac_default_src(const char *ifname, uint8_t out[6]);
 
+/* Pack six MAC bytes into the low 48 bits of a uint64_t, big-endian (byte 0
+ * highest), and back out again.
+ *
+ * IT EXISTS SO A MAC CAN CROSS A THREAD AS ONE ATOMIC. reac_slave's engine
+ * thread learns the master's address and the main loop publishes it on the
+ * segment's node properties; six loose bytes read across that boundary are a
+ * torn read nobody synchronises, and half a MAC is a WRONG answer rather than a
+ * stale one. Packed, it is one relaxed store and one relaxed load.
+ *
+ * 0 means NO MAC — the all-zero address is not one any device carries, and it is
+ * what an unlearned master publishes "none" from. PURE. */
+uint64_t reac_mac48_pack(const uint8_t mac[6]);
+void reac_mac48_unpack(uint64_t packed, uint8_t out[6]);
+
 #endif /* REAC_MAC_H */
