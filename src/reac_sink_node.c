@@ -24,6 +24,7 @@
  * decodes, with the cdea/cfea control frames interspersed ~1/s. */
 
 #include "reac_sink_node.h"
+#include "reac_segment_ident.h" /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
 #include "reac_tx.h"
 #include "reac_pacer.h"
@@ -1429,6 +1430,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
 			PW_KEY_NODE_NAME, nodename,
 			PW_KEY_NODE_DESCRIPTION, desc,
+			/* THE SEGMENT'S IDENTITY (reac_segment_ident.h). This node is the
+			 * master role's door — it accepts reac.cfg.rate / reac.cfg.role and
+			 * publishes the answer — so it is the node that names the segment.
+			 * A console keys its row on this value instead of parsing the node
+			 * name, which is what makes the same segment addressable when the
+			 * role swaps and the reac-capture node carries the key instead. */
+			REAC_PROP_SEGMENT, reac_segment_name(n->inst),
 			/* NO node.rate: on a filter that was a REQUEST for the graph to run at
 			 * the REAC rate, which an RME-driven graph refuses. The rate that matters
 			 * is the one in our FORMAT, which the adapter resamples from. */

@@ -38,13 +38,42 @@ right, and the work below still stands; only its stated reason does not.
 
 ## Work items
 
-### W1 — PipeWire `reac:return` sink for slave role  ·  effort M  ·  **#1 gap**
+### W1 — PipeWire `reac:return` sink for slave role  ·  effort M  ·  **STILL OPEN**
 `main.c` builds a `reac_sink_node` only for the master role. In slave role
 `tx_ring` is created but nothing fills it, so the encoder runs on silence (see
 the `main.c` slave-branch comment). Add a slave-side sink node that accepts
 PipeWire playback into `tx_ring`; the slave engine already drains it through the
 braided encoder. Delivers "inject audio as the box's mic inputs."
 Files: `src/reac_sink_node.*` (reuse/param), `src/main.c` slave branch.
+
+**THE CONSOLE-REACH HALF IS CLOSED, AND NOT BY BUILDING THIS (2026-09-01).** The
+role commit (`7d0c0de`) gave a slave a `reac.cfg.role` door on its capture node
+and then found the console could not use it: openmixer addressed a segment by
+parsing its `reac-playback[.<inst>]` node name, and a slave has no such node — so
+a role could be driven TO recorder and never back. That deadlock pointed here,
+because a slave-side sink would incidentally give a recorder a `reac-playback`
+node and make the name-parsing console work again.
+
+**It was fixed the other way round, deliberately.** Making the console's reach
+depend on which node kind happens to exist is the same defect one layer up:
+recovering a fact by PARSING a name, where the name's prefix IS the role. So the
+segment now DECLARES itself — `reac.segment` on whichever node carries its door
+(`src/reac_segment_ident.h`), reac-playback for a mixer and reac-capture for a
+recorder — and the slave's capture node publishes the same `reac.master.*` +
+`reac.rate` aggregate a mixer's sink does. openmixer keys its row on that value,
+so one segment is one row in either role and the PATCH lands on whichever node
+holds the door. The round trip is reachable now, with no sink node in it.
+
+**What that leaves W1 as: its AUDIO half, undiminished.** Nothing fills `tx_ring`
+in the slave role, so a recorder still returns silence upstream and a desk's
+input meters still show nothing — which is exactly the W5 milestone still marked
+blocked below. Do not read "the console can drive the role both ways" as any part
+of this item being done.
+
+**And what is still not evidence.** No capture shows a real desk or box
+re-attaching across a role swap, so the round trip is proven offline and on our
+own two engines only. A real desk across the swap remains an operator-present rig
+test (`src/reac_role_swap.h`'s closing note says the same).
 
 ### W2 — Frame-locked upstream TX (clock recovery)  ·  effort M–L  ·  clock heart
 The slave must emit each upstream frame phase-aligned to the master's slot (a
@@ -151,7 +180,8 @@ ESTABLISHED, streams to us, and shows our upstream on its input meters.
 Result: a real cold-booted **M-200** grants and enrols reac-pw, and holds 300 s —
 "W5 CONNECTED" below, with the census and the config-announce frame that unlocked
 it. The **M-5000** grants us and then reverts to hunting; still open. The input-meter
-half is blocked on W1 (nothing fills `tx_ring` in the slave role yet).
+half is blocked on W1's audio half (nothing fills `tx_ring` in the slave role
+yet — W1's console-reach half is closed and does not move this).
 
 ## Build order (each ends in a wire test)
 

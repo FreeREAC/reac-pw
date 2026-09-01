@@ -8,6 +8,8 @@
                                  * (task #4.3 extension: "one wire, one rate" — see
                                  * reac_sink_format.h's revised SCOPE note) */
 #include "reac_role_cfg.h"    /* the `reac.cfg.role` parse + refusal codes */
+#include "reac_rate_cfg.h"    /* REAC_PROP_RATE — the wire pace this segment locked to */
+#include "reac_segment_ident.h" /* the segment identity + the slave answer set */
 #include "reac_role_swap.h"   /* the swap's lifecycle answer (arbitration §8) */
 
 #include <reac/reac.h>
@@ -290,6 +292,14 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		pw_properties_set(props, REAC_PROP_BOX_MODEL, "none");
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, "0x0");
 	}
+	/* THE SEGMENT'S IDENTITY, in the SLAVE role only — this node is then the
+	 * segment's door and the only node it has, so naming the segment here is what
+	 * lets a console address it without parsing a node name whose prefix is the
+	 * role (reac_segment_ident.h). A master's reac-capture is not the door; its
+	 * reac-playback sink carries this key instead, so exactly one node per
+	 * segment ever answers to it. */
+	if (props && !master_role)
+		pw_properties_set(props, REAC_PROP_SEGMENT, reac_segment_name(inst));
 
 	n->stream = pw_stream_new_simple(loop, "reac:capture", props, &stream_events, n);
 	if (!n->stream) {
@@ -361,14 +371,27 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 	pw_properties_free(props);
 }
 
-/* MAIN LOOP: the role trio on the capture node. In the MASTER role the sink
- * publishes these on reac-playback and this is never called; in the SLAVE role
- * there is no sink node at all, so this is the only place the segment's own
- * answer appears at all. Same merge semantics as publish_link above. */
-void reac_source_node_publish_role(struct reac_source_node *n,
-                                   const char *role,
-                                   const char *state,
-                                   const char *refused)
+/* MAIN LOOP: the SLAVE segment's whole published answer, in one update. In the
+ * MASTER role the sink publishes all of this on reac-playback and this is never
+ * called; in the SLAVE role there is no sink node at all, so this is the only
+ * place the segment answers for itself.
+ *
+ * ONE UPDATE, NOT TWO. The role trio and the reac.master.* aggregate move
+ * together — the hunt ending is simultaneously `applied` and a master appearing —
+ * and a reader that caught one without the other would compute a disagreement
+ * that never existed. Same MERGE semantics as publish_link above: only the keys
+ * set here change, and the create-time identity/ports/format persist untouched.
+ *
+ * WHAT IS NOT HERE IS NOT AN OMISSION. A slave publishes no reac.discovery.*
+ * (it runs no disco classifier), no reac.link-state / reac.box-* (a different
+ * FSM), no reac.rate.drivable (it drives no pace) and no reac.headamp.* (a box
+ * is told what its preamps do). Each absence is a fact a consumer reads as one;
+ * a default would be a claim. */
+void reac_source_node_publish_segment(struct reac_source_node *n,
+                                      const char *role,
+                                      const char *state,
+                                      const char *refused,
+                                      const struct reac_segment_answer *answer)
 {
 	if (!n || !n->stream)
 		return;
@@ -381,6 +404,15 @@ void reac_source_node_publish_role(struct reac_source_node *n,
 		pw_properties_set(props, REAC_PROP_ROLE_STATE, state);
 	if (refused)
 		pw_properties_set(props, REAC_PROP_ROLE_REFUSED, refused);
+	if (answer) {
+		pw_properties_set(props, REAC_PROP_MASTER_STATE, answer->master_state);
+		pw_properties_set(props, REAC_PROP_MASTER_MAC, answer->master_mac);
+		pw_properties_set(props, REAC_PROP_PACE_SOURCE, answer->pace_source);
+		pw_properties_set(props, REAC_PROP_MASTER_CONFLICT, answer->conflict);
+		pw_properties_set(props, REAC_PROP_RIVAL_KIND, answer->rival_kind);
+		pw_properties_set(props, REAC_PROP_REFUSAL, answer->refusal);
+		pw_properties_set(props, REAC_PROP_RATE, answer->rate);
+	}
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
 }

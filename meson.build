@@ -108,6 +108,7 @@ reac_pw_src = [
   'src/reac_rate_cfg.c',
   'src/reac_role_cfg.c',
   'src/reac_role_swap.c',
+  'src/reac_segment_ident.c',
   'src/reac_sink_format.c',
   'src/reac_node_ensure.c',
   'src/reac_source_node.c',
@@ -483,7 +484,8 @@ courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_slave.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
    'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c',
-   'src/reac_role_swap.c'],
+   'src/reac_role_swap.c', 'src/reac_segment_ident.c', 'src/reac_arbitration.c',
+   'src/reac_disco.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
@@ -680,8 +682,19 @@ test('reac_role_cfg', role_cfg_test)
 # master drives, with nothing transmitted). Sabotage-verified by making
 # reac_role_engine_of_slave answer PERFORMING while unestablished, which turns
 # the quiet-wire hunt into a false `applied` and reddens two cases.
+# W1 (docs/SLAVE-EMULATION-SCOPE.md) extends it to the SEGMENT'S OWN ANSWER: a
+# recorder has no reac-playback node, so its capture node must publish the same
+# addressable fact — the identity, the reac.master.* aggregate and the wire pace —
+# or the console can drive a segment to recorder and never back. Covered here:
+# reac_segment_name for both the named and the bare segment; the heard latch's
+# DECAY (a cumulative frame count would otherwise vouch for an unplugged desk
+# forever); and the slave answer table, whose strings are asserted to be
+# reac_arbitration's own (the module is linked in, not re-spelled).
+# Sabotage-verified: dropping the identity, and removing the decay.
 role_swap_test = executable('test_reac_role_swap',
-  ['tests/test_reac_role_swap.c', 'src/reac_role_swap.c', 'src/reac_seglock.c'],
+  ['tests/test_reac_role_swap.c', 'src/reac_role_swap.c', 'src/reac_seglock.c',
+   'src/reac_segment_ident.c', 'src/reac_arbitration.c', 'src/reac_disco.c',
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_role_swap', role_swap_test)

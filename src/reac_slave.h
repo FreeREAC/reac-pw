@@ -114,6 +114,16 @@ struct reac_slave {
 	uint8_t  ha_phantom[REAC_MAX_CHANNELS]; /* received +48V (state only; NOT a gain) */
 	_Atomic float ha_gain[REAC_MAX_CHANNELS]; /* precomputed linear input gain (relaxed) */
 
+	/* THE LEARNED MASTER'S MAC, PUBLISHED AS ONE ATOMIC. The FSM's own copy
+	 * (fsm.master_mac) is engine-thread state; the main loop publishes the
+	 * segment's answer from a 200 ms timer, and reading six loose bytes across
+	 * that boundary is a torn read nobody synchronises — a half-updated MAC is a
+	 * WRONG answer, not merely a stale one. Packed big-endian into the low 48
+	 * bits (reac_segment_ident.h's reac_mac48_pack/unpack); 0 until a master is
+	 * learned, which is the fact "none" is published from. Written by the engine
+	 * thread only, on the step that learns or changes the master. */
+	_Atomic uint64_t master_mac48;
+
 	/* diagnostics (read from any thread) */
 	_Atomic uint64_t rx_master_frames;  /* master downstream frames we locked to */
 	_Atomic uint64_t tx_frames;         /* upstream frames we emitted */
