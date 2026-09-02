@@ -91,6 +91,7 @@ reac_pw_src = [
   'src/reac_pace_watch.c',
   'src/reac_box_pin.c',
   'src/reac_seglock.c',
+  'src/reac_ifscan.c',
   'src/reac_arbitration.c',
   'src/reac_conf.c',
   'src/reac_rt.c',
@@ -305,6 +306,17 @@ test('reac_link_up_reestablishes',
   find_program('tests/link-up-reestablishes.sh'),
   args : [reac_pw_exe],
   timeout : 60)
+
+# --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
+# drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
+# test_reac_ifscan pins the table; this drives the real binary on a veth pair
+# with a second reac-pw mastering the peer end, inside an unprivileged user+net
+# namespace. Skips where that or PipeWire is unavailable. Timeout covers
+# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups.
+test('reac_hearing_finds_a_segment',
+  find_program('tests/hearing-finds-a-segment.sh'),
+  args : [reac_pw_exe],
+  timeout : 90)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
