@@ -63,7 +63,7 @@ so the declaration and the code cannot drift apart.
    |---|---|---|
    | 1 | **the command line** (`--rate`, `--live`, ...) | an explicit argument. **This is the layer openmixer uses** — the console owns the desk's configuration and hands it over when it launches us, which is what "omx needs to override" means in practice |
    | 2 | **the process environment** (`REAC_RATE`, `REACPW_*`) | an operator's ad-hoc override for one run, and the channel systemd's `EnvironmentFile=` delivers on. Above the files because a variable set for THIS invocation is more specific than a file describing every one |
-   | 3 | **`~/.config/reac-pw/<iface>.env`** | **per-segment.** The rig has two segments and they are not interchangeable — different boxes, different NICs, potentially different rates. This is the layer that can say so |
+   | 3 | **`<KEY>_<segment>`** — `REAC_RATE_enp131s0` | **per-segment.** The rig has two segments and they are not interchangeable — different boxes, different NICs, potentially different rates. A per-segment fact is the key suffixed with the segment's name (its interface), in any of the layers below, and it outranks the bare key in every one of them — even the environment, because systemd's `EnvironmentFile=` exports the whole of `reac-pw.env` and a bare key there is the same file speaking. Segments are discovered, not declared (the trunk-VLAN spec, amendment 2026-09-02), so there is no per-segment FILE |
    | 4 | **`~/.config/reac-pw/reac-pw.env`** | per-host: what every segment on this host shares |
    | 5 | **`~/.config/openmixer/reac.env`** | **the last resort, and it STAYS.** What makes a standalone install work with no console present. openmixer overrides it from above and shows the user the result |
    | 6 | **the built-in default** (`REAC_MASTER_DEFAULT_RATE` = 96000) | compiled in; reached only when all five above are silent |
@@ -89,7 +89,7 @@ so the declaration and the code cannot drift apart.
    ```
    reac-pw: REAC rate = 48000 Hz (4000 pps), from the command line
    reac-pw: REAC rate = 44100 Hz (3675 pps), from the process environment
-   reac-pw: REAC rate = 48000 Hz (4000 pps), from ~/.config/reac-pw/<iface>.env (per-segment)
+   reac-pw: REAC rate = 48000 Hz (4000 pps), from a per-segment key (<KEY>_<segment>) in the environment or a conf file
    reac-pw: REAC rate = 96000 Hz (8000 pps), from ~/.config/openmixer/reac.env (last resort)
    reac-pw: REAC rate = 96000 Hz (8000 pps), from the built-in default
    ```
@@ -130,13 +130,12 @@ accepting an empty value each turn the test red, and restoring turns it green.
   (docs/design/specs/2026-08-20-reac-auto-spine.md §5, the openmixer tree):
   "a SINGLE daemon manages every box... Not a daemon per NIC." What actually
   landed is `packaging/reac-pw.service` — ONE unit, no `--live`/`--rate`/
-  `--headamp` at all — opening one internal LISTENER per interface listed in
-  `~/.config/reac-pw/reac-pw.env`'s `REAC_IFACES` (the layer-4 per-host file
-  this section already names), each then reading its OWN
-  REAC_TX/REAC_ROLE/REAC_MIXER/REAC_NAME/REAC_HEADAMP/REAC_RATE from layer 3,
-  `~/.config/reac-pw/<iface>.env` — unchanged from what this file already
-  documented, just consulted by N listeners in one process instead of one
-  process per file. `packaging/reac-pw.conf` is the commented worked example
+  `--headamp` at all — opening one internal LISTENER per segment it HEARS on
+  a linked Ethernet interface (the trunk-VLAN spec there, amendment
+  2026-09-02; `REAC_IFACES` and the per-interface files retired with it), each
+  then reading its OWN REAC_TX/REAC_ROLE/REAC_MIXER/REAC_NAME/REAC_HEADAMP/
+  REAC_RATE from layer 3, the `<KEY>_<segment>` keys of the one
+  `reac-pw.env` — consulted by N listeners in one process. `packaging/reac-pw.conf` is the commented worked example
   for this rig's own two segments; `docs/RIG-MASTERS.txt` carries the cutover
   note. **`~/.config/openmixer/reac.env` stays where it is and keeps what it
   has**; it is the floor, not a stray.
