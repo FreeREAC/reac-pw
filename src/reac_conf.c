@@ -12,7 +12,7 @@ const char *reac_conf_layer_name(enum reac_conf_layer l)
 	switch (l) {
 	case REAC_CONF_ARGV:        return "the command line";
 	case REAC_CONF_ENV:         return "the process environment";
-	case REAC_CONF_SEGMENT:     return "~/.config/reac-pw/<iface>.env (per-segment)";
+	case REAC_CONF_SEGMENT:     return "a per-segment key (<KEY>_<segment>) in the environment or a conf file";
 	case REAC_CONF_HOST:        return "~/.config/reac-pw/reac-pw.env (per-host)";
 	case REAC_CONF_LAST_RESORT: return "~/.config/openmixer/reac.env (last resort)";
 	case REAC_CONF_BUILTIN:     return "the built-in default";
@@ -80,12 +80,10 @@ int reac_conf_read_file(const char *path, const char *key, char *out, size_t cap
 	return hit;
 }
 
-enum reac_conf_layer reac_conf_lookup(const char *key, const char *iface,
-                                      const char *home, char *out, size_t cap)
+/* The bare key through layers 2, 4 and 5, in that order. `home` is non-NULL here. */
+static enum reac_conf_layer lookup_bare(const char *key, const char *home,
+                                        char *out, size_t cap)
 {
-	if (!key || !out || cap == 0)
-		return REAC_CONF_NONE;
-
 	/* Layer 2 — the process environment. */
 	const char *e = getenv(key);
 	if (e && *e) {
@@ -93,20 +91,7 @@ enum reac_conf_layer reac_conf_lookup(const char *key, const char *iface,
 		return REAC_CONF_ENV;
 	}
 
-	if (!home)
-		home = getenv("HOME");
-	if (!home || !*home)
-		return REAC_CONF_NONE;   /* no home, no files; env was the only chance */
-
 	char path[1024];
-
-	/* Layer 3 — per-segment. Skipped when the caller has no interface, which is
-	 * the honest thing to do: a per-segment file cannot answer for "no segment". */
-	if (iface && *iface) {
-		snprintf(path, sizeof path, "%s/.config/reac-pw/%s.env", home, iface);
-		if (reac_conf_read_file(path, key, out, cap))
-			return REAC_CONF_SEGMENT;
-	}
 
 	/* Layer 4 — per-host, every segment. */
 	snprintf(path, sizeof path, "%s/.config/reac-pw/reac-pw.env", home);
@@ -122,4 +107,48 @@ enum reac_conf_layer reac_conf_lookup(const char *key, const char *iface,
 		return REAC_CONF_LAST_RESORT;
 
 	return REAC_CONF_NONE;
+}
+
+enum reac_conf_layer reac_conf_lookup(const char *key, const char *segment,
+                                      const char *home, char *out, size_t cap)
+{
+	if (!key || !out || cap == 0)
+		return REAC_CONF_NONE;
+
+	if (!home)
+		home = getenv("HOME");
+	if (!home || !*home) {
+		/* No home, no files; the environment is the only chance, and the
+		 * per-segment key still outranks the bare one there. */
+		char seg_key[256];
+		if (segment && *segment) {
+			snprintf(seg_key, sizeof seg_key, "%s_%s", key, segment);
+			const char *e = getenv(seg_key);
+			if (e && *e) {
+				snprintf(out, cap, "%s", e);
+				return REAC_CONF_SEGMENT;
+			}
+		}
+		const char *e = getenv(key);
+		if (!e || !*e)
+			return REAC_CONF_NONE;
+		snprintf(out, cap, "%s", e);
+		return REAC_CONF_ENV;
+	}
+
+	/* Layer 3 — per-segment: the key SUFFIXED with the segment's name, in any
+	 * of the layers below, before the bare key in any of them. Skipped when the
+	 * caller has no segment, which is the honest thing to do: a per-segment key
+	 * cannot answer for "no segment". It sits ABOVE the bare key in every layer
+	 * because systemd's EnvironmentFile= exports reac-pw.env into the process
+	 * environment: a bare REAC_ROLE=master there must not outrank the
+	 * REAC_ROLE_<segment> the console wrote for one segment in the same file. */
+	if (segment && *segment) {
+		char seg_key[256];
+		snprintf(seg_key, sizeof seg_key, "%s_%s", key, segment);
+		if (lookup_bare(seg_key, home, out, cap) != REAC_CONF_NONE)
+			return REAC_CONF_SEGMENT;
+	}
+
+	return lookup_bare(key, home, out, cap);
 }
