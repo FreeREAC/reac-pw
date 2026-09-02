@@ -24,6 +24,7 @@
  * decodes, with the cdea/cfea control frames interspersed ~1/s. */
 
 #include "reac_sink_node.h"
+#include "reac_segment_ident.h" /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
 #include "reac_tx.h"
 #include "reac_pacer.h"
@@ -34,6 +35,7 @@
 #include "reac_sink_format.h"    /* the Format pod + renegotiate decision (#4.3) */
 #include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
+#include "reac_role_swap.h"      /* the swap's LIFECYCLE answer (arbitration §8) */
 #include "reac_link_state.h"
 #include "reac_linkmon.h"   /* the RTM_NEWLINK carrier watch (#95) */
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
@@ -196,6 +198,14 @@ struct reac_sink_node {
 	enum reac_role_refuse role_refused;
 	const char *role_state_last;
 	enum reac_role_refuse role_refused_last;
+
+	/* The SEGMENT's role lifecycle, borrowed from the listener that owns it
+	 * (main.c wires it with reac_sink_node_set_role_swap). It outlives this
+	 * node deliberately: a swap DESTROYS this node, so a record kept here
+	 * could never answer for the half of the swap that happens after it. NULL
+	 * when nothing wired one (a unit harness), and then role_state is the
+	 * decision core's own answer, unchanged. */
+	struct reac_role_swap *role_swap;
 
 	/* #208: the peer reac-capture node's SLOT (main's `&src`), so the same log-timer
 	 * that keeps THIS sink's badge live also drives the source's — that node has no
@@ -652,14 +662,25 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		n->role_refused = role_parsed < 0 ? REAC_ROLE_REFUSE_MALFORMED
 		                                  : REAC_ROLE_REFUSE_NONE;
 		if (n->role_refused == REAC_ROLE_REFUSE_NONE) {
-			n->role_state = reac_role_cfg_apply_state(REAC_ROLE_MASTER, req_role);
-			/* A role CHANGE is the cross-engine swap: stash it for main's poll timer to
-			 * apply as a clean listener re-open (master engine down, slave engine up).
-			 * This node exists only in the master role, so a change is always -> slave. */
-			if (reac_role_cfg_changes(REAC_ROLE_MASTER, req_role))
-				atomic_store_explicit(&n->reopen_role, (int)req_role + 1, memory_order_relaxed);
+			/* THE ASSERTION IS RECORDED ON THE SEGMENT, NOT ON THIS NODE. A role
+			 * change destroys this node (the swap tears the master engine down),
+			 * so an answer stored here would vanish exactly when it is owed. The
+			 * listener's record survives both engines and reac_role_swap_state
+			 * derives the answer from it on every publish. */
+			if (n->role_swap) {
+				if (reac_role_swap_request(n->role_swap, req_role))
+					atomic_store_explicit(&n->reopen_role, (int)req_role + 1,
+					                      memory_order_relaxed);
+			} else {
+				/* No listener behind this node (a unit harness): the decision
+				 * core's own answer, which never claims a swap happened. */
+				n->role_state = reac_role_cfg_apply_state(REAC_ROLE_MASTER, req_role);
+				if (reac_role_cfg_changes(REAC_ROLE_MASTER, req_role))
+					atomic_store_explicit(&n->reopen_role, (int)req_role + 1,
+					                      memory_order_relaxed);
+			}
 		}
-		/* A refusal leaves role_state exactly as it was: the malformed write
+		/* A refusal leaves the answer exactly as it was: the malformed write
 		 * changed nothing about the running role, so its answer should not
 		 * look like it did either. */
 	}
@@ -1002,22 +1023,35 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
  * cross-thread atomic to read because this increment's role apply never
  * reaches the pacer/RT thread at all (reac_role_cfg.h's HONESTY note).
  *
- * reac.role reports the FACT that this node is running, not the console's
+ * reac.role reports the FACT that this node is running, never the console's
  * latest reac.cfg.role request: this node exists ONLY in the master role
- * (reac_sink_node_new is never called for a slave), and the cross-engine
- * swap a role-changing assertion would need is exactly what this increment
- * does not perform — so the observed role stays master, honestly, even while
- * reac.cfg.role.state says a change is pending. Publishing anything else
- * here would be the "fake success" this module's header explicitly refuses
- * to produce. */
+ * (reac_sink_node_new is never called for a slave), so while it is alive the
+ * running role IS master — even while reac.cfg.role.state says a change is
+ * owed. Publishing anything else here would be the "fake success"
+ * reac_role_cfg.h refuses to produce.
+ *
+ * reac.cfg.role.state is DERIVED on every publish, from the listener's swap
+ * record and this master's own FSM (reac_role_swap.h) — never a string frozen
+ * at the moment the assertion was parsed. A master performs its role by pacing
+ * its wire, so PROBING onward reads `applied`; the sub-millisecond IDLE
+ * transient before the first frame, and every window in which the wrong engine
+ * (or none) owns the segment, read honestly instead. */
 static void sink_publish_role_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
 		return;
 
-	if (n->role_state == n->role_state_last && n->role_refused == n->role_refused_last)
+	const char *state = n->role_state;
+	if (n->role_swap) {
+		enum reac_master_state fsm = (enum reac_master_state)
+			atomic_load_explicit(&n->pacer.fsm_state, memory_order_acquire);
+		state = reac_role_swap_state(n->role_swap,
+		                             reac_role_engine_of_master(n->pacer_open, fsm));
+	}
+
+	if (state == n->role_state_last && n->role_refused == n->role_refused_last)
 		return;                          /* unchanged: do not spam the update */
-	n->role_state_last = n->role_state;
+	n->role_state_last = state;
 	n->role_refused_last = n->role_refused;
 
 	char role_s[4];
@@ -1025,7 +1059,7 @@ static void sink_publish_role_props(struct reac_sink_node *n)
 
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_ROLE,         role_s,
-		REAC_PROP_ROLE_STATE,   n->role_state,
+		REAC_PROP_ROLE_STATE,   state,
 		REAC_PROP_ROLE_REFUSED, reac_role_refuse_code(n->role_refused),
 		NULL);
 	if (props) {
@@ -1396,6 +1430,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
 			PW_KEY_NODE_NAME, nodename,
 			PW_KEY_NODE_DESCRIPTION, desc,
+			/* THE SEGMENT'S IDENTITY (reac_segment_ident.h). This node is the
+			 * master role's door — it accepts reac.cfg.rate / reac.cfg.role and
+			 * publishes the answer — so it is the node that names the segment.
+			 * A console keys its row on this value instead of parsing the node
+			 * name, which is what makes the same segment addressable when the
+			 * role swaps and the reac-capture node carries the key instead. */
+			REAC_PROP_SEGMENT, reac_segment_name(n->inst),
 			/* NO node.rate: on a filter that was a REQUEST for the graph to run at
 			 * the REAC rate, which an RME-driven graph refuses. The rate that matters
 			 * is the one in our FORMAT, which the adapter resamples from. */
@@ -1497,6 +1538,12 @@ int reac_sink_node_take_reopen_role(struct reac_sink_node *n)
 {
 	int r = n ? atomic_exchange_explicit(&n->reopen_role, 0, memory_order_relaxed) : 0;
 	return r ? r - 1 : -1;
+}
+
+void reac_sink_node_set_role_swap(struct reac_sink_node *n, struct reac_role_swap *swap)
+{
+	if (n)
+		n->role_swap = swap;
 }
 
 struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,

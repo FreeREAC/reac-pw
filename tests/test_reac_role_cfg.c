@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_role_cfg — the `reac.cfg.role` decision core
+/* reac_role_cfg — the `reac.cfg.role` DECISION core
  * (2026-08-26-reac-runtime-config.md, the ROLE half). Pure, no socket, no RT
  * privilege — same style as test_reac_rate_cfg.c's part 1 (its own decision
- * core). Unlike rate, there is no pacer-level section to add here: this
- * increment's own honesty clause (reac_role_cfg.h) documents that applying a
- * role CHANGE would need a cross-engine swap (master's reac_sink_node +
- * reac_pacer vs. a slave's reac_slave — two different engines) this increment
- * does not perform without a real NIC to prove the re-attach against. What IS
- * covered, completely: the parse, the same-role-is-a-no-op detection, and the
- * state string a request publishes — including that a role-changing
- * assertion answers `role_reestablish_pending` and never `applied`. */
+ * core). Unlike rate there is no pacer-level section here, because a role change
+ * does not happen inside one engine: master and slave are two of them, and the
+ * swap plus the answer it owes afterwards belong to reac_role_swap
+ * (tests/test_reac_role_swap.c). What this file covers, completely: the parse,
+ * the same-role-is-a-no-op detection, and the state a request publishes with
+ * nothing carrying it out — including that a role-changing assertion answers
+ * `role_reestablish_pending` and never `applied`. */
 #include "reac_role_cfg.h"
 #include "reac_role.h"
 

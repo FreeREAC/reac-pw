@@ -24,10 +24,9 @@ int main(int argc, char **argv)
 	char cmd[4096];
 	/* ASK FOR HELP EXPLICITLY. This used to run the binary with no arguments and
 	 * rely on that printing usage — which stopped being true when the packaged
-	 * (no-argument) shape started reading REAC_IFACES from the layered conf: on a
-	 * host that HAS a segment configured, a bare run is a real start. `--help` is
-	 * the question this test is actually asking, and its answer is the same text
-	 * on every host. */
+	 * (no-argument) shape became a real start: the daemon hears its segments, so
+	 * a bare run listens rather than explains. `--help` is the question this
+	 * test is actually asking, and its answer is the same text on every host. */
 	snprintf(cmd, sizeof cmd, "%s --help 2>&1", argv[1]);
 	FILE *p = popen(cmd, "r");
 	if (!p) {

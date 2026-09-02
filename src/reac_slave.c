@@ -503,6 +503,16 @@ static void *slave_loop(void *arg)
 		struct reac_slave_decision d = reac_slave_step_rx(s, &p);
 		memcpy(uni_sll.sll_addr, s->fsm.master_mac, 6);  /* learned this step */
 
+		/* Publish the learned master to the main loop's segment answer, as one
+		 * atomic (reac_slave.h). Stored only when it MOVES, so the established
+		 * steady state costs a compare and not a store on every one of the
+		 * 8000 frames a second this loop runs at. */
+		if (s->fsm.have_master) {
+			uint64_t mac48 = reac_mac48_pack(s->fsm.master_mac);
+			if (mac48 != atomic_load_explicit(&s->master_mac48, memory_order_relaxed))
+				atomic_store_explicit(&s->master_mac48, mac48, memory_order_relaxed);
+		}
+
 		/* Follow the master clock (the M-200i is the word-clock master): override
 		 * the FSM's free-running counter with one LOCKED to the master's downstream
 		 * counter at a fixed offset, latched at first lock. A real box's upstream

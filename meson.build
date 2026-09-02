@@ -91,6 +91,7 @@ reac_pw_src = [
   'src/reac_pace_watch.c',
   'src/reac_box_pin.c',
   'src/reac_seglock.c',
+  'src/reac_ifscan.c',
   'src/reac_arbitration.c',
   'src/reac_conf.c',
   'src/reac_rt.c',
@@ -107,6 +108,8 @@ reac_pw_src = [
   'src/reac_headamp_prop.c',
   'src/reac_rate_cfg.c',
   'src/reac_role_cfg.c',
+  'src/reac_role_swap.c',
+  'src/reac_segment_ident.c',
   'src/reac_sink_format.c',
   'src/reac_node_ensure.c',
   'src/reac_source_node.c',
@@ -256,6 +259,17 @@ test('reac_link_edge_observed',
   args : [linkmon_test],
   timeout : 30)
 
+# --- unit test: WHICH interfaces are listened on, and which are segments -----
+# The autodetect table (openmixer trunk-VLAN spec, amendment 2026-09-02): a NIC
+# with link is sniffed, the first REAC frame makes it a segment, a flap shorter
+# than the hold changes nothing, a longer loss drops it, DELLINK drops at once.
+# The netlink half is fed kernel-shaped datagrams; the live arm dumps the real
+# host through the same parser (unprivileged).
+ifscan_test = executable('test_reac_ifscan',
+  ['tests/test_reac_ifscan.c', 'src/reac_ifscan.c'],
+  include_directories : [include_directories('src')])
+test('reac_ifscan', ifscan_test)
+
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
    'src/reac_pace_watch.c'],
@@ -292,6 +306,17 @@ test('reac_link_up_reestablishes',
   find_program('tests/link-up-reestablishes.sh'),
   args : [reac_pw_exe],
   timeout : 60)
+
+# --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
+# drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
+# test_reac_ifscan pins the table; this drives the real binary on a veth pair
+# with a second reac-pw mastering the peer end, inside an unprivileged user+net
+# namespace. Skips where that or PipeWire is unavailable. Timeout covers
+# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups.
+test('reac_hearing_finds_a_segment',
+  find_program('tests/hearing-finds-a-segment.sh'),
+  args : [reac_pw_exe],
+  timeout : 90)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
@@ -481,7 +506,9 @@ test('reac_vboxgain', vboxgain_test)
 courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_slave.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
-   'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c'],
+   'src/reac_headamp_tx.c', 'src/reac_ring.c', 'src/reac_tx.c', 'src/reac_mac.c',
+   'src/reac_role_swap.c', 'src/reac_segment_ident.c', 'src/reac_arbitration.c',
+   'src/reac_disco.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
@@ -647,25 +674,53 @@ rate_cfg_test = executable('test_reac_rate_cfg',
 test('reac_rate_cfg', rate_cfg_test)
 
 # --- unit test: reac.cfg.role — the ROLE half of runtime config ---------------
-# (2026-08-26-reac-runtime-config.md). Pure decision core only (reac_role_cfg.c:
-# the parse, the same-role-is-a-no-op detection, the state string a request
-# publishes) — there is no pacer-level re-establish to exercise here at all,
-# because this increment's own honesty clause (reac_role_cfg.h) is that the
-# cross-engine swap a role CHANGE would need (master's reac_sink_node+
-# reac_pacer vs. a slave's reac_slave — two different engines, each owning its
-# own AF_PACKET socket) is a documented stub: it is decided and answered, never
-# silently dropped and never faked as applied, but not actually carried out
-# without a real NIC to prove the re-attach against. Proves: role 0/1 parse
-# (Int and the Float-bridge tolerance), a malformed value refuses, a same-role
-# assertion is an idempotent "applied" no-op, and a role-changing assertion
-# answers "role_reestablish_pending" — and stays there, sabotage-verified by
-# flipping the state string comparison in reac_role_cfg_apply_state to prove
-# the shape-identity test actually distinguishes the two answers.
+# (2026-08-26-reac-runtime-config.md). The DECISION core only: the parse, the
+# same-role-is-a-no-op detection, and the state a request publishes when nothing
+# behind it is carrying the change out. The swap itself and its lifecycle are
+# reac_role_swap's (next block) — this module keeps the pure decision and knows
+# nothing about engines. Proves: role 0/1 parse (Int and the Float-bridge
+# tolerance), a malformed value refuses, a same-role assertion is an idempotent
+# "applied" no-op, and a role-changing assertion answers
+# "role_reestablish_pending" — sabotage-verified by flipping the state string
+# comparison in reac_role_cfg_apply_state to prove the shape-identity test
+# actually distinguishes the two answers.
 role_cfg_test = executable('test_reac_role_cfg',
   ['tests/test_reac_role_cfg.c', 'src/reac_role_cfg.c'],
   include_directories : [include_directories('src')],
   dependencies : [spa_dep])
 test('reac_role_cfg', role_cfg_test)
+
+# --- unit test: reac_role_swap — what the segment ANSWERS across the swap -----
+# (2026-08-20-reac-master-arbitration.md §8). reac_role_cfg decides an
+# assertion; this covers the window afterwards, where master and slave are two
+# different engines and the segment briefly belongs to neither. Proves the one
+# property that matters: `applied` is unreachable until the NEW engine is doing
+# the job, and "doing the job" is a DIFFERENT rule per role — a master by pacing
+# its own wire (PROBING onward), a slave only by being enrolled, so a recorder
+# asked for on a quiet wire answers `role_hunting` for as long as the hunt lasts
+# and never `applied`. Also walks the round trip master->slave->master, pins
+# head-amp emission to the RUNNING master engine across it, and proves the
+# SEGMENT LOCK genuinely changes hands (reac_seglock claimed, proven to exclude a
+# second claimant, released, claimable again — on `lo`, an inert name no REAC
+# master drives, with nothing transmitted). Sabotage-verified by making
+# reac_role_engine_of_slave answer PERFORMING while unestablished, which turns
+# the quiet-wire hunt into a false `applied` and reddens two cases.
+# W1 (docs/SLAVE-EMULATION-SCOPE.md) extends it to the SEGMENT'S OWN ANSWER: a
+# recorder has no reac-playback node, so its capture node must publish the same
+# addressable fact — the identity, the reac.master.* aggregate and the wire pace —
+# or the console can drive a segment to recorder and never back. Covered here:
+# reac_segment_name for both the named and the bare segment; the heard latch's
+# DECAY (a cumulative frame count would otherwise vouch for an unplugged desk
+# forever); and the slave answer table, whose strings are asserted to be
+# reac_arbitration's own (the module is linked in, not re-spelled).
+# Sabotage-verified: dropping the identity, and removing the decay.
+role_swap_test = executable('test_reac_role_swap',
+  ['tests/test_reac_role_swap.c', 'src/reac_role_swap.c', 'src/reac_seglock.c',
+   'src/reac_segment_ident.c', 'src/reac_arbitration.c', 'src/reac_disco.c',
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_mac.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_role_swap', role_swap_test)
 
 # --- unit test: reac_sink_format — the reac-playback node's Format pod and ---
 # the renegotiate decision (2026-08-26-clock-tabs-and-reac-pace-coupling.md

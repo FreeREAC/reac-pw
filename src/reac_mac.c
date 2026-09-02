@@ -50,3 +50,23 @@ int reac_mac_default_src(const char *ifname, uint8_t out[6])
 	return reac_mac_compose(ifr.ifr_hwaddr.sa_family,
 	                        (const uint8_t *)ifr.ifr_hwaddr.sa_data, out);
 }
+
+uint64_t reac_mac48_pack(const uint8_t mac[6])
+{
+	uint64_t v = 0;
+	if (!mac)
+		return 0;
+	for (int i = 0; i < 6; i++)
+		v = (v << 8) | (uint64_t)mac[i];
+	return v;
+}
+
+void reac_mac48_unpack(uint64_t packed, uint8_t out[6])
+{
+	if (!out)
+		return;
+	for (int i = 5; i >= 0; i--) {
+		out[i] = (uint8_t)(packed & 0xffu);
+		packed >>= 8;
+	}
+}

@@ -29,6 +29,8 @@
 #include "reac_slave.h"
 #include "reac_ctrl.h"
 #include "reac_fsm.h"
+#include "reac_role_swap.h"   /* the role lifecycle answers off THESE FSMs */
+#include "reac_segment_ident.h" /* W1: the SEGMENT's answer, off the same FSMs */
 #include "reac_tx.h"
 #include <reac/reac.h>
 #include <reac/reac_encode.h>
@@ -53,6 +55,10 @@ struct court {
 	long m_probes, m_subs, m_announces, m_grants, m_chanmaps, m_enrolls;
 	long s_joins_fed, s_unicasts_fed, s_heartbeats_fed, s_floods_fed;
 	long s_configs_fed;            /* box config-announces the master RECOGNIZED */
+	/* Master downstream frames the SLAVE decoded — the same thing reac_rx's
+	 * frames_ok counts on a real wire under REAC_RX_ACCEPT_DOWNSTREAM, and the
+	 * evidence the segment's heard-latch is stepped from (reac_segment_ident.h). */
+	uint64_t s_downstream_seen;
 	unsigned cc_phase;             /* the box's cold-connect frame rotation */
 	int  m_granted_before_join;    /* the #130 regression flag */
 	int  slave_on;                 /* feed slave frames into the master? */
@@ -94,6 +100,7 @@ static int step(struct court *c)
 		return 0;
 
 	/* --- the slave sees the master frame (frame-arrival = its clock) ----- */
+	c->s_downstream_seen++;
 	struct reac_ctrl_parsed pm;
 	reac_ctrl_parse(mf, REAC_FRAME_BYTES, &pm);
 	struct reac_slave_decision d = reac_slave_step_rx(&c->s, &pm);
@@ -180,6 +187,51 @@ static int step(struct court *c)
 	return 0;
 }
 
+/* THE OPERATOR'S CASE, DRIVEN BY THE REAL SLAVE FSM: asked to be the recorder
+ * end on a wire with no desk on it. The engine is up and announcing — the
+ * bounded broadcast FILLER flood is a box's presence announcement — and it never
+ * links, because it has nothing to link to: reac_fsm hands off to the unicast
+ * cold-connect only once the master MAC is LEARNED, and on a silent wire it
+ * never is. So the honest terminal here is the flood, and the role answer must
+ * SAY the hunt for the whole of it and never reach `applied` (arbitration §8; a
+ * "recorder applied" lamp over a desk that is not there is the lie this pins
+ * shut). The OTHER hunt — cold-connecting a master that has been heard but has
+ * not granted — is walked with real golden frames in the establishment loop of
+ * main() below. */
+static int test_quiet_wire_recorder_never_leaves_the_hunt(void)
+{
+	struct reac_slave s;
+	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = 16,
+	                               .sample_rate = 96000, .src_mac = S_SRC };
+	reac_slave_fsm_init(&s, &scfg);
+
+	struct reac_role_swap sw;
+	reac_role_swap_init(&sw, REAC_ROLE_MASTER);      /* booted as the mixer end */
+	CHK(reac_role_swap_request(&sw, REAC_ROLE_SLAVE) != 0);   /* the console asks */
+	reac_role_swap_closed(&sw);                      /* the master engine goes down */
+	CHK(strcmp(reac_role_swap_state(&sw, REAC_ROLE_ENGINE_DOWN),
+	           REAC_ROLE_STATE_REESTABLISH_PENDING) == 0);
+	reac_role_swap_opened(&sw, REAC_ROLE_SLAVE);     /* the slave engine comes up */
+
+	struct reac_slave_decision d = reac_slave_step_phy(&s, 1);
+	CHK(d.state == FSM_FLOOD_ANNOUNCE);
+
+	/* PRESENCE BEFORE ABSENCE: the engine must actually be DOING something, or
+	 * "never established" would be true of a slave that never started. */
+	int flooded = 0;
+	for (long i = 0; i < 10L * FPS; i++) {
+		d = reac_slave_step_tick(&s);
+		if (d.emit == REAC_SLAVE_EMIT_FLOOD_FILLER) flooded++;
+		CHK(d.state != FSM_ESTABLISHED);
+		CHK(s.fsm.have_master == 0);   /* nothing to learn on a silent wire */
+		CHK(strcmp(reac_role_swap_state(&sw,
+		           reac_role_engine_of_slave(1, s.fsm.state == FSM_ESTABLISHED)),
+		           REAC_ROLE_STATE_HUNTING) == 0);
+	}
+	CHK(flooded > 0);          /* it announced: a real, live hunt, not a dead engine */
+	return 0;
+}
+
 int main(void)
 {
 	struct court c;
@@ -201,15 +253,59 @@ int main(void)
 	CHK(c.m_chanmaps > 0);         /* §4: chanmap advertised while unlinked too */
 	CHK(c.m_subs > 0);             /* the sub01/sub02 keepalives flow too */
 
+	/* THE ROLE ANSWER, READ OFF THIS VERY FSM (arbitration §8). A master alone
+	 * on the wire is PERFORMING its role — it holds the segment, it paces, it
+	 * probes — so the mixer end reads `applied` with no box in sight. That
+	 * asymmetry against the slave (below) is the whole reason the lifecycle
+	 * core exists. */
+	struct reac_role_swap sw_m;
+	reac_role_swap_init(&sw_m, REAC_ROLE_MASTER);
+	reac_role_swap_opened(&sw_m, REAC_ROLE_MASTER);
+	CHK(strcmp(reac_role_swap_state(&sw_m,
+	           reac_role_engine_of_master(1, c.m.state)),
+	           REAC_ROLE_STATE_APPLIED) == 0);
+
 	/* 2. the box PHY comes up: it floods + JOINs; the master grants ONLY
 	 * after the cold-connect, both sides walk the golden ordering. */
 	struct reac_slave_decision d0 = reac_slave_step_phy(&c.s, 1);
 	CHK(d0.state == FSM_FLOOD_ANNOUNCE);
 	c.slave_on = 1;
 
+	/* The recorder end's own record, walked with the golden frames: `applied` is
+	 * unreachable for it until the master has enrolled it, so every flood,
+	 * cold-connect and TX-mute slot on the way there answers `role_hunting`. */
+	struct reac_role_swap sw_join;
+	reac_role_swap_init(&sw_join, REAC_ROLE_SLAVE);
+	reac_role_swap_opened(&sw_join, REAC_ROLE_SLAVE);
+
+	/* W1: THE SEGMENT'S OWN ANSWER, walked beside the role's. A recorder has no
+	 * reac-playback node, so this is everything a console can read about it —
+	 * and before the desk is heard, "everything" must be a set of honest
+	 * absences, not defaults dressed as facts. The latch is stepped from the
+	 * master frames this slave actually decodes, which is what reac_rx counts on
+	 * a real wire. */
+	struct reac_segment_heard heard;
+	struct reac_segment_answer ans;
+	reac_segment_heard_init(&heard, 0);
+	reac_segment_answer_slave(&ans, heard.heard, 0, 96000);
+	CHK(strcmp(ans.master_state, "none") == 0);
+	CHK(strcmp(ans.master_mac, "none") == 0);
+	CHK(strcmp(ans.pace_source, "free-run") == 0);
+	CHK(strcmp(ans.rival_kind, "none") == 0);
+
 	long slot_master_established = -1, slot_slave_established = -1;
 	for (long i = 0; i < 5L * FPS; i++) {
 		CHK(step(&c) == 0);
+		if (c.s.fsm.state != FSM_ESTABLISHED)
+			CHK(strcmp(reac_role_swap_state(&sw_join,
+			           reac_role_engine_of_slave(1, 0)),
+			           REAC_ROLE_STATE_HUNTING) == 0);
+		/* The aggregate follows the SAME wire, slot by slot: the desk is being
+		 * heard from the first decoded downstream frame — before the grant, and
+		 * before `applied` — because presence and enrolment are two facts. */
+		reac_segment_heard_step(&heard, c.s_downstream_seen,
+		                        REAC_SEGMENT_HEARD_QUIET_TICKS);
+		CHK(heard.heard == 1);
 		if (slot_slave_established < 0 && c.s.fsm.state == FSM_ESTABLISHED)
 			slot_slave_established = i;
 		if (slot_master_established < 0 && c.m.state == REAC_M_ESTABLISHED)
@@ -229,6 +325,38 @@ int main(void)
 	CHK(memcmp(c.m.box_mac, S_SRC, 6) == 0);  /* the box we latched */
 	CHK(memcmp(c.s.fsm.master_mac, M_SRC, 6) == 0);   /* the master it learned */
 	CHK(memcmp(c.m.join_blk, "\x04\x03", 2) == 0);    /* captured its cold-connect block */
+
+	/* Both ends, answered off the established FSMs: the slave reaches `applied`
+	 * only HERE — enrolled by a master — which is the fact the quiet-wire case
+	 * below proves it cannot reach on its own. */
+	struct reac_role_swap sw_s;
+	reac_role_swap_init(&sw_s, REAC_ROLE_SLAVE);
+	reac_role_swap_opened(&sw_s, REAC_ROLE_SLAVE);
+	CHK(strcmp(reac_role_swap_state(&sw_s,
+	           reac_role_engine_of_slave(1, c.s.fsm.state == FSM_ESTABLISHED)),
+	           REAC_ROLE_STATE_APPLIED) == 0);
+	CHK(strcmp(reac_role_swap_state(&sw_m,
+	           reac_role_engine_of_master(1, c.m.state)),
+	           REAC_ROLE_STATE_APPLIED) == 0);
+
+	/* W1, ESTABLISHED: the recorder's node now carries the whole segment. The
+	 * MAC is the one the FSM LEARNED off the wire in this very simulation — not
+	 * a constant restated — carried through the packed atomic the engine thread
+	 * publishes it as, so a byte lost in that crossing would fail here. And the
+	 * geometry: the frames this slave decoded are the 40-channel master
+	 * downstream its gate accepts and nothing else, so the answer is `desk` by
+	 * the master's own classifier. That is the value the console's role policy
+	 * needs to join what it is joined to rather than report it as a rival. */
+	reac_segment_answer_slave(&ans, heard.heard,
+	                          reac_mac48_pack(c.s.fsm.master_mac), 96000);
+	CHK(strcmp(ans.master_state, "foreign") == 0);
+	CHK(strcmp(ans.master_mac, "00:40:ab:00:00:01") == 0);
+	CHK(memcmp(M_SRC, "\x00\x40\xab\x00\x00\x01", 6) == 0);  /* the MAC just named */
+	CHK(strcmp(ans.pace_source, "foreign-master") == 0);
+	CHK(strcmp(ans.rival_kind, "desk") == 0);
+	CHK(strcmp(ans.refusal, "none") == 0);      /* a desk is JOINED, not refused */
+	CHK(strcmp(ans.conflict, "0") == 0);        /* a slave masters nothing to dispute */
+	CHK(strcmp(ans.rate, "96000") == 0);
 
 	/* 3. steady state holds >= 5 simulated seconds: the slave's upstream
 	 * flood + heartbeats hold our 600 budget; our chanmap+cfea hold its HOLD.
@@ -254,9 +382,38 @@ int main(void)
 	CHK(c.m.state == REAC_M_PROBING);         /* the last frame drains the budget */
 	CHK(c.m.drop_reason == REAC_M_DROP_PEER_GONE);
 
+	/* W1, THE OTHER DIRECTION OF THE SAME EVIDENCE: the desk stops. The frame
+	 * count is cumulative and cannot fall, so only the latch's decay stops the
+	 * segment reporting a master that has gone — and until it does, the answer
+	 * must not flip early either. Both halves are asserted, because a latch that
+	 * cleared immediately would pass a test that only checked it eventually
+	 * cleared. */
+	uint64_t frozen = c.s_downstream_seen;
+	/* The tick that observes the LAST frame to arrive — the desk was still
+	 * talking through the steady-state and peer-gone loops above, so the latch
+	 * catches up here and the decay is counted from this point, not from a stale
+	 * reading taken before all of it. */
+	CHK(reac_segment_heard_step(&heard, frozen,
+	                            REAC_SEGMENT_HEARD_QUIET_TICKS) == 1);
+	for (int i = 0; i < REAC_SEGMENT_HEARD_QUIET_TICKS - 1; i++)
+		CHK(reac_segment_heard_step(&heard, frozen,
+		                            REAC_SEGMENT_HEARD_QUIET_TICKS) == 1);
+	CHK(reac_segment_heard_step(&heard, frozen,
+	                            REAC_SEGMENT_HEARD_QUIET_TICKS) == 0);
+	reac_segment_answer_slave(&ans, heard.heard,
+	                          reac_mac48_pack(c.s.fsm.master_mac), 96000);
+	CHK(strcmp(ans.master_state, "none") == 0);
+	CHK(strcmp(ans.rival_kind, "none") == 0);
+	CHK(strcmp(ans.pace_source, "free-run") == 0);
+
+	if (test_quiet_wire_recorder_never_leaves_the_hunt()) return 1;
+
 	printf("OK: full offline courtship — master probes first, grants only on the "
 	       "box's cold-connect (echoed), box links off the grant, master links off "
 	       "the box's first unicast, 5 s steady HOLD both ways, peer-gone at "
-	       "exactly %d silent slots\n", c.m.link_check_reload);
+	       "exactly %d silent slots; the role answer walks the same FSMs and a "
+	       "recorder on a quiet wire stays in the hunt; the SEGMENT answers "
+	       "beside it in both roles and stops naming a desk that has gone\n",
+	       c.m.link_check_reload);
 	return 0;
 }
