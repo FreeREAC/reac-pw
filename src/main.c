@@ -1316,11 +1316,15 @@ static void hearing_serve(struct hearing *h, const char *name)
 	}
 	snprintf(L->cfg.tag, sizeof L->cfg.tag, "[%s] ", name);
 	reac_role_swap_init(&L->role_swap, L->cfg.role);
-	if (listener_open(L, h->loop) != 0 || reac_rx_start(&L->rx) != 0) {
-		if (L->rx.ring)
-			listener_close(L, h->loop);
-		L->opened = 0;
-		L->rx_started = 0;
+	/* listener_open cleans up after its own refusal (its contract); a feeder
+	 * that will not start leaves an opened listener to close, as in main(). */
+	int up = listener_open(L, h->loop) == 0;
+	if (up && reac_rx_start(&L->rx) != 0) {
+		listener_close(L, h->loop);
+		up = 0;
+	}
+	if (!up) {
+		memset(L, 0, sizeof *L);
 		fprintf(stderr, "reac-pw: [%s] heard, but the segment did not come up — sniffing "
 		        "again in %d s\n", name, (int)(REAC_IFSCAN_RETRY_NS / 1000000000ULL));
 		reac_ifscan_serve_failed(&h->scan, name, monotonic_ns());
