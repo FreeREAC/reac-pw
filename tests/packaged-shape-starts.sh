@@ -1,29 +1,33 @@
 #!/bin/bash
-# The PACKAGED SHAPE: `reac-pw` with NO arguments must read REAC_IFACES from the
-# layered conf and try to start, not print usage and exit.
+# The PACKAGED SHAPE: `reac-pw` with NO arguments must try to START — hearing its
+# segments on every linked interface — and never answer with the usage text.
 #
-# This is the shape auto-spine §5 gives the unit, and it was unreachable: an
-# `argc < 2` guard answered before the conf was ever consulted, so the packaged
-# service could never start and the config-once design was dead on arrival.
-# Measured 2026-08-31 on the rig while retiring the hand-run.
+# This is the shape the unit gives the daemon (ExecStart=/usr/bin/reac-pw, no
+# flags), and nothing is configured for it: REAC_IFACES retired with the
+# per-interface files (openmixer's trunk-VLAN spec, amendment 2026-09-02). An
+# `argc < 2` guard once answered usage before anything else and made the
+# packaged service unstartable; measured 2026-08-31 on the rig.
 #
-# The test does NOT need a NIC. It asserts the two ends of the decision:
-#   - with nothing configured, bare `reac-pw` still explains itself (exit 2);
-#   - with REAC_IFACES naming an interface, it gets PAST argument handling —
-#     it must not exit 2 with the usage text.
+# The test does NOT need a NIC or a capability. It asserts the two ends of the
+# decision:
+#   - `--help` still explains itself, exit 0, before any preflight;
+#   - bare `reac-pw` gets PAST argument handling: whatever stops it next (the
+#     capability preflight here, PipeWire on a host with none), it is not exit 2
+#     with the usage text.
 set -u
 BIN="${1:?usage: packaged-shape-starts.sh /path/to/reac-pw}"
 
-out=$(HOME=/nonexistent-reac-pw-test "$BIN" 2>&1); rc=$?
-if [ "$rc" -ne 2 ] || ! grep -q "usage:" <<<"$out"; then
-  echo "FAIL: with no conf, bare reac-pw must still print usage and exit 2 (rc=$rc)"; exit 1
+out=$(HOME=/nonexistent-reac-pw-test "$BIN" --help 2>&1); rc=$?
+if [ "$rc" -ne 0 ] || ! grep -q "usage:" <<<"$out"; then
+  echo "FAIL: --help must print usage and exit 0 (rc=$rc)"; exit 1
+fi
+if ! grep -q "HEARS its segments" <<<"$out"; then
+  echo "FAIL: the usage text no longer describes the packaged shape"; exit 1
 fi
 
-# A name no host has: the daemon must get past the argument stage and fail on the
-# INTERFACE, which is a different answer with a different exit path.
-out=$(HOME=/nonexistent-reac-pw-test REAC_IFACES=reacpw-no-such-if "$BIN" 2>&1); rc=$?
+out=$(HOME=/nonexistent-reac-pw-test timeout 5 "$BIN" 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && grep -q "usage:" <<<"$out"; then
-  echo "FAIL: REAC_IFACES was ignored — the packaged shape is unreachable"; echo "$out" | head -3; exit 1
+  echo "FAIL: bare reac-pw answered usage — the packaged shape is unreachable"; echo "$out" | head -3; exit 1
 fi
 
-echo "OK: the packaged (no-argument) shape reads REAC_IFACES"
+echo "OK: the packaged (no-argument) shape starts without a declaration"
