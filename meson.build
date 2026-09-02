@@ -258,6 +258,17 @@ test('reac_link_edge_observed',
   args : [linkmon_test],
   timeout : 30)
 
+# --- unit test: WHICH interfaces are listened on, and which are segments -----
+# The autodetect table (openmixer trunk-VLAN spec, amendment 2026-09-02): a NIC
+# with link is sniffed, the first REAC frame makes it a segment, a flap shorter
+# than the hold changes nothing, a longer loss drops it, DELLINK drops at once.
+# The netlink half is fed kernel-shaped datagrams; the live arm dumps the real
+# host through the same parser (unprivileged).
+ifscan_test = executable('test_reac_ifscan',
+  ['tests/test_reac_ifscan.c', 'src/reac_ifscan.c'],
+  include_directories : [include_directories('src')])
+test('reac_ifscan', ifscan_test)
+
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
    'src/reac_pace_watch.c'],
