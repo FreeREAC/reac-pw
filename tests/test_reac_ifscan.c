@@ -15,7 +15,10 @@
 #include "reac_ifscan.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <net/if_arp.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -287,6 +290,103 @@ static void t_netlink_parse(void)
 	CHK(drain(&s, v, n, 8) == 0);
 }
 
+/* ---- wireless exclusion, opt-in only ------------------------------------------------------ */
+
+static void t_wireless_pure(void)
+{
+	/* A synthetic fixture root: wlan0 wireless (both markers, as a real driver may set
+	 * either), wlan1 wireless via phy80211 alone, enp0 not wireless at all, and an
+	 * interface reac_ifscan has never heard of. */
+	char root[] = "/tmp/reac_ifscan_wireless_test_XXXXXX";
+	CHK(mkdtemp(root) != NULL);
+	char p[1024];
+	snprintf(p, sizeof p, "%s/wlan0", root); mkdir(p, 0700);
+	snprintf(p, sizeof p, "%s/wlan0/wireless", root); mkdir(p, 0700);
+	snprintf(p, sizeof p, "%s/wlan0/phy80211", root); mkdir(p, 0700);
+	snprintf(p, sizeof p, "%s/wlan1", root); mkdir(p, 0700);
+	snprintf(p, sizeof p, "%s/wlan1/phy80211", root); mkdir(p, 0700);
+	snprintf(p, sizeof p, "%s/enp0", root); mkdir(p, 0700);
+
+	CHK(reac_ifscan_is_wireless(root, "wlan0") == 1);
+	CHK(reac_ifscan_is_wireless(root, "wlan1") == 1);   /* phy80211 alone still counts */
+	CHK(reac_ifscan_is_wireless(root, "enp0") == 0);
+	CHK(reac_ifscan_is_wireless(root, "ghost0") == 0);  /* unknown: not wireless, not a guess */
+	CHK(reac_ifscan_is_wireless(root, NULL) == 0);
+
+	/* The allow-list: exact names, comma-separated, or "*". Unset/empty opts nothing in. */
+	CHK(reac_ifscan_wireless_allowed(NULL, "wlan0") == 0);
+	CHK(reac_ifscan_wireless_allowed("", "wlan0") == 0);
+	CHK(reac_ifscan_wireless_allowed("*", "wlan0") == 1);
+	CHK(reac_ifscan_wireless_allowed("wlan0", "wlan0") == 1);
+	CHK(reac_ifscan_wireless_allowed("wlan0", "wlan1") == 0);
+	CHK(reac_ifscan_wireless_allowed("wlan1,wlan0", "wlan0") == 1);   /* not just the first */
+	CHK(reac_ifscan_wireless_allowed("wlan0", "wlan00") == 0);        /* exact match, no prefix */
+	CHK(reac_ifscan_wireless_allowed("wla", "wlan0") == 0);
+}
+
+/* Real hardware, both directions (the false-signals rule: prove a probe can see PRESENCE
+ * before trusting an ABSENCE). This box has a real wireless NIC and two real wired ones
+ * (2026-09-03 recon: wlp128s20f3's "wireless" and "phy80211" markers both exist under
+ * /sys/class/net; enp128s20f0u2 and enp131s0 have neither). Skips gracefully if this box's
+ * specific interfaces are not present (a different host), same style as t_live_dump. */
+static void t_wireless_live(void)
+{
+	if (access("/sys/class/net/wlp128s20f3/wireless", F_OK) != 0) {
+		fprintf(stderr, "note: this box's wlp128s20f3 not present; wireless live arm skipped\n");
+		return;
+	}
+	CHK(reac_ifscan_is_wireless(NULL, "wlp128s20f3") == 1);          /* the positive case */
+	CHK(reac_ifscan_is_wireless(NULL, "enp128s20f0u2") == 0);        /* the negative case: */
+	CHK(reac_ifscan_is_wireless(NULL, "enp131s0") == 0);             /* a real probe that */
+	CHK(reac_ifscan_is_wireless(NULL, "lo") == 0);                   /* cannot detect absence
+	                                                                   * cannot be trusted on
+	                                                                   * presence either */
+}
+
+/* End to end, through the real netlink parser: a wireless interface reports ARPHRD_ETHER
+ * with link exactly like a wired one, and this table's ONE filter is the only thing standing
+ * between it and a listener socket. Uses this box's REAL wlp128s20f3 (genuinely wireless on
+ * this machine, so reac_ifscan_is_wireless(NULL, ...) inside msg_link reads the real sysfs —
+ * the actual production seam, not a fixture standing in for it) alongside a synthetic
+ * ifname guaranteed absent from /sys/class/net (so it is guaranteed NOT wireless) as the
+ * negative control in the same message. */
+static void t_wireless_excluded_from_scan(void)
+{
+	if (access("/sys/class/net/wlp128s20f3", F_OK) != 0) {
+		fprintf(stderr, "note: this box's wlp128s20f3 not present; scan-exclusion arm skipped\n");
+		return;
+	}
+	struct reac_ifscan s;
+	reac_ifscan_init(&s);
+	enum reac_ifscan_verb v[8];
+	char n[8][IFNAMSIZ];
+	char buf[1024] __attribute__((aligned(8)));
+
+	size_t off = 0;
+	off += build_link(buf + off, RTM_NEWLINK, "wlp128s20f3", 101, ARPHRD_ETHER,
+	                  IFF_UP | IFF_LOWER_UP);
+	off += build_link(buf + off, RTM_NEWLINK, "reac-ghost0", 102, ARPHRD_ETHER,
+	                  IFF_UP | IFF_LOWER_UP);
+	reac_ifscan_feed(&s, buf, off, 0);
+
+	/* Only the guaranteed-not-wireless synthetic name gets a LISTEN — the real Wi-Fi NIC
+	 * carries link and reports ARPHRD_ETHER exactly like it, and is refused anyway. */
+	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_LISTEN &&
+	   !strcmp(n[0], "reac-ghost0"));
+	CHK(reac_ifscan_find(&s, "wlp128s20f3") == NULL);   /* never entered the table at all */
+	CHK(reac_ifscan_find(&s, "reac-ghost0")->state == REAC_IFSCAN_LINKED);
+
+	/* Opt-in: REAC_IFACES_ALLOW_WIRELESS names it explicitly, and the SAME frame reaches
+	 * LISTEN. */
+	CHK(setenv("REAC_IFACES_ALLOW_WIRELESS", "wlp128s20f3", 1) == 0);
+	reac_ifscan_init(&s);
+	reac_ifscan_feed(&s, buf, off, 0);
+	CHK(drain(&s, v, n, 8) == 2);
+	CHK(reac_ifscan_find(&s, "wlp128s20f3") != NULL &&
+	   reac_ifscan_find(&s, "wlp128s20f3")->state == REAC_IFSCAN_LINKED);
+	unsetenv("REAC_IFACES_ALLOW_WIRELESS");
+}
+
 /* The live arm: an RTM_GETLINK dump of the real host through the same parser. Unprivileged.
  * Asserts only what any host has — a table that parsed at least `lo`'s neighbours — and
  * that loopback is not in it. */
@@ -312,6 +412,9 @@ int main(void)
 	t_serve_failed_retries_later();
 	t_bounded();
 	t_netlink_parse();
+	t_wireless_pure();
+	t_wireless_live();
+	t_wireless_excluded_from_scan();
 	t_live_dump();
 	if (fails) {
 		fprintf(stderr, "test_reac_ifscan: %d FAILED\n", fails);
