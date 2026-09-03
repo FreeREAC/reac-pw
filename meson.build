@@ -270,6 +270,17 @@ ifscan_test = executable('test_reac_ifscan',
   include_directories : [include_directories('src')])
 test('reac_ifscan', ifscan_test)
 
+# --- unit test: the segment's bus+address-derived name ------------------------
+# reac_ifname is NOT YET WIRED into main.c/reac_ifscan.c's segment identity (see
+# docs/ENV-KNOBS.md-adjacent per-segment conf keys, which are keyed by raw ifname
+# today on the live rig — replacing that identity is a deployment-affecting change
+# of its own, left to the operator). This proves the pure derive function alone,
+# against real captured /sys paths from a real box, not synthetic strings.
+ifname_test = executable('test_reac_ifname',
+  ['tests/test_reac_ifname.c', 'src/reac_ifname.c'],
+  include_directories : [include_directories('src')])
+test('reac_ifname', ifname_test)
+
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
    'src/reac_pace_watch.c'],
