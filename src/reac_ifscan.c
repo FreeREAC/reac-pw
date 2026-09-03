@@ -8,7 +8,9 @@
 #include <errno.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <net/if_arp.h>       /* ARPHRD_ETHER */
 #include <sys/socket.h>
@@ -240,6 +242,46 @@ void reac_ifscan_tick(struct reac_ifscan *s, uint64_t now_ns)
 	}
 }
 
+/* ---- wireless exclusion -------------------------------------------------------------------- */
+
+int reac_ifscan_is_wireless(const char *root, const char *ifname)
+{
+	if (!ifname || !ifname[0])
+		return 0;
+	if (!root || !root[0])
+		root = "/sys/class/net";
+
+	char path[512];
+	struct stat st;
+	int n = snprintf(path, sizeof path, "%s/%s/wireless", root, ifname);
+	if (n > 0 && (size_t)n < sizeof path && stat(path, &st) == 0)
+		return 1;
+	n = snprintf(path, sizeof path, "%s/%s/phy80211", root, ifname);
+	if (n > 0 && (size_t)n < sizeof path && stat(path, &st) == 0)
+		return 1;
+	return 0;
+}
+
+int reac_ifscan_wireless_allowed(const char *allowlist, const char *ifname)
+{
+	if (!allowlist || !allowlist[0] || !ifname || !ifname[0])
+		return 0;
+	if (strcmp(allowlist, "*") == 0)
+		return 1;
+	size_t iflen = strlen(ifname);
+	const char *p = allowlist;
+	while (*p) {
+		const char *comma = strchr(p, ',');
+		size_t seglen = comma ? (size_t)(comma - p) : strlen(p);
+		if (seglen == iflen && strncmp(p, ifname, seglen) == 0)
+			return 1;
+		p += seglen;
+		if (*p == ',')
+			p++;
+	}
+	return 0;
+}
+
 /* ---- netlink ----------------------------------------------------------------------------- */
 
 /* One RTM_NEWLINK/RTM_DELLINK into the table. Anything else is not ours. */
@@ -280,8 +322,13 @@ static void msg_link(struct reac_ifscan *s, const struct nlmsghdr *nh, uint64_t 
 	}
 	/* Ethernet and not loopback. IFF_LOWER_UP rather than IFLA_CARRIER, for the reason
 	 * reac_linkmon.c gives: an admin-down NIC still reports carrier, and it cannot pass a
-	 * frame. */
-	int ether = ifi->ifi_type == ARPHRD_ETHER && !(ifi->ifi_flags & IFF_LOOPBACK);
+	 * frame. Wireless is excluded from the SAME gate unless explicitly opted in — see
+	 * reac_ifscan.h's header comment. ifi_type == ARPHRD_ETHER is true of a wireless NIC
+	 * too, so this is not a second filter layered on top; it is what "ether" now means. */
+	int wireless = reac_ifscan_is_wireless(NULL, name);
+	int wireless_ok = !wireless ||
+	                  reac_ifscan_wireless_allowed(getenv("REAC_IFACES_ALLOW_WIRELESS"), name);
+	int ether = ifi->ifi_type == ARPHRD_ETHER && !(ifi->ifi_flags & IFF_LOOPBACK) && wireless_ok;
 	reac_ifscan_observe(s, name, ifi->ifi_index, ether,
 	                    (ifi->ifi_flags & IFF_LOWER_UP) ? 1 : 0, now_ns);
 }

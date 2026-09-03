@@ -4,7 +4,7 @@
  * reac_ifscan — WHICH interfaces to listen on, and which of them are SEGMENTS. The host's
  * netdev table, watched over rtnetlink, folded into one decision per interface
  * (openmixer's docs/design/specs/2026-08-23-reac-trunk-vlan-daemon.md §7-§9, amendment
- * 2026-09-02: every LINKED interface is listened on; nothing is declared per NIC).
+ * 2026-09-02: every linked WIRED interface is listened on; nothing is declared per NIC).
  *
  * LINK IS THE GATE TO LISTEN; HEARING IS THE GATE TO SERVE. An Ethernet interface that carries
  * link (IFF_LOWER_UP) is SNIFFED — a passive 0x8819 socket that transmits nothing, so an office
@@ -12,6 +12,16 @@
  * into a SEGMENT, and only then does the full listener (FSM, ring, nodes, a master that
  * transmits) open on it. A NIC that has link and never carries REAC is never a segment, never a
  * node, never a row.
+ *
+ * WI-FI IS EXCLUDED BY DEFAULT, OPT-IN ONLY. `ifi_type == ARPHRD_ETHER` is true of a wireless
+ * NIC too (found 2026-09-03: it was passing this table's gate with no exclusion at all, not
+ * even a deny-list), and REAC's timing has no tolerance for Wi-Fi's jitter — this project has
+ * no repacer to absorb it (DESIGN.md's ring-depth note: "enough to swallow a WiFi tail spike"
+ * is about a WIRED ring's margin, not a claim Wi-Fi itself works). A wireless interface
+ * (`/sys/class/net/<if>/wireless` or `/phy80211` exists — reac_ifscan_is_wireless) never
+ * reaches this table's `ether` gate unless its name is listed in REAC_IFACES_ALLOW_WIRELESS
+ * (comma-separated, or "*" for all — reac_ifscan_wireless_allowed). Unset/empty = every
+ * wireless NIC excluded, which is the default and the common case.
  *
  * A SEGMENT DROPS ON LINK LOSS, WITH HYSTERESIS. Carrier gone starts a hold; carrier back inside
  * it cancels the hold and the segment keeps its FSM, ring and nodes — a box power-cycle, a PHY
@@ -143,6 +153,21 @@ int reac_ifscan_count(const struct reac_ifscan *s, enum reac_ifscan_state state)
 /* Parse one netlink datagram, folding every RTM_NEWLINK/RTM_DELLINK it carries through
  * observe/gone. A truncated or malformed buffer is dropped, never guessed. */
 void reac_ifscan_feed(struct reac_ifscan *s, const void *buf, size_t len, uint64_t now_ns);
+
+/* ---- wireless exclusion (opt-in only) ---------------------------------------------------- */
+
+/* `<root ?: "/sys/class/net">/<ifname>/wireless` or `/phy80211` exists: both are kernel-
+ * guaranteed markers of a wireless NIC (checked either, since which one a given driver
+ * populates varies) and neither implies the other's absence proves anything — the check
+ * is "does either exist", not "do both". `root` overrides /sys/class/net for a test
+ * fixture; NULL = the real filesystem. Never fails loud: an unreadable/nonexistent path
+ * reads as "not wireless" (0), same as any other interface this table has never heard of. */
+int reac_ifscan_is_wireless(const char *root, const char *ifname);
+
+/* Does `allowlist` (REAC_IFACES_ALLOW_WIRELESS's value; NULL/empty = nothing) opt `ifname`
+ * in? "*" opts in every wireless NIC; otherwise a comma-separated list of exact interface
+ * names. Pure string matching, no I/O. */
+int reac_ifscan_wireless_allowed(const char *allowlist, const char *ifname);
 
 /* ---- the netlink shell ------------------------------------------------------------------ */
 
