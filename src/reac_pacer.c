@@ -429,9 +429,12 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	 * (reac_ctrl.c:141) and unicast between third parties (reac_ctrl.c:144). Those
 	 * discards ARE the discovery. Classify for sighting BEFORE the FSM filter, and
 	 * with a separate ownership-blind classifier, so recording what is out there can
-	 * never alter what the master does about it. */
+	 * never alter what the master does about it.
+	 *
+	 * _on_segment (not the bare classifier): this segment's own p->disco_peer_lock
+	 * closes the FILLER-frame gap the Roland-OUI removal opened (reac_disco.h). */
 	struct reac_disco_sighting sight;
-	if (reac_disco_classify(frame, len, p->src, &sight) == 0 &&
+	if (reac_disco_classify_on_segment(&p->disco_peer_lock, frame, len, p->src, &sight) == 0 &&
 	    reac_disco_gate_should_push(&p->disco_gate, &sight, mono_ns())) {
 		/* The ring slot is bytes, not pointers: the model travels as its index in the
 		 * fixed matrix, +1 so 0 reads as "unidentified". */

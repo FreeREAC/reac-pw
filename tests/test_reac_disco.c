@@ -6,7 +6,11 @@
  * bytes the wire carries, checksum and all), never from a hand-rolled mock: the
  * false positive this whole module exists to prevent once SURVIVED a test suite
  * because the suite asserted it. Pins:
- *   (a) presence needs a real 0x8819 Roland-OUI frame — a busy link is not a device;
+ *   (a) presence needs a real 0x8819 frame — a busy link is not a device; NO MAC-vendor
+ *       gate (deleted 2026-09-03, operator's ruling: discover by protocol frame only,
+ *       never pin or spoof a MAC) — a non-Roland source is real evidence now;
+ *   (a2) the FILLER gap that ruling opens is closed by SEGMENT-LEVEL PEER-LOCKING
+ *       (reac_disco_classify_on_segment), not by any MAC-vendor scheme;
  *   (b) role comes from the full byte signature, not the frame KIND (cdea 04 03 is
  *       BOTH the box JOIN and the master grant; cdea 01 03 0010 is a BOX frame that
  *       parses as kind PROBE) — and stays UNKNOWN when the bytes are ambiguous;
@@ -45,11 +49,17 @@ int main(void)
 	memset(f, 0x5a, sizeof f);
 	CHK(reac_disco_classify(f, 838, OURS, &s) == -1);
 
-	/* A 0x8819 frame from a NON-Roland OUI is not REAC gear. */
+	/* A 0x8819 frame from a NON-Roland source IS real evidence now — there is no MAC-vendor
+	 * gate. "Discover by protocol frame only, never pin or spoof a MAC" (operator's
+	 * ruling, 2026-09-03): a valid checksummed control frame is real regardless of source
+	 * OUI, and the sighting carries the real (non-Roland) source MAC verbatim. */
 	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
 	CHK(n == 628);
-	f[6] = 0xde; f[7] = 0xad; f[8] = 0xbe;      /* stomp the OUI */
-	CHK(reac_disco_classify(f, n, OURS, &s) == -1);
+	uint8_t nonRoland[6] = { 0xde, 0xad, 0xbe, 0xef, 0x00, 0x01 };
+	memcpy(f + 6, nonRoland, 6);
+	reac_ctrl_checksum_apply(f);                 /* the source moved; keep it VALID */
+	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
+	CHK(memcmp(s.mac, nonRoland, 6) == 0);
 
 	/* Our own echo is never a discovery of someone else. */
 	n = reac_ctrl_build_box_hb(f, MASTER, OURS, 0x11, 16);
@@ -60,6 +70,65 @@ int main(void)
 	f[49] ^= 0xff;                               /* break the checksum */
 	CHK(reac_ctrl_checksum_verify(f) != 0);
 	CHK(reac_disco_classify(f, n, OURS, &s) == -1);
+
+	/* ---- (a2) SEGMENT-LEVEL PEER-LOCKING closes the FILLER gap the OUI removal opened.
+	 * REAC is physically point-to-point, so once a segment's lock has latched to the source
+	 * of its FIRST checksum-verified control frame, a FILLER (checksum-EXEMPT) frame from a
+	 * DIFFERENT source on the SAME segment is refused — not an identity/vendor test, "is
+	 * this the box already proven real on this wire". reac_disco_classify (no lock,
+	 * everything above this point) is untouched by any of this. */
+	struct reac_disco_peer_lock lock;
+	reac_disco_peer_lock_init(&lock);
+	CHK(lock.locked == 0);
+
+	/* Before ANY control frame validates a peer, a FILLER is accepted exactly as the
+	 * unlocked classifier already accepted it — the lock only closes the window AFTER a
+	 * real peer is known. */
+	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x20, 16, NULL, 12);
+	CHK(n > 0);
+	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
+	CHK(s.role == REAC_DISCO_ROLE_BOX);
+	CHK(lock.locked == 0);                      /* a FILLER never latches the lock itself */
+
+	/* The box's real heartbeat (checksum-verified, non-FILLER) latches the lock to BOX. */
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x21, 16);
+	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
+	CHK(lock.locked == 1);
+	CHK(memcmp(lock.mac, BOX, 6) == 0);
+
+	/* Now a FILLER from the SAME box still passes. */
+	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x22, 16, NULL, 12);
+	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
+	CHK(memcmp(s.mac, BOX, 6) == 0);
+
+	/* A FILLER claiming to be a DIFFERENT box on the SAME (now-locked) segment is refused —
+	 * this is the sabotage target: reverting classify_core's lock check must turn this red. */
+	static const uint8_t IMPOSTOR[6] = { 0x00, 0x40, 0xab, 0xbe, 0xef, 0x01 };
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x23, 16, NULL, 12);
+	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == -1);
+	/* The SAME frame is real evidence through the unlocked classifier — the refusal is the
+	 * lock's, not the frame's. */
+	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
+
+	/* A LATER checksum-verified control frame from a different MAC is still accepted
+	 * unchanged — the lock never restricts a VERIFIED frame, and it does not re-latch
+	 * either (the first-proven peer holds for the lock's lifetime). */
+	n = reac_ctrl_build_box_hb(f, MASTER, IMPOSTOR, 0x24, 16);
+	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
+	CHK(memcmp(s.mac, IMPOSTOR, 6) == 0);
+	CHK(memcmp(lock.mac, BOX, 6) == 0);          /* still BOX — not re-latched */
+
+	/* And the impostor's FILLER is STILL refused after that — proving a checksum-verified
+	 * sighting from a new MAC does not quietly relax the lock. */
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x25, 16, NULL, 12);
+	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == -1);
+
+	/* A fresh lock (a segment drop/reopen) starts unlocked again, so the box's own FILLER
+	 * is not permanently orphaned by a stale lock from a departed peer. */
+	struct reac_disco_peer_lock lock2;
+	reac_disco_peer_lock_init(&lock2);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x26, 16, NULL, 12);
+	CHK(reac_disco_classify_on_segment(&lock2, f, n, OURS, &s) == 0);
 
 	/* ---- (b) role from the signature, not the kind. */
 
@@ -303,8 +372,9 @@ int main(void)
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.channels == reac_frame_channels((size_t)n));
 
-	printf("OK: disco — presence only from real 0x8819 Roland frames, role from the full "
-	       "signature (never the kind), model never inferred, stale devices withdrawn, "
-	       "JSON all-or-nothing, S-4000 goldens replay byte-verbatim\n");
+	printf("OK: disco — presence from a real 0x8819 frame with NO MAC-vendor gate, a locked "
+	       "segment refusing an impostor's FILLER, role from the full signature (never the "
+	       "kind), model never inferred, stale devices withdrawn, JSON all-or-nothing, "
+	       "S-4000 goldens replay byte-verbatim\n");
 	return 0;
 }

@@ -12,14 +12,45 @@
  * depends on, discovery re-reads the frame independently: reac_disco_classify is pure,
  * ownership-blind, and its verdict never reaches the FSM.
  *
- * Presence is NEVER a heuristic. A sighting requires a 0x8819 frame, a Roland OUI src,
- * and (for non-FILLER) a verified checksum. A packet COUNT is not evidence — openmixer
- * #161 announced any NIC over ~62 pkt/s (ordinary Wi-Fi) as a REAC master because an
- * rx_packets delta was fed in as a device.
+ * Presence is NEVER a heuristic. A sighting requires a 0x8819 frame and (for non-FILLER) a
+ * verified checksum. A packet COUNT is not evidence — openmixer #161 announced any NIC over
+ * ~62 pkt/s (ordinary Wi-Fi) as a REAC master because an rx_packets delta was fed in as a
+ * device.
  *
- * Threading: reac_disco_classify is pure and RT-safe (no alloc, no stdio) — the pacer
- * thread calls it. The TABLE is main-thread-only: sightings cross threads on the pacer's
- * existing lock-free event ring, so there is no new cross-thread primitive here. See
+ * NO MAC-BASED TRUST, EVER (operator's ruling, 2026-09-03): a sighting is never gated on the
+ * source MAC's vendor prefix. The Roland-OUI check that used to sit here was deleted outright
+ * — REAC gear is discovered by PROTOCOL FRAME alone, never by pinning or spoofing a MAC.
+ * `our_mac` above still excludes our OWN echo (reac_disco_classify's self-filter, unrelated to
+ * vendor trust — it stops a hub/loopback re-delivering our own traffic, whatever the trust
+ * policy).
+ *
+ * THE FILLER GAP THIS LEFT, AND HOW IT IS CLOSED. FILLER (type 0000, audio) frames are
+ * checksum-EXEMPT, so with the OUI gone a bare FILLER sighting rests on the EtherType/kind
+ * parse and the self-echo filter alone — not enough to refuse a spoofed or noise frame
+ * claiming to be a box. The operator's ruling: REAC is physically POINT-TO-POINT — two boxes
+ * cannot collide on the same segment/NIC — so use SEGMENT-LEVEL PEER-LOCKING instead of any
+ * MAC-vendor scheme. reac_disco_classify_on_segment remembers, per segment, the source MAC of
+ * the FIRST sighting a real control frame validated (0x8819 parse + a VERIFIED checksum — the
+ * existing non-FILLER path, unchanged); once a segment has that proven peer, a FILLER frame on
+ * the SAME segment is accepted only if its source matches it. This is NOT identity/vendor
+ * checking — nothing is hardcoded or configured — it is "is this the box already proven real
+ * on THIS wire", learned dynamically. reac_disco_classify (no lock) keeps its old, unlocked
+ * behaviour for a caller with no segment concept (existing callers, unit tests).
+ * (Real-hardware check, 2026-09-03: neither REAC-BOX-STATE-DIAGRAM.md nor the golden captures
+ * document a structural check — a sequence-counter continuity requirement or "FILLER length
+ * must equal the box's declared join width" — that a real console applies to its OWN
+ * established box's FILLER stream; the counter field reac_frame_counter() exposes is used
+ * elsewhere in this project only for LOSS COUNTING on an already-trusted link, never as an
+ * acceptance gate. The likely reason: a real box is wired point-to-point, so a real console
+ * never needs to defend against a foreign FILLER at all — the physical topology already
+ * guarantees it. reac-pw's segment is only PHYSICALLY point-to-point when nothing else shares
+ * the VLAN/trunk it listens on, which the peer-lock above defends in software instead.)
+ *
+ * Threading: reac_disco_classify / reac_disco_classify_on_segment are pure and RT-safe (no
+ * alloc, no stdio) — the pacer thread calls them, one `reac_disco_peer_lock` per segment's own
+ * pacer (so its lifetime matches the segment's: a drop/reopen gets a fresh, unlocked lock).
+ * The TABLE is main-thread-only: sightings cross threads on the pacer's existing lock-free
+ * event ring, so there is no new cross-thread primitive here. See
  * docs/design/specs/2026-07-16-reac-discovery-via-reac-pw.md (openmixer) for the seam. */
 #ifndef REAC_DISCO_H
 #define REAC_DISCO_H
@@ -68,10 +99,36 @@ struct reac_disco_sighting {
 
 /* Classify one raw frame into a sighting, blind to whether we own the peer.
  * Returns 0 and fills *out on a sighting; -1 when the frame is not evidence of REAC
- * gear (not 0x8819, not Roland-OUI, our own echo, or a corrupt control block).
- * Pure: no state, no clock, RT-safe. */
+ * gear (not 0x8819, our own echo, or a corrupt control block).
+ * Pure: no state, no clock, RT-safe. No MAC-based trust of any kind — see reac_disco.h's
+ * header comment for the operator's ruling and reac_disco_classify_on_segment below for the
+ * FILLER-frame gap that ruling leaves and how it is closed. */
 int reac_disco_classify(const uint8_t *frame, size_t len, const uint8_t our_mac[6],
                         struct reac_disco_sighting *out);
+
+/* Per-segment established-peer state for reac_disco_classify_on_segment. One instance per
+ * segment's own pacer — its lifetime matches the segment's (a drop/reopen makes a fresh,
+ * unlocked one, so a genuine box replacement on that physical port is never stuck refusing
+ * the new box's FILLER frames forever). Zero-initialize with reac_disco_peer_lock_init. */
+struct reac_disco_peer_lock {
+	uint8_t mac[6];
+	int locked;
+};
+
+void reac_disco_peer_lock_init(struct reac_disco_peer_lock *lock);
+
+/* Same contract as reac_disco_classify, plus segment-level peer-locking: the FIRST sighting a
+ * real (checksum-verified) non-FILLER control frame validates latches *lock to that source
+ * MAC, once, for *lock's lifetime — a later checksum-verified frame from a DIFFERENT MAC is
+ * still accepted unchanged (the lock never restricts a VERIFIED frame, only a checksum-EXEMPT
+ * FILLER one). Once locked, a FILLER frame from any OTHER source MAC on the segment is refused
+ * (-1): not an identity/vendor test, but "is this the box already proven real on a link that
+ * is physically point-to-point". Before *lock is ever locked, a FILLER frame is accepted
+ * exactly as reac_disco_classify already accepted it — this only closes the window AFTER a
+ * real peer is known. RT-safe, no allocation. */
+int reac_disco_classify_on_segment(struct reac_disco_peer_lock *lock, const uint8_t *frame,
+                                   size_t len, const uint8_t our_mac[6],
+                                   struct reac_disco_sighting *out);
 
 /* Index of a model in the fixed matrix (reac_box_model_table), the form a model takes
  * when it crosses the pacer's event ring: the ring slot carries bytes, not pointers.
