@@ -12,6 +12,8 @@
  *      the timing contract; the live check is a bonus when privilege exists. */
 #include "reac_pacer.h"
 #include "reac_ctrl.h"
+#include "reac_link_state.h"   /* reac_box_mac_str — the reac.box.mac badge */
+#include "reac_mac.h"
 #include <reac/reac.h>
 
 #include <stdio.h>
@@ -166,6 +168,10 @@ int main(void)
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_box_frames == 1 && p3.rx_box_ctrl == 0 && p3.rx_joins == 0);
 		CHK(p3.master.state == REAC_M_PROBING);   /* promoted, but NOT granting */
+		/* A box FLOODING presence is not a box we have joined: reac.box.mac stays
+		 * empty until a JOIN we granted latches an address. Hearing a chassis and
+		 * enrolling it are different facts and the badge answers only the second. */
+		CHK(reac_pacer_box_mac48(&p3) == 0);
 
 		/* our own echo must be ignored (the software self-filter) */
 		bn = reac_ctrl_build_upstream_filler(bf, BCAST, OUR, 1, 16, NULL, 12);
@@ -212,6 +218,18 @@ int main(void)
 		const struct reac_box_model *rec = atomic_load(&p3.recognized_box);
 		CHK(rec != NULL && rec->in_ch == 16);
 		CHK(reac_master_has_box(&p3.master) == 1);
+		/* THE BOX'S OWN ADDRESS crosses to the property poll here (reac.box.mac),
+		 * latched from the JOIN's L2 source and NEVER from p3.src — a consumer that
+		 * keys a stagebox registry on the master's MAC matches this machine's NIC
+		 * and misses every box on every rig (openmixer
+		 * docs/design/notes/2026-09-06-rig-headamp-and-clip-findings.md §5). */
+		CHK(reac_pacer_box_mac48(&p3) == reac_mac48_pack(BOX));
+		CHK(reac_pacer_box_mac48(&p3) != reac_mac48_pack(OUR));
+		{
+			char badge[REAC_BOX_MAC_STR_CAP];
+			reac_box_mac_str(reac_pacer_box_mac48(&p3), badge, sizeof badge);
+			CHK(strcmp(badge, "00:40:ab:c4:80:3b") == 0);
+		}
 		/* THE VALUE, not the shape: an S-1608's inputs are enrolled at head-amp
 		 * 0x20..0x2f, and the enrollment that will reach the wire says so in every
 		 * group-A record. This is the agreement head-amp control depends on. */
@@ -267,6 +285,15 @@ int main(void)
 		CHK(p3.master.state == REAC_M_PROBING);
 		CHK(reac_master_has_box(&p3.master) == 0);
 		CHK(atomic_load(&p3.recognized_box) == NULL);
+		/* The address goes with the box. A stale one names a chassis that has left
+		 * the wire, which is worse than no name: the console would keep a patch
+		 * label for equipment nobody can address. */
+		CHK(reac_pacer_box_mac48(&p3) == 0);
+		{
+			char badge[REAC_BOX_MAC_STR_CAP];
+			reac_box_mac_str(reac_pacer_box_mac48(&p3), badge, sizeof badge);
+			CHK(strcmp(badge, REAC_BOX_MAC_NONE) == 0);
+		}
 
 		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 5, 16);
 		reac_pacer_rx_ingest(&p3, bf, bn);

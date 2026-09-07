@@ -383,6 +383,17 @@ static inline void identity_write_end(struct reac_pacer *p, unsigned s)
 
 static void sync_published_box(struct reac_pacer *p)
 {
+	/* THE BOX'S OWN MAC, mirrored on its own atomic (reac.box.mac). Taken from
+	 * the master unconditionally rather than inside the has_box arm, because the
+	 * two facts latch at different moments: the address arrives with the JOIN
+	 * (enter_granting), the allocation only once the box declares its geometry.
+	 * A box that JOINs and never declares is still a box whose address we know,
+	 * and reac_master_forget_box zeroes the MAC with everything else, so the
+	 * cleared state comes out of the same read. */
+	atomic_store_explicit(&p->recognized_box_mac,
+	                      reac_mac48_pack(p->master.box_mac),
+	                      memory_order_release);
+
 	if (!reac_master_has_box(&p->master)) {
 		if (atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
 			atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
@@ -405,6 +416,13 @@ static void sync_published_box(struct reac_pacer *p)
 		atomic_store_explicit(&p->recognized_headamp_base,
 		                      p->master.alloc.base, memory_order_release);
 	}
+}
+
+uint64_t reac_pacer_box_mac48(const struct reac_pacer *p)
+{
+	if (!p)
+		return 0;
+	return atomic_load_explicit(&p->recognized_box_mac, memory_order_acquire);
 }
 
 void reac_pacer_read_identity(const struct reac_pacer *p, struct reac_identity *out)
@@ -1138,6 +1156,7 @@ int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 	if (atomic_load_explicit(&p->recognized_box, memory_order_relaxed))
 		atomic_store_explicit(&p->recognized_box, NULL, memory_order_release);
 	atomic_store_explicit(&p->recognized_headamp_base, -1, memory_order_release);
+	atomic_store_explicit(&p->recognized_box_mac, 0, memory_order_release);
 	p->declared_in = p->declared_out = 0;
 
 	{

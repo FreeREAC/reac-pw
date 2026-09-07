@@ -405,7 +405,7 @@ test('reac_lat', lat_test)
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c',
-   'src/reac_headamp_tx.c', 'src/reac_clock.c'],
+   'src/reac_headamp_tx.c', 'src/reac_clock.c', 'src/reac_link_state.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
@@ -526,7 +526,9 @@ test('sink_buffer_pairing', python3,
   args : [meson.current_source_dir() / 'tests' / 'test_sink_buffer_pairing.py'])
 
 link_state_test = executable('test_reac_link_state',
-  ['tests/test_reac_link_state.c', 'src/reac_link_state.c'],
+  ['tests/test_reac_link_state.c', 'src/reac_link_state.c', 'src/reac_mac.c',
+   'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
+   'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_link_state', link_state_test)
