@@ -14,21 +14,29 @@
  *    record. A box that POWER-CYCLES comes back with its pins blank and simply
  *    re-courts; the scene replay rides the new grant, unrequested and unACKed.
  *    That replay is the only mechanism that restores 48V after an outage.
- *  - THEN SILENCE. There is NO periodic re-assert on the wire — captures hold
- *    20.8-33 s of established traffic with phantom lit and zero head-amp
- *    records. The 1 Hz frame is the op-0103 CHANMAP heartbeat; it carries no
- *    head-amp cell (its per-record byte1 is a bank marker).
  *  - EACH CHANGE IS ONE RECORD. A lone op-0403 write of an absolute value
  *    self-commits (the LED follows); no commit pair exists on the wire.
+ *  - A REAL M-200 THEN GOES SILENT. Captures hold 20.8-33 s of established
+ *    traffic with phantom lit and zero head-amp records; the 1 Hz frame is the
+ *    op-0103 CHANMAP heartbeat and carries no head-amp cell (its per-record
+ *    byte1 is a bank marker). WE DO NOT COPY THAT. The protocol has no readback,
+ *    so a master that asserts once has no mechanism that could ever discover a
+ *    disagreement with the box, and one lost frame is one lost setting until the
+ *    next establishment. Once ESTABLISHED, after REAC_HEADAMP_RESWEEP_SECONDS of
+ *    head-amp silence, this re-emits the cells the operator SET — and only those,
+ *    because the enrolling defaults below are safe-off phantom and re-sending
+ *    them would darken a channel somebody lit at the box. The whole argument, the
+ *    named risk and the rig gate are in docs/HEADAMP-REASSERT-POLICY.md.
  *
  * This module is the PURE state + scheduler for that: a per-wire-channel table of
- * (phantom, pad, sens), a one-shot complete-scene REPLAY cursor armed on every
- * entry into ESTABLISHED, and a per-frame `next()` that says whether THIS slot
- * should carry a head-amp record and which one. It owns no socket and no frame
- * buffer — the caller (the pacer) turns a returned (ch, param, value) into wire
- * bytes with reac_ctrl_stamp_headamp over a FILLER slot. Keeping it separate from
- * reac_master's establishment FSM is deliberate: the head-amp overlay must never
- * alter or race the verified grant/chanmap/cfea emit path.
+ * (phantom, pad, sens), a REPLAY cursor armed complete on every entry into
+ * ESTABLISHED and re-armed set-only on the re-assert cadence, and a per-frame
+ * `next()` that says whether THIS slot should carry a head-amp record and which
+ * one. It owns no socket and no frame buffer — the caller (the pacer) turns a
+ * returned (ch, param, value) into wire bytes with reac_ctrl_stamp_headamp over a
+ * FILLER slot. Keeping it separate from reac_master's establishment FSM is
+ * deliberate: the head-amp overlay must never alter or race the verified
+ * grant/chanmap/cfea emit path.
  */
 #ifndef REAC_HEADAMP_TX_H
 #define REAC_HEADAMP_TX_H
@@ -47,6 +55,20 @@
  * ~36 ms at 8000 fps, a 32-channel one ~144 ms — inside the M-200's measured
  * 70-310 ms envelope. */
 #define REAC_HEADAMP_SWEEP_STRIDE 12
+
+/* HOW OFTEN THE SET CELLS ARE RE-ASSERTED, in seconds of head-amp silence.
+ *
+ * THIS IS A POLICY, not a protocol constant — the operator may change it, and
+ * the two directions are both meaningful: raise it on a congested segment, lower
+ * it on a rig that is losing records, set the period to 0 (see
+ * reac_headamp_tx_set_resweep) and the behaviour is exactly the assert-once one a
+ * real M-200 shows. The cost at 2 s is small enough that the number is not
+ * delicate: records ride one per SWEEP_STRIDE frames on FILLER slots whose
+ * control block is otherwise wasted, so a 16-input box with every cell set
+ * spends ~72 ms of every 2 s at 8000 fps, about 0.3 % of slots, and a desk with
+ * nothing set emits nothing at all. Reasoning and rig gate:
+ * docs/HEADAMP-REASSERT-POLICY.md. */
+#define REAC_HEADAMP_RESWEEP_SECONDS 2
 
 /* One operator-supplied head-amp cell, as carried from the CLI through the sink
  * + pacer config into the table (reac_headamp_tx_set). `ch` is the WIRE channel. */
@@ -85,12 +107,30 @@ struct reac_headamp_tx {
 	uint8_t dirty[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS]; /* changed since emit */
 	int     active;            /* >=1 cell set -> the edge sender is armed */
 
-	/* One-shot complete-scene replay (armed on every entry into ESTABLISHED):
-	 * cursor over base..base+width-1, all params per channel. width == 0 = idle. */
+	/* Scene replay cursor over base..base+width-1, all params per channel.
+	 * width == 0 = idle. Armed COMPLETE on every entry into ESTABLISHED, and
+	 * armed SET-ONLY by the re-assert cadence below. */
 	uint8_t replay_base;
 	uint8_t replay_width;
 	int     replay_idx;        /* flattened cursor: ch_offset*NPARAMS + param */
 	int     replay_wait;       /* frames until the next replay record */
+	uint8_t replay_set_only;   /* this replay skips cells the operator never set */
+
+	/* The slots the last COMPLETE scene was armed over, remembered so the
+	 * re-assert can re-arm the same cursor without being told the box's geometry
+	 * again — and so it stays silent until an establishment has armed one, which
+	 * is what keeps REACPW_NO_HEADAMP a total silence rather than a delayed one. */
+	uint8_t scene_base;
+	uint8_t scene_width;
+
+	/* The re-assert cadence, in FRAMES OF HEAD-AMP SILENCE (next() calls that
+	 * emitted nothing). 0 = off, which is what init leaves it at: the pure module
+	 * asserts once until a caller states a period. Counted from the last record
+	 * ACTUALLY EMITTED rather than off a free-running clock, so an operator edge
+	 * or a scene replay pushes the next sweep out and two sweeps can never
+	 * overlap on the wire. */
+	uint32_t resweep_period;
+	uint32_t resweep_wait;
 };
 
 /* Initialize an empty (inactive) table. */
@@ -123,12 +163,21 @@ uint8_t reac_headamp_tx_effective(const struct reac_headamp_tx *t,
 void reac_headamp_tx_arm_scene(struct reac_headamp_tx *t, uint8_t base,
                                uint8_t width);
 
+/* Set the periodic re-assert cadence in FRAMES, or 0 to disable it. The caller
+ * (the pacer) converts REAC_HEADAMP_RESWEEP_SECONDS at the wire's frame rate,
+ * which is also why it re-states the period after a rate change: 2 s is 16 000
+ * frames at 8000 fps and 8 000 at 4000 fps. Re-stating restarts the silence
+ * count. Single-writer: call on the pacer thread only (or before it starts). */
+void reac_headamp_tx_set_resweep(struct reac_headamp_tx *t, uint32_t frames);
+
 /* Advance the scheduler by ONE frame and decide whether this slot carries a
  * head-amp record. Returns 1 and fills ch/param/value when it does, else 0.
  * Emits changed cells first (edge, one per call), then walks a pending scene
- * replay one record per REAC_HEADAMP_SWEEP_STRIDE frames. With no edge pending
- * and no replay armed it returns 0 forever — committed state is held by the box.
- * Call at most once per emitted downstream frame (like reac_master_next). */
+ * replay one record per REAC_HEADAMP_SWEEP_STRIDE frames. Once both drain it
+ * counts silent frames and, at the re-assert period, re-arms the replay over the
+ * SET cells alone — never an unset cell's enrolling default. With no period set
+ * it returns 0 forever after the drain. Call at most once per emitted downstream
+ * frame (like reac_master_next). */
 int reac_headamp_tx_next(struct reac_headamp_tx *t, uint8_t *ch, uint8_t *param,
                          uint8_t *value);
 

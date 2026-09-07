@@ -1135,6 +1135,12 @@ int reac_pacer_apply_rate(struct reac_pacer *p, int hz)
 
 	reac_master_init(&p->master, p->src, ccfg, fps);
 	reac_master_set_headamp_src(&p->master, &p->headamp);
+	/* Same seconds, a different number of frames: the head-amp table counts slots
+	 * and the slot rate has just changed. Re-stating it here is what keeps the
+	 * re-assert 2 s at 96 k and 2 s at 48 k rather than 2 s at whichever rate the
+	 * pacer happened to open on. */
+	reac_headamp_tx_set_resweep(&p->headamp,
+	                            (uint32_t)fps * REAC_HEADAMP_RESWEEP_SECONDS);
 
 	p->prev_state = REAC_M_IDLE;
 	atomic_store_explicit(&p->fsm_state, REAC_M_IDLE, memory_order_relaxed);
@@ -1675,6 +1681,12 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	for (int i = 0; i < cfg->n_headamps; i++)
 		reac_headamp_tx_set(&p->headamp, cfg->headamps[i].ch,
 		                    cfg->headamps[i].param, cfg->headamps[i].value);
+	/* The re-assert cadence, converted from seconds to FRAMES at this wire rate
+	 * (docs/HEADAMP-REASSERT-POLICY.md). The table counts silent slots, not time,
+	 * so the period is rate-relative and has to be re-stated whenever the pace
+	 * changes — reac_pacer_apply_rate does exactly that. */
+	reac_headamp_tx_set_resweep(&p->headamp,
+	                            (uint32_t)p->fps * REAC_HEADAMP_RESWEEP_SECONDS);
 
 	/* Point the master's GRANT sweep at this table: group A of the enrollment sweep
 	 * IS the initial head-amp state push (reac_grant.h), so the state we enroll a

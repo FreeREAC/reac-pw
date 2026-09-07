@@ -901,8 +901,9 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		        "stderr\n", c->tag, c->mixer->display, c->tx_if);
 		if (c->n_headamps)
 			fprintf(stderr, "reac-pw: %shead-amp DMX send armed — %d cell(s), "
-			        "re-asserted once established (RIG-GATED: verify 48V at the "
-			        "XLR pins)\n", c->tag, c->n_headamps);
+			        "asserted once established and refreshed every %d s "
+			        "(RIG-GATED: verify 48V at the XLR pins)\n",
+			        c->tag, c->n_headamps, REAC_HEADAMP_RESWEEP_SECONDS);
 	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the

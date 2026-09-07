@@ -3,14 +3,15 @@
 
 /* reac_headamp_tx — the MASTER head-amp send scheduler (task #155, item C.7).
  * Pure state + per-frame next(): pins OFF-unless-set, the edge emission on
- * change, and the one-shot complete-scene REPLAY armed at every establishment —
- * the mechanism that restores a power-cycled box's pins (task #179; measured:
+ * change, the complete-scene REPLAY armed at every establishment — the mechanism
+ * that restores a power-cycled box's pins (task #179; measured:
  * m200-s1608-BIDIR-reboot, the M-200 replays the full width x 3 scene 10 ms
- * behind every grant, then goes silent). There is NO periodic re-assert: the
- * committed captures hold 20.8-33 s of established traffic with phantom lit and
- * zero head-amp records. No socket, no FSM — the guard that keeps the head-amp
- * overlay from touching establishment is the pacer's FILLER-only stamp, tested
- * separately; here we only prove the scheduler's emission logic. */
+ * behind every grant) — and the PERIODIC RE-ASSERT of the SET cells that follows
+ * it (docs/HEADAMP-REASSERT-POLICY.md). The cadence is off until a caller states
+ * one, which is why every "then silence" pin below still holds: those tables have
+ * no period. No socket, no FSM — the guard that keeps the head-amp overlay from
+ * touching establishment is the pacer's FILLER-only stamp, tested separately;
+ * here we only prove the scheduler's emission logic. */
 #include "reac_headamp_tx.h"
 #include "reac_ctrl.h"     /* enum reac_headamp_param */
 
@@ -53,13 +54,12 @@ int main(void)
 			edges++;
 	CHK(edges == 2);   /* exactly the two new changes */
 
-	/* 5. NO periodic re-assert. The committed captures show a real M-200 keeps
-	 * head-amp silence once the box is armed — 20.8 s / 27.8 s / 33.0 s of
-	 * established traffic with phantom lit and zero head-amp records
+	/* 5. WITH NO CADENCE SET, an edge is asserted once and the wire goes quiet:
+	 * the re-assert period is 0 until a caller states one (step 12), so this table
+	 * behaves exactly as a real M-200 does — captures hold 20.8 s / 27.8 s /
+	 * 33.0 s of established traffic with phantom lit and zero head-amp records
 	 * (COLDCONNECT-clean-2026-07-24, BIDIR-reboot-2026-07-11, matrix-m200-s1608).
-	 * The box HOLDS its committed state while powered; the answer to a
-	 * power-cycle is the scene replay (step 8), never a timer. Run a long
-	 * stretch with no further changes and confirm nothing emits. */
+	 * Run a long stretch with no further changes and confirm nothing emits. */
 	int total = 0;
 	for (int i = 0; i < 1000; i++)
 		if (reac_headamp_tx_next(&t, &ch, &p, &v))
@@ -117,7 +117,7 @@ int main(void)
 	CHK(reac_headamp_default(REAC_HEADAMP_SENS) != 0x00);     /* non-zero = enrols */
 	/* the stride really spreads the burst: strictly more calls than records */
 	CHK(calls >= records * REAC_HEADAMP_SWEEP_STRIDE - (REAC_HEADAMP_SWEEP_STRIDE - 1));
-	/* scene complete -> silence again (no timer brings it back) */
+	/* scene complete -> silence again (this table states no re-assert period) */
 	for (int i = 0; i < 1000; i++)
 		CHK(reac_headamp_tx_next(&rp, &ch, &p, &v) == 0);
 
@@ -168,6 +168,106 @@ int main(void)
 	reac_headamp_tx_arm_scene(&cl, 0, 0);
 	CHK(reac_headamp_tx_next(&cl, &ch, &p, &v) == 0);
 
-	printf("OK: head-amp send — off-unless-set, edge-on-change, scene replay at establish, no periodic re-assert\n");
+	/* 12. THE PERIODIC RE-ASSERT (docs/HEADAMP-REASSERT-POLICY.md). Measured on
+	 * the live rig: 400 000 frames spanning a phantom write carried three head-amp
+	 * records and then nothing, so a box that drops a pin on its own timer, or
+	 * misses the one frame that carried it, was never refreshed — and the protocol
+	 * has no readback to notice with. Once ESTABLISHED, after a period of head-amp
+	 * SILENCE, the SET cells go out again. */
+	struct reac_headamp_tx rs;
+	reac_headamp_tx_init(&rs);
+	CHK(rs.resweep_period == 0);   /* off until a caller states a cadence */
+
+	/* (a) A cadence alone re-asserts NOTHING. Until an establishment has armed a
+	 * scene there is no box we have granted, and a master must not start writing
+	 * to the wire on a timer. */
+	const uint32_t PERIOD = 50;   /* frames; the pacer converts seconds at wire rate */
+	reac_headamp_tx_set_resweep(&rs, PERIOD);
+	CHK(reac_headamp_tx_set(&rs, 1, REAC_HEADAMP_PHANTOM, 1) == 0);
+	CHK(reac_headamp_tx_next(&rs, &ch, &p, &v) == 1);      /* the edge */
+	for (int i = 0; i < 10 * (int)PERIOD; i++)
+		CHK(reac_headamp_tx_next(&rs, &ch, &p, &v) == 0);  /* no scene, no re-assert */
+
+	/* (b) Two more cells, one of them a DELIBERATE 0, so the re-assert is proved
+	 * to carry `set` and not "nonzero". Drain their edges. */
+	CHK(reac_headamp_tx_set(&rs, 5, REAC_HEADAMP_SENS, 0x2a) == 0);
+	CHK(reac_headamp_tx_set(&rs, 3, REAC_HEADAMP_PAD, 0x00) == 0);
+	while (reac_headamp_tx_next(&rs, &ch, &p, &v)) {}
+
+	/* (c) Establishment arms the COMPLETE scene — every cell of an 8-channel box,
+	 * enrolling defaults included, because a channel armed all-zero never enrols. */
+	reac_headamp_tx_arm_scene(&rs, 0x00, 8);
+	int scene = 0;
+	for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 32 && scene < 24; i++)
+		if (reac_headamp_tx_next(&rs, &ch, &p, &v))
+			scene++;
+	CHK(scene == 24);
+
+	/* (d) THE RE-ASSERT ITSELF. After the scene drains the wire goes quiet for the
+	 * cadence and then carries the SET cells — the three of them, in ascending
+	 * (ch, param) order, with the operator's values including the deliberate 0.
+	 * NEVER an unset cell: every record is checked against `set`, so an enrolling
+	 * default reappearing here (phantom OFF onto a channel somebody lit at the
+	 * box) fails this test rather than darkening a microphone. */
+	struct { uint8_t ch, p, v; } want[3] = {
+		{ 1, REAC_HEADAMP_PHANTOM, 0x01 },
+		{ 3, REAC_HEADAMP_PAD,     0x00 },
+		{ 5, REAC_HEADAMP_SENS,    0x2a },
+	};
+	int silent = 0;
+	while (silent < (int)PERIOD * 4 && !reac_headamp_tx_next(&rs, &ch, &p, &v))
+		silent++;
+	/* A record was FOUND, and it really WAITED for it: the cadence is silence,
+	 * not a per-slot dribble — and the loop exiting on its own cap would leave
+	 * ch/p/v holding the previous record, which is an absence reading as a pass. */
+	CHK(silent < (int)PERIOD * 4);
+	CHK(silent >= (int)PERIOD);
+	int got = 0;
+	CHK(ch == want[0].ch && p == want[0].p && v == want[0].v);
+	got = 1;
+	for (int i = 0; i < 3 * REAC_HEADAMP_SWEEP_STRIDE + 8 && got < 3; i++)
+		if (reac_headamp_tx_next(&rs, &ch, &p, &v)) {
+			CHK(ch == want[got].ch && p == want[got].p && v == want[got].v);
+			got++;
+		}
+	CHK(got == 3);
+	/* and the sweep ENDS: 3 set cells out of 24, not a 24-record scene */
+	for (int i = 0; i < (int)PERIOD - 1; i++)
+		CHK(reac_headamp_tx_next(&rs, &ch, &p, &v) == 0);
+
+	/* (e) It REPEATS. One refresh would be a re-arm; a policy is a cadence. */
+	int again = 0;
+	for (int i = 0; i < (int)PERIOD * 2 + 3 * REAC_HEADAMP_SWEEP_STRIDE + 8 && again < 3; i++)
+		if (reac_headamp_tx_next(&rs, &ch, &p, &v)) {
+			CHK(ch == want[again].ch && p == want[again].p && v == want[again].v);
+			again++;
+		}
+	CHK(again == 3);
+
+	/* (f) A period of 0 turns it off again — the assert-once behaviour a real
+	 * M-200 shows, and the mitigation the policy note names if a box ever turns
+	 * out to dislike a redundant write. */
+	reac_headamp_tx_set_resweep(&rs, 0);
+	while (reac_headamp_tx_next(&rs, &ch, &p, &v)) {}   /* let any sweep finish */
+	for (int i = 0; i < 10 * (int)PERIOD; i++)
+		CHK(reac_headamp_tx_next(&rs, &ch, &p, &v) == 0);
+
+	/* (g) A box with NOTHING set is never written to on the timer. The scene at
+	 * establishment enrols it; after that we have no opinion about any of its
+	 * channels, and no opinion is silence. */
+	struct reac_headamp_tx empty;
+	reac_headamp_tx_init(&empty);
+	reac_headamp_tx_set_resweep(&empty, PERIOD);
+	reac_headamp_tx_arm_scene(&empty, 0x00, 8);
+	scene = 0;
+	for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 32 && scene < 24; i++)
+		if (reac_headamp_tx_next(&empty, &ch, &p, &v))
+			scene++;
+	CHK(scene == 24);
+	for (int i = 0; i < 10 * (int)PERIOD; i++)
+		CHK(reac_headamp_tx_next(&empty, &ch, &p, &v) == 0);
+
+	printf("OK: head-amp send — off-unless-set, edge-on-change, complete scene at "
+	       "establish, periodic re-assert of the SET cells only\n");
 	return 0;
 }
