@@ -1,9 +1,45 @@
 # The head-amp re-assert policy
 
-**Status: implemented and SHIPPED DISABLED.** The mechanism is built and unit-
+**Status: RULED 2026-09-07 — stays at zero.** The mechanism is built and unit-
 tested (`reac_headamp_tx`, the ESTABLISHED FILLER overlay in `reac_pacer`), and
-`REAC_HEADAMP_RESWEEP_SECONDS` is **0**, which turns it off. Any positive value
-enables it.
+`REAC_HEADAMP_RESWEEP_SECONDS` is **0**, which turns it off. The operator ruled
+it stays off: assert-once is exactly what the M-200 captures show, no wire-side
+loss has ever been observed on the rig, the one real loss case (a box whose
+input board is still booting) is already covered by the establishment replay
+and its +4 s / +12 s follow-ups, and the only dropped write ever found was in
+the console's own pump, fixed with a test the same night. A periodic resend
+would fight the box's front panel to cover a case nobody has seen. If the
+evidence changes, the proportionate first step is an operator action that
+re-sends one channel's scene; the second is the witness below, not a cadence.
+
+## If it ever becomes a problem: the effect witness (designed, not built)
+
+The wire has no readback, but the audio does. The console knows the instant it
+put a head-amp frame on the wire, and the raw REAC samples arrive before any
+desk processing, so a before/after comparison around that instant can say
+whether the frame landed, with a confidence, cell by cell:
+
+- **Gain** — strongly inferable. A commanded change of N dB must move the raw
+  incoming level by N dB. With signal present the ratio is clean, within a
+  tolerance for the performer moving; with no signal it still shows, weakly, in
+  the preamp's own noise floor. The baseline must sit well above the floor
+  before the ratio means anything.
+- **Pad** — inferable the same way: a fixed, known step. Ambiguous only if gain
+  and pad change in the same instant, which the console controls.
+- **Phantom** — an EVENT, and only sometimes. A condenser waking up moves level
+  and noise floor and leaves a slow DC settle in the low band; a dynamic mic or
+  an open input changes nothing. Three verdicts, not two: confirmed,
+  unconfirmed, cannot-tell-on-this-input.
+
+Shape: a raw-level tap in the native mixer around each dispatch (300 ms before,
+300–1000 ms after), a comparator in the head-amp actuator, a fourth observed
+fact beside keyed/refused/reached — `effect {expectedDb, observedDb, confidence,
+verdict}` — labelled as an inference about the audio and never as the box's
+state, and a resend only when the audio says a gain or pad frame did not land.
+Rig proof: the ECM8000 on the S-4000 (confirmed case) and a dynamic mic on the
+S-1608 (cannot-tell case). Cost: about a day, plus a permanent piece of RT
+code. Not worth it for a loss nobody has observed; written down so it is not
+re-derived.
 
 It stays off pending two things, in this order: **the operator's acceptance**,
 because a refresh overrides a change made at the box's own front panel within one
