@@ -37,6 +37,12 @@
  * FILLER slot. Keeping it separate from reac_master's establishment FSM is
  * deliberate: the head-amp overlay must never alter or race the verified
  * grant/chanmap/cfea emit path.
+ *
+ * THE RE-ASSERT SHIPS DISABLED (REAC_HEADAMP_RESWEEP_SECONDS 0). It overrides a
+ * change made at the box's own panel within one cadence, it has never been run
+ * against a box, and the claim that a redundant op-0403 is harmless is a
+ * deduction from the protocol audit rather than a measurement. Whether a console
+ * takes that authority over 48 V is the operator's call, not this file's.
  */
 #ifndef REAC_HEADAMP_TX_H
 #define REAC_HEADAMP_TX_H
@@ -58,17 +64,25 @@
 
 /* HOW OFTEN THE SET CELLS ARE RE-ASSERTED, in seconds of head-amp silence.
  *
- * THIS IS A POLICY, not a protocol constant — the operator may change it, and
- * the two directions are both meaningful: raise it on a congested segment, lower
- * it on a rig that is losing records, set the period to 0 (see
- * reac_headamp_tx_set_resweep) and the behaviour is exactly the assert-once one a
- * real M-200 shows. The cost at 2 s is small enough that the number is not
- * delicate: records ride one per SWEEP_STRIDE frames on FILLER slots whose
- * control block is otherwise wasted, so a 16-input box with every cell set
- * spends ~72 ms of every 2 s at 8000 fps, about 0.3 % of slots, and a desk with
- * nothing set emits nothing at all. Reasoning and rig gate:
+ * ZERO = DISABLED, AND ZERO IS WHAT SHIPS. A refresh overrides a change made at
+ * the box's own panel within one cadence; that authority over 48 V belongs to the
+ * operator, and the mechanism is rig-unproven — no capture in this repo shows a
+ * box receiving a redundant head-amp record, because no master here ever sent
+ * one. Until it is accepted and capture-gated, openmixer's scene watch
+ * (REAC_SCENE_SETTLE_REPLAY_MS) remains the writer that re-applies a recorded
+ * scene, and this master asserts once, as a real M-200 does.
+ *
+ * THIS IS A POLICY, not a protocol constant: any positive value enables the
+ * refresh, and both directions are meaningful — slower on a congested segment,
+ * faster on a rig that is losing records. The cost at 2 s, with its two
+ * denominators kept apart because chaining them is how this note first got it
+ * wrong: 40 SET cells at 96 k is 469 frames = 59 ms per sweep, a 2.06 s cycle,
+ * 19.4 op-0403/s on average and ZERO ADDED FRAMES — every record rides a FILLER
+ * slot the pacer was going to emit anyway. Of that cycle, 2.9 % is ELAPSED TIME
+ * spent sweeping and 0.24 % of SLOTS carry a record. A desk with nothing set
+ * emits nothing at all. Reasoning and rig gate:
  * docs/HEADAMP-REASSERT-POLICY.md. */
-#define REAC_HEADAMP_RESWEEP_SECONDS 2
+#define REAC_HEADAMP_RESWEEP_SECONDS 0
 
 /* One operator-supplied head-amp cell, as carried from the CLI through the sink
  * + pacer config into the table (reac_headamp_tx_set). `ch` is the WIRE channel. */
@@ -163,11 +177,12 @@ uint8_t reac_headamp_tx_effective(const struct reac_headamp_tx *t,
 void reac_headamp_tx_arm_scene(struct reac_headamp_tx *t, uint8_t base,
                                uint8_t width);
 
-/* Set the periodic re-assert cadence in FRAMES, or 0 to disable it. The caller
- * (the pacer) converts REAC_HEADAMP_RESWEEP_SECONDS at the wire's frame rate,
- * which is also why it re-states the period after a rate change: 2 s is 16 000
- * frames at 8000 fps and 8 000 at 4000 fps. Re-stating restarts the silence
- * count. Single-writer: call on the pacer thread only (or before it starts). */
+/* Set the periodic re-assert cadence in FRAMES, or 0 to disable it — which is
+ * what the shipped REAC_HEADAMP_RESWEEP_SECONDS resolves to. The caller (the
+ * pacer) converts the seconds at the wire's frame rate, which is also why it
+ * re-states the period after a rate change: 2 s would be 16 000 frames at 8000
+ * fps and 8 000 at 4000 fps. Re-stating restarts the silence count.
+ * Single-writer: call on the pacer thread only (or before it starts). */
 void reac_headamp_tx_set_resweep(struct reac_headamp_tx *t, uint32_t frames);
 
 /* Advance the scheduler by ONE frame and decide whether this slot carries a

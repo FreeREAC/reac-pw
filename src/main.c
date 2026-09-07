@@ -899,11 +899,24 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		        "event-driven establishment: probing until the box's "
 		        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
 		        "stderr\n", c->tag, c->mixer->display, c->tx_if);
-		if (c->n_headamps)
+		if (c->n_headamps) {
+			/* Say which of the two policies is actually running. An operator
+			 * reading "armed" cannot otherwise tell whether the wire will refresh
+			 * these cells or assert them once and go quiet, and that is the whole
+			 * difference between the console owning the box's pins and the box
+			 * panel owning them. */
+			char refresh[64];
+			if (REAC_HEADAMP_RESWEEP_SECONDS > 0)
+				snprintf(refresh, sizeof refresh, "refreshed every %d s",
+				         REAC_HEADAMP_RESWEEP_SECONDS);
+			else
+				snprintf(refresh, sizeof refresh,
+				         "no periodic refresh (re-assert disabled)");
 			fprintf(stderr, "reac-pw: %shead-amp DMX send armed — %d cell(s), "
-			        "asserted once established and refreshed every %d s "
+			        "asserted once established, %s "
 			        "(RIG-GATED: verify 48V at the XLR pins)\n",
-			        c->tag, c->n_headamps, REAC_HEADAMP_RESWEEP_SECONDS);
+			        c->tag, c->n_headamps, refresh);
+		}
 	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the

@@ -464,7 +464,7 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `src/reac_slots.h` | the TWO slot spaces, named once with their capture evidence: AUDIO fabric 40 vs HEAD-AMP/chanmap 48 (`0x00..0x2f`). Never one for the other (#69) |
 | `src/reac_boxreg.{h,c}` | the multi-box registry: box MAC → (base, nch, name) over the 40-slot AUDIO fabric, allocated by first-JOIN order or pre-declared |
 | `src/reac_grant.{h,c}` | the master's per-channel ENROLLMENT SWEEP (the `cdea 04 03` grant): group A head-amp records + group B, over the HEAD-AMP space |
-| `src/reac_headamp_tx.{h,c}` | **master-role** head-amp SEND model: the declarative/DMX table the master re-asserts (edge on change, the complete scene at every establishment, then the SET cells on a slow period — [docs/HEADAMP-REASSERT-POLICY.md](docs/HEADAMP-REASSERT-POLICY.md)) |
+| `src/reac_headamp_tx.{h,c}` | **master-role** head-amp SEND model: edge on change + the complete scene at every establishment, plus a periodic re-assert of the SET cells that is built and SHIPPED DISABLED ([docs/HEADAMP-REASSERT-POLICY.md](docs/HEADAMP-REASSERT-POLICY.md)) |
 | `src/reac_headamp_prop.{h,c}` | parse live head-amp changes out of `SPA_PARAM_Props` (`reac.headamp.<ch>.<phantom\|pad\|sens>` over `SPA_PROP_params`) |
 | `src/reac_clock.{h,c}` | the clock-discipline core: role-dependent reference hierarchy, quality grading, and a bounded period DLL. INERT unless `REACPW_CLOCK_FOLLOW` (#75/#77) |
 | `src/reac_gain.{h,c}` | pure RT-safe output-gain staging for `reac:playback` (linear `SPA_PROP` volume/mute, ramped) |
