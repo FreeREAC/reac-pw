@@ -30,6 +30,9 @@
 #ifndef REAC_LINK_STATE_H
 #define REAC_LINK_STATE_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "reac_master.h"
 
 /* PipeWire node property keys the badge consumer reads. reac.link-state is
@@ -48,6 +51,27 @@
  * once it drops) — a consumer reads "" as "not answered", a fact, not a zero. */
 #define REAC_PROP_BOX_FIRMWARE "reac.box-firmware"
 #define REAC_PROP_BOX_HW       "reac.box-hw"
+
+/* THE ENROLLED BOX'S OWN L2 ADDRESS — the peer's, never ours. Latched from the
+ * source MAC of the box's JOIN (the `cdea 04 03` the master answers with a grant)
+ * and cleared with the box, so it says exactly which chassis is on this segment.
+ * Colon-separated lowercase hex, the form the master's own log prints; the string
+ * REAC_BOX_MAC_NONE while no box is known.
+ *
+ * IT IS PUBLISHED BECAUSE reac.master.mac IS NOT IT AND CANNOT BE. That key names
+ * whoever drives the segment, which in the master role is THIS machine's NIC. A
+ * consumer that keys a stagebox registry by box address — openmixer keys its
+ * `reac:<box mac>` patch names exactly that way — read reac.master.mac, matched
+ * our own NIC against a registry of Roland addresses, and missed on every rig
+ * (openmixer docs/design/notes/2026-09-06-rig-headamp-and-clip-findings.md §5).
+ * The alternative was for every consumer to re-derive the peer from a discovery
+ * sighting list, which is a second implementation of a fact only the master
+ * actually holds. */
+#define REAC_PROP_BOX_MAC      "reac.box.mac"
+#define REAC_BOX_MAC_NONE      "none"
+
+/* Buffer size reac_box_mac_str needs: 17 characters plus the terminator. */
+#define REAC_BOX_MAC_STR_CAP   18
 
 /* WHERE the box identity came from. There is exactly one possible answer while a
  * box is known — the wire — and saying so explicitly is the point: reac-pw has no
@@ -175,5 +199,13 @@ enum reac_link_state reac_link_state_from_master(enum reac_master_state st,
 
 /* The exact string stamped into REAC_PROP_LINK_STATE. Never NULL. */
 const char *reac_link_state_name(enum reac_link_state s);
+
+/* PURE: format a MAC packed by reac_mac48_pack (reac_mac.h) into the exact string
+ * REAC_PROP_BOX_MAC carries — "aa:bb:cc:dd:ee:ff", lowercase — or REAC_BOX_MAC_NONE
+ * when `mac48` is 0. Zero is the no-MAC sentinel the pack function already defines
+ * (no device carries the all-zero address), and it is what the master holds while
+ * it has no box, so "no box" and "a box at 00:00:00:00:00:00" cannot collide.
+ * `out` is always NUL-terminated; `cap` should be REAC_BOX_MAC_STR_CAP. */
+void reac_box_mac_str(uint64_t mac48, char *out, size_t cap);
 
 #endif /* REAC_LINK_STATE_H */

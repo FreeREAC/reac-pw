@@ -162,6 +162,11 @@ struct reac_sink_node {
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
 	struct reac_identity box_identity_last; /* last-published identity, for the change guard */
+	/* reac.box.mac, packed. In the guard on its own account: a box can be
+	 * REPLACED by another of the same model between two polls, which moves the
+	 * address while link-state, model and width all hold steady. 0 = no box, the
+	 * value the create-time "none" seed stands for. */
+	uint64_t box_mac_last;
 
 	/* reac.rate / reac.rate.source / reac.cfg.rate.state / reac.cfg.rate.refused
 	 * (2026-08-26-reac-runtime-config.md): same shadow-and-compare pattern as
@@ -754,11 +759,16 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	struct reac_identity id;
 	reac_pacer_read_identity(&n->pacer, &id);
 
+	/* The enrolled box's OWN address, as the master latched it from the JOIN. */
+	uint64_t box_mac = reac_pacer_box_mac48(&n->pacer);
+
 	if (ls == n->link_state_last && bm == n->box_model_last &&
+	    box_mac == n->box_mac_last &&
 	    memcmp(&id, &n->box_identity_last, sizeof id) == 0)
 		return; /* unchanged: do not spam pw_filter_update_properties */
 	n->link_state_last = ls;
 	n->box_model_last = bm;
+	n->box_mac_last = box_mac;
 	n->box_identity_last = id;
 
 	char width[16];
@@ -804,6 +814,13 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		         id.hw_block[0], id.hw_block[1], id.hw_block[2], id.hw_block[3],
 		         id.hw_block[4], id.hw_block[5], id.hw_block[6], id.hw_block[7]);
 
+	/* The box's own L2 address (reac.box.mac), or REAC_BOX_MAC_NONE. Stamped on
+	 * every publish, present or not, for the same reason firmware is:
+	 * update_properties MERGES, so a key left unstamped keeps the DEPARTED box's
+	 * address and a consumer goes on naming a chassis that has left the wire. */
+	char boxmac[REAC_BOX_MAC_STR_CAP];
+	reac_box_mac_str(box_mac, boxmac, sizeof boxmac);
+
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
 		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
@@ -813,6 +830,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		REAC_PROP_HEADAMP_BASE,    ha_base,
 		REAC_PROP_BOX_FIRMWARE,    firmware,
 		REAC_PROP_BOX_HW,          hwblock,
+		REAC_PROP_BOX_MAC,         boxmac,
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);
@@ -828,7 +846,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		reac_source_node_publish_link(*n->peer_src,
 		                              reac_link_state_name(ls),
 		                              bm ? bm->token : "none",
-		                              width);
+		                              width, boxmac);
 }
 
 /* MAIN LOOP: force the live adapter to actually present `hz`, closing the
@@ -1447,6 +1465,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			REAC_PROP_BOX_MODEL, "none",
 			REAC_PROP_BOX_WIDTH, "0x0",
 			REAC_PROP_BOX_SOURCE, REAC_BOX_SOURCE_NONE,
+			REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE,
 			REAC_PROP_HEADAMP_BASE, REAC_BOX_SOURCE_NONE,
 			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
 			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
@@ -1474,6 +1493,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	 * flash a spurious "dropped" overlay. */
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
+	n->box_mac_last = 0;
 	n->disco_seq_last = 0;
 	n->link_drops_seen = 0;
 	for (int i = 0; i < 8; i++)
@@ -1636,6 +1656,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * first sink_open_filter re-stamps to the live pacer state. */
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
+	n->box_mac_last = 0;
 	n->disco_seq_last = 0;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);

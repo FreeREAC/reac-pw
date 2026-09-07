@@ -291,6 +291,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		                  reac_link_state_name(REAC_LINK_PROBING));
 		pw_properties_set(props, REAC_PROP_BOX_MODEL, "none");
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, "0x0");
+		pw_properties_set(props, REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE);
 	}
 	/* THE SEGMENT'S IDENTITY, in the SLAVE role only — this node is then the
 	 * segment's door and the only node it has, so naming the segment here is what
@@ -354,7 +355,8 @@ void reac_source_node_destroy(struct reac_source_node *n)
 void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
                                    const char *box_model,
-                                   const char *box_width)
+                                   const char *box_width,
+                                   const char *box_mac)
 {
 	if (!n || !n->stream)
 		return;
@@ -367,6 +369,8 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 		pw_properties_set(props, REAC_PROP_BOX_MODEL, box_model);
 	if (box_width)
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
+	if (box_mac)
+		pw_properties_set(props, REAC_PROP_BOX_MAC, box_mac);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
 }

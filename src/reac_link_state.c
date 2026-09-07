@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_link_state.h"
+#include "reac_mac.h"
+
+#include <stdio.h>
 
 enum reac_link_state reac_link_state_from_master(enum reac_master_state st,
                                                   int just_dropped)
@@ -29,4 +32,18 @@ const char *reac_link_state_name(enum reac_link_state s)
 	case REAC_LINK_DROPPED:     return "dropped";
 	default:                    return "probing";
 	}
+}
+
+void reac_box_mac_str(uint64_t mac48, char *out, size_t cap)
+{
+	if (!out || cap == 0)
+		return;
+	if (mac48 == 0) {
+		snprintf(out, cap, "%s", REAC_BOX_MAC_NONE);
+		return;
+	}
+	uint8_t m[6];
+	reac_mac48_unpack(mac48, m);
+	snprintf(out, cap, "%02x:%02x:%02x:%02x:%02x:%02x",
+	         m[0], m[1], m[2], m[3], m[4], m[5]);
 }

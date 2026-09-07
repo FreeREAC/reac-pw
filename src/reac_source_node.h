@@ -85,12 +85,15 @@ void reac_source_node_destroy(struct reac_source_node *n);
  * pushes the recognized state here from that same (shared, single-loop) timer, so the
  * capture badge stops lying and tracks the box in lock-step with the playback side.
  * Args are the already-formatted strings the sink computes (reac.link-state name, box
- * model token, "INxOUT" width); a NULL arg leaves that key untouched. No-op on a NULL
- * node / one with no filter yet. Main-loop thread only (same loop as the caller). */
+ * model token, "INxOUT" width, and the box's own MAC as reac_box_mac_str writes it —
+ * REAC_BOX_MAC_NONE when there is no box); a NULL arg leaves that key untouched. No-op
+ * on a NULL node / one with no filter yet. Main-loop thread only (same loop as the
+ * caller). */
 void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
                                    const char *box_model,
-                                   const char *box_width);
+                                   const char *box_width,
+                                   const char *box_mac);
 
 /* Live-update the reac-capture node's presented Format rate — the RATE half of
  * #208/2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b ("a rate is ONE

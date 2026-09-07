@@ -449,6 +449,13 @@ struct reac_pacer {
 	 * -1 means NO BOX IS ON THE WIRE — the same state recognized_box == NULL
 	 * reports, not an established box whose base is unknown. */
 	_Atomic int recognized_headamp_base;
+	/* THE ENROLLED BOX'S OWN MAC, latched by the master from the source address of
+	 * the JOIN it granted, mirrored here for cross-thread reads (reac.box.mac on
+	 * the node). Packed into one word by reac_mac48_pack so it crosses as a single
+	 * atomic — six loose bytes read from another thread is a torn read nobody
+	 * synchronises, and half a MAC is a WRONG address rather than a stale one.
+	 * 0 = NO BOX, which is what the master holds once it forgets one. */
+	_Atomic uint64_t recognized_box_mac;
 	/* THE BOX'S OWN IDENTITY, decoded from the identity-page replies (DT1 tag
 	 * 0x0500) the grant sweep's group B polls. Written ONLY on the pacer thread as
 	 * replies arrive (reac_pacer_rx_ingest); read by the non-RT property poll
@@ -611,6 +618,12 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
  * writes happen only as a box establishes, so the reader reads a stable sequence
  * at once in practice. */
 void reac_pacer_read_identity(const struct reac_pacer *p, struct reac_identity *out);
+
+/* Read the ENROLLED BOX'S OWN MAC, packed by reac_mac48_pack — safe from any
+ * non-RT thread (the property poll), one atomic load. 0 means NO BOX, the state
+ * the master holds before a JOIN and again after it forgets one; pass it straight
+ * to reac_box_mac_str, which turns exactly that into REAC_BOX_MAC_NONE. */
+uint64_t reac_pacer_box_mac48(const struct reac_pacer *p);
 
 /* CONSUMER side (any non-RT thread, e.g. a 200 ms main-loop timer): drain the
  * event ring, formatting each event to `out` (one line per event). Returns the
