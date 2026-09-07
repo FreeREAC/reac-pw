@@ -352,11 +352,18 @@ void reac_source_node_destroy(struct reac_source_node *n)
 /* See the header: the sink's main-loop timer drives this so the capture badge follows
  * the box. pw_stream_update_properties MERGES — only the keys we set change; the ports,
  * rate, media.* seeded at create persist untouched. A NULL arg skips that key. */
+/* The reac_prop_set_fn adapter, as on the sink: the composer writes through this
+ * so a test can drive the same call with a recording fake. */
+static void source_prop_set(void *ctx, const char *key, const char *value)
+{
+	pw_properties_set(ctx, key, value);
+}
+
 void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
                                    const char *box_model,
                                    const char *box_width,
-                                   const char *box_mac)
+                                   uint64_t box_mac48)
 {
 	if (!n || !n->stream)
 		return;
@@ -369,8 +376,10 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 		pw_properties_set(props, REAC_PROP_BOX_MODEL, box_model);
 	if (box_width)
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
-	if (box_mac)
-		pw_properties_set(props, REAC_PROP_BOX_MAC, box_mac);
+	/* Unconditional, unlike the three above: 0 is a MEANING here (no box) and not
+	 * "leave it alone", and a merge that skipped it would keep the departed box's
+	 * address on the capture node while the playback node had already cleared it. */
+	reac_box_mac_publish(box_mac48, source_prop_set, props);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
 }

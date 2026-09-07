@@ -34,16 +34,23 @@ const char *reac_link_state_name(enum reac_link_state s)
 	}
 }
 
-void reac_box_mac_str(uint64_t mac48, char *out, size_t cap)
+/* 17 characters plus the terminator. Private: the composed string has exactly one
+ * destination — the stamp below — and handing callers a buffer to fill invites the
+ * second, divergent formatting this key exists to retire. */
+#define BOX_MAC_STR_CAP 18
+
+void reac_box_mac_publish(uint64_t mac48, reac_prop_set_fn set, void *ctx)
 {
-	if (!out || cap == 0)
+	if (!set)
 		return;
+	char out[BOX_MAC_STR_CAP];
 	if (mac48 == 0) {
-		snprintf(out, cap, "%s", REAC_BOX_MAC_NONE);
-		return;
+		snprintf(out, sizeof out, "%s", REAC_BOX_MAC_NONE);
+	} else {
+		uint8_t m[6];
+		reac_mac48_unpack(mac48, m);
+		snprintf(out, sizeof out, "%02x:%02x:%02x:%02x:%02x:%02x",
+		         m[0], m[1], m[2], m[3], m[4], m[5]);
 	}
-	uint8_t m[6];
-	reac_mac48_unpack(mac48, m);
-	snprintf(out, cap, "%02x:%02x:%02x:%02x:%02x:%02x",
-	         m[0], m[1], m[2], m[3], m[4], m[5]);
+	set(ctx, REAC_PROP_BOX_MAC, out);
 }

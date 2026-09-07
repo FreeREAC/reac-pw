@@ -735,6 +735,13 @@ static const struct pw_stream_events stream_events = {
  * touches the RT process() path. Called from on_log_timer, the pacer's
  * existing non-RT drain hook — see reac_link_state.h for the mapping + the
  * "dropped" one-shot-overlay rationale. */
+/* The reac_prop_set_fn adapter the badge composers stamp through: one line, so the
+ * composition itself is testable without libpipewire (reac_link_state.h). */
+static void sink_prop_set(void *ctx, const char *key, const char *value)
+{
+	pw_properties_set(ctx, key, value);
+}
+
 static void sink_publish_link_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
@@ -814,13 +821,6 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		         id.hw_block[0], id.hw_block[1], id.hw_block[2], id.hw_block[3],
 		         id.hw_block[4], id.hw_block[5], id.hw_block[6], id.hw_block[7]);
 
-	/* The box's own L2 address (reac.box.mac), or REAC_BOX_MAC_NONE. Stamped on
-	 * every publish, present or not, for the same reason firmware is:
-	 * update_properties MERGES, so a key left unstamped keeps the DEPARTED box's
-	 * address and a consumer goes on naming a chassis that has left the wire. */
-	char boxmac[REAC_BOX_MAC_STR_CAP];
-	reac_box_mac_str(box_mac, boxmac, sizeof boxmac);
-
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
 		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
@@ -830,9 +830,13 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		REAC_PROP_HEADAMP_BASE,    ha_base,
 		REAC_PROP_BOX_FIRMWARE,    firmware,
 		REAC_PROP_BOX_HW,          hwblock,
-		REAC_PROP_BOX_MAC,         boxmac,
 		NULL);
 	if (props) {
+		/* reac.box.mac goes on through the shared composer rather than a second
+		 * hand-written snprintf here — the sink and the reac-capture mirror below
+		 * then cannot format the same fact two ways, and the stamp itself is what
+		 * the unit test drives (tests/test_reac_box_badge.c). */
+		reac_box_mac_publish(box_mac, sink_prop_set, props);
 		pw_stream_update_properties(n->stream, &props->dict);
 		pw_properties_free(props);
 	}
@@ -846,7 +850,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		reac_source_node_publish_link(*n->peer_src,
 		                              reac_link_state_name(ls),
 		                              bm ? bm->token : "none",
-		                              width, boxmac);
+		                              width, box_mac);
 }
 
 /* MAIN LOOP: force the live adapter to actually present `hz`, closing the
