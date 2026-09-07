@@ -110,10 +110,21 @@ real M-200/M-300 captures. The decision core refactor moves only the
 transition DECISIONS; the emit sites and their timing constants are the
 goldens' territory.
 
-While ESTABLISHED, two overlays ride FILLER slots and nothing else: a pending
-operator head-amp EDGE, and the entry-armed scene replay (one record per sweep
-stride until the width × 3 scene is out, then silence — no periodic re-assert
-exists on the wire; captures hold 20.8–33 s of established head-amp silence).
+While ESTABLISHED, three overlays ride FILLER slots and nothing else, and none of
+them ever displaces a probe / grant / chanmap / cfea frame:
+
+- a pending operator head-amp EDGE;
+- the entry-armed COMPLETE scene replay (one record per sweep stride until the
+  width × 3 scene is out — operator values where set, the enrolling defaults
+  everywhere else, because a channel armed all-zero never enrols);
+- the periodic RE-ASSERT of the SET cells: after `REAC_HEADAMP_RESWEEP_SECONDS`
+  of head-amp silence the same cursor is re-armed in set-only mode, so the cells
+  the operator owns are refreshed and the cells they do not are never written.
+  The cadence is measured from the last record actually emitted, so an edge or a
+  scene replay pushes it out and two sweeps never overlap. A real M-200 does not
+  do this — captures hold 20.8–33 s of established head-amp silence — and the
+  reason we do it anyway, plus the rig gate that would prove it, are in
+  [HEADAMP-REASSERT-POLICY.md](HEADAMP-REASSERT-POLICY.md).
 
 ## The law of this file
 
