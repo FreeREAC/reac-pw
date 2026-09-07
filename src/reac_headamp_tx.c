@@ -85,6 +85,20 @@ void reac_headamp_tx_arm_scene(struct reac_headamp_tx *t, uint8_t base,
 	t->replay_width = width;
 	t->replay_idx = 0;
 	t->replay_wait = 0;   /* the first record goes on the next eligible slot */
+	t->replay_set_only = 0;   /* an establishment arms the COMPLETE scene */
+	/* Remember the slots so the re-assert can re-arm them itself. This is also
+	 * the re-assert's ENABLE: a table that has never been armed belongs to a
+	 * master that has never established (or one running REACPW_NO_HEADAMP), and
+	 * such a master must not start writing to a box on a timer. */
+	t->scene_base = base;
+	t->scene_width = width;
+	t->resweep_wait = 0;
+}
+
+void reac_headamp_tx_set_resweep(struct reac_headamp_tx *t, uint32_t frames)
+{
+	t->resweep_period = frames;
+	t->resweep_wait = 0;
 }
 
 #define REAC_HEADAMP_NCELLS (REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS)
@@ -107,6 +121,7 @@ int reac_headamp_tx_next(struct reac_headamp_tx *t, uint8_t *ch, uint8_t *param,
 			*ch = (uint8_t)c;
 			*param = (uint8_t)p;
 			*value = t->value[c][p];
+			t->resweep_wait = 0;   /* the cadence counts SILENCE, and this is not */
 			return 1;
 		}
 	}
@@ -122,24 +137,54 @@ int reac_headamp_tx_next(struct reac_headamp_tx *t, uint8_t *ch, uint8_t *param,
 			t->replay_wait--;
 			return 0;
 		}
-		int c = t->replay_base + t->replay_idx / REAC_HEADAMP_NPARAMS;
-		int p = t->replay_idx % REAC_HEADAMP_NPARAMS;
-		*ch = (uint8_t)c;
-		*param = (uint8_t)p;
-		*value = reac_headamp_tx_effective(t, (uint8_t)c, (uint8_t)p);
-		if (++t->replay_idx >= (int)t->replay_width * REAC_HEADAMP_NPARAMS)
-			t->replay_width = 0;   /* scene complete — back to silence */
-		else
-			t->replay_wait = REAC_HEADAMP_SWEEP_STRIDE - 1;
-		return 1;
+		/* Walk to the next cell THIS replay carries. A complete scene carries
+		 * every cell; a set-only re-assert skips the ones the operator never set,
+		 * which is a bounded scan (width x NPARAMS, at most 120) and no
+		 * allocation — it runs on the RT pacer thread. */
+		int total = (int)t->replay_width * REAC_HEADAMP_NPARAMS;
+		while (t->replay_idx < total) {
+			int c = t->replay_base + t->replay_idx / REAC_HEADAMP_NPARAMS;
+			int p = t->replay_idx % REAC_HEADAMP_NPARAMS;
+			t->replay_idx++;
+			if (t->replay_set_only &&
+			    !(c < REAC_HEADAMP_MAX_CH && t->set[c][p]))
+				continue;
+			*ch = (uint8_t)c;
+			*param = (uint8_t)p;
+			*value = reac_headamp_tx_effective(t, (uint8_t)c, (uint8_t)p);
+			if (t->replay_idx >= total)
+				t->replay_width = 0;   /* scene complete — back to silence */
+			else
+				t->replay_wait = REAC_HEADAMP_SWEEP_STRIDE - 1;
+			t->resweep_wait = 0;       /* the cadence counts SILENCE */
+			return 1;
+		}
+		t->replay_width = 0;   /* a set-only sweep with nothing left to send */
 	}
 
-	/* NO periodic re-assert. A real M-200 keeps head-amp silence once armed —
+	/* PERIODIC RE-ASSERT OF THE SET CELLS. A real M-200 stays silent here —
 	 * committed captures hold 20.8 s / 27.8 s / 33.0 s of established traffic
 	 * with phantom lit and ZERO head-amp records (COLDCONNECT-clean-2026-07-24,
-	 * BIDIR-reboot-2026-07-11, matrix-m200-s1608-2026-07-11). The 1 Hz frame is
-	 * the op-0103 CHANMAP heartbeat and carries no head-amp cell. The box HOLDS
-	 * its committed state while powered; a power-cycle is answered by the scene
-	 * replay above, never by a timer. */
+	 * BIDIR-reboot-2026-07-11, matrix-m200-s1608-2026-07-11) — but the protocol
+	 * has no readback, so asserting once leaves us no way to notice, let alone
+	 * correct, a box that has dropped a setting or missed the frame that carried
+	 * it (measured on the live rig: 400 000 frames spanning a phantom write held
+	 * three head-amp records and then nothing).
+	 *
+	 * SET CELLS ONLY. An unset cell's enrolling default is phantom OFF, and
+	 * re-sending it every couple of seconds would darken a channel the operator
+	 * lit at the box itself; absence of a cell means we have no opinion, and no
+	 * opinion is silence. The full argument, the named risk (a redundant op-0403
+	 * is idempotent BY DEDUCTION, never measured) and the rig gate are in
+	 * docs/HEADAMP-REASSERT-POLICY.md. */
+	if (t->resweep_period && t->scene_width &&
+	    ++t->resweep_wait >= t->resweep_period) {
+		t->resweep_wait = 0;
+		t->replay_base = t->scene_base;
+		t->replay_width = t->scene_width;
+		t->replay_idx = 0;
+		t->replay_wait = 0;
+		t->replay_set_only = 1;
+	}
 	return 0;
 }
