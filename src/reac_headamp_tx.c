@@ -171,6 +171,11 @@ int reac_headamp_tx_next(struct reac_headamp_tx *t, uint8_t *ch, uint8_t *param,
 	 * it (measured on the live rig: 400 000 frames spanning a phantom write held
 	 * three head-amp records and then nothing).
 	 *
+	 * DISABLED UNLESS A CALLER STATES A PERIOD, and the shipped
+	 * REAC_HEADAMP_RESWEEP_SECONDS is 0: a refresh overrides a change made at the
+	 * box's own panel within one cadence, and taking that authority over 48 V is
+	 * the operator's decision to make once the capture gate has run.
+	 *
 	 * SET CELLS ONLY. An unset cell's enrolling default is phantom OFF, and
 	 * re-sending it every couple of seconds would darken a channel the operator
 	 * lit at the box itself; absence of a cell means we have no opinion, and no

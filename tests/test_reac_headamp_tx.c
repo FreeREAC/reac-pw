@@ -178,6 +178,33 @@ int main(void)
 	reac_headamp_tx_init(&rs);
 	CHK(rs.resweep_period == 0);   /* off until a caller states a cadence */
 
+	/* THE SHIPPED DEFAULT IS DISABLED, pinned here rather than left to a comment.
+	 * Enabling it hands the console authority over a box's 48V within one cadence
+	 * — it would override a change made at the box's own panel — and that is the
+	 * operator's grant to give, after the capture gate in
+	 * docs/HEADAMP-REASSERT-POLICY.md has run. A silent flip of this constant is
+	 * exactly the kind of change that reaches a rig unnoticed. */
+	CHK(REAC_HEADAMP_RESWEEP_SECONDS == 0);
+	{
+		/* And the conversion the pacer performs carries the 0 through: seconds
+		 * times any frame rate is still no cadence, so the shipped daemon emits
+		 * the edge and the establishment scene and nothing else. */
+		struct reac_headamp_tx ship;
+		reac_headamp_tx_init(&ship);
+		reac_headamp_tx_set_resweep(&ship,
+			(uint32_t)8000 * REAC_HEADAMP_RESWEEP_SECONDS);
+		CHK(ship.resweep_period == 0);
+		CHK(reac_headamp_tx_set(&ship, 2, REAC_HEADAMP_PHANTOM, 1) == 0);
+		reac_headamp_tx_arm_scene(&ship, 0x00, 8);
+		int shipped = 0;
+		for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 32; i++)
+			if (reac_headamp_tx_next(&ship, &ch, &p, &v))
+				shipped++;
+		CHK(shipped == 1 + 24);          /* the edge, then the complete scene */
+		for (int i = 0; i < 100000; i++)   /* >12 s at 8000 fps: never again */
+			CHK(reac_headamp_tx_next(&ship, &ch, &p, &v) == 0);
+	}
+
 	/* (a) A cadence alone re-asserts NOTHING. Until an establishment has armed a
 	 * scene there is no box we have granted, and a master must not start writing
 	 * to the wire on a timer. */
@@ -268,6 +295,7 @@ int main(void)
 		CHK(reac_headamp_tx_next(&empty, &ch, &p, &v) == 0);
 
 	printf("OK: head-amp send — off-unless-set, edge-on-change, complete scene at "
-	       "establish, periodic re-assert of the SET cells only\n");
+	       "establish; periodic re-assert DISABLED by default and, when a cadence "
+	       "is stated, carrying the SET cells only\n");
 	return 0;
 }
