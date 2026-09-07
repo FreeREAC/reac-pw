@@ -70,8 +70,6 @@
 #define REAC_PROP_BOX_MAC      "reac.box.mac"
 #define REAC_BOX_MAC_NONE      "none"
 
-/* Buffer size reac_box_mac_str needs: 17 characters plus the terminator. */
-#define REAC_BOX_MAC_STR_CAP   18
 
 /* WHERE the box identity came from. There is exactly one possible answer while a
  * box is known — the wire — and saying so explicitly is the point: reac-pw has no
@@ -200,12 +198,26 @@ enum reac_link_state reac_link_state_from_master(enum reac_master_state st,
 /* The exact string stamped into REAC_PROP_LINK_STATE. Never NULL. */
 const char *reac_link_state_name(enum reac_link_state s);
 
-/* PURE: format a MAC packed by reac_mac48_pack (reac_mac.h) into the exact string
- * REAC_PROP_BOX_MAC carries — "aa:bb:cc:dd:ee:ff", lowercase — or REAC_BOX_MAC_NONE
- * when `mac48` is 0. Zero is the no-MAC sentinel the pack function already defines
- * (no device carries the all-zero address), and it is what the master holds while
- * it has no box, so "no box" and "a box at 00:00:00:00:00:00" cannot collide.
- * `out` is always NUL-terminated; `cap` should be REAC_BOX_MAC_STR_CAP. */
-void reac_box_mac_str(uint64_t mac48, char *out, size_t cap);
+/* A destination for one published node property: the key and the value it takes.
+ *
+ * IT EXISTS SO THE STAMP CAN BE TESTED. Composing the string and writing it onto
+ * the node are one act, and the act is what a consumer reads — a formatter tested
+ * on its own leaves "which key, with what value, and is it written at all" as the
+ * untested half, which is exactly the half that was wrong (the badge set named the
+ * box five ways and never by its address). pw_properties lives behind libpipewire
+ * and no unit test here links it, so the sink and the source pass their own
+ * one-line pw_properties_set adapter and a test passes a recording fake. */
+typedef void (*reac_prop_set_fn)(void *ctx, const char *key, const char *value);
+
+/* Compose REAC_PROP_BOX_MAC from a MAC packed by reac_mac48_pack (reac_mac.h) and
+ * STAMP it through `set`: "aa:bb:cc:dd:ee:ff" lowercase, or REAC_BOX_MAC_NONE when
+ * `mac48` is 0. Zero is the no-MAC sentinel the pack function already defines (no
+ * device carries the all-zero address) and it is what the master holds while it
+ * has no box, so "no box" and "a box at 00:00:00:00:00:00" cannot collide.
+ *
+ * ALWAYS STAMPS, present or not. pw_properties_update MERGES, so a key left
+ * unwritten keeps the DEPARTED box's address and a consumer goes on naming a
+ * chassis that has left the wire. `set` NULL is a no-op. */
+void reac_box_mac_publish(uint64_t mac48, reac_prop_set_fn set, void *ctx);
 
 #endif /* REAC_LINK_STATE_H */
