@@ -621,8 +621,8 @@ void reac_pacer_read_identity(const struct reac_pacer *p, struct reac_identity *
 
 /* Read the ENROLLED BOX'S OWN MAC, packed by reac_mac48_pack — safe from any
  * non-RT thread (the property poll), one atomic load. 0 means NO BOX, the state
- * the master holds before a JOIN and again after it forgets one; pass it straight
- * to reac_box_mac_str, which turns exactly that into REAC_BOX_MAC_NONE. */
+ * the master holds before a JOIN and again after it forgets one; pass it packed
+ * to reac_box_mac_publish, which stamps exactly that as REAC_BOX_MAC_NONE. */
 uint64_t reac_pacer_box_mac48(const struct reac_pacer *p);
 
 /* CONSUMER side (any non-RT thread, e.g. a 200 ms main-loop timer): drain the

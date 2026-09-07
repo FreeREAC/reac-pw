@@ -726,6 +726,13 @@ static const struct pw_stream_events stream_events = {
 	.param_changed = on_param_changed,
 };
 
+/* The reac_prop_set_fn adapter the badge composers stamp through: one line, so the
+ * composition itself is testable without libpipewire (reac_link_state.h). */
+static void sink_prop_set(void *ctx, const char *key, const char *value)
+{
+	pw_properties_set(ctx, key, value);
+}
+
 /* MAIN LOOP: stamp reac.link-state / reac.box-model / reac.box-width (task
  * #154's stagebox-badge need) from the pacer's cross-thread-safe snapshot,
  * re-advertising via pw_filter_update_properties only when something actually
@@ -735,13 +742,6 @@ static const struct pw_stream_events stream_events = {
  * touches the RT process() path. Called from on_log_timer, the pacer's
  * existing non-RT drain hook — see reac_link_state.h for the mapping + the
  * "dropped" one-shot-overlay rationale. */
-/* The reac_prop_set_fn adapter the badge composers stamp through: one line, so the
- * composition itself is testable without libpipewire (reac_link_state.h). */
-static void sink_prop_set(void *ctx, const char *key, const char *value)
-{
-	pw_properties_set(ctx, key, value);
-}
-
 static void sink_publish_link_props(struct reac_sink_node *n)
 {
 	if (!n->stream)

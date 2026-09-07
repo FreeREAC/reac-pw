@@ -101,7 +101,7 @@ int main(void)
 		CHK(f.writes == 1);            /* absence is stamped, never skipped */
 		CHK(f.n == 1);                 /* and it stamps ONE key, not a set */
 		CHK(fake_get(&f, REAC_PROP_BOX_MAC) != NULL);
-		CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), REAC_BOX_MAC_NONE) == 0);
+		CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
 		/* The key is spelled out here, not taken from the macro: a consumer
 		 * matches this literal, so a rename has to break a test rather than a
 		 * rig. openmixer reads exactly "reac.box.mac". */
@@ -115,7 +115,7 @@ int main(void)
 
 		/* And back to none: a departed box must not leave its address standing. */
 		reac_box_mac_publish(0, fake_set, &f);
-		CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), REAC_BOX_MAC_NONE) == 0);
+		CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
 	}
 
 	/* ---- 2. THE SEAM, end to end: real frames -> reac_pacer_rx_ingest -> the
@@ -139,7 +139,7 @@ int main(void)
 	bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, 12);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
-	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), REAC_BOX_MAC_NONE) == 0);
+	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
 
 	/* (b) The cold-connect. Its forward edge is HELD until the scene push
 	 * completes (reac_master.c), so drive the cadence to the end of a transfer
@@ -185,7 +185,7 @@ int main(void)
 	CHK(p.master.state == REAC_M_PROBING);
 	CHK(reac_master_has_box(&p.master) == 0);
 	publish(&p, &f);
-	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), REAC_BOX_MAC_NONE) == 0);
+	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
 
 	/* (e) A DIFFERENT box on the same segment takes the badge with it. The
 	 * address is a fact about the peer we are courting now, never the first one
