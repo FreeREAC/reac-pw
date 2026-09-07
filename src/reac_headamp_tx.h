@@ -19,14 +19,17 @@
  *  - A REAL M-200 THEN GOES SILENT. Captures hold 20.8-33 s of established
  *    traffic with phantom lit and zero head-amp records; the 1 Hz frame is the
  *    op-0103 CHANMAP heartbeat and carries no head-amp cell (its per-record
- *    byte1 is a bank marker). WE DO NOT COPY THAT. The protocol has no readback,
- *    so a master that asserts once has no mechanism that could ever discover a
- *    disagreement with the box, and one lost frame is one lost setting until the
- *    next establishment. Once ESTABLISHED, after REAC_HEADAMP_RESWEEP_SECONDS of
- *    head-amp silence, this re-emits the cells the operator SET — and only those,
- *    because the enrolling defaults below are safe-off phantom and re-sending
- *    them would darken a channel somebody lit at the box. The whole argument, the
- *    named risk and the rig gate are in docs/HEADAMP-REASSERT-POLICY.md.
+ *    byte1 is a bank marker). As shipped, this module does the same: it asserts
+ *    once per establishment. The protocol has no readback, so a master that
+ *    asserts once has no mechanism that could ever discover a disagreement with
+ *    the box, and one lost frame is one lost setting until the next
+ *    establishment. The re-assert cadence exists for that: with
+ *    REAC_HEADAMP_RESWEEP_SECONDS set above zero, after that many seconds of
+ *    head-amp silence in ESTABLISHED, this re-emits the cells the operator SET —
+ *    and only those, because the enrolling defaults below are safe-off phantom
+ *    and re-sending them would darken a channel somebody lit at the box. The
+ *    whole argument, the named risk and the rig gate are in
+ *    docs/HEADAMP-REASSERT-POLICY.md.
  *
  * This module is the PURE state + scheduler for that: a per-wire-channel table of
  * (phantom, pad, sens), a REPLAY cursor armed complete on every entry into
