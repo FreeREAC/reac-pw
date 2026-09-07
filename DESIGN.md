@@ -234,9 +234,14 @@ every head-amp record — the class `reac_grant.h` records from 2026-07-17).
 
 The master publishes what it decided so a consumer never has to re-derive it:
 `reac.box-model` / `reac.box-width` / `reac.headamp.channels` as before, plus
-`reac.box-source` (`wire` while a box is known, `none` otherwise) and
+`reac.box-source` (`wire` while a box is known, `none` otherwise),
 `reac.headamp.base` — the head-amp wire channel the box's input 1 sits at, i.e. the
-`base` in `CH = base + (input - 1)`. `reac_link_state.h` defines all of them.
+`base` in `CH = base + (input - 1)` — and `reac.box.mac`, the ENROLLED BOX's own L2
+address as latched from its JOIN, colon-separated lowercase, `none` when no box is
+known. That last one is the peer's address and never ours: `reac.master.mac` names
+whoever drives the segment, which in the master role is this NIC, so a consumer
+keying a box registry on it matches nothing on every rig. `reac_link_state.h`
+defines all of them.
 
 **Byte source-of-truth.** The probe/SUB01/SUB02 blocks are FIXED protocol
 constants replayed verbatim from a real **M-300** driving an S-1608
@@ -459,7 +464,7 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `src/reac_slots.h` | the TWO slot spaces, named once with their capture evidence: AUDIO fabric 40 vs HEAD-AMP/chanmap 48 (`0x00..0x2f`). Never one for the other (#69) |
 | `src/reac_boxreg.{h,c}` | the multi-box registry: box MAC → (base, nch, name) over the 40-slot AUDIO fabric, allocated by first-JOIN order or pre-declared |
 | `src/reac_grant.{h,c}` | the master's per-channel ENROLLMENT SWEEP (the `cdea 04 03` grant): group A head-amp records + group B, over the HEAD-AMP space |
-| `src/reac_headamp_tx.{h,c}` | **master-role** head-amp SEND model: the declarative/DMX table the master re-asserts (full table on a slow period + an edge record on change) |
+| `src/reac_headamp_tx.{h,c}` | **master-role** head-amp SEND model: the declarative/DMX table the master re-asserts (edge on change, the complete scene at every establishment, then the SET cells on a slow period — [docs/HEADAMP-REASSERT-POLICY.md](docs/HEADAMP-REASSERT-POLICY.md)) |
 | `src/reac_headamp_prop.{h,c}` | parse live head-amp changes out of `SPA_PARAM_Props` (`reac.headamp.<ch>.<phantom\|pad\|sens>` over `SPA_PROP_params`) |
 | `src/reac_clock.{h,c}` | the clock-discipline core: role-dependent reference hierarchy, quality grading, and a bounded period DLL. INERT unless `REACPW_CLOCK_FOLLOW` (#75/#77) |
 | `src/reac_gain.{h,c}` | pure RT-safe output-gain staging for `reac:playback` (linear `SPA_PROP` volume/mute, ramped) |
