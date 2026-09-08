@@ -30,6 +30,7 @@
 #include "reac_seglock.h"
 #include "reac_segment_ident.h"   /* W1: the segment's identity + a slave's answer */
 #include "reac_arbitration.h"     /* the vocabulary those answers must BE */
+#include <reac/reac.h>            /* REAC_MAX_CHANNELS — a desk's downstream width */
 
 #include <stdio.h>
 #include <string.h>
@@ -359,7 +360,7 @@ static int test_slave_answers_the_segment_aggregate(void)
 
 	/* HUNTING: a recorder on a quiet wire. Nothing is mastering, nothing paces,
 	 * and there is no MAC to name — every one of those is a fact, not a gap. */
-	reac_segment_answer_slave(&a, 0, 0, 96000);
+	reac_segment_answer_slave(&a, 0, 0, 96000, REAC_MAX_CHANNELS);
 	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_NONE)) == 0);
 	CHK(strcmp(a.master_mac, "none") == 0);
 	CHK(strcmp(a.pace_source, reac_pace_source_name(REAC_PACE_FREE_RUN)) == 0);
@@ -374,7 +375,7 @@ static int test_slave_answers_the_segment_aggregate(void)
 	 * console's role policy joins a desk and refuses everything else. A recorder
 	 * that answered `none` here would be reported as refusing the very master it
 	 * is happily joined to. */
-	reac_segment_answer_slave(&a, 1, mac48, 48000);
+	reac_segment_answer_slave(&a, 1, mac48, 48000, REAC_MAX_CHANNELS);
 	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
 	CHK(strcmp(a.master_mac, "00:40:ab:c4:80:3b") == 0);
 	CHK(strcmp(a.pace_source, reac_pace_source_name(REAC_PACE_FOREIGN_MASTER)) == 0);
@@ -390,15 +391,48 @@ static int test_slave_answers_the_segment_aggregate(void)
 
 	/* Heard, but no MAC learned yet (the grant burst has not named a master):
 	 * the presence is reported and the identity is honestly absent. */
-	reac_segment_answer_slave(&a, 1, 0, 48000);
+	reac_segment_answer_slave(&a, 1, 0, 48000, REAC_MAX_CHANNELS);
 	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
 	CHK(strcmp(a.master_mac, "none") == 0);
 
+	/* JOINED TO A BOX ON M (0.5.1). The same segment, the same engine, a different
+	 * peer: an S-0808 strapped to master streams 8 channels, we follow its clock,
+	 * and the answer says `box` because the WIDTH says box. It is not a refusal —
+	 * we joined it — and publishing the box's refusal CODE here would report this
+	 * segment as declining the very master it is following. */
+	reac_segment_answer_slave(&a, 1, mac48, 48000, 8);
+	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
+	CHK(strcmp(a.rival_kind, reac_rival_kind_name(REAC_RIVAL_BOX)) == 0);
+	CHK(strcmp(a.refusal, reac_rival_refusal(REAC_RIVAL_NONE)) == 0);
+	CHK(strcmp(a.refusal, "none") == 0);
+	CHK(strcmp(a.pace_source, reac_pace_source_name(REAC_PACE_FOREIGN_MASTER)) == 0);
+	CHK(strcmp(a.conflict, "0") == 0);
+
+	/* THE REFUSED DOOR — a wire pinned MASTER with a box mastering it. No engine
+	 * runs behind this answer; the node exists so the refusal can be SEEN, which
+	 * is the whole defect of 2026-09-09 (the refused wire published nothing and
+	 * vanished from the console). The MAC is the RIVAL's, never ours. */
+	reac_segment_answer_refused(&a, 8, mac48, 48000);
+	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
+	CHK(strcmp(a.master_mac, "00:40:ab:c4:80:3b") == 0);
+	CHK(strcmp(a.rival_kind, reac_rival_kind_name(REAC_RIVAL_BOX)) == 0);
+	CHK(strcmp(a.refusal, reac_rival_refusal(REAC_RIVAL_BOX)) == 0);
+	CHK(strcmp(a.refusal, "rival-master-box") == 0);
+	CHK(strcmp(a.pace_source, reac_pace_source_name(REAC_PACE_FOREIGN_MASTER)) == 0);
+	CHK(strcmp(a.conflict, "0") == 0);
+	CHK(strcmp(a.rate, "48000") == 0);
+
+	/* A rival with no readable geometry refuses under its own code, and the width
+	 * that could not be read is 0 rather than a guess. */
+	reac_segment_answer_refused(&a, 0, mac48, 96000);
+	CHK(strcmp(a.rival_kind, reac_rival_kind_name(REAC_RIVAL_UNKNOWN)) == 0);
+	CHK(strcmp(a.refusal, "rival-master-unknown") == 0);
+
 	/* No rate published is "0", which a consumer reads as no rate — never a
 	 * guess at one. */
-	reac_segment_answer_slave(&a, 0, 0, 0);
+	reac_segment_answer_slave(&a, 0, 0, 0, REAC_MAX_CHANNELS);
 	CHK(strcmp(a.rate, "0") == 0);
-	reac_segment_answer_slave(&a, 0, 0, -1);
+	reac_segment_answer_slave(&a, 0, 0, -1, REAC_MAX_CHANNELS);
 	CHK(strcmp(a.rate, "0") == 0);
 	return 0;
 }
@@ -454,13 +488,13 @@ static int test_the_segment_answers_in_both_roles(void)
 	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
 
 	/* Quiet wire: hunting, and the aggregate says why — nothing masters it. */
-	reac_segment_answer_slave(&a, 0, 0, 96000);
+	reac_segment_answer_slave(&a, 0, 0, 96000, REAC_MAX_CHANNELS);
 	CHK_STATE(&sw, reac_role_engine_of_slave(1, 0), REAC_ROLE_STATE_HUNTING);
 	CHK(strcmp(a.master_state, "none") == 0);
 
 	/* A desk arrives and enrols us: applied, and the aggregate names the desk. */
 	reac_segment_answer_slave(&a, 1, reac_mac48_pack((const uint8_t[]){
-		0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }), 96000);
+		0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }), 96000, REAC_MAX_CHANNELS);
 	CHK_STATE(&sw, reac_role_engine_of_slave(1, 1), REAC_ROLE_STATE_APPLIED);
 	CHK(strcmp(a.master_state, "foreign") == 0);
 	CHK(strcmp(a.rival_kind, "desk") == 0);
