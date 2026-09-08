@@ -140,15 +140,46 @@ static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 	 * only their own announce could have produced. A pin is the evidence; requiring a
 	 * second kind is what made the desk silent (DESIGN.md, "A cold stagebox is
 	 * silent"). */
-	if (h->pinned)
+	if (h->pinned) {
+		/* THE ONE CONTRADICTION A PIN CANNOT SETTLE (operator ruling, 2026-09-09). The
+		 * operator wrote down that THIS wire is ours to drive, and a stagebox on M says
+		 * it is not. Two answers, and the daemon never picks between them by
+		 * out-shouting a box: it refuses, publishes the code and the rival's address,
+		 * and the remedy is the switch on the box's own front panel.
+		 *
+		 * IT STILL WAITS FOR NOTHING. This reads whatever the table ALREADY holds on the
+		 * first step after link — a box on M streams at wire cadence, so it is in the
+		 * table within microseconds of the sniffer opening — and a wire whose box is
+		 * COLD leaves the table empty, so the pin drives exactly as it did before (the
+		 * 2026-09-08 cold-start rule, untouched).
+		 *
+		 * ONLY A BOX. An UNREADABLE rival does not flip a pin: §4's conservatism is
+		 * that a frame kind nobody has captured must not decide a segment's topology,
+		 * and turning the operator's own answer into a refusal is deciding it. A box's
+		 * geometry is unambiguous and its remedy is physical, which is what earns it
+		 * the right to outrank a pin. */
+		if (h->pin == REAC_ROLE_MASTER && h->arb.state == REAC_SEGMENT_FOREIGN &&
+		    h->arb.rival == REAC_RIVAL_BOX)
+			return REAC_HUNT_REFUSED;
 		return h->pin == REAC_ROLE_SLAVE ? REAC_HUNT_SLAVE : REAC_HUNT_MASTER;
+	}
 
-	/* A foreign master is unambiguous evidence, and WHAT it is decides what we do about
-	 * it: a desk is joined, a stagebox on M and an unreadable rival are
-	 * refused. Immediate — a desk on the wire is not a maybe, and there is nothing a
-	 * longer wait could add. */
+	/* A foreign master is unambiguous evidence, and on a wire nobody pinned it is
+	 * OBEYED — a desk and a stagebox strapped to master alike (operator, 2026-09-09:
+	 * "if the box wants to be master, unless we have forced the master mode, we can
+	 * enslave the segment to the box's master clock"). A clock is a clock whichever end
+	 * of the pairing sends it; the width it announces is what the segment is then sized
+	 * from, and that width rides the verdict in `arb.rival_channels`.
+	 *
+	 * An UNREADABLE rival is the exception and stays refused: no legal `52 + n*36`
+	 * geometry has been heard from it, so there is nothing to size a segment from and
+	 * nothing anybody has captured — §4's rule that such a frame must not flip the
+	 * segment's topology applies to joining it just as it applied to driving over it.
+	 *
+	 * Immediate, either way: a master on the wire is not a maybe, and there is nothing
+	 * a longer wait could add. */
 	if (h->arb.state == REAC_SEGMENT_FOREIGN)
-		return h->arb.rival == REAC_RIVAL_DESK ? REAC_HUNT_SLAVE : REAC_HUNT_REFUSED;
+		return h->arb.rival == REAC_RIVAL_UNKNOWN ? REAC_HUNT_REFUSED : REAC_HUNT_SLAVE;
 
 	/* No master evidence. Before calling the wire vacant, refuse to race a 40-channel
 	 * stream whose owner has not announced yet. */
@@ -177,7 +208,8 @@ static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 int reac_hunt_step(struct reac_hunt *h, uint64_t now_ns)
 {
 	/* Age first: nothing here latches. A desk unplugged stops mastering the segment, a
-	 * box taken out of M stops being refused, and the next step says so on its own. */
+	 * box taken out of M stops mastering it too (and a pinned master stops refusing it),
+	 * and the next step says so on its own. */
 	reac_disco_table_age(&h->table, now_ns);
 	/* Our own FSM is IDLE by construction — this runs BEFORE any listener opens, so we
 	 * are neither probing nor established — and the pace is ours-and-undisciplined
