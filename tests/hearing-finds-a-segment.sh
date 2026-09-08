@@ -34,10 +34,18 @@ command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3"; exit $SKIP; }
 command -v ip >/dev/null 2>&1 || { echo "SKIP: no iproute2"; exit $SKIP; }
 command -v pipewire >/dev/null 2>&1 || { echo "SKIP: no pipewire binary"; exit $SKIP; }
 command -v pw-dump >/dev/null 2>&1 || { echo "SKIP: no pw-dump"; exit $SKIP; }
-unshare -r -n --map-root-user true 2>/dev/null || {
-	echo "SKIP: unprivileged user+net namespaces unavailable"; exit $SKIP; }
+# THE PID NAMESPACE IS WHAT MAKES "NOTHING OF OURS OUTLIVES THIS SCRIPT" TRUE UNDER A
+# KILL. The EXIT trap below covers every path the script takes ITSELF, and it does; what
+# it cannot cover is the script being SIGKILLed -- a meson timeout, a Ctrl-C, an agent
+# stopped mid-run. Five peer daemons from interrupted runs were found reparented to
+# systemd on 2026-09-09, each still holding the nested peer network namespace open, two
+# hours after the run that started them. Inside a PID namespace pid 1 is this shell, and
+# the kernel SIGKILLs every remaining process in the namespace the instant it dies, so an
+# interrupted run cleans itself up whether or not the trap ever ran.
+unshare -r -n -p -f --mount-proc --map-root-user true 2>/dev/null || {
+	echo "SKIP: unprivileged user+net+pid namespaces unavailable"; exit $SKIP; }
 
-OUT=$(unshare -r -n --map-root-user bash -s -- "$BIN" "$FAKE" <<'INNER'
+OUT=$(unshare -r -n -p -f --mount-proc --map-root-user bash -s -- "$BIN" "$FAKE" <<'INNER'
 set -u
 BIN="$1"
 FAKE="$2"
