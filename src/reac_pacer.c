@@ -1236,6 +1236,18 @@ int reac_clock_label_get(const struct reac_clock_label *l, char *out, size_t cap
 	return before == after;           /* 0 = torn; print nothing, not half a name */
 }
 
+void reac_pacer_clock_publish_graph(struct reac_pacer *p, const char *name, int freewheel,
+                                    double rate_diff, uint64_t nsec, const char *clock_ref)
+{
+	if (!p || !p->clock_follow)
+		return;
+	int usable = !freewheel && reac_clock_name_is_hardware(name);
+	enum reac_clock_quality q = reac_clock_grade_name(name, clock_ref);
+	reac_pacer_clock_publish(p, REAC_CLOCK_SRC_GRAPH, usable,
+	                         (int)(reac_clock_ppm_from_rate_diff(rate_diff) * 1000.0),
+	                         name, q, nsec);
+}
+
 void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
                               int present, int ppm_milli, const char *label,
                               enum reac_clock_quality quality, uint64_t now_ns)

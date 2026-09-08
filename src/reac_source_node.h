@@ -27,6 +27,8 @@ struct reac_source_node;
  * per-box width + label, which the autodetected box supplies. Bundled so the
  * recognition path can (re)size the node with one call without re-plumbing the
  * ring/rx/loop each time (they are process-lifetime constants). */
+struct reac_pacer;   /* reac_pacer.h — the master engine's cadence + clock discipline */
+
 struct reac_source_node_cfg {
 	struct pw_loop   *loop;
 	struct reac_ring *ring;
@@ -34,6 +36,15 @@ struct reac_source_node_cfg {
 	int               sample_rate;
 	const char       *inst;         /* per-instance node suffix (may be NULL)   */
 	int               master_role;  /* stamp the create-time badge props (#154) */
+	/* THE GRAPH-CLOCK SAMPLE'S OTHER DOOR. This node is the one the console links
+	 * (a box's inputs are what an operator patches first), so it is often the only
+	 * one the graph drives — a reac-playback nobody has patched into is SUSPENDED
+	 * and its callback never runs. Both nodes publish the same sample through
+	 * reac_pacer_clock_publish_graph; NULL (a slave, a pcap run) publishes nothing
+	 * and costs one branch. Borrowed, and it outlives this node: the pacer belongs
+	 * to the segment's sink, which is torn down after every source rebuild. */
+	struct reac_pacer *pacer;
+	const char       *clock_ref;    /* REACPW_CLOCK_REF, forwarded verbatim */
 };
 
 /* Create + connect the source node onto the given PipeWire loop. Reads from
@@ -184,6 +195,15 @@ int reac_source_node_take_reopen_role(struct reac_source_node *n);
  * and the rebuilt node reads the same planes. Input width is model-unique, so a
  * same-width call is a no-op. Returns 0, or -1 (on a failed rebuild *slot is left
  * NULL). */
+/* IS THIS NODE ACTUALLY ON THE GRAPH? A stream that was created and connected is not
+ * yet a node: PipeWire assigns the node id asynchronously, and a connect that fails
+ * later leaves an object nobody can see. Returns 1 once the daemon has given this
+ * stream a node id and it is not in error; 0 otherwise, with *why (never NULL) naming
+ * the state. The caller is expected to allow a grace period — CONNECTING is a normal
+ * transient — and then to REBUILD rather than to keep reporting success, because a
+ * segment whose capture node is missing has no input patches at all. */
+int reac_source_node_on_graph(const struct reac_source_node *n, const char **why);
+
 int reac_source_node_ensure(struct reac_source_node **slot,
                             const struct reac_source_node_cfg *cfg,
                             int channels, const char *label);

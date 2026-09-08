@@ -511,15 +511,43 @@ struct autodetect_ctx {
 	const char                  *pin;   /* a retired --box value, for the disagreement
 	                                     * notice; NULL once reported (report ONCE)  */
 	const char                  *tag;   /* "[iface] " once N>1, "" for a lone listener */
+	int                          absent; /* consecutive ticks reac-capture was NOT on
+	                                      * the graph after we said we had sized it */
 };
+
+/* How many 200 ms ticks a freshly built reac-capture may take to become a node before
+ * we call it missing and rebuild. CONNECTING is a normal transient and a loaded graph
+ * can take a moment; 2 s is far longer than any healthy path and far shorter than the
+ * NINE MINUTES a segment spent on 2026-09-08 with a playback node, a journal line
+ * claiming "-> reac-capture 16 in", and no capture node in the graph at all. */
+#define REAC_AD_ABSENT_TICKS 10
 
 static void on_autodetect_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct autodetect_ctx *c = data;
 	const struct reac_box_model *bm = reac_sink_node_recognized_box(c->sink);
-	if (!bm || bm == c->last)
-		return;   /* nothing recognized yet, or the same model as last poll */
+	if (!bm)
+		return;                      /* nothing recognized yet */
+	if (bm == c->last) {
+		/* SAME MODEL AS LAST POLL — so the only question left is whether the node we
+		 * SAID we built is really there. Announcing a resize and never checking is
+		 * how a segment can hold a playback node, a log line naming its capture
+		 * width, and no capture node, for as long as nobody looks at the graph. */
+		const char *why = "no node was ever created";
+		if (reac_source_node_on_graph(*c->src, &why)) {
+			c->absent = 0;
+			return;
+		}
+		if (++c->absent < REAC_AD_ABSENT_TICKS)
+			return;                  /* still inside the connect grace */
+		fprintf(stderr, "reac-pw: %sreac-capture is NOT on the graph %.1f s after it was "
+		        "sized to %s (%s) — rebuilding it. A segment without its capture node has "
+		        "no input patches at all.\n", c->tag,
+		        REAC_AD_ABSENT_TICKS * 0.2, bm->display, why);
+		c->absent = 0;
+		c->last = NULL;              /* fall through and build it again */
+	}
 	c->last = bm;
 	/* A pin that DISAGREES with the wire, said ONCE and never again. Once per frame is
 	 * how a disagreement becomes wallpaper; never saying it is what lets a wrong pin sit
@@ -868,6 +896,9 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	L->src_cfg = (struct reac_source_node_cfg){
 		.loop = loop, .ring = &L->ring, .rx = &L->rx, .sample_rate = L->rx.sample_rate,
 		.inst = c->inst_name, .master_role = (c->role == REAC_ROLE_MASTER),
+		/* .pacer is filled once the sink exists, below: this node publishes the
+		 * graph-clock sample too, because it is the node a console actually links
+		 * and therefore often the only one the graph drives. */
 	};
 
 	/* TX side: who drives the handshake + the clock depends on the role.
@@ -1034,8 +1065,13 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * tracks the box's counter slope and publishes a filtered ppm error. The sink's
 	 * existing 200 ms timer forwards it to the pacer's discipline. Wired
 	 * unconditionally; it is only ever read when clock following is enabled. */
-	if (L->sink)
+	if (L->sink) {
 		reac_sink_node_set_rate_source(L->sink, &L->rx);
+		/* Before any source node is built (the deferred autodetect path builds them
+		 * from this same cfg), so every rebuild carries the clock door. */
+		L->src_cfg.pacer = reac_sink_node_pacer(L->sink);
+		L->src_cfg.clock_ref = getenv("REACPW_CLOCK_REF");
+	}
 	/* The master node publishes reac.cfg.role.state off the SEGMENT's record, so
 	 * the answer is derived from the engine that is actually up rather than
 	 * frozen at the moment an assertion was parsed. */

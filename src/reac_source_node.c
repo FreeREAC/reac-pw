@@ -17,6 +17,9 @@
 #include <spa/param/latency-utils.h>
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
+#include "reac_pacer.h"   /* the segment's clock discipline: the graph-clock door */
+#include "reac_clock.h"   /* reac_clock_name_is_hardware, for the REAC_DEBUG line */
+
 #include <pipewire/pipewire.h>
 #include <pipewire/stream.h>
 
@@ -53,6 +56,13 @@ struct reac_source_node {
 	                   * reac_sink_node's own n->label — the ensure() identity check
 	                   * needs it to tell a width-preserving relabel from a no-op) */
 	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
+	char nodename[80];              /* what this node is called, for its own messages */
+	/* The graph-clock reference, published from the RT callback into the segment's
+	 * pacer. See reac_source_node_cfg's own comment for why this node has it too. */
+	struct reac_pacer *pacer;
+	const char *clock_ref;
+	struct spa_io_position *position;   /* SPA_IO_Position area; NULL until configured */
+	char graph_clock[64];               /* last driver clock name seen (REAC_DEBUG line) */
 	float scratch[REAC_MAX_QUANTUM]; /* sink for absent planes; never read back */
 
 	/* Set around source_reconnect_rate's pw_stream_disconnect/connect pair —
@@ -96,6 +106,29 @@ static void on_process(void *data)
 	 * cycle costs nothing dangerous: the ring keeps filling from the RX feeder
 	 * independently of this stream's lifecycle and simply holds the frames for
 	 * the next cycle once reconnected. */
+	/* THE GRAPH-CLOCK SAMPLE, taken BEFORE any early return, because it is a fact
+	 * about the graph and not about this cycle's buffer: a cycle with nothing to
+	 * dequeue still had a driver, and that driver is the reference we are grading.
+	 * Inert unless the segment has a pacer and it is following (reac_pacer.h). */
+	if (n->pacer && n->position) {
+		const struct spa_io_clock *c = &n->position->clock;
+		reac_pacer_clock_publish_graph(n->pacer, c->name,
+		                               (c->flags & SPA_IO_CLOCK_FLAG_FREEWHEEL) != 0,
+		                               c->rate_diff, c->nsec, n->clock_ref);
+		/* REAC_DEBUG only, and only when the DRIVER CHANGES: which clock is driving
+		 * this node is the one fact that decides whether a reference exists at all,
+		 * and it was previously invisible — the sink published the same sample from a
+		 * callback that a suspended node never runs, so "no reference" and "nobody
+		 * asked" read identically. One bounded string compare per cycle, a line per
+		 * change, exactly like this node's existing ring telemetry. */
+		if (n->debug && strncmp(n->graph_clock, c->name, sizeof n->graph_clock - 1) != 0) {
+			snprintf(n->graph_clock, sizeof n->graph_clock, "%s", c->name);
+			fprintf(stderr, "reac-pw: %s: graph clock = %s (%s)\n", n->nodename,
+			        c->name[0] ? c->name : "(unnamed)",
+			        reac_clock_name_is_hardware(c->name) ? "a hardware clock"
+			                                             : "refused: not a hardware clock");
+		}
+	}
 	if (atomic_load_explicit(&n->rate_reconnecting, memory_order_relaxed))
 		return;
 	struct pw_buffer *pwb = pw_stream_dequeue_buffer(n->stream);
@@ -196,6 +229,8 @@ static void on_process(void *data)
 static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 {
 	struct reac_source_node *n = data;
+	if (id == SPA_IO_Position)
+		n->position = (size >= sizeof(struct spa_io_position)) ? area : NULL;
 	if (id == SPA_IO_RateMatch)
 		n->rate_match = (size >= sizeof(struct spa_io_rate_match)) ? area : NULL;
 }
@@ -222,8 +257,30 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		atomic_store_explicit(&n->reopen_role, (int)req_role + 1, memory_order_relaxed);
 }
 
+/* MAIN LOOP. A NODE THAT DID NOT APPEAR HAS TO SAY SO.
+ *
+ * There was no state handler here at all, so a stream that errored on connect — or one
+ * PipeWire refused for any reason — left the daemon reporting "autodetected S-1608 ->
+ * reac-capture 16 in" over a graph that held no such node, and nothing anywhere said
+ * otherwise. That is the shape of a silent failure this project refuses: nine minutes of
+ * dead input patches on 2026-09-08 with a journal that read like success. ERROR is
+ * printed with PipeWire's own reason; the other transitions are debug-only, because a
+ * healthy stream walks through several of them on every rebuild. */
+static void on_state_changed(void *data, enum pw_stream_state old,
+                             enum pw_stream_state state, const char *error)
+{
+	struct reac_source_node *n = data;
+	if (state == PW_STREAM_STATE_ERROR)
+		fprintf(stderr, "reac-pw: %s: stream ERROR — %s (this node is NOT in the graph; "
+		        "its patches cannot exist)\n", n->nodename, error ? error : "no reason given");
+	else if (n->debug)
+		fprintf(stderr, "reac-pw: %s: stream %s -> %s\n", n->nodename,
+		        pw_stream_state_as_string(old), pw_stream_state_as_string(state));
+}
+
 static const struct pw_stream_events stream_events = {
 	PW_VERSION_STREAM_EVENTS,
+	.state_changed = on_state_changed,
 	.process = on_process,
 	.io_changed = on_io_changed,
 	.param_changed = on_param_changed,
@@ -254,12 +311,13 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", sample_rate);
 
-	/* Per-instance node name so one master per REAC VLAN/segment coexists. */
-	char nodename[64];
+	/* Per-instance node name so one master per REAC VLAN/segment coexists. Kept on the
+	 * node so its own failures can name themselves (on_state_changed). */
+	char *nodename = n->nodename;
 	if (inst && *inst)
-		snprintf(nodename, sizeof nodename, "reac-capture.%s", inst);
+		snprintf(n->nodename, sizeof n->nodename, "reac-capture.%s", inst);
 	else
-		snprintf(nodename, sizeof nodename, "reac-capture");
+		snprintf(n->nodename, sizeof n->nodename, "reac-capture");
 	char desc[128];
 	if (label && *label)
 		snprintf(desc, sizeof desc, "%s — %d ch (REAC box inputs)", label, n->channels);
@@ -293,13 +351,16 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		pw_properties_set(props, REAC_PROP_BOX_WIDTH, "0x0");
 		pw_properties_set(props, REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE);
 	}
-	/* THE SEGMENT'S IDENTITY, in the SLAVE role only — this node is then the
-	 * segment's door and the only node it has, so naming the segment here is what
-	 * lets a console address it without parsing a node name whose prefix is the
-	 * role (reac_segment_ident.h). A master's reac-capture is not the door; its
-	 * reac-playback sink carries this key instead, so exactly one node per
-	 * segment ever answers to it. */
-	if (props && !master_role)
+	/* THE SEGMENT'S IDENTITY, ON BOTH NODES OF THE PAIR. It used to be published on
+	 * the slave's capture node and on the master's playback node only — "exactly one
+	 * node per segment answers to it" — and that reading cost the console its grip on
+	 * a box: it keys a stagebox off the reac.* identity of the nodes it finds, and a
+	 * capture node whose reac.segment read `null` (measured on the rig 2026-09-08,
+	 * reac-capture.enp131s0) belongs to no segment as far as any client can tell.
+	 * A segment's two nodes are two halves of ONE thing and carry the same identity;
+	 * which node is the WRITE door is a different question, and role_swap still
+	 * answers it (see the role_swap field's comment). */
+	if (props)
 		pw_properties_set(props, REAC_PROP_SEGMENT, reac_segment_name(inst));
 
 	n->stream = pw_stream_new_simple(loop, "reac:capture", props, &stream_events, n);
@@ -520,6 +581,28 @@ void reac_source_node_publish_rate(struct reac_source_node *n, int hz)
 		source_reconnect_rate(n, hz);
 }
 
+int reac_source_node_on_graph(const struct reac_source_node *n, const char **why)
+{
+	const char *reason = "no node was ever created";
+	if (n && n->stream) {
+		const char *err = NULL;
+		enum pw_stream_state st = pw_stream_get_state(n->stream, &err);
+		uint32_t id = pw_stream_get_node_id(n->stream);
+		if (st == PW_STREAM_STATE_ERROR)
+			reason = err ? err : "the stream is in error";
+		else if (id == SPA_ID_INVALID)
+			reason = "the daemon has given it no node id";
+		else {
+			if (why)
+				*why = "on the graph";
+			return 1;
+		}
+	}
+	if (why)
+		*why = reason;
+	return 0;
+}
+
 int reac_source_node_ensure(struct reac_source_node **slot,
                             const struct reac_source_node_cfg *cfg,
                             int channels, const char *label)
@@ -556,5 +639,12 @@ int reac_source_node_ensure(struct reac_source_node **slot,
 	}
 	*slot = reac_source_node_new(cfg->loop, cfg->ring, cfg->rx, cfg->sample_rate,
 	                             want, cfg->inst, label, cfg->master_role);
-	return *slot ? 0 : -1;
+	if (!*slot)
+		return -1;
+	/* The clock door, re-attached on every rebuild — a resized node is a NEW stream,
+	 * and a graph-clock sample that stopped at the first box swap would be a
+	 * reference that quietly disappears. */
+	(*slot)->pacer = cfg->pacer;
+	(*slot)->clock_ref = cfg->clock_ref;
+	return 0;
 }

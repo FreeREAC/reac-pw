@@ -24,6 +24,7 @@
 #include "reac_ring.h"
 
 struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */
+struct reac_pacer;             /* reac_pacer.h — the cadence + the clock discipline */
 
 struct pw_loop;
 struct reac_sink_node;
@@ -150,6 +151,12 @@ void reac_sink_node_set_role_swap(struct reac_sink_node *n, struct reac_role_swa
  * after both nodes exist; pass NULL slot to detach. */
 void reac_sink_node_set_peer_source(struct reac_sink_node *n,
                                     struct reac_source_node **src_slot);
+
+/* The segment's clock discipline, so the OTHER node of the pair can publish the
+ * graph-clock sample into it (reac_source_node_cfg.pacer). Borrowed: it lives as long as
+ * this sink does, which outlives every source rebuild. NULL for a sink that is not a
+ * master engine. */
+struct reac_pacer *reac_sink_node_pacer(struct reac_sink_node *n);
 
 /* Wire the RX feeder as the BOX clock reference's measurement source (#75): the
  * sink's existing main-loop timer forwards reac_rx's filtered counter-slope ppm to
