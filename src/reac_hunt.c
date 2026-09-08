@@ -121,16 +121,22 @@ static int desk_geometry_live(const struct reac_disco_table *t, const uint8_t ou
 
 static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 {
-	/* A PIN IS AN ANSWER ABOUT THIS WIRE AND OUTRANKS THE HUNT. It is not an opinion the
-	 * election weighs: `REAC_ROLE_<segment>` says which end of the pairing the operator
-	 * wants here, and the hunt exists only for the segments nobody answered for. So the
-	 * ONLY thing still waited on is the wire being a REAC segment at all — no window, no
-	 * box evidence, no rival classification. A pinned segment that had to wait three
-	 * seconds and find a box would be a setting the daemon second-guesses; worse, a
-	 * pinned segment the hunt could not decide would never be served at all. */
+	/* A PIN IS AN ANSWER ABOUT THIS WIRE AND OUTRANKS THE HUNT, AND IT WAITS ON NOTHING.
+	 * It is not an opinion the election weighs: `REAC_ROLE_<segment>` says which end of
+	 * the pairing the operator wants here, and the hunt exists only for the segments
+	 * nobody answered for. No window, no box evidence, no rival classification — AND NO
+	 * FRAME. The caller pins on link, so this decides on link.
+	 *
+	 * THE FRAME USED TO BE WAITED FOR, AND THAT WAS THE 2026-09-08 22:10 OUTAGE. A REAC
+	 * stagebox in slave mode transmits NOTHING until a master announces to it: the
+	 * S-0808 and the S-1608 sat powered and cabled behind carrier-up NICs with
+	 * rx_packets +0 in five seconds and no 0x8819 frame in eight seconds of capture, so
+	 * `table.n == 0` was true forever and both pinned masters hunted for a frame that
+	 * only their own announce could have produced. A pin is the evidence; requiring a
+	 * second kind is what made the desk silent (DESIGN.md, "A cold stagebox is
+	 * silent"). */
 	if (h->pinned)
-		return h->table.n == 0 ? REAC_HUNT_HUNTING
-		     : (h->pin == REAC_ROLE_SLAVE ? REAC_HUNT_SLAVE : REAC_HUNT_MASTER);
+		return h->pin == REAC_ROLE_SLAVE ? REAC_HUNT_SLAVE : REAC_HUNT_MASTER;
 
 	/* A foreign master is unambiguous evidence, and WHAT it is decides what we do about
 	 * it: a desk is joined, a stagebox on M and an unreadable rival are
