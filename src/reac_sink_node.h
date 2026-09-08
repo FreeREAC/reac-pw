@@ -168,6 +168,26 @@ void reac_sink_node_restamp_peer(struct reac_sink_node *n);
  * master engine. */
 struct reac_pacer *reac_sink_node_pacer(struct reac_sink_node *n);
 
+/* IS A STAGEBOX MASTERING THE WIRE WE ARE DRIVING, with nobody enrolled to us?
+ *
+ * The segment aggregate this node already publishes, asked as a question instead of
+ * rendered as a property (`sink_publish_disco_props` composes it from the same call). It
+ * exists for the 2026-09-09 ruling: a wire the operator pinned MASTER with a box on M
+ * mastering it is REFUSED, and a daemon that serves a pin on link — which it must, since a
+ * cold box cannot speak first — can only learn that afterwards, from the engine it already
+ * started. There is no second sniffer and no second classifier: this is the pacer's own
+ * discovery table read through reac_arbitrate.
+ *
+ * Returns 1 (and fills `mac` with the RIVAL's address and `channels` with the width it was
+ * classified from) only when ALL of these hold: the aggregate is FOREIGN — which
+ * reac_arbitrate reports only while we are neither established nor granting, so a segment
+ * that HAS enrolled a box is never torn down for a second box's misconfiguration — and the
+ * rival's geometry is a box's. 0 otherwise, including for a desk and for a rival nobody can
+ * read (§4: a frame kind nobody has captured must not flip a pinned segment's topology).
+ *
+ * Main-loop only, like every other reader of the disco table. NULL-safe. */
+int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned *channels);
+
 /* Wire the RX feeder as the BOX clock reference's measurement source (#75): the
  * sink's existing main-loop timer forwards reac_rx's filtered counter-slope ppm to
  * the pacer's discipline. Borrowed pointer, main-loop use only, no RT path

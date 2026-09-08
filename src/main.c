@@ -910,10 +910,15 @@ static void listener_publish_segment(struct listener *L)
 		&L->heard,
 		L->rx_started ? atomic_load_explicit(&L->rx.frames_ok, memory_order_relaxed) : 0,
 		REAC_SEGMENT_HEARD_QUIET_TICKS);
-	reac_segment_answer_slave(&answer, heard,
-	                          L->slave_open
-	                            ? atomic_load_explicit(&L->slave.master_mac48,
-	                                                   memory_order_relaxed) : 0,
+	/* WHOSE CLOCK THIS SEGMENT IS ON. Normally the slave FSM learns it from the grant
+	 * burst; a box that masters the wire GRANTS NOTHING (it runs no handshake at all),
+	 * so for that join the address is the one the sighting carried — the same evidence
+	 * the verdict itself was made from, and the only one there is. */
+	uint64_t master_mac48 = L->slave_open
+		? atomic_load_explicit(&L->slave.master_mac48, memory_order_relaxed) : 0;
+	if (master_mac48 == 0 && L->cfg.join_box_master && L->cfg.rival_mac_set)
+		master_mac48 = reac_mac48_pack(L->cfg.rival_mac);
+	reac_segment_answer_slave(&answer, heard, master_mac48,
 	                          L->rx.sample_rate, L->cfg.wire_channels);
 
 	reac_source_node_publish_segment(L->src, role_s, state,
@@ -1549,7 +1554,12 @@ static int segment_role_pin(const char *iface, enum reac_role *out)
 	return 1;
 }
 
-static int sniffer_open(struct hearing *h, const char *name)
+/* `announce` says whether this open is news. It is, at link-up: the journal line that says
+ * which of the three things this interface is doing was what made the 2026-09-08 outage
+ * readable. It is NOT when a refused segment re-opens a sniffer to watch its own rival —
+ * that wire's story was just told, and repeating "pinned master — driving on link" under a
+ * door would describe the opposite of what is happening. */
+static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 {
 	if (sniffer_find(h, name))
 		return 0;
@@ -1601,6 +1611,8 @@ static int sniffer_open(struct hearing *h, const char *name)
 	/* WHICH OF THE THREE THIS INTERFACE IS DOING, said once, at link. A journal that only
 	 * ever says "listening for REAC" cannot distinguish a wire we are driving from a wire
 	 * we are waiting on, and that is what made the 2026-09-08 outage unreadable. */
+	if (!announce)
+		return 0;
 	if (pinned && pin == REAC_ROLE_MASTER)
 		fprintf(stderr, "reac-pw: [%s] pinned master — driving on link\n", name);
 	else if (pinned)
@@ -1609,6 +1621,11 @@ static int sniffer_open(struct hearing *h, const char *name)
 	else
 		fprintf(stderr, "reac-pw: [%s] unpinned — listening for REAC\n", name);
 	return 0;
+}
+
+static int sniffer_open(struct hearing *h, const char *name)
+{
+	return sniffer_open_ex(h, name, 1);
 }
 
 static struct listener *hearing_listener(struct hearing *h, const char *name)
@@ -1976,6 +1993,23 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 		if (door) {
 			if (sn->hunt.verdict == REAC_HUNT_REFUSED)
 				continue;                      /* still refused; the door stands */
+			/* AN EMPTY TABLE IS NOT EVIDENCE THAT THE RIVAL LEFT. This sniffer was
+			 * opened when the door went up, so for its first moments it has heard
+			 * nothing at all — and a pinned master on a silent wire decides MASTER at
+			 * once, by design. Undoing a refusal on that would take the door down 200 ms
+			 * after putting it up, and put it back a second later when the box's next
+			 * master record arrived: measured as exactly that flap. The bar is the
+			 * table's OWN withdrawal window, which is what "the rival stopped mastering"
+			 * means everywhere else in this daemon.
+			 *
+			 * UNSIGNED TIME COMPARES IN THE RIGHT ORDER OR NOT AT ALL: the poll's
+			 * `now` is read once at the top and the sniffer this door just opened
+			 * stamps a LATER one, so `now - opened_ns` wrapped to ~584 years and the
+			 * dwell passed on the very first poll — measured, as a door that came down
+			 * 200 ms after going up. */
+			if (now <= sn->hunt.opened_ns ||
+			    now - sn->hunt.opened_ns < REAC_DISCO_STALE_NS)
+				continue;
 			/* THE REFUSAL ENDED. The box was switched to S, or unplugged, and its
 			 * sighting aged out — so the wire the operator pinned is ours to drive
 			 * after all. Down with the door, up with the segment, through the same
@@ -2012,6 +2046,69 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 /* The 200 ms poll's share: expire holds, apply whatever the table queued. A
  * listener whose capture socket lost its interface is a DROP here, not a
  * process exit — failure is isolated to its segment (§9). */
+/* A PINNED MASTER THAT FINDS A BOX MASTERING ITS WIRE STOPS DRIVING (operator, 2026-09-09).
+ *
+ * The one contradiction: the operator wrote MASTER on this wire and a stagebox on M says it
+ * is theirs. The daemon never settles that by out-shouting a box.
+ *
+ * WHY IT CANNOT BE DECIDED BEFORE THE ENGINE STARTS, which is the whole reason this lives
+ * here and not in the hunt. A pin is served ON LINK with no frame waited for — a cold
+ * stagebox in slave mode transmits nothing until a master announces to it, and requiring a
+ * frame on a pinned wire is the 2026-09-08 outage. The sniffer's socket is opened in the
+ * same 200 ms poll that takes the decision, so at that instant the table is empty by
+ * construction; and a box on M announces its MASTER signature about once a second, so even
+ * a listening window would have to be a whole announce cadence of added latency on EVERY
+ * pinned wire, silent or not. Measured on the veth proof: the hunt-side refusal fired zero
+ * times. So the pin drives, and its OWN engine — which classifies every frame on that wire
+ * already — is what notices. The segment then comes down and a door goes up in its place.
+ *
+ * `reac_sink_node_rival_box` reports FOREIGN only while we are neither established nor
+ * granting, so a segment that has actually enrolled a box is never taken away from it. */
+static void hearing_refuse_pinned_master(struct hearing *h, uint64_t now)
+{
+	(void)now;
+	for (int i = 0; i < h->n_slots; i++) {
+		struct listener *L = &h->listeners[i];
+		if (!L->opened || L->cfg.door_only || !L->sink)
+			continue;
+		if (!L->cfg.role_pinned || L->cfg.role != REAC_ROLE_MASTER)
+			continue;   /* an unpinned wire JOINS a box master; it never refuses */
+		uint8_t mac[6];
+		unsigned channels = 0;
+		if (!reac_sink_node_rival_box(L->sink, mac, &channels))
+			continue;
+		char name[IFNAMSIZ];
+		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source ? L->cfg.rxcfg.source : "");
+		if (!name[0])
+			continue;
+		fprintf(stderr, "reac-pw: [%s] REFUSED (%s): REAC_ROLE_%s pins this segment "
+		        "MASTER and %02x:%02x:%02x:%02x:%02x:%02x masters it at %u ch, a BOX "
+		        "width. Two answers, and the console never fights a box: set the box's "
+		        "REAC Mode switch to slave and power-cycle it, or drop the pin and this "
+		        "wire will JOIN it. We drove it until we heard it and we stop now; the "
+		        "segment is republished as a door so the refusal can be seen.\n",
+		        name, reac_rival_refusal(REAC_RIVAL_BOX), name,
+		        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], channels);
+		/* The verdict is carried in the same shape the hunt would have handed over, so
+		 * there is ONE serve path and the door is configured by the same lines whichever
+		 * side of the segment's life the refusal was decided on. */
+		struct reac_hunt refused;
+		memset(&refused, 0, sizeof refused);
+		refused.verdict = REAC_HUNT_REFUSED;
+		refused.arb.state = REAC_SEGMENT_FOREIGN;
+		refused.arb.rival = REAC_RIVAL_BOX;
+		refused.arb.rival_channels = channels;
+		refused.arb.have_mac = 1;
+		memcpy(refused.arb.mac, mac, 6);
+		hearing_drop(h, name, "a box masters this wire and the pin says MASTER — refusing");
+		hearing_serve(h, name, &refused);
+		/* AND THE WIRE GOES ON BEING CLASSIFIED, or the refusal would be a latch: the
+		 * door has no engine to notice the box being switched back to slave. This is the
+		 * same kept sniffer a wire taken on silence gets, read by hearing_yield. */
+		sniffer_open_ex(h, name, 0);
+	}
+}
+
 static void hearing_poll(struct hearing *h)
 {
 	if (!h->enabled)
@@ -2024,6 +2121,7 @@ static void hearing_poll(struct hearing *h)
 			reac_ifscan_gone(&h->scan, L->cfg.rxcfg.source, 0, now);
 	}
 	hearing_hunt(h, now);
+	hearing_refuse_pinned_master(h, now);
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	hearing_apply(h);
