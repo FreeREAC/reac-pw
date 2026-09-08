@@ -372,15 +372,11 @@ static void on_process(void *data)
 	 * Guarded by the knob so the default path costs one predictable branch and not
 	 * a single store. RT-safe when it does run: a handful of bounded scans over a
 	 * 64-byte name plus four relaxed atomics, no allocation and no syscall. */
-	if (n->pacer.clock_follow) {
+	{
 		const struct spa_io_clock *c = &position->clock;
-		int usable = !(c->flags & SPA_IO_CLOCK_FLAG_FREEWHEEL) &&
-		             reac_clock_name_is_hardware(c->name);
-		enum reac_clock_quality q = reac_clock_grade_name(c->name, n->clock_ref);
-		reac_pacer_clock_publish(&n->pacer, REAC_CLOCK_SRC_GRAPH, usable,
-		                         (int)(reac_clock_ppm_from_rate_diff(c->rate_diff)
-		                               * 1000.0),
-		                         c->name, q, c->nsec);
+		reac_pacer_clock_publish_graph(&n->pacer, c->name,
+		                               (c->flags & SPA_IO_CLOCK_FLAG_FREEWHEEL) != 0,
+		                               c->rate_diff, c->nsec, n->clock_ref);
 	}
 
 	const float *in[REAC_MAX_CHANNELS];
@@ -1773,6 +1769,11 @@ static void sink_on_session(void *ctx, const uint8_t mac[6], unsigned session)
 		reac_rx_peer_reset((struct reac_rx *)ctx, mac, session);
 	else
 		reac_rx_session_end((struct reac_rx *)ctx);   /* the session ended */
+}
+
+struct reac_pacer *reac_sink_node_pacer(struct reac_sink_node *n)
+{
+	return n ? &n->pacer : NULL;
 }
 
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx)

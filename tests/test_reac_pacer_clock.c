@@ -390,6 +390,72 @@ int main(void)
 		}
 	}
 
+	/* ---- THE GRAPH-CLOCK DOOR ITSELF (2026-09-08). The admission and the grading used
+	 * to sit inline in the reac-playback node's RT callback, which made the reference
+	 * hostage to somebody having patched audio INTO the box's outputs: an unlinked
+	 * playback node is SUSPENDED, its callback never runs, and the daemon reported
+	 * "free-running (no reference)" on a rig whose RME was driving everything else and
+	 * whose CAPTURE node was linked and running throughout. The decision moved into
+	 * reac_pacer_clock_publish_graph so both nodes can take the sample; these are its
+	 * arms, which is what a caller can no longer get wrong on its own. */
+	{
+		struct reac_pacer p;
+		uint64_t now = 1000000000ull;
+		pacer_clock_init(&p, 1);
+
+		/* A HARDWARE DRIVER IS ADMITTED, graded by name, and followed. */
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish_graph(&p, "alsa_output.usb-RME_Babyface_Pro",
+			                               0, 1.000018, now, NULL);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
+		CHK(p.clock.state == REAC_CLOCK_LOCKED);
+
+		/* A SOFTWARE TIMER IS NOT A CLOCK. Following PipeWire's dummy driver would be
+		 * following our own CLOCK_MONOTONIC through a longer pipe, and would let us
+		 * report lock while nothing external disciplines anything. */
+		pacer_clock_init(&p, 1);
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish_graph(&p, "clock.system.monotonic",
+			                               0, 1.000018, now, NULL);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_FREERUN);
+		CHK(p.slot_period_ns == NOMINAL_NS);
+
+		/* A FREEWHEELING GRAPH IS NOT A CLOCK EITHER, whatever its driver is called. */
+		pacer_clock_init(&p, 1);
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish_graph(&p, "alsa_output.usb-RME_Babyface_Pro",
+			                               1, 1.000018, now, NULL);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_FREERUN);
+
+		/* THE OPERATOR'S DESIGNATION RIDES THROUGH the same door and is graded, so the
+		 * transcript names the tier the operator asked for rather than a bare guess. */
+		pacer_clock_init(&p, 1);
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish_graph(&p, "alsa_output.usb-RME_Babyface_Pro",
+			                               0, 1.000018, now, "Babyface");
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
+		CHK(reac_clock_disc_quality(&p.clock) == REAC_CLOCK_Q_DESIGNATED ||
+		    reac_clock_disc_quality(&p.clock) == REAC_CLOCK_Q_GOOD);
+
+		/* AND IT IS INERT WITH FOLLOWING OFF, like every other publisher here. */
+		pacer_clock_init(&p, 0);
+		for (int i = 0; i < 200; i++) {
+			reac_pacer_clock_publish_graph(&p, "alsa_output.usb-RME_Babyface_Pro",
+			                               0, 1.000018, now, NULL);
+			run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
+		}
+		CHK(p.clock.src == REAC_CLOCK_SRC_FREERUN);
+		CHK(p.slot_period_ns == NOMINAL_NS);
+	}
+
 	printf("test_reac_pacer_clock: OK\n");
 	return 0;
 }

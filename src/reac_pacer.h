@@ -726,6 +726,29 @@ void reac_pacer_clock_publish(struct reac_pacer *p, enum reac_clock_source src,
                               int present, int ppm_milli, const char *label,
                               enum reac_clock_quality quality, uint64_t now_ns);
 
+/* THE GRAPH-CLOCK SAMPLE, from whichever of our nodes the graph happens to drive.
+ *
+ * The admission and the grading used to live in the SINK's process callback, which made
+ * the reference hostage to somebody having patched audio INTO the box's outputs: a
+ * reac-playback node nobody has linked is SUSPENDED, its callback never runs, and the
+ * daemon falls back to the box counter slope while an RME sits in the graph driving
+ * everything else. Measured on the rig 2026-09-08 — both playback nodes suspended, zero
+ * links, "free-running (no reference)" — with the capture node linked and running the
+ * whole time. So the decision moved HERE and both nodes call it.
+ *
+ * `name` is the driver clock's name, `freewheel` its freewheeling flag, `rate_diff` its
+ * speed as a ratio of CLOCK_MONOTONIC and `nsec` its timestamp. A freewheeling graph is
+ * not a clock, and a software timer (clock.system.*) is our own free-run through a longer
+ * pipe: both are refused here, which drops the pacer to the box slope or an honest
+ * free-run. `clock_ref` is the operator's designation (REACPW_CLOCK_REF), which outranks
+ * the name heuristic and is outranked in turn by measured stability.
+ *
+ * RT-SAFE and inert unless following: a handful of bounded scans over a 64-byte name plus
+ * four relaxed atomics, no allocation, no syscall, and one predictable branch when the
+ * discipline is off. Callable from any node's RT callback. */
+void reac_pacer_clock_publish_graph(struct reac_pacer *p, const char *name, int freewheel,
+                                    double rate_diff, uint64_t nsec, const char *clock_ref);
+
 /* PACER THREAD ONLY. Re-evaluate the discipline (rate-limited internally to one
  * evaluation per REAC_CLOCK_TICK_SLOTS) and return the period this slot should
  * advance the deadline by.
