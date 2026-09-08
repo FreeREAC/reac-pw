@@ -4,8 +4,8 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.0}
-Release:        3%{?dist}
+Version:        %{?version_override}%{!?version_override:0.5.1}
+Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,43 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.1-1
+- A BOX THAT MASTERS THE WIRE IS JOINED, not refused. Operator ruling after the rig
+  proof of 0.5.0-3: an S-0808 rebooted with its REAC Mode switch on M, on an unpinned
+  wire, was refused -- "masters this wire at 8 ch, which is a BOX width, not a desk's
+  40" -- and the daemon then served nothing, so the segment disappeared from the
+  console altogether. A clock is a clock whichever end of the pairing sends it. An
+  unpinned wire, or one pinned slave, now follows a box master's clock, decodes the
+  box-width broadcast it puts on the wire, and publishes a capture node sized from the
+  width that box announced (8 ch for an S-0808, not a 40-slot fabric).
+- The join is RECEIVE-ONLY, and that is the protocol's own shape rather than a reduced
+  one: a stagebox on M runs no handshake at all -- no announce, no grant, no heartbeat
+  -- so there is no enrolment to answer and a cold-connect flood aimed at it would be
+  noise. Nothing is emitted on a wire we joined this way.
+- A wire the operator PINNED master is the one case that still refuses: two answers
+  contradict each other and the console never fights a box. The pin drives on link (a
+  cold box cannot speak first, which is 0.5.0-3's own rule), the segment's engine
+  classifies the box mastering the wire about a second later, and the segment is then
+  taken down.
+- AND A REFUSED WIRE PUBLISHES A DOOR. The real cost on the rig was the silence: a
+  refusal nobody can see is indistinguishable from a daemon that is not running. A
+  refused segment now publishes one reac-capture node carrying reac.segment,
+  reac.master.state=foreign, the rival's MAC, reac.master.rival.kind=box and
+  reac.master.refusal=rival-master-box, with no TX, no pacer, no segment lock and no
+  RX feeder behind it. Its sniffer is kept, so the door comes down and the segment
+  comes up when the box stops mastering the wire -- no restart, no latch.
+- A sighting's WIDTH now crosses the pacer's event ring. It never did: role and model
+  index crossed and the geometry did not, so the master side classified every stagebox
+  on M as a rival nobody can read (rival-master-unknown) -- the one distinction the
+  arbitration exists to make.
+- A peer's width also widens on its own in the discovery table, instead of only when
+  its model changes. A box on M declares no model at all, so its width could never be
+  re-read once recorded.
+- Proven end to end on the veth job proof, against a stagebox emitting real
+  box-geometry master frames: joined at 8 ch with the right props and not one frame
+  sent back; refused on a pinned wire with the door on the graph, our transmission
+  stopped, and the segment taken when the box stopped mastering.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-3
 - A COLD STAGEBOX NOW WAKES. Measured on the rig 2026-09-08 22:10 with 0.5.0-2: an
   S-0808 and an S-1608, both freshly powered, both cabled, both NICs carrier up at
