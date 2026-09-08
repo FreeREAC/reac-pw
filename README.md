@@ -56,7 +56,19 @@ sudo ./build/reac-pw --live reac0 --tx reac0        # MASTER (default) pinned to
 sudo ./build/reac-pw --live reac0 --role slave --tx reac0   # SLAVE: we slave to a desk
 ```
 
-REAC has no fixed master — any box can be the master. `--role master` (default)
+**The packaged shape configures nothing at all.** With no flags, reac-pw sniffs every
+linked Ethernet interface passively, and the first REAC frame it hears turns that
+interface into a segment. It then takes the end of the pairing the wire leaves open:
+a desk mastering the segment is JOINED as a slave, a segment with a box on it and no
+master is TAKEN as master after a three-second hunt (three master announce cadences)
+and the box is granted, and a stagebox strapped to master mode is REFUSED with the
+remedy named and never fought. `REAC_ROLE_<segment>=master|slave` in
+`~/.config/reac-pw/reac-pw.env` overrides that for one segment; a bare `REAC_ROLE` is
+only a floor for a segment nobody has heard yet, and the hunt supersedes it out loud.
+Nothing has to be written for a normal box to appear.
+
+REAC has no fixed master — any box can be the master. `--role master` (default on a
+pinned `--live` run)
 makes openmixer the master (we drive the cdea/cfea handshake + own the clock; a
 stagebox slaves to us). `--role slave` makes us a box slaved to an external master
 (it drives the handshake + owns the clock; we lock to its cadence and return our
@@ -159,8 +171,18 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   shape, not a clock wall. See
   [docs/REAC-BOX-STATE-DIAGRAM.md](docs/REAC-BOX-STATE-DIAGRAM.md) and
   [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md).
-- **Role selection** (`--role master|slave`, `reac_role.h`) — default master
-  preserves the original behaviour; parse + validation unit-tested.
+- **Role selection** (`--role master|slave`, `reac_role.h`) — default master on a
+  pinned `--live` run; parse + validation unit-tested.
+- **Autodetect + role election** (0.5.0, `reac_ifscan` + `reac_hunt`) — the daemon
+  finds its own segments (rtnetlink link state, a passive `0x8819` sniff) and elects
+  its own role per segment from what it hears. Proven on a veth pair inside an
+  unprivileged namespace, whole-binary: a desk on the peer end is joined as a slave,
+  and a box on a vacant wire is taken as master, granted, and reaches ESTABLISHED —
+  with an empty `$HOME` and no arguments (`tests/hearing-finds-a-segment.sh`).
+- **Clock discipline** (0.5.0, `reac_clock`) — ON by default: the TX cadence follows
+  the best available reference (NIC/external PHC > a hardware-driven graph clock >
+  the box's counter slope), the period is slewed and never phase-stepped, and with no
+  reference the pacer free-runs and says so. `REACPW_CLOCK_FOLLOW=0` opts out.
 
 Target: Fedora + PipeWire 1.4.
 
