@@ -457,11 +457,50 @@ interface into a SEGMENT (`reac_ifscan`). The role then comes out of the same he
 (`reac_hunt`): a desk mastering the wire is joined as a slave; a wire with a box on it
 and no master is taken as master after three master announce cadences (3 s) and the box
 is granted; a stagebox strapped to master is refused with the remedy named and never
-fought; a `REAC_ROLE_<segment>` pin skips the election and is served on the first
-classifying frame. **The segment's NAME is its interface's**, and so is the node suffix
+fought; a `REAC_ROLE_<segment>` pin skips the election and the hearing both, and is
+served **on link up** (see "A cold stagebox is silent" below). **The segment's NAME is
+its interface's**, and so is the node suffix
 (`reac-capture.enp131s0`), which is also the key the per-segment conf is written under —
 `REAC_ROLE_enp131s0`. There is no per-interface file any more; there is one conf and
 suffixed keys in it.
+
+**A cold stagebox is silent, so hearing alone cannot wake one.** Measured on the
+operator's desk 2026-09-08 22:10 with 0.5.0-2: an S-0808 on `enp131s0` and an S-1608 on
+`enp128s20f0u2`, both freshly powered, both cabled, both NICs carrier up at 100 Mb full,
+and in five seconds `rx_packets` moved by **0** on both and eight seconds of `tcpdump`
+caught no `0x8819` frame at all. A REAC stagebox in SLAVE mode transmits nothing until a
+master announces to it — the `cdea 04 03` JOIN and the heartbeats this rig has captured
+all followed a master's announce, never preceded one. So "the first classifying frame is
+the gate to SERVE" is a gate a cold segment can never open, and 0.4.8 did not have this
+problem only because it drove from the first instant with no gate at all. This is the
+hearing model's one hole and it is not a small one: two boxes, both mute, forever.
+
+Therefore the model needs an answer that does not depend on being spoken to first, and
+there are exactly two. **The pin is the one this release builds.** `REAC_ROLE_<iface>=master`
+is the operator's explicit answer about that wire, and a setting is not evidence to be
+weighed — so a PINNED interface opens its side the moment it has CARRIER, with no frame
+required: a pinned master probes and announces exactly as 0.4.8 did, a pinned slave opens
+its slave engine and still transmits nothing until a master is heard. Only the UNPINNED
+path is still passive-until-heard, and on an unpinned wire a passive sniffer remains the
+right cost. The journal says which of the three an interface did, in one line at link up:
+`pinned master — driving on link`, `pinned slave — listening for a master`, or
+`unpinned — listening for REAC`.
+
+**OPEN DECISION (the operator's ruling is pending; NOT built here) — the knock.** The
+second answer is a periodic knock: on a LINKED, wired interface that has carried zero
+REAC traffic for N seconds, emit ONE master announce, and if a desk answers, back off to
+slave. It would wake a cold box on a wire nobody configured, which is the whole promise
+of "nobody writes a config file", and it is the only thing that closes the hole for an
+UNPINNED segment. Against it: an announce is a transmission onto a wire we were told
+nothing about. On an office LAN, or a NIC that shares a switch with the house network,
+that is this daemon periodically shouting a Roland-OUI frame at machines that never
+asked, forever, with nothing to hear it — and the passive sniffer's whole argument is
+that listening costs one idle socket and transmitting is what needs a reason. The
+trade-off is therefore: a box that never wakes on an unpinned wire, versus an unsolicited
+announce on every linked NIC in the house. A middle ground exists and is also unruled —
+knock only where the interface has never carried non-REAC traffic either, or only on a
+NIC the operator named. Until it is ruled, an unpinned cold box is woken by pinning its
+interface, and the journal line above is what tells the operator which case they are in.
 
 **What it owes, in this order.**
 
@@ -513,7 +552,7 @@ middle digit does not move again for them.
 | `src/reac_link.{h,c}` | **is there a CABLE** — a dependency-free `/sys/class/net/<if>/carrier` predicate, 1/0/-1 UNKNOWN. Read by the PROBING watchdog so "the box is silent" and "the cable is out" stop reading the same (#95). Answers UNKNOWN for an admin-down interface, which the file cannot describe |
 | `src/reac_ifscan.{h,c}` | **WHICH interfaces to listen on, and which are segments** — the host's netdev table over rtnetlink, one decision per Ethernet interface. Link is the gate to LISTEN (a passive 0x8819 sniffer, `main.c`'s hearing supervisor), the first REAC frame heard is the gate to SERVE, and link loss drops the segment after a 3 s hold a box power-cycle cannot outlast; `RTM_DELLINK` and a re-enumerated ifindex drop at once. A segment is named after its interface; nothing names one in advance (openmixer's trunk-VLAN spec, amendment 2026-09-02). Pure table + event queue, netlink as a byte source, same shape as `reac_linkmon` |
 | `src/reac_ifname.{h,c}` | a segment's STABLE, bus+physical-address-derived name (`pci1`, `usb2`) — built, tested against real captured `/sys` paths, and DELIBERATELY NOT WIRED into segment identity. A segment IS its interface here and is NAMED after it, and a console generates its per-segment keys and its patch addresses from that published name — so swapping the identity renames every key and every patch on a live rig in one step. The answer to name instability is node names that follow the BOX (owed, see "What 0.5.0 does not do"), not a second name derived from the interface. Kept for that work; wired to nothing today |
-| `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is REFUSED by its frame geometry and left alone. A `REAC_ROLE_<segment>` pin skips all of it and is served on the first classifying frame. Nothing latches: the table ages, and the verdict is recomputed. Pure |
+| `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is REFUSED by its frame geometry and left alone. A `REAC_ROLE_<segment>` pin skips all of it and is served ON LINK, with no frame required — a cold slave box is silent until a master announces to it, so waiting for a classifying frame on a pinned wire waits forever (2026-09-08, both rig boxes mute). Nothing latches: the table ages, and the verdict is recomputed. Pure |
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
