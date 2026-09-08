@@ -183,6 +183,30 @@ int main(void)
 	/* A RIVAL always wins the report: it is why nothing else can happen. */
 	CHK(strcmp(reac_segment_refusal(REAC_RIVAL_BOX, 1, 1, 0), "rival-master-box") == 0);
 
+	/* ---- THE EVIDENCE TRAVELS WITH THE VERDICT (2026-09-09). A box mastering an unpinned
+	 * wire is JOINED now, and the segment's nodes are sized from what it announces — so the
+	 * width the kind was decided from is published beside the kind, never re-derived by a
+	 * caller reading the table a second time. */
+	reac_disco_table_init(&t);
+	put(&t, BOX, REAC_DISCO_ROLE_MASTER, now);
+	t.e[0].channels = 8;                            /* an S-0808 on M: 340 B frames */
+	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
+	CHK(a.state == REAC_SEGMENT_FOREIGN);
+	CHK(a.rival == REAC_RIVAL_BOX);
+	CHK(a.rival_channels == 8);
+	/* A desk publishes its own 40 the same way. */
+	reac_disco_table_init(&t);
+	put(&t, DESK, REAC_DISCO_ROLE_MASTER, now);
+	t.e[0].channels = REAC_MAX_CHANNELS;
+	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
+	CHK(a.rival == REAC_RIVAL_DESK);
+	CHK(a.rival_channels == REAC_MAX_CHANNELS);
+	/* No rival, no width — an absent number is 0 and means "no geometry heard", which is
+	 * exactly what makes an unreadable rival UNKNOWN rather than narrow. */
+	reac_disco_table_init(&t);
+	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
+	CHK(a.rival == REAC_RIVAL_NONE && a.rival_channels == 0);
+
 	printf("test_reac_arbitration: OK\n");
 	return 0;
 }

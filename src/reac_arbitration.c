@@ -92,6 +92,7 @@ void reac_arbitrate(const struct reac_disco_table *table,
 		/* WHAT the rival is travels with the fact that there IS one: a surface told only
 		 * "conflict" cannot tell a desk to join from a box to fix. */
 		out->rival = rival ? reac_rival_kind_from_channels(rival->channels) : REAC_RIVAL_NONE;
+		out->rival_channels = rival ? rival->channels : 0;
 		if (our_mac) {
 			memcpy(out->mac, our_mac, 6);
 			out->have_mac = 1;
@@ -108,6 +109,9 @@ void reac_arbitrate(const struct reac_disco_table *table,
 		/* §2b: a DESK here is joined; a stagebox strapped to master claims exactly the same
 		 * thing and must be refused instead, and only the geometry separates them. */
 		out->rival = reac_rival_kind_from_channels(rival->channels);
+		/* The evidence under that verdict travels with it: a box master that is JOINED
+		 * sizes the segment's nodes from this number (0.5.1's ruling, DESIGN.md). */
+		out->rival_channels = rival->channels;
 		/* The foreign master times the stream; whatever WE would have disciplined to is
 		 * not what the wire is running on. */
 		out->pace = REAC_PACE_FOREIGN_MASTER;

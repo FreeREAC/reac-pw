@@ -104,6 +104,17 @@ struct reac_arbitration {
 	 * REAC_RIVAL_NONE when there is no rival at all.
 	 */
 	enum reac_rival_kind rival;
+	/**
+	 * THE WIDTH THE CLASSIFICATION WAS MADE FROM, in channels; 0 when the rival's frames
+	 * carried no legal `52 + n*36` geometry (which is what makes {@link rival} UNKNOWN).
+	 *
+	 * The kind is a verdict and this is the evidence under it, and the difference is
+	 * load-bearing since the 2026-09-09 ruling: a box that masters an unpinned wire is
+	 * JOINED, and the segment's nodes are then sized from what that box announces. A
+	 * caller that had only `box` would have to re-derive the width from the table — the
+	 * classification and the number it was made from must not be recovered separately.
+	 */
+	unsigned rival_channels;
 };
 
 
