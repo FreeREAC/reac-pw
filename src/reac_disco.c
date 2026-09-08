@@ -95,23 +95,45 @@ static enum reac_disco_role role_of(const struct reac_ctrl_parsed *p)
 	}
 }
 
-int reac_disco_classify(const uint8_t *frame, size_t len, const uint8_t our_mac[6],
-                        struct reac_disco_sighting *out)
+/* Shared body for reac_disco_classify and reac_disco_classify_on_segment. `lock` is NULL for
+ * the plain (unlocked) entry point — see reac_disco.h for what the lock does and why. */
+static int classify_core(struct reac_disco_peer_lock *lock, const uint8_t *frame, size_t len,
+                         const uint8_t our_mac[6], struct reac_disco_sighting *out)
 {
 	struct reac_ctrl_parsed p;
 	if (reac_ctrl_parse(frame, len, &p) == REAC_CTRL_NONE)
 		return -1;                       /* not a 0x8819 frame: not evidence */
-	/* The Roland OUI is the "is this REAC gear at all" gate — the one test that makes a
-	 * sighting a fact rather than a packet count. */
-	if (p.src[0] != 0x00 || p.src[1] != 0x40 || p.src[2] != 0xab)
-		return -1;
 	if (memcmp(p.src, our_mac, 6) == 0)
 		return -1;                       /* our own echo (PACKET_IGNORE_OUTGOING is
 		                                  * best-effort; hubs and loopbacks echo) */
 	/* A cdea/cfea frame that fails the checksum is corrupt — not a device with a bad
-	 * byte. FILLER (type 0000) is checksum-exempt: its block is the audio descriptor. */
-	if (p.kind != REAC_CTRL_FILLER && reac_ctrl_checksum_verify(frame) != 0)
+	 * byte. FILLER (type 0000) is checksum-exempt: its block is the audio descriptor.
+	 * This is now the PRIMARY validity signal for a non-FILLER sighting (the operator's
+	 * ruling removed the Roland-OUI gate below it: discover by protocol frame only, never
+	 * pin or spoof a MAC). */
+	int is_filler = p.kind == REAC_CTRL_FILLER;
+	if (!is_filler) {
+		if (reac_ctrl_checksum_verify(frame) != 0)
+			return -1;
+		/* REAC is physically point-to-point: two boxes cannot collide on the same
+		 * segment/NIC. The FIRST checksum-verified control frame on a segment proves a
+		 * peer real; latch it, once, for the lifetime of *lock (which matches the
+		 * segment's own pacer — a segment drop/reopen gets a fresh, unlocked lock along
+		 * with a fresh pacer, so a genuine box swap is not stuck on the old MAC forever).
+		 * A LATER checksum-verified frame from a DIFFERENT MAC is still accepted as
+		 * evidence unchanged — the lock only ever narrows what a checksum-EXEMPT FILLER
+		 * frame may claim, never what a verified control frame proves. */
+		if (lock && !lock->locked) {
+			memcpy(lock->mac, p.src, 6);
+			lock->locked = 1;
+		}
+	} else if (lock && lock->locked && memcmp(lock->mac, p.src, 6) != 0) {
+		/* A FILLER frame skips the checksum, so on its own it proves nothing about WHO
+		 * sent it — only that 0x8819 was on the wire. Once this segment has a proven
+		 * peer, a FILLER claiming to be someone else cannot be the box already proven
+		 * real on a link that physically has only one other party. */
 		return -1;
+	}
 
 	memset(out, 0, sizeof *out);
 	memcpy(out->mac, p.src, 6);
@@ -122,6 +144,24 @@ int reac_disco_classify(const uint8_t *frame, size_t len, const uint8_t our_mac[
 	/* The geometry, straight off the length: what the peer IS, beside what it claims. */
 	out->channels = reac_frame_channels(reac_frame_clean_len(len));
 	return 0;
+}
+
+int reac_disco_classify(const uint8_t *frame, size_t len, const uint8_t our_mac[6],
+                        struct reac_disco_sighting *out)
+{
+	return classify_core(NULL, frame, len, our_mac, out);
+}
+
+void reac_disco_peer_lock_init(struct reac_disco_peer_lock *lock)
+{
+	memset(lock, 0, sizeof *lock);
+}
+
+int reac_disco_classify_on_segment(struct reac_disco_peer_lock *lock, const uint8_t *frame,
+                                   size_t len, const uint8_t our_mac[6],
+                                   struct reac_disco_sighting *out)
+{
+	return classify_core(lock, frame, len, our_mac, out);
 }
 
 int reac_disco_model_index(const struct reac_box_model *m)

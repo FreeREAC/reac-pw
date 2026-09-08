@@ -484,9 +484,16 @@ struct reac_pacer {
 	 *                read by the sink node's property poll. The pacer thread must never
 	 *                touch it.
 	 * See reac_disco.h; the seam it feeds is documented in openmixer's
-	 * docs/design/specs/2026-07-16-reac-discovery-via-reac-pw.md. */
+	 * docs/design/specs/2026-07-16-reac-discovery-via-reac-pw.md.
+	 *
+	 * disco_peer_lock — PACER-THREAD-ONLY, like disco_gate. One reac_pacer is one segment
+	 * (embedded in the segment's sink node), so its lifetime matches the segment's: a
+	 * segment drop/reopen gets a fresh reac_pacer and so a fresh, unlocked lock — see
+	 * reac_disco.h's header comment for what it defends against (the FILLER-frame gap
+	 * left by removing the Roland-OUI check, 2026-09-03). */
 	struct reac_disco_gate disco_gate;
 	struct reac_disco_table disco;
+	struct reac_disco_peer_lock disco_peer_lock;
 
 	/* FSM event log ring (producer = pacer thread, consumer = main loop) */
 	struct reac_pacer_event evring[REAC_PACER_EVRING];

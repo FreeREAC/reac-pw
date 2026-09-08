@@ -26,11 +26,15 @@
  *      EnvironmentFile= delivers on. Above the files because a variable set for
  *      THIS invocation is more specific than a file that describes every one.
  *
- *   3. ~/.config/reac-pw/<iface>.env       PER-SEGMENT
+ *   3. <KEY>_<segment>                     PER-SEGMENT
  *      The rig has two segments and they are not interchangeable: different
- *      boxes, different NICs, potentially different rates. This is the layer
- *      that can say so, and it is the one a multi-segment rig should actually
- *      use.
+ *      boxes, different NICs, potentially different rates. A per-segment fact
+ *      is the key SUFFIXED with the segment's name — REAC_ROLE_enp131s0 — in
+ *      any of the layers below, and it outranks the bare key in every one of
+ *      them. Segments are discovered, not declared (openmixer's
+ *      2026-08-23-reac-trunk-vlan-daemon.md, amendment 2026-09-02), so there
+ *      is no per-segment FILE to create: a segment's name is its interface's,
+ *      and the console generates the key into reac-pw.env.
  *
  *   4. ~/.config/reac-pw/reac-pw.env       PER-HOST, all segments
  *      What every segment on this host shares.
@@ -67,7 +71,7 @@ enum reac_conf_layer {
 	REAC_CONF_NONE = 0,     /* nothing answered; the caller's built-in wins */
 	REAC_CONF_ARGV,         /* set by main.c when a command-line flag won */
 	REAC_CONF_ENV,          /* the process environment */
-	REAC_CONF_SEGMENT,      /* ~/.config/reac-pw/<iface>.env */
+	REAC_CONF_SEGMENT,      /* <KEY>_<segment>, in the environment or a conf file */
 	REAC_CONF_HOST,         /* ~/.config/reac-pw/reac-pw.env */
 	REAC_CONF_LAST_RESORT,  /* ~/.config/openmixer/reac.env */
 	REAC_CONF_BUILTIN,      /* the compiled-in default */
@@ -78,13 +82,13 @@ enum reac_conf_layer {
 const char *reac_conf_layer_name(enum reac_conf_layer l);
 
 /* Resolve `key` through the layers above (2 through 5 — argv is the caller's).
- * `iface` selects the per-segment file and may be NULL, which skips layer 3.
+ * `segment` selects the per-segment key and may be NULL, which skips layer 3.
  * On a hit, copies the value into `out` (always NUL-terminated) and returns the
  * layer. On no hit anywhere, leaves `out` untouched and returns REAC_CONF_NONE.
  *
  * `home` is the base for ~ and exists so the test can point the whole stack at a
  * temporary directory; pass NULL for the real $HOME. */
-enum reac_conf_layer reac_conf_lookup(const char *key, const char *iface,
+enum reac_conf_layer reac_conf_lookup(const char *key, const char *segment,
                                       const char *home, char *out, size_t cap);
 
 /* Read one key out of one env-format file. Exposed for the test and for anyone
