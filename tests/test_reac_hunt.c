@@ -200,16 +200,25 @@ int main(void)
 	 * up, and neither emitted a single 0x8819 frame — a REAC box in slave mode says
 	 * nothing until a master announces to IT. So a pin that waited for "the wire to BE a
 	 * segment" waited forever, and both boxes stayed mute. THE FIRST STEP DECIDES, on an
-	 * utterly silent table, or a pinned master can never wake the box it was pinned for. */
+	 * utterly silent table, or a pinned master can never wake the box it was pinned for.
+	 * PROVEN ON THE RIG with 0.5.0-3: both boxes came up within two seconds of
+	 * "pinned master — driving on link". */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_MASTER);
 	CHK(reac_hunt_step(&h, t0) == 1);              /* silent wire, zero frames, no window */
 	CHK(h.verdict == REAC_HUNT_MASTER);
 	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
 	CHK(reac_hunt_heard_anything(&h) == 0);        /* and it is honest about hearing nothing */
-	/* A pinned SLAVE opens its own side on the same silence. It transmits nothing until a
-	 * master is heard — that is the slave engine's own law, not a reason to withhold the
-	 * role — so the operator's `REAC_ROLE_<iface>=slave` is obeyed on link, too. */
+	/* A pinned SLAVE opens its own side on the same silence: the operator's
+	 * `REAC_ROLE_<iface>=slave` is obeyed on link too, with no frame waited for.
+	 *
+	 * AND IT DOES TRANSMIT. This comment used to say a pinned slave "transmits nothing
+	 * until a master is heard" and that is FALSE: on PHY-up the slave role FLOODS
+	 * REAC_FSM_FLOOD_BURST (~5460) broadcast FILLER frames — reac_fsm.h's
+	 * FLOOD_ANNOUNCE, reac_slave.c — and only falls quiet afterwards if nothing answered.
+	 * That flood is the protocol's own bounded cold-connect announcement and is exactly
+	 * what a real box does, so it is correct; it is simply not silence, and the journal
+	 * line says "cold-connect flood, then listening for a master". */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_SLAVE);
 	CHK(reac_hunt_step(&h, t0) == 1);
@@ -248,26 +257,35 @@ int main(void)
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
 	CHK(h.verdict == REAC_HUNT_MASTER);
 
-	/* ---- J. OUR OWN KNOCK IS NOT EVIDENCE OF ANYBODY. A knock goes out with the
-	 * Roland-OUI stand-in MAC, not this NIC's address, and libreac's capture is a plain
-	 * recv() on AF_PACKET, which hands back locally generated OUTGOING frames too. So the
-	 * frame we put on the wire to wake a box comes straight back at us looking exactly
-	 * like a foreign master at desk geometry — and without this defence a knocking daemon
-	 * reads its own announce, calls the wire taken, and slaves itself to itself on every
-	 * wire in the house. Sabotage check: the SAME frame from a MAC we did not declare
-	 * IS a sighting, so this drops our echo and not the wire. */
-	static const uint8_t KNOCKER[6] = { 0x00, 0x40, 0xab, 0x9f, 0x9e, 0xbe };
+	/* ---- J. THE MASTERLESS LICENCE, for a wire nobody pinned. reac_knock proves a wire
+	 * carried NOTHING for its observation window; a master fills every audio slot and
+	 * cannot be present and silent, so that is proof there is no master. The hunt then
+	 * drives it WITHOUT hearing a box first — which is the requirement that left two
+	 * powered, cabled rig boxes mute, because a cold box spends a bounded flood on PHY-up
+	 * and can never afterwards be the evidence its own waking depends on. */
 	reac_hunt_init(&h, OURS, t0);
-	reac_hunt_knock_mac(&h, KNOCKER);
-	CHK(desk_headamp(&h, KNOCKER, t0) == -1);      /* our own knock: not a sighting */
-	CHK(reac_hunt_heard_anything(&h) == 0);
-	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 0);
-	CHK(h.verdict == REAC_HUNT_HUNTING);           /* and above all: NOT slave to ourselves */
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 0);   /* no licence: not taken */
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	reac_hunt_silence_proven(&h);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
+	CHK(reac_hunt_heard_anything(&h) == 0);   /* honest: it drove having heard nothing */
+
+	/* AND EVIDENCE STILL OUTRANKS THE LICENCE, which is the whole safety half. A desk
+	 * that turns up on a wire we were licensed to drive is JOINED, never out-shouted; a
+	 * stagebox strapped to master is still refused and never fought. The licence only
+	 * ever replaces "wait three cadences and find a box". */
 	reac_hunt_init(&h, OURS, t0);
-	reac_hunt_knock_mac(&h, KNOCKER);
-	CHK(desk_headamp(&h, DESK, t0) == 1);          /* the control: a real desk still lands */
+	reac_hunt_silence_proven(&h);
+	CHK(desk_headamp(&h, DESK, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
 	CHK(h.verdict == REAC_HUNT_SLAVE);
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_silence_proven(&h);
+	CHK(box_on_m(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_REFUSED);
 
 	/* ---- The window itself, stated as the number and its reason: three master announce
 	 * cadences, and a cadence is one second (reac_master.c: announce_tick >= fps). */
@@ -275,8 +293,8 @@ int main(void)
 	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
 
 	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
-	       "refused, a pin drives on link with no frame at all, our own knock is nobody, "
-	       "and nothing latches\n",
+	       "refused, a pin drives on link with no frame at all, a wire proven silent is "
+	       "driven while evidence still outranks that, and nothing latches\n",
 	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
 	return 0;
 }

@@ -88,15 +88,16 @@ struct reac_hunt {
 	 * pacer's own classifier runs; the hunt is a segment too. */
 	struct reac_disco_peer_lock lock;
 	uint8_t our_mac[6];
-	/* OUR KNOCK'S SOURCE, WHICH IS NOT THIS NIC'S ADDRESS. A knock (reac_knock.h) goes
-	 * out with the Roland-OUI stand-in reac_mac builds, not with `our_mac`, and libreac's
-	 * capture is a plain `recv()` on AF_PACKET — which delivers LOCALLY GENERATED
-	 * OUTGOING frames as well as received ones. So without this the daemon hears its own
-	 * announce, classifies it as a foreign master at desk geometry, and slaves itself to
-	 * itself on every wire it knocks on. A watcher that sees its own writes is the oldest
-	 * trap in this codebase; the defence is to name the second address that is ours. */
-	uint8_t knock_mac[6];
-	int have_knock_mac;
+	/* THE WIRE WAS PROVEN MASTERLESS (reac_knock.h) AND WE MAY TAKE IT. Not a pin and not
+	 * a sighting: a licence, granted after REAC_KNOCK_LISTEN_NS in which a master — which
+	 * fills every audio slot and cannot be present and silent — transmitted nothing. It
+	 * replaces exactly one thing: the requirement to hear a BOX before driving a vacant
+	 * wire. A cold box cannot produce that evidence (it spends a bounded flood on PHY-up
+	 * and then never speaks again), so requiring it left two rig boxes mute on
+	 * 2026-09-08. Everything else still rules over it: a desk heard is still joined, a
+	 * stagebox on M is still refused, and the licence is cancelled the moment anything is
+	 * heard inside the window. */
+	int silence_proven;
 	/* When the window started: the hunt's own opening, re-anchored to the FIRST sighting
 	 * (reac_hunt_observe explains why). Never moved again — a second peer does not buy
 	 * the wire another three seconds. */
@@ -129,10 +130,11 @@ void reac_hunt_init(struct reac_hunt *h, const uint8_t our_mac[6], uint64_t now_
  * drives a wire whose box has not spoken and cannot speak until it does. */
 void reac_hunt_pin(struct reac_hunt *h, enum reac_role role);
 
-/* Tell the hunt the source address our own KNOCK goes out with, so the frame we put on
- * the wire is never mistaken for somebody else's. Call once, when the knock's TX opens;
- * without it a knocking daemon slaves to its own announce (see `knock_mac`). */
-void reac_hunt_knock_mac(struct reac_hunt *h, const uint8_t mac[6]);
+/* Grant the masterless licence (reac_knock.h): this wire carried nothing for the whole
+ * observation window, so a vacant wire may be DRIVEN without first hearing a box on it.
+ * Call once, when reac_knock says ACT_DRIVE. It does not outrank evidence — a desk or a
+ * rival heard afterwards still decides — so it is safe to grant and then be overruled. */
+void reac_hunt_silence_proven(struct reac_hunt *h);
 
 /* Offer one raw frame. Returns 1 when it was a sighting that changed the table
  * OBSERVABLY (a new peer, a sharper role or model) — which is what deserves a log line;

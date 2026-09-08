@@ -560,25 +560,6 @@ enum reac_master_emit reac_master_next(struct reac_master *m, uint16_t *counter,
 int reac_master_stamp(const struct reac_master *m, uint8_t *frame,
                       enum reac_master_emit emit, int tmpl_idx);
 
-/* BUILD ONE STANDALONE MASTER ANNOUNCE — the KNOCK's frame (reac_knock.h).
- *
- * `frame` gets a complete REAC_FRAME_BYTES downstream broadcast: silent audio, the given
- * counter, and the cfea master announce of an IDLE console (no box declared, the 0x08
- * width placeholder every captured desk announces while unlinked) stamped over its
- * control block. It is byte-for-byte the announce a probing master emits once a second —
- * `reac_master_init` + `reac_master_stamp(REAC_M_EMIT_ANNOUNCE)`, the same two calls the
- * pacer makes — because the point of a knock is that a real Roland box recognises it as
- * a master and learns our MAC (reac_fsm.c's is_master_frame accepts a
- * REAC_CTRL_MASTER_ANNOUNCE, and that is the whole mechanism by which a cold box wakes).
- *
- * It is a MASTER frame and not the master's CADENCE: one announce, sent by the knock at
- * 0.5 Hz onto a wire observed to have no master on it. When something answers, the hunt
- * decides and the real listener opens with the real pacer behind it.
- *
- * Pure apart from the buffer it fills; no socket, no state kept. Returns REAC_FRAME_BYTES,
- * or -1 if the frame could not be built. */
-int reac_master_build_announce(uint8_t *frame, const uint8_t src[6], uint16_t counter);
-
 /* Human-readable names for the caller's logging. */
 const char *reac_master_state_name(enum reac_master_state s);
 const char *reac_master_rx_event_name(enum reac_master_rx_event e);

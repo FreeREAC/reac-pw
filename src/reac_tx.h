@@ -72,11 +72,5 @@ void reac_tx_close(struct reac_tx *tx);
  * nch) on the wire; counter auto-increments. Returns bytes sent, or -1. */
 int reac_tx_emit(struct reac_tx *tx, float *const *planar, int nch, int ns);
 
-/* Broadcast a frame somebody else already built — the KNOCK's single master announce
- * (reac_knock.h, reac_master_build_announce). The counter is NOT touched: the caller
- * built the frame with the counter it wanted stamped, and a knock's counter comes from
- * `tx->counter` exactly as an emitted frame's does, so the two paths share one
- * free-running sequence on the wire. Returns bytes sent, or -1. */
-int reac_tx_emit_frame(struct reac_tx *tx, const uint8_t *frame, size_t len);
 
 #endif /* REAC_TX_H */

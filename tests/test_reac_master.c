@@ -881,45 +881,5 @@ int main(void)
 		       "at nor established\n");
 	}
 
-	/* ---- THE KNOCK'S FRAME. reac_master_build_announce is the one frame reac-pw puts
-	 * on an unpinned wire that has been observed masterless (reac_knock.h). Its whole
-	 * job is to be recognised BY A REAL BOX as a master, which is a property of the
-	 * bytes and of nothing else: reac_fsm.c's is_master_frame learns the master's MAC
-	 * from a REAC_CTRL_MASTER_ANNOUNCE, so that is what this must parse as, from OUR
-	 * source address, in a well-formed 1492-byte downstream frame.
-	 *
-	 * IT IS PINNED HERE BECAUSE IT HAS ALREADY BEEN WRONG ONCE. The first cut read
-	 * reac_downstream_build's return as a 0/-1 status; it answers the frame LENGTH, so
-	 * the builder failed on every success and the daemon reported a sendto error for a
-	 * syscall it never made. The veth proof caught it — this catches it offline. */
-	{
-		static const uint8_t KSRC[6] = { 0x00, 0x40, 0xab, 0x9f, 0x9e, 0xbe };
-		uint8_t kf[REAC_FRAME_BYTES];
-		CHK(reac_master_build_announce(kf, KSRC, 0x1234) == REAC_FRAME_BYTES);
-		CHK(memcmp(kf, "\xff\xff\xff\xff\xff\xff", 6) == 0);   /* broadcast: anybody */
-		CHK(memcmp(kf + 6, KSRC, 6) == 0);                        /* from us */
-		CHK(kf[12] == 0x88 && kf[13] == 0x19);                    /* the REAC EtherType */
-		CHK(kf[REAC_HDR_COUNTER_OFF] == 0x34 && kf[REAC_HDR_COUNTER_OFF + 1] == 0x12);
-		CHK(kf[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0);
-		CHK(kf[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
-		/* THE ASSERTION THAT MATTERS: a box's own parser calls this a master announce,
-		 * and the MAC it would learn is ours. Everything above is shape; this is the
-		 * thing the knock is FOR. */
-		struct reac_ctrl_parsed kp;
-		CHK(reac_ctrl_parse(kf, REAC_FRAME_BYTES, &kp) == REAC_CTRL_MASTER_ANNOUNCE);
-		CHK(memcmp(kp.src, KSRC, 6) == 0);
-		/* And a knock is SILENT: it is a question, not program. Every audio byte zero. */
-		int nonzero = 0;
-		for (int i = REAC_AUDIO_OFFSET; i < REAC_FRAME_BYTES - 2; i++)
-			if (kf[i] != 0)
-				nonzero = 1;
-		CHK(!nonzero);
-		/* A refused build is refused, not half-written. */
-		CHK(reac_master_build_announce(NULL, KSRC, 0) == -1);
-		CHK(reac_master_build_announce(kf, NULL, 0) == -1);
-		printf("OK: the knock's frame is a broadcast REAC master announce from our own "
-		       "MAC, silent, well-formed, and parsed as one by the box's own parser\n");
-	}
-
 	return 0;
 }

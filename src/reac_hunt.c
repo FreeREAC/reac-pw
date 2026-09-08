@@ -37,27 +37,15 @@ void reac_hunt_pin(struct reac_hunt *h, enum reac_role role)
 	h->pin = role;
 }
 
-void reac_hunt_knock_mac(struct reac_hunt *h, const uint8_t mac[6])
+void reac_hunt_silence_proven(struct reac_hunt *h)
 {
-	if (!mac)
-		return;
-	memcpy(h->knock_mac, mac, 6);
-	h->have_knock_mac = 1;
+	h->silence_proven = 1;
 }
 
 int reac_hunt_observe(struct reac_hunt *h, const uint8_t *frame, size_t len,
                       uint64_t now_ns, struct reac_disco_sighting *out)
 {
 	struct reac_disco_sighting s;
-	/* OUR OWN KNOCK IS NOT EVIDENCE OF ANYBODY. The classifier already drops frames
-	 * sourced from this NIC's address, but a knock carries the Roland-OUI stand-in
-	 * (reac_mac.h) so that it cannot collide with a real box — and an AF_PACKET capture
-	 * delivers our own outgoing frames back to us. Left in, the daemon would read its
-	 * own 40-channel announce as a desk mastering the wire and go slave to itself on the
-	 * first wire it knocked on. Dropped here rather than inside reac_disco, which
-	 * answers about the WIRE and has no business knowing what we transmit. */
-	if (h->have_knock_mac && len >= 12 && memcmp(frame + 6, h->knock_mac, 6) == 0)
-		return -1;
 	if (reac_disco_classify_on_segment(&h->lock, frame, len, h->our_mac, &s) != 0)
 		return -1;
 	if (out)
@@ -167,13 +155,22 @@ static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 	if (desk_geometry_live(&h->table, h->our_mac, now_ns))
 		return REAC_HUNT_HUNTING;
 
+	/* THE MASTERLESS LICENCE. A wire that carried nothing at all for the observation
+	 * window has no master on it — a master fills every audio slot and cannot be present
+	 * and silent — so it is DRIVEN, without first hearing a box and without sitting out
+	 * the three-cadence window that exists to give a slow desk its announce. That
+	 * requirement is what left two powered, cabled rig boxes mute on 2026-09-08: a cold
+	 * box spends a bounded flood on PHY-up and then never speaks again, so it can never
+	 * be the evidence its own waking depends on. Reached only when the branches above
+	 * found no master and no desk geometry, so evidence still outranks the licence. */
+	if (h->silence_proven)
+		return REAC_HUNT_MASTER;
+
 	if (now_ns - h->opened_ns < REAC_HUNT_WINDOW_NS)
 		return REAC_HUNT_HUNTING;
 
-	/* The window closed on a silent wire with a box on it: we drive, probe, grant,
-	 * establish. A wire with nothing on it at all is NOT taken — a segment is a place
-	 * where REAC gear was HEARD, and driving needs evidence. Listening is passive and
-	 * costs an idle socket; transmitting is what needs a reason. */
+	/* The window closed on a wire with a box on it: we drive, probe, grant, establish. A
+	 * wire that was never proven masterless and has no box on it is NOT taken. */
 	return box_present(&h->table, now_ns) ? REAC_HUNT_MASTER : REAC_HUNT_HUNTING;
 }
 
