@@ -107,43 +107,71 @@ struct reac_segment_answer {
 	char master_mac[24];     /* REAC_PROP_MASTER_MAC:      aa:bb:… or "none"        */
 	char pace_source[16];    /* REAC_PROP_PACE_SOURCE:     foreign-master | free-run */
 	char conflict[2];        /* REAC_PROP_MASTER_CONFLICT: always "0" — see below   */
-	char rival_kind[8];      /* REAC_PROP_RIVAL_KIND:      desk | none              */
-	char refusal[24];        /* REAC_PROP_REFUSAL:         none                     */
+	char rival_kind[8];      /* REAC_PROP_RIVAL_KIND:      desk | box | unknown | none */
+	char refusal[24];        /* REAC_PROP_REFUSAL:         none | rival-master-*    */
 	char rate[8];            /* REAC_PROP_RATE:            the wire pace, decimal Hz */
 };
 
-/* Fill the answer a SLAVE segment publishes, from the two facts its own engine
+/* Fill the answer a SLAVE segment publishes, from the facts its own engine
  * witnesses and nothing else.
  *
- *   `heard`     — reac_segment_heard's latch: is a master downstream arriving?
+ *   `heard`     — reac_segment_heard's latch: is a master's stream arriving?
  *   `master_mac48` — the master MAC the FSM learned, packed big-endian into the
  *                 low 48 bits (reac_slave's published atomic copy); 0 = none
  *                 learned, which is a fact and reads as "none".
  *   `rate_hz`   — the pace this segment is locked to; <=0 publishes "0", which a
  *                 consumer reads as "no rate published" rather than as a guess.
+ *   `wire_channels` — the WIDTH the segment's RX gate is accepting: 40 for a
+ *                 desk's downstream, the box's own width for a stagebox on M
+ *                 that we joined (0.5.1). Passed rather than assumed, because
+ *                 since the 2026-09-09 ruling a slave segment can be joined to
+ *                 either, and the width is the only thing that tells them apart.
  *
  * WHY EACH VALUE IS WHAT IT IS:
  *   master_state — heard means an OTHER master drives this wire and it is not
  *                  us, which is precisely REAC_SEGMENT_FOREIGN. Unheard is
  *                  REAC_SEGMENT_NONE: no evidence, not an assumption.
- *   rival_kind   — the slave RX gate passes the 40-channel master downstream and
- *                  nothing else, so a decoded frame is a REAC_MAX_CHANNELS
- *                  geometry; reac_rival_kind_from_channels turns that into
- *                  `desk` under the SAME law the master's arbitration uses. This
- *                  matters beyond tidiness: the console's role policy joins a
- *                  desk and refuses anything else, so an enrolled recorder that
- *                  published `none` here would be reported as refusing the very
- *                  master it is happily joined to.
- *   refusal      — reac_rival_refusal of that kind, which is "none" for a desk
- *                  and for no rival alike. Computed, never asserted.
+ *   rival_kind   — reac_rival_kind_from_channels of `wire_channels`, the SAME
+ *                  law the master's arbitration uses, so a joined desk reads
+ *                  `desk` and a joined box on M reads `box`. This matters beyond
+ *                  tidiness: the console's role policy renders the row from it,
+ *                  and a segment that published `none` here would be reported as
+ *                  refusing the very master it is happily joined to.
+ *   refusal      — always "none", and it is a fact about US rather than about the
+ *                  peer: this segment JOINED whatever is out there, so nothing
+ *                  was declined. A box carries a refusal CODE
+ *                  (`reac_rival_refusal`) for the one case that still refuses —
+ *                  a wire pinned master — and that answer is composed by
+ *                  reac_segment_answer_refused below, never by this one.
  *   conflict     — always "0", and definitionally so: the flag means a foreign
  *                  master is live WHILE WE ARE MASTERING. A slave is not
  *                  mastering, so the dispute it reports cannot exist here.
- *   pace_source  — heard means the desk times the wire
+ *   pace_source  — heard means the peer times the wire
  *                  (REAC_PACE_FOREIGN_MASTER). Unheard, nothing is timing it and
  *                  the honest answer is the reported fallback, never silence.
  */
 void reac_segment_answer_slave(struct reac_segment_answer *out, int heard,
-                               uint64_t master_mac48, int rate_hz);
+                               uint64_t master_mac48, int rate_hz,
+                               unsigned wire_channels);
+
+/* Fill the answer a REFUSED segment publishes — the DOOR-ONLY segment of
+ * DESIGN.md's 0.5.1 ruling: a wire pinned MASTER with a stagebox mastering it,
+ * or a rival whose geometry nobody has captured. No engine of any kind is
+ * running behind this answer, which is exactly what it says.
+ *
+ *   `rival_channels` — the width the refusal was decided from
+ *                 (`reac_arbitration`'s rival_channels); 0 means no legal
+ *                 geometry was heard, which is what makes the kind `unknown`.
+ *   `rival_mac48`  — the RIVAL's address, packed; this is who masters the wire,
+ *                 never ours. 0 reads as "none".
+ *   `rate_hz`    — the rate this segment would have run at; <=0 publishes "0".
+ *
+ * The refusal CODE is reac_rival_refusal of the kind, so the same word the
+ * journal prints is the one a console renders a remedy from. `conflict` is "0"
+ * here too: we are not mastering, so the mid-flight dispute cannot exist. The
+ * pace is the foreign master's, because it is the one thing on the wire. */
+void reac_segment_answer_refused(struct reac_segment_answer *out,
+                                 unsigned rival_channels, uint64_t rival_mac48,
+                                 int rate_hz);
 
 #endif /* REAC_SEGMENT_IDENT_H */

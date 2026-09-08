@@ -287,7 +287,7 @@ int main(void)
 	struct reac_segment_heard heard;
 	struct reac_segment_answer ans;
 	reac_segment_heard_init(&heard, 0);
-	reac_segment_answer_slave(&ans, heard.heard, 0, 96000);
+	reac_segment_answer_slave(&ans, heard.heard, 0, 96000, REAC_MAX_CHANNELS);
 	CHK(strcmp(ans.master_state, "none") == 0);
 	CHK(strcmp(ans.master_mac, "none") == 0);
 	CHK(strcmp(ans.pace_source, "free-run") == 0);
@@ -348,7 +348,8 @@ int main(void)
 	 * the master's own classifier. That is the value the console's role policy
 	 * needs to join what it is joined to rather than report it as a rival. */
 	reac_segment_answer_slave(&ans, heard.heard,
-	                          reac_mac48_pack(c.s.fsm.master_mac), 96000);
+	                          reac_mac48_pack(c.s.fsm.master_mac), 96000,
+	                          REAC_MAX_CHANNELS);
 	CHK(strcmp(ans.master_state, "foreign") == 0);
 	CHK(strcmp(ans.master_mac, "00:40:ab:00:00:01") == 0);
 	CHK(memcmp(M_SRC, "\x00\x40\xab\x00\x00\x01", 6) == 0);  /* the MAC just named */
@@ -401,7 +402,8 @@ int main(void)
 	CHK(reac_segment_heard_step(&heard, frozen,
 	                            REAC_SEGMENT_HEARD_QUIET_TICKS) == 0);
 	reac_segment_answer_slave(&ans, heard.heard,
-	                          reac_mac48_pack(c.s.fsm.master_mac), 96000);
+	                          reac_mac48_pack(c.s.fsm.master_mac), 96000,
+	                          REAC_MAX_CHANNELS);
 	CHK(strcmp(ans.master_state, "none") == 0);
 	CHK(strcmp(ans.rival_kind, "none") == 0);
 	CHK(strcmp(ans.pace_source, "free-run") == 0);

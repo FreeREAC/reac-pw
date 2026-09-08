@@ -656,6 +656,19 @@ struct listener_cfg {
 	uint8_t src_mac[6];
 	int src_mac_set;
 	int box_channels;                   /* SLAVE role: our own input width */
+	/* WHAT IS MASTERING THIS WIRE, carried out of the hunt's verdict (0.5.1, DESIGN.md).
+	 * `wire_channels` is the width of the stream this segment RECEIVES — 40 for a desk's
+	 * downstream, the box's own width when a stagebox on M masters it — and it sizes the
+	 * capture node as well as naming the rival kind in the published answer.
+	 * `join_box_master` is that second case: a receive-only join, because a box on M runs
+	 * no handshake at all and there is no grant for a slave engine to answer.
+	 * `door_only` is the refusal: a wire pinned MASTER with a box mastering it, published
+	 * as a door with no engine behind it so the refusal can be SEEN. */
+	unsigned wire_channels;
+	int join_box_master;
+	int door_only;
+	uint8_t rival_mac[6];
+	int rival_mac_set;
 	const struct reac_box_model *pin_model;
 	const char *pin_label;
 	const char *box_pin_spec;
@@ -722,6 +735,9 @@ static void listener_cfg_defaults(struct listener_cfg *c)
 	c->role = REAC_ROLE_MASTER;
 	c->mixer = reac_mixer_profile_by_name("m200");
 	c->box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;
+	/* A desk's downstream until the wire says otherwise: it is what every slave segment
+	 * received before a box could master one, and it is what the RX gate accepts. */
+	c->wire_channels = REAC_MAX_CHANNELS;
 }
 
 /* Fill a listener's configuration from the layered conf files, keyed by ITS
@@ -869,21 +885,36 @@ static void listener_publish_segment(struct listener *L)
 	snprintf(role_s, sizeof role_s, "%d", REAC_CFG_ROLE_VALUE_SLAVE);
 
 	/* THE SEGMENT AGGREGATE, from what this engine actually witnessed. The
-	 * evidence is the RX's accepted-frame count: in the slave role the gate
-	 * passes the 40-channel master downstream and nothing else, so a moving
-	 * count is both "a master is here" and "its geometry is a desk's" — the same
-	 * two facts a master's arbitration derives from its sighting table, and
-	 * derived here through the SAME classifier rather than a second one. */
+	 * evidence is the RX's accepted-frame count: the gate passes ONE geometry —
+	 * the 40-channel downstream when a desk masters the wire, the box's own width
+	 * when a stagebox on M does (0.5.1) — so a moving count is both "a master is
+	 * here" and "it is of the kind cfg.wire_channels says", the same two facts a
+	 * master's arbitration derives from its sighting table, through the SAME
+	 * classifier rather than a second one. */
+	struct reac_segment_answer answer;
+	if (L->cfg.door_only) {
+		/* A REFUSED SEGMENT PUBLISHES THE REFUSAL AND NOTHING ELSE (0.5.1). No engine
+		 * runs here, so there is no frame count to latch on and no MAC we learned from
+		 * a handshake — the rival's address comes from the sighting that caused the
+		 * refusal, which is the only evidence there is. */
+		reac_segment_answer_refused(&answer, L->cfg.wire_channels,
+		                            L->cfg.rival_mac_set
+		                              ? reac_mac48_pack(L->cfg.rival_mac) : 0,
+		                            L->rx.sample_rate);
+		reac_source_node_publish_segment(L->src, role_s, state,
+		                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
+		                                 &answer);
+		return;
+	}
 	int heard = reac_segment_heard_step(
 		&L->heard,
 		L->rx_started ? atomic_load_explicit(&L->rx.frames_ok, memory_order_relaxed) : 0,
 		REAC_SEGMENT_HEARD_QUIET_TICKS);
-	struct reac_segment_answer answer;
 	reac_segment_answer_slave(&answer, heard,
 	                          L->slave_open
 	                            ? atomic_load_explicit(&L->slave.master_mac48,
 	                                                   memory_order_relaxed) : 0,
-	                          L->rx.sample_rate);
+	                          L->rx.sample_rate, L->cfg.wire_channels);
 
 	reac_source_node_publish_segment(L->src, role_s, state,
 	                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
@@ -912,7 +943,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	/* SAMPLE RATE — the master chooses it; the box follows. See
 	 * docs/RATE-AND-CLOCK-CONFIG.md for the full law; this is its per-segment
 	 * application, unchanged from the single-instance code it replaces. */
-	if (c->role == REAC_ROLE_MASTER && c->rxcfg.forced_rate == 0)
+	if ((c->role == REAC_ROLE_MASTER || c->door_only) && c->rxcfg.forced_rate == 0)
 		c->rxcfg.forced_rate = listener_resolve_rate(c, &c->rate_layer);
 	else if (c->rxcfg.forced_rate != 0)
 		c->rate_layer = REAC_CONF_ARGV;
@@ -928,9 +959,15 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	/* The role picks which stream RX decodes (see DESIGN's role table): as
 	 * MASTER our capture is a box's upstream return (its input channels,
 	 * box-width braided frames); as SLAVE it is the master's 40-ch downstream
-	 * broadcast. The wire carries both; the gate keeps them apart. */
-	c->rxcfg.accept = (c->role == REAC_ROLE_MASTER) ? REAC_RX_ACCEPT_UPSTREAM
-	                                                : REAC_RX_ACCEPT_DOWNSTREAM;
+	 * broadcast. The wire carries both; the gate keeps them apart.
+	 *
+	 * AND A BOX THAT MASTERS THE WIRE IS THE THIRD CASE (0.5.1): it broadcasts its
+	 * own UPSTREAM geometry — `52 + n*36`, never a master downstream frame
+	 * (reac-protocol/wire-format.md) — so the segment reads it through the SAME
+	 * box-width gate and the SAME decoder the master role already uses for a box's
+	 * return. No second decoder, and no new frame kind. */
+	c->rxcfg.accept = (c->role == REAC_ROLE_MASTER || c->join_box_master)
+	                    ? REAC_RX_ACCEPT_UPSTREAM : REAC_RX_ACCEPT_DOWNSTREAM;
 
 	if (reac_rx_open(&L->rx, &c->rxcfg, &L->ring) != 0) {
 		fprintf(stderr, "reac-pw: %scannot open source '%s'\n", c->tag, c->rxcfg.source);
@@ -938,7 +975,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	}
 	fprintf(stderr, "reac-pw: %srecovered REAC rate = %d Hz (%d pps), rx stream = %s\n",
 	        c->tag, L->rx.sample_rate, L->rx.sample_rate / REAC_SAMPLES_PER_PKT,
-	        c->rxcfg.accept == REAC_RX_ACCEPT_UPSTREAM
+	        c->join_box_master ? "a box master's own broadcast (box-width)"
+	        : c->rxcfg.accept == REAC_RX_ACCEPT_UPSTREAM
 	          ? "box upstream return (box-width)" : "master downstream (40 ch)");
 
 	/* The reac-capture source is created AFTER the TX side, because whether to DEFER
@@ -949,11 +987,46 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * recognizer, so the node is created at its startup width. */
 	L->src_cfg = (struct reac_source_node_cfg){
 		.loop = loop, .ring = &L->ring, .rx = &L->rx, .sample_rate = L->rx.sample_rate,
-		.inst = c->inst_name, .master_role = (c->role == REAC_ROLE_MASTER),
+		.inst = c->inst_name,
+		/* A DOOR IS NOT A MASTER. `master_role` stamps the create-time badge props of a
+		 * master that is about to probe, and a refused segment probes nothing — so the
+		 * door takes the slave shape, which is also what stamps reac.segment on this
+		 * node and makes it the segment's one doorway (reac_segment_ident.h). */
+		.master_role = (c->role == REAC_ROLE_MASTER && !c->door_only),
 		/* .pacer is filled once the sink exists, below: this node publishes the
 		 * graph-clock sample too, because it is the node a console actually links
 		 * and therefore often the only one the graph drives. */
 	};
+
+	/* A REFUSED SEGMENT IS A DOOR AND NOTHING ELSE (0.5.1, DESIGN.md). The wire is
+	 * pinned MASTER and a stagebox is mastering it, or a rival nobody can read is: two
+	 * answers that contradict each other, and the daemon settles it by refusing rather
+	 * than out-shouting a box. What it must NOT do is disappear — the 2026-09-09 rig
+	 * proof refused correctly and published nothing, so the console had an absence to
+	 * render and the operator had no remedy to read. So: one node, carrying the segment's
+	 * identity and the refusal props, and no engine at all behind it — no TX, no pacer,
+	 * no segment lock, and no RX feeder (hearing_serve does not start one), which is why
+	 * the ports are silent rather than carrying a wire we declined. */
+	if (c->door_only) {
+		if (reac_source_node_ensure(&L->src, &L->src_cfg,
+		                            (int)c->wire_channels, NULL) != 0) {
+			fprintf(stderr, "reac-pw: %sREFUSED, and the door node could not be "
+			        "created — the refusal is in this journal and nowhere else\n",
+			        c->tag);
+			reac_rx_close(&L->rx);
+			reac_ring_free(&L->ring);
+			return -1;
+		}
+		reac_role_swap_opened(&L->role_swap, c->role);
+		reac_source_node_set_role_swap(L->src, &L->role_swap);
+		listener_publish_segment(L);
+		fprintf(stderr, "reac-pw: %sREFUSED — publishing the door only: "
+		        "reac-capture at %u ch carrying reac.master.refusal, the rival's "
+		        "address and the segment name. Nothing is transmitted, nothing is "
+		        "received, and the remedy is on the box's own front panel\n",
+		        c->tag, c->wire_channels);
+		return 0;
+	}
 
 	/* TX side: who drives the handshake + the clock depends on the role.
 	 *   master -> reac:playback sink: WE encode the graph downstream + the pacer
@@ -1068,6 +1141,18 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			        "(RIG-GATED: verify 48V at the XLR pins)\n",
 			        c->tag, c->n_headamps, refresh);
 		}
+	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE && c->join_box_master) {
+		/* A BOX THAT MASTERS THE WIRE IS JOINED RECEIVE-ONLY (0.5.1, DESIGN.md). The
+		 * slave engine exists to answer a grant, and a stagebox on M runs no handshake
+		 * at all — zero control frames, no announce, no grant, no heartbeat
+		 * (reac-protocol/wire-format.md, measured) — so it will never send one. A
+		 * cold-connect flood aimed at a peer that cannot answer is noise with a state
+		 * machine behind it, so nothing is emitted here. What the operator gets is the
+		 * box's channels in the graph, on the box's own clock. */
+		fprintf(stderr, "reac-pw: %sSLAVE role, RECEIVE-ONLY (%u-ch box master) — "
+		        "following its clock and taking what it broadcasts; no upstream return, "
+		        "because a box on M runs no handshake to join\n",
+		        c->tag, c->wire_channels);
 	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the
@@ -1175,8 +1260,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	} else {
 		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
 		 * the full 40-slot fabric. With no recognizer there is nothing that could
-		 * honestly narrow it to a box, and nothing may pretend otherwise. */
-		if (reac_source_node_ensure(&L->src, &L->src_cfg, 0, NULL) != 0) {
+		 * honestly narrow it to a box, and nothing may pretend otherwise.
+		 *
+		 * EXCEPT WHEN THE WIRE ITSELF DECLARED A WIDTH (0.5.1). A box mastering the
+		 * segment broadcasts its own geometry, and that width is evidence, not a
+		 * guess — an 8-channel box gets an 8-port capture node rather than a 40-slot
+		 * fabric with 32 rows of silence in it. */
+		int width = c->join_box_master ? (int)c->wire_channels : 0;
+		if (reac_source_node_ensure(&L->src, &L->src_cfg, width, NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
 			return -1;
 		}
@@ -1207,7 +1298,13 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
  * NULL/unheld-safe), so it doubles as listener_open()'s own failure cleanup. */
 static void listener_close(struct listener *L, struct pw_loop *loop)
 {
-	reac_rx_stop(&L->rx);
+	/* ONLY A FEEDER THAT WAS STARTED IS JOINED. reac_rx_stop joins the thread
+	 * unconditionally, and joining a pthread_t that was never created is a
+	 * dereference of nothing — reachable from the failed-start path since it was
+	 * written, and a NORMAL path since 0.5.1's door-only segment, which deliberately
+	 * runs no feeder at all. */
+	if (L->rx_started)
+		reac_rx_stop(&L->rx);
 	if (L->ad_timer)
 		pw_loop_destroy_source(loop, L->ad_timer);   /* stop the autodetect watcher first */
 	reac_source_node_destroy(L->src);                /* may be NULL (never recognized) */
@@ -1548,6 +1645,25 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	 * rather than obeyed. That floor is what left two boxes ungranted on 2026-09-08:
 	 * `REAC_ROLE=slave` in a file described every segment on the host, including the two
 	 * that had nothing to slave to. */
+	/* WHAT THE WIRE TURNED OUT TO BE, carried into this segment's configuration
+	 * (0.5.1). The hunt classified the peer by its frame geometry; re-deriving any of
+	 * that here would be a second classifier over the same evidence. */
+	if (hunt && hunt->verdict == REAC_HUNT_REFUSED) {
+		L->cfg.door_only = 1;
+		L->cfg.wire_channels = hunt->arb.rival_channels;
+		L->cfg.rival_mac_set = hunt->arb.have_mac;
+		if (hunt->arb.have_mac)
+			memcpy(L->cfg.rival_mac, hunt->arb.mac, 6);
+	} else if (hunt && hunt->verdict == REAC_HUNT_SLAVE &&
+	           hunt->arb.rival == REAC_RIVAL_BOX && hunt->arb.rival_channels > 0) {
+		/* A stagebox masters this wire and we are joining it: its own width is what
+		 * the segment receives and what its capture node is sized to. */
+		L->cfg.join_box_master = 1;
+		L->cfg.wire_channels = hunt->arb.rival_channels;
+		L->cfg.rival_mac_set = hunt->arb.have_mac;
+		if (hunt->arb.have_mac)
+			memcpy(L->cfg.rival_mac, hunt->arb.mac, 6);
+	}
 	if (hunt && !L->cfg.role_pinned) {
 		enum reac_role elected = reac_hunt_role(hunt);
 		if (L->cfg.role_layer != REAC_CONF_NONE &&
@@ -1569,7 +1685,9 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	/* listener_open cleans up after its own refusal (its contract); a feeder
 	 * that will not start leaves an opened listener to close, as in main(). */
 	int up = listener_open(L, h->loop) == 0;
-	if (up && reac_rx_start(&L->rx) != 0) {
+	/* A DOOR HAS NO FEEDER. Starting one would decode the very wire this segment
+	 * refused, and the refusal is total: nothing transmitted, nothing received. */
+	if (up && !L->cfg.door_only && reac_rx_start(&L->rx) != 0) {
 		listener_close(L, h->loop);
 		up = 0;
 	}
@@ -1581,12 +1699,21 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		return;
 	}
 	L->opened = 1;
-	L->rx_started = 1;
+	L->rx_started = !L->cfg.door_only;
 	h->served++;
-	fprintf(stderr, "reac-pw: [%s] segment up (%s, %s) — %lu served so far\n", name,
-	        reac_role_name(L->cfg.role),
-	        L->cfg.role_pinned ? "pinned by REAC_ROLE_<segment>" : "chosen by hearing the wire",
-	        h->served);
+	if (L->cfg.door_only)
+		/* NOT "segment up": nothing is running here. It is a segment that EXISTS on
+		 * the graph so the refusal can be read, and the line says which. */
+		fprintf(stderr, "reac-pw: [%s] segment REFUSED and PUBLISHED (door only, "
+		        "%u-ch rival) — %lu served so far\n", name, L->cfg.wire_channels,
+		        h->served);
+	else
+		fprintf(stderr, "reac-pw: [%s] segment up (%s%s, %s) — %lu served so far\n", name,
+		        reac_role_name(L->cfg.role),
+		        L->cfg.join_box_master ? ", receive-only on a box master" : "",
+		        L->cfg.role_pinned ? "pinned by REAC_ROLE_<segment>"
+		                           : "chosen by hearing the wire",
+		        h->served);
 }
 
 static void hearing_drop(struct hearing *h, const char *name, const char *why)
@@ -1630,7 +1757,13 @@ static void hearing_apply(struct hearing *h)
 			struct sniffer *sn = sniffer_find(h, ev.name);
 			struct reac_hunt verdict;
 			int have = sn != NULL;
-			int keep = have && sn->driven_on_silence;
+			/* A REFUSED WIRE KEEPS ITS SNIFFER TOO (0.5.1). It is served as a door,
+			 * and a refusal that could not be revisited would need a restart to
+			 * notice the switch being moved — nothing in this module latches. So the
+			 * wire goes on being classified and hearing_yield takes the door down the
+			 * moment the rival stops mastering it. */
+			int keep = have && (sn->driven_on_silence ||
+			                    sn->hunt.verdict == REAC_HUNT_REFUSED);
 			if (have)
 				verdict = sn->hunt;
 			if (!keep)
@@ -1681,8 +1814,11 @@ static void on_hearing_nl_io(void *data, int fd, uint32_t mask)
  * within itself; every verb this block owns is applied from the poll for exactly that
  * reason.
  *
- * Only a MASTER or SLAVE verdict turns the interface into a segment. A refusal
- * (a stagebox on M, an unreadable rival) is said once and left alone: never joined,
+ * Every verdict but HUNTING now turns the interface into a segment. MASTER and SLAVE
+ * bring an engine up; a REFUSAL (a box on a wire pinned master, or an unreadable rival)
+ * brings up a DOOR — a node carrying the refusal props and nothing else — because a
+ * refusal nobody can see is indistinguishable from a daemon that is not running, which
+ * is exactly what the 2026-09-09 rig proof produced. Refused still means never joined,
  * never probed at, never fought. */
 static void hearing_hunt(struct hearing *h, uint64_t now)
 {
@@ -1715,7 +1851,18 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		int changed = reac_hunt_step(&sn->hunt, now);
 		switch (sn->hunt.verdict) {
 		case REAC_HUNT_SLAVE:
-			if (changed && sn->hunt.pinned)
+			if (changed && sn->hunt.arb.rival == REAC_RIVAL_BOX)
+				/* THE ORDINARY CASE, not a tolerated hazard (operator, 2026-09-09).
+				 * A clock is a clock whichever end of the pairing sends it. */
+				fprintf(stderr, "reac-pw: [%s] box masters this wire — joining it as a "
+				        "slave (operator rule: a box that wants to be master gets the "
+				        "clock): %02x:%02x:%02x:%02x:%02x:%02x at %u ch, so this "
+				        "segment follows its clock and takes what it broadcasts\n",
+				        sn->name,
+				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
+				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
+				        sn->hunt.arb.rival_channels);
+			else if (changed && sn->hunt.pinned)
 				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as SLAVE — "
 				        "opening the slave side on link, without waiting to be heard\n",
 				        sn->name, sn->name);
@@ -1744,16 +1891,32 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			reac_ifscan_heard(&h->scan, sn->name, now);
 			break;
 		case REAC_HUNT_REFUSED:
-			if (changed)
-				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): %02x:%02x:%02x:%02x:%02x:%02x "
-				        "masters this wire at %u ch, which is a BOX width, not a desk's "
-				        "40. If that is a stagebox, set its REAC Mode switch to slave and "
-				        "power-cycle it. Nothing is transmitted here and nothing is "
-				        "fought.\n", sn->name,
-				        reac_rival_refusal(sn->hunt.arb.rival),
+			if (changed && sn->hunt.arb.rival == REAC_RIVAL_BOX)
+				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): REAC_ROLE_%s pins this "
+				        "segment MASTER and %02x:%02x:%02x:%02x:%02x:%02x masters it at "
+				        "%u ch, a BOX width. Two answers, and the console never fights a "
+				        "box: set the box's REAC Mode switch to slave and power-cycle it, "
+				        "or drop the pin and this wire will JOIN it. Nothing is "
+				        "transmitted here and nothing is fought — the segment is "
+				        "published as a door so the refusal can be seen.\n",
+				        sn->name, reac_rival_refusal(sn->hunt.arb.rival), sn->name,
 				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
 				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
-				        sn->hunt.table.n ? sn->hunt.table.e[0].channels : 0);
+				        sn->hunt.arb.rival_channels);
+			else if (changed)
+				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): "
+				        "%02x:%02x:%02x:%02x:%02x:%02x masters this wire and carries no "
+				        "legal 52 + n*36 geometry, so there is nothing to size a segment "
+				        "from and nobody has captured a peer like it. Neither driven over "
+				        "nor joined; published as a door so it can be seen.\n",
+				        sn->name, reac_rival_refusal(sn->hunt.arb.rival),
+				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
+				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5]);
+			/* AND IT IS SERVED, as a door with no engine behind it. A refusal nobody
+			 * can see is indistinguishable from a daemon that is not running: the
+			 * 2026-09-09 rig proof refused correctly and the segment vanished from the
+			 * console. reac_ifscan_heard is what queues the SERVE. */
+			reac_ifscan_heard(&h->scan, sn->name, now);
 			break;
 		case REAC_HUNT_HUNTING:
 		default:
@@ -1786,26 +1949,52 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
  * and every emitting role of ours sources from it (reac_mac.h), so the frames we are
  * putting on this very wire never reach the table.
  *
- * A REFUSAL is not a yield. A stagebox strapped to master on a wire we are already
- * driving is a misconfiguration to report, and dropping our own master would take the
- * segment away from every other box on it to no one's benefit — so it is said and the
- * segment stands, which is the same answer the hunt gives before a segment exists. */
+ * A REFUSAL IS NOT A YIELD, AND SINCE 0.5.1 IT IS ALSO NOT A LATCH. On a wire we are
+ * driving because it was silent, a stagebox that starts mastering it is now YIELDED to
+ * like a desk — that wire is unpinned, and a box that wants the clock gets it. What is
+ * still refused is a wire pinned MASTER, and that segment is published as a DOOR rather
+ * than dropped; its sniffer is kept for the same reason this one is, so the door comes
+ * down and the segment comes up the moment the rival stops mastering the wire. Nothing
+ * here latches, in either direction. */
 static void hearing_yield(struct hearing *h, uint64_t now)
 {
 	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
 		struct sniffer *sn = &h->sniff[i];
-		if (!sn->name[0] || !sn->driven_on_silence)
+		if (!sn->name[0])
 			continue;
-		if (!hearing_listener(h, sn->name))
+		struct listener *L = hearing_listener(h, sn->name);
+		if (!L)
 			continue;   /* the segment went away; nothing to yield */
+		/* Two kinds of segment keep their sniffer: one taken on a BET that the wire
+		 * was empty, and (since 0.5.1) one REFUSED, which is published as a door and
+		 * must stop being refused the moment the rival does. */
+		int door = L->cfg.door_only;
+		if (!sn->driven_on_silence && !door)
+			continue;
 		if (!reac_hunt_step(&sn->hunt, now))
 			continue;   /* the verdict stands */
+		if (door) {
+			if (sn->hunt.verdict == REAC_HUNT_REFUSED)
+				continue;                      /* still refused; the door stands */
+			/* THE REFUSAL ENDED. The box was switched to S, or unplugged, and its
+			 * sighting aged out — so the wire the operator pinned is ours to drive
+			 * after all. Down with the door, up with the segment, through the same
+			 * seam a cold start uses. */
+			fprintf(stderr, "reac-pw: [%s] the rival stopped mastering this wire — "
+			        "the refusal is over; taking the segment as %s\n", sn->name,
+			        reac_role_name(reac_hunt_role(&sn->hunt)));
+			struct reac_hunt after = sn->hunt;
+			hearing_drop(h, sn->name, "the refusal ended");
+			hearing_serve(h, sn->name, &after);
+			continue;
+		}
 		if (sn->hunt.verdict != REAC_HUNT_SLAVE)
 			continue;
-		fprintf(stderr, "reac-pw: [%s] a desk masters this segment "
+		fprintf(stderr, "reac-pw: [%s] a %s masters this segment "
 		        "(%02x:%02x:%02x:%02x:%02x:%02x) — we took this wire because it was "
 		        "SILENT and it is not: yielding the master role and joining as SLAVE\n",
-		        sn->name, sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
+		        sn->name, reac_rival_kind_name(sn->hunt.arb.rival),
+		        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
 		        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5]);
 		/* Drop first, then serve: the two engines are exclusive (one AF_PACKET TX, one
 		 * segment lock, one node pair) and the swap passes through a window in which
