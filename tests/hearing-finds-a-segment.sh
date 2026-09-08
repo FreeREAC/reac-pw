@@ -286,13 +286,24 @@ for i in $(seq 20); do nsenter -t $NSPID -n true 2>/dev/null && break; sleep 0.1
 nsenter -t $NSPID -n true 2>/dev/null || {
 	echo "SKIP: no nested network namespace for the peer end"; exit 77; }
 peer() { nsenter -t $NSPID -n "$@"; }
-# Create a pair and hand the peer end over before either end ever has carrier.
-pair() {   # pair <ours> <theirs>
+# Create a pair and hand the peer end over before either end ever has carrier, and leave
+# BOTH ends down: link is what the daemon acts on, so a down pair is invisible to it.
+mkpair() {   # mkpair <ours> <theirs>
 	ip link add "$1" type veth peer name "$2" || return 1
 	ip link set "$2" netns $NSPID || return 1
-	ip link set "$1" up
-	peer ip link set "$2" up
 }
+# NOTHING BELOW EVER DELETES AN INTERFACE. Linux recycles ifindexes, so a phase that
+# deleted its pair and the next that created one could be handed the same index — and a
+# socket somewhere still bound to it then transmits onto the new wire. That is what made
+# cold1 hear a 40-channel stream from an address nobody on its segment owns, inside the
+# RPM's %check, on code that passed three runs standing alone. A phase raises its own
+# link and lowers it again; the indexes are fixed for the whole run.
+up_pair()   { ip link set "$1" up;   peer ip link set "$2" up; }
+down_pair() { ip link set "$1" down; peer ip link set "$2" down; }
+
+mkpair pin0  pbox0  || exit 90
+mkpair cold0 kbox0  || exit 90
+mkpair cold1 kdesk1 || exit 90
 
 # ---- THE PEER'S OWN EAR. Everything below asserts what left THIS daemon and landed on
 # the other end of the wire, so the other end needs a capture of its own. AF_PACKET bound
@@ -339,7 +350,7 @@ other() { [ -s "$1" ] || { echo 0; return; }; awk -v m="$2" '$1 != m {n += $2} E
 # this host; a journal line would only prove we decided to.
 mkdir -p "$CONF/.config/reac-pw"
 echo "REAC_ROLE_pin0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
-pair pin0 pbox0 || exit 90
+up_pair pin0 pbox0
 peer python3 "$RT/sniff.py" pbox0 "$RT/pin0.cnt" & SNIFF1=$!
 wait_for "\[pin0\] pinned master — driving on link" 10 || {
 	echo "FAIL: a pinned master did not say it was driving on link"; tail -20 "$LOG"; exit 1; }
@@ -356,7 +367,7 @@ wait_for "\[pin0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
 	echo "FAIL: pinned master never served pin0"; tail -20 "$LOG"; exit 1; }
 kill -TERM $SNIFF1 2>/dev/null; wait $SNIFF1 2>/dev/null
 kill -TERM $PBOXPID 2>/dev/null; wait $PBOXPID 2>/dev/null
-ip link del pin0 2>/dev/null   # takes the peer end with it
+down_pair pin0 pbox0
 
 # ---- THE KNOCK: AN UNPINNED WIRE WITH A COLD BOX ON IT. A final-user system has NO pins
 # on its first boot, so the pin above cannot be the whole answer. An unpinned interface
@@ -364,7 +375,7 @@ ip link del pin0 2>/dev/null   # takes the peer end with it
 # master cannot be present and silent -- knocks: one master announce every 2 s until
 # something answers. The peer here is again bare veth, so any 0x8819 frame it hears came
 # from us and nothing prompted it.
-pair cold0 kbox0 || exit 90
+up_pair cold0 kbox0
 peer python3 "$RT/sniff.py" kbox0 "$RT/cold0.cnt" & SNIFF2=$!
 wait_for "\[cold0\] unpinned — listening for REAC" 10 || {
 	echo "FAIL: cold0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
@@ -387,12 +398,12 @@ wait_for "\[cold0\] autodetected S-1608" 20 || {
 	echo "FAIL: took cold0 as master but the box was never autodetected"; tail -20 "$LOG"; exit 1; }
 kill -TERM $SNIFF2 2>/dev/null; wait $SNIFF2 2>/dev/null
 kill -TERM $KBOXPID 2>/dev/null; wait $KBOXPID 2>/dev/null
-ip link del cold0 2>/dev/null
+down_pair cold0 kbox0
 
 # ---- A DESK ANSWERS THE KNOCK: WE STOP, WE SLAVE, WE NEVER FIGHT. The other half of the
 # safety argument. Being late to a master's wire must cost that master nothing, so the
 # knocking ends on its first frame and not one more announce of ours goes out.
-pair cold1 kdesk1 || exit 90
+up_pair cold1 kdesk1
 peer python3 "$RT/sniff.py" kdesk1 "$RT/cold1.cnt" & SNIFF3=$!
 wait_for "\[cold1\] no REAC heard — knocking" 10 || {
 	echo "FAIL: cold1 was never knocked on"; tail -20 "$LOG"; exit 1; }
@@ -426,7 +437,7 @@ AFTER=$(seen x "$RT/cold1.cnt" "$KNOCKMAC")
 	echo "      over it in 6 s -- that is two masters on one segment"; exit 1; }
 kill -TERM $SNIFF3 2>/dev/null; wait $SNIFF3 2>/dev/null
 kill -TERM $KDESKPID 2>/dev/null; wait $KDESKPID 2>/dev/null
-ip link del cold1 2>/dev/null
+down_pair cold1 kdesk1
 
 kill -TERM $PID; wait $PID; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: clean SIGTERM exited $rc"; tail -5 "$LOG"; exit 1; }
