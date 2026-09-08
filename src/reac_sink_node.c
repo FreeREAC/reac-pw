@@ -1172,6 +1172,25 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 	}
 }
 
+int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned *channels)
+{
+	if (!n)
+		return 0;
+	/* The SAME computation the property publisher above makes, from the same table and
+	 * the same FSM state — asked rather than displayed. Duplicating the reasoning here
+	 * would be a second opinion about one segment. */
+	struct reac_arbitration arb;
+	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
+	               REAC_PACE_FREE_RUN, reac_pacer_mono_ns(), &arb);
+	if (arb.state != REAC_SEGMENT_FOREIGN || arb.rival != REAC_RIVAL_BOX || !arb.have_mac)
+		return 0;
+	if (mac)
+		memcpy(mac, arb.mac, 6);
+	if (channels)
+		*channels = arb.rival_channels;
+	return 1;
+}
+
 /* MAIN LOOP: publish the daemon's own health onto the node, so the console can
  * see the fault it is otherwise structurally unable to see.
  *

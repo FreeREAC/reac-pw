@@ -602,6 +602,33 @@ that by out-shouting. It says so, and the remedy is the box's own switch. Everyw
 the wire is obeyed, in the journal's own words: `box masters this wire — joining it as a
 slave (operator rule: a box that wants to be master gets the clock)`.
 
+**WHERE THE PINNED REFUSAL IS TAKEN, AND WHY IT IS NOT IN THE HUNT.** A pin is served ON
+LINK with no frame waited for — that is the 2026-09-08 rule and it is not weakened here: a
+cold stagebox in slave mode transmits nothing until a master announces to it, so a pinned
+wire that waited for evidence would wait forever. The sniffer's socket is opened in the same
+200 ms poll that takes the hunt's decision, so at that instant its table is empty BY
+CONSTRUCTION; and a box on M announces its master signature about once a second, so even a
+listening window would cost an announce cadence of added latency on every pinned wire,
+silent or not. Measured on the veth proof: the hunt-side refusal fired zero times out of
+every run. So the pin drives, and the segment's OWN engine — which already classifies every
+frame on that wire into the discovery table the console reads — is what notices. About a
+second later the segment comes down and the door goes up in its place, and the journal says
+`we drove it until we heard it and we stop now`. The hunt keeps the same rule for the case
+it CAN see (a rival already in its table when the wire is served), so the decision table
+above is the whole law and only its timing depends on which half of the daemon reached it
+first.
+
+*(This is also where a real defect surfaced: a sighting's WIDTH never crossed the pacer's
+event ring — it carried the role and the model index and nothing else — so the master side
+classified every box on M as an unreadable rival and published `rival-master-unknown` for
+it. The geometry is what §2b decides on, so it now rides the ring with the rest.)*
+
+**AND THE REFUSAL IS NOT A LATCH.** A refused segment keeps a sniffer, exactly as a wire
+taken on proven silence does, and the door comes down when the rival stops mastering the
+wire — bounded by the discovery table's own 5 s withdrawal window, because an EMPTY table is
+not evidence that anybody left. Without that bar the door came down 200 ms after going up
+and went back a second later, which is what a flap looks like on a console.
+
 **What a box-master wire carries, and how it differs from a desk's.** The mode switch is read
 at boot and never re-read, and M is the SPLITTER's clock role rather than "act as a console":
 the S-4000S image carries a master parser AND a slave parser plus a clock driver, so it is

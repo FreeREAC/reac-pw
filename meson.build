@@ -329,10 +329,20 @@ test('reac_link_up_reestablishes',
 # 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups, and since 2026-09-08 the three
 # cold-start phases (pinned-drives-on-link, the knock, a desk answering) with their own
 # peer captures and a 6 s no-further-announce hold.
+# A STAGEBOX WITH ITS REAC MODE SWITCH ON M, for the far end of the veth pair. The daemon
+# cannot play one (its master role IS a desk: the fixed 40-channel downstream), and the
+# 0.5.1 ruling turns on exactly this peer -- joined on an unpinned wire, refused on one
+# pinned master. Same libreac builders as test_reac_hunt's own fixture.
+fake_box_master = executable('fake-box-master',
+  ['tests/fake_box_master.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep],
+  install : false)
+
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
-  args : [reac_pw_exe],
-  timeout : 300)
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 420)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #

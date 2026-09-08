@@ -24,7 +24,8 @@
 # real desk's nodes. Every daemon it starts is killed on every exit path, for the same
 # reason. Skips (77) where the namespace, iproute2 or PipeWire is unavailable.
 set -u
-BIN="${1:?usage: $0 /path/to/reac-pw}"
+BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
+FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
 
 command -v unshare >/dev/null 2>&1 || { echo "SKIP: no unshare"; exit $SKIP; }
@@ -36,9 +37,10 @@ command -v pw-dump >/dev/null 2>&1 || { echo "SKIP: no pw-dump"; exit $SKIP; }
 unshare -r -n --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net namespaces unavailable"; exit $SKIP; }
 
-OUT=$(unshare -r -n --map-root-user bash -s -- "$BIN" <<'INNER'
+OUT=$(unshare -r -n --map-root-user bash -s -- "$BIN" "$FAKE" <<'INNER'
 set -u
 BIN="$1"
+FAKE="$2"
 LOG=$(mktemp); PEER=$(mktemp); CONF=$(mktemp -d); RT=$(mktemp -d)
 
 # OUR OWN GRAPH, and nothing of ours ever outlives this script.
@@ -85,6 +87,38 @@ for o in d:
 ' "$1"
 }
 
+# ONE NODE'S OWN PROPERTIES, and its port count. The refusal and the joined box master are
+# both PUBLISHED FACTS -- a console renders the remedy from these keys -- so the proof reads
+# the keys rather than the journal line that claims them.
+# ONE NODE'S PUBLISHED ANSWER, field by field, '|'-separated (a description has spaces in
+# it). THE WIDTH IS READ FROM THE NODE'S OWN DESCRIPTION, not from a port count: no
+# session manager runs in this namespace, so no node here ever materialises its ports --
+# every node in this graph reports zero, which reads exactly like a node with none. The
+# description is composed from the very argument that sizes the ports
+# (reac_source_node_new), and it is how the master phase above proves its width too.
+# Prints: state|rival.kind|refusal|master.mac|segment|node.description
+daemon_node_props() {
+	pw-dump | python3 -c '
+import json,sys
+pid, want = int(sys.argv[1]), sys.argv[2]
+d=json.load(sys.stdin)
+mine={o["id"] for o in d if o.get("type")=="PipeWire:Interface:Client"
+      and int(o["info"]["props"].get("application.process.id",-1))==pid}
+for o in d:
+    if o.get("type")!="PipeWire:Interface:Node": continue
+    p=o["info"]["props"]
+    if int(p.get("client.id",-1)) not in mine: continue
+    if p.get("node.name")!=want: continue
+    print("|".join([p.get("reac.master.state","(none)"),
+                    p.get("reac.master.rival.kind","(none)"),
+                    p.get("reac.master.refusal","(none)"),
+                    p.get("reac.master.mac","(none)"),
+                    p.get("reac.segment","(none)"),
+                    p.get("node.description","(none)")]))
+' "$1" "$2"
+}
+fld() { echo "$1" | cut -d'|' -f"$2"; }
+
 # ---- THE PEER IS ANOTHER HOST, AND HAS TO BE ONE. Every phase below turns on what one
 # side of a wire does when the OTHER side is silent, and a veth pair whose two ends both
 # sit in this namespace has no other side: the daemon sniffs both, hears its own peer
@@ -122,6 +156,8 @@ up_pair()   { ip link set "$1" up;   peer ip link set "$2" up; }
 down_pair() { ip link set "$1" down; peer ip link set "$2" down; }
 
 mkpair pin0  pbox0  || exit 90
+mkpair boxm0 mbox0  || exit 90
+mkpair pinm0 mbox1  || exit 90
 mkpair cold0 kbox0  || exit 90
 mkpair cold1 kdesk1 || exit 90
 
@@ -502,6 +538,131 @@ kill -TERM $SNIFF3 2>/dev/null; wait $SNIFF3 2>/dev/null
 kill -TERM $KDESKPID 2>/dev/null; wait $KDESKPID 2>/dev/null
 down_pair cold1 kdesk1
 
+# ---- A BOX MASTERS AN UNPINNED WIRE: WE JOIN IT, AT ITS OWN WIDTH (0.5.1).
+# The 2026-09-09 rig proof in miniature, with the ruling applied: an S-0808 on M is not a
+# hazard to refuse, it is a clock to follow. The peer is the fake box master -- broadcast
+# box geometry, one master-only record a second, no handshake, which is what a stagebox on
+# M really does (reac-protocol/wire-format.md) -- and it is started BEFORE the link comes
+# up, so the wire carries a master from the first instant of carrier and the masterless
+# licence is not in the race at all.
+BOXMAC=00:40:ab:c4:08:bc
+$in_peer "$FAKE" mbox0 "$BOXMAC" 8 2000 >"$RT/boxm.log" 2>&1 &
+FAKEPID=$!
+sleep 0.5
+up_pair boxm0 mbox0
+# THE CAPTURE GOES UP WITH THE CARRIER, never before it: a recv on a down interface ends
+# with ENETDOWN and leaves a probe that reports absence because it died.
+$in_peer python3 "$RT/sniff.py" mbox0 "$RT/boxm0.cnt" & SNIFF4=$!
+wait_for "\[boxm0\] box masters this wire — joining it as a slave (operator rule: a box that wants to be master gets the clock)" 15 || {
+	echo "FAIL: a box mastered an unpinned wire and the daemon did not join it"
+	tail -20 "$LOG"; tail -3 "$RT/boxm.log"; exit 1; }
+wait_for "\[boxm0\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 15 || {
+	echo "FAIL: joined in the journal, but the segment never came up receive-only"
+	tail -20 "$LOG"; exit 1; }
+# THE JOB: the box's channels are on the graph, sized by what the box announced -- 8, not
+# a 40-slot fabric with 32 rows of silence -- and the node says whose clock they are on.
+sleep 1.5
+BP=$(daemon_node_props $PID reac-capture.boxm0)
+[ -n "$BP" ] || { echo "FAIL: no reac-capture.boxm0 on the graph after joining a box master"
+	daemon_nodes $PID; tail -20 "$LOG"; exit 1; }
+[ "$(fld "$BP" 6)" = "REAC 8ch capture (box mic inputs)" ] || {
+	echo "FAIL: the joined segment is not sized to the box's 8 ch, and does not say it is"
+	echo "      reading the box's own geometry: $BP"; exit 1; }
+[ "$(fld "$BP" 1)" = "foreign" ] || { echo "FAIL: master.state is not foreign: $BP"; exit 1; }
+[ "$(fld "$BP" 2)" = "box" ] || { echo "FAIL: master.rival.kind is not box: $BP"; exit 1; }
+[ "$(fld "$BP" 3)" = "none" ] || {
+	echo "FAIL: we JOINED it, so master.refusal must be none: $BP"; exit 1; }
+[ "$(fld "$BP" 4)" = "$BOXMAC" ] || {
+	echo "FAIL: the joined node names a master other than the box: $BP"; exit 1; }
+[ "$(fld "$BP" 5)" = "boxm0" ] || { echo "FAIL: the joined node names another segment: $BP"; exit 1; }
+# AND WE PUT NOTHING ON THAT WIRE. A box on M runs no handshake, so a slave engine
+# flooding at it would be noise: the join is receive-only. This is an ABSENCE claim, so its
+# positive control is the SAME capture counting the box's own frames over the same window.
+sleep 1
+OURS_B=$(other "$RT/boxm0.cnt" "$(echo $BOXMAC | tr -d :)")
+BOXFR=$(seen x "$RT/boxm0.cnt" "$(echo $BOXMAC | tr -d :)")
+[ "$BOXFR" -gt 500 ] || {
+	echo "FAIL: the peer capture has only $BOXFR frames from the box master itself, so it"
+	echo "      cannot testify that we sent nothing"; cat "$RT/boxm0.cnt"; exit 1; }
+[ "$OURS_B" -lt 50 ] || {
+	echo "FAIL: a receive-only join put $OURS_B frames on the wire -- there is nothing on"
+	echo "      the far end that could answer them"; cat "$RT/boxm0.cnt"; exit 1; }
+kill -TERM $SNIFF4 2>/dev/null; wait $SNIFF4 2>/dev/null
+kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
+down_pair boxm0 mbox0
+
+# ---- THE SAME BOX ON A WIRE PINNED MASTER: REFUSED, AND THE REFUSAL IS PUBLISHED.
+# Two answers that contradict each other -- the operator wrote MASTER on this wire and a
+# stagebox is mastering it -- and the daemon never settles that by out-shouting a box. What
+# it must not do is vanish: on the rig the refused wire published nothing at all, so the
+# console had an absence to render and no remedy to show.
+#
+# THE PIN STILL DRIVES FIRST, and that is not a defect to test around. A pinned master is
+# served on LINK with no frame waited for, because a cold stagebox in slave mode transmits
+# nothing until a master announces to it (the 2026-09-08 outage). So the daemon cannot know
+# a box is mastering this wire until it has listened, and its own engine -- which classifies
+# every frame on that wire -- is what tells it, about a second later. The phase asserts the
+# END STATE and the STOP: the segment goes down, a door goes up, and nothing more of ours
+# reaches the far end.
+echo "REAC_ROLE_pinm0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
+$in_peer "$FAKE" mbox1 "$BOXMAC" 8 2000 >"$RT/boxm1.log" 2>&1 &
+FAKEPID2=$!
+sleep 0.5
+up_pair pinm0 mbox1
+$in_peer python3 "$RT/sniff.py" mbox1 "$RT/pinm0.cnt" & SNIFF5=$!
+wait_for "\[pinm0\] REFUSED (rival-master-box): REAC_ROLE_pinm0 pins this segment MASTER" 20 || {
+	echo "FAIL: a pinned master beside a box on M did not refuse"
+	grep -n "pinm0" "$LOG" | tail -20; tail -3 "$RT/boxm1.log"
+	echo "--- conf:"; cat "$CONF/.config/reac-pw/reac-pw.env"; exit 1; }
+wait_for "\[pinm0\] segment REFUSED and PUBLISHED (door only, 8-ch rival)" 15 || {
+	echo "FAIL: refused, and then published nothing -- which is the 2026-09-09 defect"
+	tail -20 "$LOG"; exit 1; }
+sleep 1.5
+RP=$(daemon_node_props $PID reac-capture.pinm0)
+[ -n "$RP" ] || { echo "FAIL: a refused wire published NO door node at all"
+	daemon_nodes $PID; tail -20 "$LOG"; exit 1; }
+[ "$(fld "$RP" 1)" = "foreign" ] || {
+	echo "FAIL: the door does not say master.state=foreign: $RP"; exit 1; }
+[ "$(fld "$RP" 2)" = "box" ] || { echo "FAIL: the door does not say rival.kind=box: $RP"; exit 1; }
+[ "$(fld "$RP" 3)" = "rival-master-box" ] || {
+	echo "FAIL: the door does not carry the refusal code: $RP"; exit 1; }
+[ "$(fld "$RP" 4)" = "$BOXMAC" ] || {
+	echo "FAIL: the door names a master other than the rival $BOXMAC: $RP"; exit 1; }
+[ "$(fld "$RP" 5)" = "pinm0" ] || { echo "FAIL: the door names another segment: $RP"; exit 1; }
+# A DOOR IS NOT AN ENGINE: no playback node, because nothing is driving this wire.
+if daemon_nodes $PID | grep -q "^reac-playback.pinm0 "; then
+	echo "FAIL: a refused wire published a reac-playback node -- a door onto an engine"
+	echo "      that is not there"; daemon_nodes $PID; exit 1
+fi
+# AND THE TRANSMISSION STOPPED. A pin is served ON LINK -- a cold box cannot speak first,
+# so the daemon drives before it can possibly know a box is mastering this wire -- and what
+# the refusal has to prove is therefore not "never transmitted" but "STOPPED, and stayed
+# stopped". Measured as a DELTA over a window that begins after the door went up, with the
+# box's own frames on the same capture over the same window as the positive control: a
+# capture that has died reports absence exactly like a daemon that has stopped.
+BEFORE_P=$(other "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
+BOXB=$(seen x "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
+sleep 3
+AFTER_P=$(other "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
+BOXA=$(seen x "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
+[ "$BOXA" -gt "$((BOXB + 1000))" ] || {
+	echo "FAIL: the box's own frames went $BOXB -> $BOXA on this capture, so it is not"
+	echo "      receiving and cannot testify that we stopped"; cat "$RT/pinm0.cnt"; exit 1; }
+[ "$((AFTER_P - BEFORE_P))" -lt 50 ] || {
+	echo "FAIL: the wire was refused and a door published, and we put"
+	echo "      $((AFTER_P - BEFORE_P)) more frames on it in 3 s anyway"
+	cat "$RT/pinm0.cnt"; exit 1; }
+# ---- AND THE REFUSAL IS NOT A LATCH. The switch is moved to slave: the box stops
+# mastering, its sighting ages out, and the wire the operator pinned is driven after all --
+# without a restart, which is what a latched refusal would have cost.
+kill -TERM $FAKEPID2 2>/dev/null; wait $FAKEPID2 2>/dev/null
+wait_for "\[pinm0\] the rival stopped mastering this wire — the refusal is over" 25 || {
+	echo "FAIL: the box stopped mastering and the refusal stood anyway"; tail -20 "$LOG"; exit 1; }
+wait_for "\[pinm0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
+	echo "FAIL: the refusal ended and the pinned segment never came up"; tail -20 "$LOG"; exit 1; }
+kill -TERM $SNIFF5 2>/dev/null; wait $SNIFF5 2>/dev/null
+down_pair pinm0 mbox1
+
 # ---- THE POSITIVE CONTROL FOR EVERY "IT NEVER SAID THAT" ABOVE. Two phases asserted the
 # ABSENCE of the masterless-licence line (hear0 with a desk on it, and the yield's frame
 # count). A grep that can never match reports absence exactly like a daemon that behaved,
@@ -516,8 +677,10 @@ echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the h
     heard again, took a vacant wire as master, established with the box and put BOTH of
     its nodes on the graph, served a per-segment pin without a hunt, DROVE A PINNED WIRE
     ON LINK with a silent peer, DROVE an unpinned wire proven silent and established with
-    the cold box that answered its stream, and YIELDED that wire to a desk that turned up
-    on it"
+    the cold box that answered its stream, YIELDED that wire to a desk that turned up
+    on it, JOINED A BOX MASTER on an unpinned wire at its own 8 ch and sent nothing back,
+    and REFUSED the same box on a wire pinned master while PUBLISHING the door that says
+    so -- then took that segment when the box stopped mastering it"
 exit 0
 INNER
 )
