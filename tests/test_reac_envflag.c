@@ -10,9 +10,9 @@
  *       it only asked whether the variable was SET. An operator who types 0 has
  *       said no; a reader that hears yes is a trap, not a knob.
  *
- *   (b) THE SHIPPED DEFAULT OF THE CLOCK DISCIPLINE IS ON (arbitration spec §3,
- *       promoted 2026-09-08 after the rig ran follow=1 + REF=Babyface from
- *       2026-09-07 20:55 without incident). The constant is asserted directly, so
+ *   (b) THE SHIPPED DEFAULT OF THE CLOCK DISCIPLINE IS ON (0.5.0, after the rig ran
+ *       follow=1 + REF=Babyface from 2026-09-07 20:55 without incident). The constant
+ *       is asserted directly, so
  *       flipping REAC_CLOCK_FOLLOW_DEFAULT back to 0 turns this test red — the
  *       default is not something a later edit can move quietly.
  *

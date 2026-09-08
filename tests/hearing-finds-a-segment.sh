@@ -73,8 +73,8 @@ sleep 4
 grep -q "\[hear0\] REAC heard" "$LOG" || { echo "FAIL: master on the peer never heard"; cat "$LOG"; tail -5 "$PEER"; exit 1; }
 grep -q "\[hear0\] segment up" "$LOG" || { echo "FAIL: heard but not served"; cat "$LOG"; exit 1; }
 # AND ON THE RIGHT END OF THE PAIRING. A desk masters this wire, so the daemon joins it as
-# a SLAVE and follows its pace (trunk-VLAN spec S7 step 4, arbitration S2). Nothing was
-# configured to say so; the verdict came from the frames.
+# a SLAVE and follows its pace. Nothing was configured to say so; the verdict came from
+# the frames.
 grep -q "\[hear0\] a desk masters this segment" "$LOG" || {
 	echo "FAIL: a desk was mastering the wire and the hunt did not say so"; cat "$LOG"; exit 1; }
 grep -q "\[hear0\] segment up (slave, chosen by hearing the wire)" "$LOG" || {
@@ -119,7 +119,7 @@ wait_for "reac-master: .* -> ESTABLISHED" 20 || {
 	echo "FAIL: took the wire as master but never established with the box"
 	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
 # ---- A PIN IS SERVED WITHOUT A HUNT. `REAC_ROLE_<segment>` is an answer about this
-# wire (arbitration S8a: the role is a setting), so it waits only for the wire to BE a
+# wire -- a setting, not a guess -- so it waits only for the wire to BE a
 # segment. The box stays where it is; only the conf changes, and the segment is bounced
 # so the sniffer re-reads it.
 mkdir -p "$CONF/.config/reac-pw"

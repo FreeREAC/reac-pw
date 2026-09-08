@@ -103,6 +103,11 @@ meson test -C _build
   per-interface env files are gone; a per-segment fact is a suffixed key in the one
   conf. REAC_ROLE_<segment> still wins outright; a bare REAC_ROLE is a floor and is
   superseded out loud.
+- A segment IS its interface and is NAMED after it: node pair reac-capture.<iface> /
+  reac-playback.<iface>, per-segment conf key REAC_ROLE_<iface>, and no <iface>.env file
+  read anywhere. Node names that follow the BOX are owed and are listed with the other
+  owed increments in DESIGN.md; those go 0.5.1, 0.5.2, ... -- the middle digit does not
+  move again for them.
 - reac-pw with no arguments STARTS. It used to answer the usage text and exit 2,
   which is what the packaged unit passes, so the service could not come up at all.
 - The clock discipline is ON by default. A daemon that owns a segment's pace and

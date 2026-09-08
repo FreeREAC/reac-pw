@@ -2,7 +2,7 @@
 # One A/B leg on the S-0808 segment. Never touches enp131s0 (the S-1608, whose
 # 16 capture channels are linked to the console and may carry the live mic).
 set -o pipefail
-S=/tmp/claude-1000/-home-pau-Devel-audio-openmixer/7d6d683f-e40e-4ae4-af00-ee77ed53dc70/scratchpad
+S=${S:-$(dirname "$0")/out}   # where this leg's captures and logs land; override with S=
 BIN=${BIN:-/home/pau/Devel/audio/reac-pw/build/reac-pw}
 TAG=$1; DUR=${2:-240}
 export XDG_RUNTIME_DIR=/run/user/1000

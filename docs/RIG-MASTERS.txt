@@ -7,7 +7,7 @@
 # <KEY>_<segment> keys in the ONE conf; REAC_IFACES and the per-interface files retired
 # with the trunk-VLAN spec's 2026-09-02 amendment, and the segments are HEARD, not named). The two `/usr/bin/reac-pw`
 # processes below are still what is ACTUALLY RUNNING as of this date — the cutover is the
-# operator's live-restart window (CLAUDE.md: never taken by an agent) — so the verbatim
+# operator's own live-restart window, never somebody else's — so the verbatim
 # lines stay beneath this note as the fallback for as long as that is true. Once the
 # operator has cut over, confirm with `systemctl --user status reac-pw` and update this
 # note rather than deleting the fact that a hand-run pair once was the whole rig.

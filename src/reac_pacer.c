@@ -1644,7 +1644,7 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 		        reac_clock_disc_describe(&p->clock, line, sizeof line),
 		        p->period_ns);
 	} else {
-		/* FREE-RUN IS THE FALLBACK, AND IT IS ANNOUNCED (arbitration §3). It stopped
+		/* FREE-RUN IS THE FALLBACK, AND IT IS ANNOUNCED. It stopped
 		 * being the silent normal when the discipline became the default: a segment
 		 * whose pace is disciplined by nothing is a state an operator must be able to
 		 * read off the journal, not one they infer from a missing line. */

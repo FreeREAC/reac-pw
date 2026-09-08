@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_hunt — which end of the pairing a HEARD segment takes when nobody configured
- * one (trunk-VLAN spec §7 step 4, arbitration §8b's `auto`).
+ * one — the `auto` role, which is the default (reac_hunt.h).
  *
  * THE DEFECT THIS EXISTS AGAINST, 2026-09-08: reac-pw was launched with `REAC_ROLE=slave`
  * standing in a conf file as the floor for every segment, and both of the rig's boxes —
@@ -64,7 +64,7 @@ static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 
 /* A STAGEBOX STRAPPED TO MASTER: the same master-only record, emitted at the box's OWN
  * width — measured 2026-08-30 as 1204 B on a wire where a desk had emitted 1492 B. The
- * frame claims master; the geometry says box; §2b says the geometry wins. */
+ * frame claims master; the geometry says box; the geometry wins. */
 static int box_on_m(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
@@ -81,7 +81,7 @@ int main(void)
 	uint64_t t0 = 100 * SEC;
 
 	/* ---- A. A SILENT WIRE IS NEVER TAKEN. Link is the gate to listen; HEARING is the
-	 * gate to serve (trunk-VLAN amendment §a). A NIC that carries no REAC frame is not a
+	 * gate to serve. A NIC that carries no REAC frame is not a
 	 * segment however long we wait, and driving needs evidence. */
 	reac_hunt_init(&h, OURS, t0);
 	CHK(h.verdict == REAC_HUNT_HUNTING);
@@ -90,7 +90,7 @@ int main(void)
 	CHK(reac_hunt_heard_anything(&h) == 0);
 
 	/* ---- B. A BOX AND NO MASTER: WE DRIVE — but only after the window.
-	 * §7 step 4: "no foreign master -> we drive, probe, grant, establish". */
+	 * No foreign master: we drive, probe, grant, establish. */
 	reac_hunt_init(&h, OURS, t0);
 	CHK(box_heartbeat(&h, t0) == 1);          /* a new peer: an observable change */
 	CHK(reac_hunt_heard_anything(&h) == 1);
@@ -133,8 +133,7 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_MASTER);
 
 	/* ---- D. A DESK MASTERS IT: WE JOIN AS SLAVE, and we do not wait out the window to
-	 * do it — a desk on the wire is not a maybe (§7 step 4's second half, §2b's `desk`
-	 * row: slave-join, never refuse). */
+	 * do it — a desk on the wire is not a maybe, and a desk is JOINED, never refused. */
 	reac_hunt_init(&h, OURS, t0);
 	CHK(desk_headamp(&h, DESK, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
@@ -146,7 +145,7 @@ int main(void)
 
 	/* ---- E. A STAGEBOX MASTERS IT: REFUSED, AND NEVER FOUGHT. Slave-joining a box
 	 * would present this console as a box to a box and obey a misconfiguration instead
-	 * of naming it (§2b). The refusal is a code the surface can render a remedy for. */
+	 * of naming it. The refusal is a code a surface can render a remedy for. */
 	reac_hunt_init(&h, OURS, t0);
 	CHK(box_on_m(&h, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
@@ -190,8 +189,8 @@ int main(void)
 	CHK(reac_hunt_heard_anything(&h) == 0);
 
 	/* ---- I. A PIN IS SERVED WITHOUT A HUNT. `REAC_ROLE_<segment>` is an answer about
-	 * this wire (arbitration §8a: the role is a SETTING), so it waits only for the wire
-	 * to BE a segment — the first classifying frame (trunk-VLAN amendment §a). Making a
+	 * this wire — a SETTING, not a guess — so it waits only for the wire to BE a
+	 * segment, which is its first classifying frame. Making a
 	 * pinned segment sit out the window, or find box evidence, would be the daemon
 	 * second-guessing a setting; and a pinned segment the hunt could not decide would
 	 * never be served at all, which is the shape of the outage this all comes from. */
@@ -209,7 +208,7 @@ int main(void)
 	/* A pinned SLAVE likewise, and on a wire with no desk on it at all: the operator
 	 * said be a box here, and the daemon does not require evidence of a master before
 	 * obeying. Whether the wire agrees is the listener's own arbitration to publish
-	 * (§8c's intent-versus-observation disagreement). */
+	 * (the intent-versus-observation disagreement, which needs the segment up to exist). */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_SLAVE);
 	CHK(box_flood(&h, BOX, 16, t0) == 1);

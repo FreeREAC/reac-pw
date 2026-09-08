@@ -445,6 +445,46 @@ locked to the first box's src MAC).
 Rig-only unknowns still open (do not guess): the 4th uncharacterised
 M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 
+## 0.5.0 — what the daemon decides for itself, and what it still owes
+
+Nobody writes a config file. Started with no flags and no conf, reac-pw finds its own
+segments and takes its own role on each of them, and the three things it does NOT yet do
+are named here rather than left to be rediscovered.
+
+**What it does.** Every linked, non-loopback Ethernet interface gets a passive `0x8819`
+sniffer, which transmits nothing; the first frame that classifies as REAC turns that
+interface into a SEGMENT (`reac_ifscan`). The role then comes out of the same hearing
+(`reac_hunt`): a desk mastering the wire is joined as a slave; a wire with a box on it
+and no master is taken as master after three master announce cadences (3 s) and the box
+is granted; a stagebox strapped to master is refused with the remedy named and never
+fought; a `REAC_ROLE_<segment>` pin skips the election and is served on the first
+classifying frame. **The segment's NAME is its interface's**, and so is the node suffix
+(`reac-capture.enp131s0`), which is also the key the per-segment conf is written under —
+`REAC_ROLE_enp131s0`. There is no per-interface file any more; there is one conf and
+suffixed keys in it.
+
+**What it owes, in this order.**
+
+1. **Node names that follow the BOX, not the segment.** A box does not belong to a
+   segment — its patch should survive being moved to another port — so the instance
+   suffix should derive from the box's identity, not from the interface. `reac_ifname`
+   (bus + physical address) is built and tested for the groundwork and is deliberately
+   wired to nothing: swapping segment identity today would rename every per-segment key
+   and every console patch in one step, which is a migration, not a refactor.
+2. **Trunk topology.** Hearing 802.1Q-tagged frames on a physical parent, and adopting
+   or creating the sub-interfaces that carry them, is designed (openmixer's trunk-VLAN
+   daemon note has the reference topology) and NOT implemented: nothing in `src/` reads
+   a VLAN tag. Today a segment is a whole interface, and a trunk has to be split by the
+   kernel before reac-pw sees it.
+3. **Re-resolution after a segment is up.** The hunt lives in the sniffer and dies when
+   the segment is served, so a desk that powers up AFTER we took a vacant wire is
+   published as a conflict by the listener's arbitration and is not yielded to. The
+   pieces for the yield exist (`reac_role_swap`); nothing drives them from a
+   foreign-master sighting yet.
+
+**Versioning.** 0.5.0 is this release. The increments above go 0.5.1, 0.5.2, ... — the
+middle digit does not move again for them.
+
 ## Files
 
 | File | Role |
@@ -472,8 +512,8 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `src/reac_link_state.{h,c}` | pure mapping from the master FSM state onto the node-property badge a consumer (openmixer's stagebox card) reads |
 | `src/reac_link.{h,c}` | **is there a CABLE** — a dependency-free `/sys/class/net/<if>/carrier` predicate, 1/0/-1 UNKNOWN. Read by the PROBING watchdog so "the box is silent" and "the cable is out" stop reading the same (#95). Answers UNKNOWN for an admin-down interface, which the file cannot describe |
 | `src/reac_ifscan.{h,c}` | **WHICH interfaces to listen on, and which are segments** — the host's netdev table over rtnetlink, one decision per Ethernet interface. Link is the gate to LISTEN (a passive 0x8819 sniffer, `main.c`'s hearing supervisor), the first REAC frame heard is the gate to SERVE, and link loss drops the segment after a 3 s hold a box power-cycle cannot outlast; `RTM_DELLINK` and a re-enumerated ifindex drop at once. A segment is named after its interface; nothing names one in advance (openmixer's trunk-VLAN spec, amendment 2026-09-02). Pure table + event queue, netlink as a byte source, same shape as `reac_linkmon` |
-| `src/reac_ifname.{h,c}` | a segment's STABLE, bus+physical-address-derived name (`pci1`, `usb2`) — built, tested against real captured `/sys` paths, and DELIBERATELY NOT WIRED into segment identity. The trunk-VLAN spec's amendment (2026-09-02 §c) rules that a segment IS its interface and is NAMED after it, and §e has the console generate `REAC_ROLE_<segment>` and its patch addresses from that published name — so swapping the identity renames every per-segment key and every patch on a live rig at once, which is a spec change and a contract break, not a refactor. §11's answer to name instability is node names that follow the BOX (increment 4), not a second interface-derived name. Kept for that work; wired to nothing today |
-| `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation (openmixer's trunk-VLAN spec §7 step 4, arbitration spec §8b's `auto`). Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is REFUSED by its frame geometry (§2b) and left alone. Nothing latches: the table ages, and the verdict is recomputed. Pure |
+| `src/reac_ifname.{h,c}` | a segment's STABLE, bus+physical-address-derived name (`pci1`, `usb2`) — built, tested against real captured `/sys` paths, and DELIBERATELY NOT WIRED into segment identity. A segment IS its interface here and is NAMED after it, and a console generates its per-segment keys and its patch addresses from that published name — so swapping the identity renames every key and every patch on a live rig in one step. The answer to name instability is node names that follow the BOX (owed, see "What 0.5.0 does not do"), not a second name derived from the interface. Kept for that work; wired to nothing today |
+| `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is REFUSED by its frame geometry and left alone. A `REAC_ROLE_<segment>` pin skips all of it and is served on the first classifying frame. Nothing latches: the table ages, and the verdict is recomputed. Pure |
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
