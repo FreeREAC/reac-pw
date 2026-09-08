@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_knock — WAKING A COLD STAGEBOX ON A WIRE NOBODY CONFIGURED.
+/* reac_knock — THE PROOF THAT A WIRE HAS NO MASTER ON IT, which is the licence to drive.
  *
  * THE DEFECT IT EXISTS AGAINST, measured on the operator's desk 2026-09-08 22:10 with
  * 0.5.0-2: an S-0808 on `enp131s0` and an S-1608 on `enp128s20f0u2`, both freshly
@@ -16,41 +16,48 @@
  * So "the first classifying frame is the gate to SERVE" is a gate a cold segment cannot
  * open, and hearing alone cannot wake a box. `REAC_ROLE_<iface>=master` answers it for a
  * wire the operator pinned (reac_hunt: a pin serves on LINK). This module answers it for
- * a wire nobody pinned, which is every wire on a final-user system's first boot: it
- * KNOCKS — one master announce, periodically, until something answers.
+ * a wire nobody pinned, which is every wire on a final-user system's first boot.
  *
- * WHY THE KNOCK CANNOT RACE A MASTER, which is the whole safety argument (operator
- * ruling 2026-09-08). A REAC master transmits CONTINUOUSLY at the wire cadence: one
- * frame per audio slot, ~125 µs at 96 k, ~272 µs at the slowest rate this daemon serves.
- * A master cannot be present and silent. So a linked wired port that carries NOT ONE
- * REAC frame across REAC_KNOCK_LISTEN_NS has been OBSERVED masterless — proof, not a
- * guess — and a knock is only ever emitted onto such a port. The first frame heard, from
- * that instant on, stops the knocking: a desk's stream means we are late to a master's
- * wire and become its slave without ever fighting it (the arbitration's observe-then-act
- * law), a box's answer means we take the wire, a box strapped to master is refused as
- * today. Everything after the first frame is the existing hunt's decision, unchanged;
- * this module only ends the silence that kept the hunt from ever having evidence.
+ * WHAT IT ANSWERS WITH — corrected on the rig, 2026-09-08, with 0.5.0-3 installed. The
+ * first cut sent ONE master announce every two seconds and waited for a reply. It was
+ * measured on `enp128s20f0u2` unpinned: the daemon knocked, tx rose by two frames per six
+ * seconds, and rx stayed at ZERO for over a minute. A COLD BOX DOES NOT ANSWER A LONE
+ * ANNOUNCE. It answers a master that is DRIVING — the continuous probing stream a real
+ * desk puts on the wire, which is what the pinned path and 0.4.8 both send and is what
+ * brought both rig boxes up within two seconds of link. So the licence this module grants
+ * is not "send a frame": it is TAKE THE WIRE, and the master role starts on that port
+ * exactly as a pin starts it.
  *
- * THE ACCEPTED COST, ruled by the operator 2026-09-08: on a linked wired interface with
- * no REAC traffic, this daemon puts ONE small 0x8819 broadcast frame on the wire every
- * REAC_KNOCK_PERIOD_NS, indefinitely. On an office LAN that is an unsolicited Roland-OUI
- * frame every two seconds that nothing will ever answer. That is the price of a box that
- * wakes with no configuration, and it is the one the operator chose. Wireless interfaces
- * are excluded from the scan entirely and never reach this module.
+ * WHY DRIVING IS SAFE, which is the whole argument for transmitting at all (operator
+ * ruling 2026-09-08). A REAC master transmits CONTINUOUSLY at the wire cadence: one frame
+ * per audio slot, ~125 us at 96 k, ~272 us at the slowest rate this daemon serves. A
+ * master cannot be present and silent. So a linked wired port that carries NOT ONE REAC
+ * frame across REAC_KNOCK_LISTEN_NS has been OBSERVED masterless — proof, not a guess —
+ * and only such a port is ever driven. Any frame arriving inside that window cancels the
+ * licence outright and hands the wire back to the ordinary hunt, which joins a desk,
+ * refuses a stagebox strapped to master, and waits out its window for a box.
  *
- * PURE, like reac_hunt: state, two clocks and a verdict, no sockets. main.c owns the TX.
- * One knock per passive sniffer, alive only until its segment is served or its link goes.
+ * THE ACCEPTED COST, ruled by the operator 2026-09-08 ("no traffic, no master"): a linked
+ * wired interface with nothing on it is driven at the master cadence indefinitely, and on
+ * an office LAN that is a REAC stream nothing will ever answer. 0.4.8 did exactly this on
+ * every interface it was given. Wireless is excluded from the scan entirely and never
+ * reaches this module.
+ *
+ * PURE: one clock and one verdict, no sockets, no frames. main.c turns the licence into a
+ * reac_hunt verdict and the hunt into a served segment; a wire taken this way KEEPS ITS
+ * SNIFFER, because a bet on silence is a bet that has to stay watched — see
+ * reac_hunt_silence_proven and main.c's yield.
  */
 #ifndef REAC_KNOCK_H
 #define REAC_KNOCK_H
 
 #include <stdint.h>
 
-/* HOW LONG A WIRE IS LISTENED TO BEFORE THE FIRST KNOCK — the masterless observation.
+/* HOW LONG A WIRE IS LISTENED TO BEFORE IT MAY BE DRIVEN — the masterless observation.
  *
  * Read off the cadence this daemon already emits, not picked. A master fills every audio
  * slot: `sampleRate/12` frames a second (reac_fsm.h §13p.3 measured 4000 fps at 48 k),
- * so the SLOWEST rate on the closed list, 44.1 k, is 3675 fps = 272 µs a slot. Half a
+ * so the SLOWEST rate on the closed list, 44.1 k, is 3675 fps = 272 us a slot. Half a
  * second is therefore 1837 consecutive slots at the worst case (and ~4000 at 96 k) in
  * which a present master would have had to transmit and did not.
  *
@@ -59,71 +66,38 @@
  * second of extra sleep — which is nothing beside the forever it slept before. */
 #define REAC_KNOCK_LISTEN_NS (500ULL * 1000000ULL)
 
-/* THE KNOCK PERIOD — one master announce every two seconds.
- *
- * The number comes from the box's own cold-connect timing, which this codebase already
- * carries: REAC_FSM_FLOOD_BURST = 5460 frames ≈ 1.36 s at the 48 k box cadence is how
- * long a box takes to announce and hand off to its unicast cold-connect grid. A knock
- * period shorter than that would put a second knock inside the answer round the first
- * one just started. 2 s is the next whole second above it; it is twice the master's own
- * 1 Hz announce cadence (`reac_master.c`, announce_tick >= fps), so a knock can never be
- * mistaken for a master's cadence by anything counting frames; and three of them fit
- * inside no useful window, which is why the wire is DECIDED by the hunt on the first
- * frame and never by a knock count. `tests/test_reac_knock.c` asserts the flood relation
- * mechanically, so moving REAC_FSM_FLOOD_BURST breaks the build's test rather than the
- * reasoning silently. */
-#define REAC_KNOCK_PERIOD_NS (2ULL * 1000000000ULL)
-
-/* Bounded jitter on each period, so two daemons brought up together on one switch do not
- * lock step and knock in the same millisecond forever. An eighth of the period (250 ms)
- * is enough to break a tie and small enough that the period is still honestly "every two
- * seconds" in the journal line. Deterministic per host: seeded off our own MAC, so a
- * capture is reproducible and no test has to tolerate a random schedule. */
-#define REAC_KNOCK_JITTER_NS (REAC_KNOCK_PERIOD_NS / 8)
-
 enum reac_knock_state {
-	REAC_KNOCK_LISTENING = 0, /* inside the masterless observation; nothing sent */
-	REAC_KNOCK_KNOCKING,      /* observed masterless: one announce per period */
-	REAC_KNOCK_STOPPED,       /* something REAC was heard; the hunt owns it now */
+	REAC_KNOCK_LISTENING = 0, /* inside the masterless observation; nothing driven */
+	REAC_KNOCK_PROVEN,        /* observed masterless: this wire may be taken */
+	REAC_KNOCK_CANCELLED,     /* something was heard; the ordinary hunt owns it */
 };
 
-/* What the caller must DO this step. The two SEND kinds are separated because the first
- * knock is the one that earns a journal line and the rest must never log — a line every
- * two seconds forever is a log nobody reads. */
+/* What the caller must DO this step. DRIVE is a ONE-SHOT: the licence is granted once,
+ * and the segment it starts outlives this object. */
 enum reac_knock_act {
 	REAC_KNOCK_ACT_NONE = 0,  /* nothing to do */
-	REAC_KNOCK_ACT_BEGIN,     /* send, and say we have started knocking */
-	REAC_KNOCK_ACT_SEND,      /* send, silently */
-	REAC_KNOCK_ACT_END,       /* stop, and say why (reac_knock_stop_reason) */
+	REAC_KNOCK_ACT_DRIVE,     /* proven masterless: take the wire as MASTER, and say so */
 };
 
 struct reac_knock {
 	enum reac_knock_state state;
 	uint64_t opened_ns;       /* when this wire got carrier and we began listening */
-	uint64_t next_ns;         /* when the next knock is due */
-	unsigned long sent;       /* knocks put on the wire, for the closing line */
-	int end_said;             /* the ACT_END line is a one-shot */
-	uint32_t rng;             /* the jitter's own state, seeded from our MAC */
+	uint64_t due_ns;          /* when the observation closes */
+	int granted;              /* the licence was handed out; never handed out twice */
 };
 
-/* Begin listening on a wire that has just come up. `our_mac` is this NIC's address and
- * seeds the jitter only. */
-void reac_knock_init(struct reac_knock *k, const uint8_t our_mac[6], uint64_t now_ns);
+/* Begin listening on a wire that has just come up. */
+void reac_knock_init(struct reac_knock *k, uint64_t now_ns);
 
 /* A REAC frame was heard on this wire — ANY frame, from a desk, a box or a rival. The
- * knock is over from this instant: whatever is out there, the hunt classifies it and
- * decides, and nothing more of ours goes on the wire until the segment is served. Safe
- * to call repeatedly and safe to call before the first knock. */
+ * licence is cancelled: whatever is out there, the ordinary hunt classifies it and rules
+ * on it, and a wire with something on it was never the case this module is for. Safe to
+ * call repeatedly, and safe to call after the licence was granted — it does not revoke a
+ * segment, which is main.c's own watch over the retained sniffer. */
 void reac_knock_heard(struct reac_knock *k);
 
-/* Advance the clock and say what to do. Returns ACT_BEGIN or ACT_SEND on the steps that
- * must put one master announce on the wire, ACT_END exactly once after
- * reac_knock_heard(), and ACT_NONE otherwise. */
+/* Advance the clock. Returns ACT_DRIVE exactly once, on the first step at or after the
+ * observation closes on total silence, and ACT_NONE every other time. */
 enum reac_knock_act reac_knock_step(struct reac_knock *k, uint64_t now_ns);
-
-/* Why the knocking ended, for the closing journal line. Only ever one reason today —
- * something answered — and it is a function rather than a literal so a second reason
- * (a serve, a link loss) has somewhere to go without the caller inventing prose. */
-const char *reac_knock_stop_reason(const struct reac_knock *k);
 
 #endif /* REAC_KNOCK_H */

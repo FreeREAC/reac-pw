@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #endif
 #include "reac_tx.h"
+#include "reac_mac.h"   /* the ONE source of an emitting role's address */
 
 #include <reac/reac.h>         /* REAC_FRAME_BYTES, REAC_ETHERTYPE */
 #include <reac/reac_encode.h>  /* reac_downstream_build — the frame builder */
@@ -47,10 +48,14 @@ int reac_tx_open(struct reac_tx *tx, const char *ifname)
 	tx->fd = -1;
 	tx->ifindex = 0;
 	tx->counter = 0;
-	/* Stand-in source MAC: Roland OUI 00:40:ab + a fixed host part. The decoder
-	 * ignores src, and this keeps emitted frames sanitization-clean (no rig MAC). */
-	static const uint8_t standin[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 };
-	memcpy(tx->src, standin, 6);
+	/* THE SOURCE IS THIS NIC'S OWN ADDRESS, which is reac_mac.h's law for every
+	 * emitting role and not a preference: a Roland-OUI stand-in collides with a real
+	 * device when both are on the wire, makes every capture ambiguous, and — found in
+	 * review 2026-09-08 — makes two reac-pw hosts on one segment each dismiss the
+	 * other's frames as its own echo, while a box that learned the stand-in then meets
+	 * the served master's real address and drops on FSM_DROP_MAC_CHANGE. There used to
+	 * be a fixed 00:40:ab:c4:80:f6 here. */
+	reac_mac_default_src(ifname, tx->src);
 
 	int fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 	if (fd < 0)
@@ -75,10 +80,11 @@ void reac_tx_close(struct reac_tx *tx)
 	tx->fd = -1;
 }
 
-int reac_tx_emit_frame(struct reac_tx *tx, const uint8_t *frame, size_t len)
+int reac_tx_emit(struct reac_tx *tx, float *const *planar, int nch, int ns)
 {
-	if (!tx || tx->fd < 0 || !frame || len == 0)
-		return -1;
+	uint8_t frame[REAC_FRAME_BYTES];
+	reac_downstream_build(frame, planar, nch, ns, tx->counter, tx->src);
+
 	struct sockaddr_ll sll;
 	memset(&sll, 0, sizeof sll);
 	sll.sll_family  = AF_PACKET;
@@ -86,14 +92,8 @@ int reac_tx_emit_frame(struct reac_tx *tx, const uint8_t *frame, size_t len)
 	sll.sll_halen   = 6;
 	memset(sll.sll_addr, 0xFF, 6);  /* broadcast dst */
 
-	return (int)sendto(tx->fd, frame, len, 0, (struct sockaddr *)&sll, sizeof sll);
-}
-
-int reac_tx_emit(struct reac_tx *tx, float *const *planar, int nch, int ns)
-{
-	uint8_t frame[REAC_FRAME_BYTES];
-	reac_downstream_build(frame, planar, nch, ns, tx->counter, tx->src);
-	int r = reac_tx_emit_frame(tx, frame, REAC_FRAME_BYTES);
+	ssize_t r = sendto(tx->fd, frame, REAC_FRAME_BYTES, 0,
+	                   (struct sockaddr *)&sll, sizeof sll);
 	tx->counter++;  /* free-running, wraps at 16 bits like the desk's */
-	return r;
+	return (int)r;
 }

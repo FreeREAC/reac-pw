@@ -92,30 +92,40 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
-* Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-3
-- A COLD STAGEBOX NOW WAKES. Measured on the rig at 22:10 with 0.5.0-2: an S-0808 and
-  an S-1608, both freshly powered, both cabled, both NICs carrier up at 100 Mb full,
-  and rx_packets moved by ZERO in five seconds on both with no 0x8819 frame in eight
-  seconds of capture. A REAC box in slave mode spends a bounded broadcast flood on
-  PHY-up and then says nothing at all until a master announces to it, so a box powered
-  before the daemon can never open the "first classifying frame" gate, and both boxes
-  sat mute where 0.4.8 had driven them from the first instant.
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-3
+- A COLD STAGEBOX NOW WAKES. Measured on the rig 2026-09-08 22:10 with 0.5.0-2: an
+  S-0808 and an S-1608, both freshly powered, both cabled, both NICs carrier up at
+  100 Mb full, and rx_packets moved by ZERO in five seconds on both with no 0x8819
+  frame in eight seconds of capture. A REAC box in slave mode spends a bounded
+  broadcast flood on PHY-up and then says nothing at all until a master announces to
+  it, so a box powered before the daemon can never open the "first classifying frame"
+  gate, and both boxes sat mute where 0.4.8 had driven them from the first instant.
 - A segment with a REAC_ROLE_<iface> pin is served ON LINK, with no frame waited for.
-  A pin is the operator's answer about that wire, and requiring a second kind of
-  evidence for it is what left the two pinned masters hunting.
-- An UNPINNED linked wired interface KNOCKS, which is what a system with no pins on
-  its first boot needs: after 500 ms of proven silence -- a master transmits one frame
-  per audio slot and cannot be present and silent, so silence over 1837 consecutive
-  slots is proof the port is masterless -- one master announce goes out every 2 s until
-  anything REAC is heard. The first frame heard stops it for good; the existing hunt
-  then rules, so a box answering is driven, a desk heard is slaved to and never fought,
-  and a stagebox strapped to master is refused with its remedy as before. The accepted
-  cost, ruled by the operator: one small broadcast frame every two seconds on a linked
-  wired port that carries no REAC traffic. Wireless is excluded from the scan as ever.
+  Proven on the rig: both boxes came up within two seconds of "pinned master --
+  driving on link".
+- An UNPINNED linked wired interface that carried NOTHING for 500 ms is taken as
+  MASTER, through the ordinary master role -- same pacer, same probing until the box
+  cold-connects, same NIC address. A master transmits one frame per audio slot and
+  cannot be present and silent, so 500 ms of nothing (1837 consecutive slots at the
+  slowest rate served) is proof the port is masterless, not a guess; any frame inside
+  the window cancels the licence and the ordinary hunt rules instead. This is what a
+  system with no pins on its first boot needs.
+  A first cut of this sent ONE master announce every two seconds instead. It was
+  measured on the rig and the box never answered -- tx +2 per ~6 s, rx +0 for over a
+  minute. A cold box answers a master that is DRIVING. The lone-announce path is gone,
+  and with it the Roland-OUI stand-in source address it emitted from, which broke
+  reac_mac.h's own law: two hosts on one segment each dismissed the other's frames as
+  its own echo, and a box that learned the stand-in dropped on FSM_DROP_MAC_CHANGE
+  when it met the served master's real address.
+- A wire taken on silence KEEPS its sniffer, because it was served on a bet. If a desk
+  turns up on it, the segment is handed over at once -- master down, slave up, never
+  fought. A stagebox strapped to master is reported and not yielded to.
+- Wireless is excluded twice: out of the scan by default, and never driven on silence
+  even where REAC_IFACES_ALLOW_WIRELESS admits one for LISTENING.
 - The journal says which of the three an interface did, once, at link: "pinned master
-  -- driving on link", "pinned slave -- listening for a master", or "unpinned --
-  listening for REAC"; plus one line when knocking starts and one when it stops with
-  the reason, and never a line per knock.
+  -- driving on link", "pinned slave -- cold-connect flood, then listening for a
+  master", or "unpinned -- listening for REAC"; plus the line naming the silence when
+  a wire is taken on it.
 
 * Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-2
 - The recovery for a capture node that never reached the graph now RE-BUILDS it: the

@@ -174,7 +174,7 @@ test('reac_ring', ring_test)
 # libreac's reac_downstream_build now; src/reac_tx.c is still linked for
 # reac_eth_crc32 (the OHRCA-trailer RE verifier, not part of any encode path).
 tx_test = executable('test_reac_tx',
-  ['tests/test_reac_tx.c', 'src/reac_tx.c'],
+  ['tests/test_reac_tx.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_tx', tx_test)
@@ -382,7 +382,7 @@ test('reac_fsm', fsm_test)
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
-   'src/reac_tx.c'],
+   'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master', master_test)
@@ -392,7 +392,7 @@ test('reac_master', master_test)
 master_no_enroll_test = executable('test_reac_master_no_enroll',
   ['tests/test_reac_master_no_enroll.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
-   'src/reac_tx.c'],
+   'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_master_no_enroll', master_no_enroll_test)
@@ -402,7 +402,7 @@ test('reac_master_no_enroll', master_no_enroll_test)
 ohrca_chanmap_test = executable('test_reac_ohrca_chanmap',
   ['tests/test_reac_ohrca_chanmap.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c',
-   'src/reac_tx.c'],
+   'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_ohrca_chanmap', ohrca_chanmap_test)
@@ -425,7 +425,7 @@ test('reac_master_fsm', master_fsm_test)
 # generated control block sums to 0 mod 256. The #130 hardware-verify gate.
 s1608_test = executable('test_reac_s1608',
   ['tests/test_reac_s1608.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_headamp_tx.c', 'src/reac_tx.c', 'src/reac_mac.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_s1608', s1608_test)
@@ -880,7 +880,7 @@ test('reac_grant', grant_test)
 # profile. Pure — no socket.
 conformance_test = executable('test_reac_conformance',
   ['tests/test_reac_conformance.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
-   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_headamp_tx.c'],
+   'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_tx.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_conformance', conformance_test)
