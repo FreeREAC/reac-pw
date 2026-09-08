@@ -28,6 +28,8 @@ BIN="${1:?usage: $0 /path/to/reac-pw}"
 SKIP=77
 
 command -v unshare >/dev/null 2>&1 || { echo "SKIP: no unshare"; exit $SKIP; }
+command -v nsenter >/dev/null 2>&1 || { echo "SKIP: no nsenter"; exit $SKIP; }
+command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3"; exit $SKIP; }
 command -v ip >/dev/null 2>&1 || { echo "SKIP: no iproute2"; exit $SKIP; }
 command -v pipewire >/dev/null 2>&1 || { echo "SKIP: no pipewire binary"; exit $SKIP; }
 command -v pw-dump >/dev/null 2>&1 || { echo "SKIP: no pw-dump"; exit $SKIP; }
@@ -269,12 +271,34 @@ wait_for "\[hear0\] segment up (master, pinned by REAC_ROLE_<segment>)" 10 || {
 	echo "FAIL: served, but not reported as pinned"; tail -20 "$LOG"; exit 1; }
 kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 
+# ---- THE PEER IS ANOTHER HOST, AND HAS TO BE ONE. Every phase below turns on what one
+# side of a wire does when the OTHER side is silent, and a veth pair whose two ends both
+# sit in this namespace has no other side: the daemon sniffs both, hears its own peer
+# daemon's OUTGOING frames on the peer's own NIC (AF_PACKET delivers those), serves the
+# peer end as a segment of its own, and then drives the very wire the phase is asking it
+# to find empty. That is not a defect in the daemon -- both ends really are its own here
+# -- but it makes the question unanswerable. So the peer ends live in a NESTED network
+# namespace from now on: moved there while still DOWN, so the daemon never sees them at
+# all, and driven with nsenter.
+unshare -n sleep 600 &
+NSPID=$!
+for i in $(seq 20); do nsenter -t $NSPID -n true 2>/dev/null && break; sleep 0.1; done
+nsenter -t $NSPID -n true 2>/dev/null || {
+	echo "SKIP: no nested network namespace for the peer end"; exit 77; }
+peer() { nsenter -t $NSPID -n "$@"; }
+# Create a pair and hand the peer end over before either end ever has carrier.
+pair() {   # pair <ours> <theirs>
+	ip link add "$1" type veth peer name "$2" || return 1
+	ip link set "$2" netns $NSPID || return 1
+	ip link set "$1" up
+	peer ip link set "$2" up
+}
+
 # ---- THE PEER'S OWN EAR. Everything below asserts what left THIS daemon and landed on
 # the other end of the wire, so the other end needs a capture of its own. AF_PACKET bound
 # to 0x8819 in the same namespace, counting frames per SOURCE MAC into a file it replaces
 # atomically, so the shell never reads a half-written one. Counting rather than logging is
 # what lets it sit under a desk's 8000 fps flood without becoming the bottleneck.
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3 for the peer capture"; exit 77; }
 cat > "$RT/sniff.py" <<'PYEOF'
 import collections, os, socket, sys, time
 iface, out = sys.argv[1], sys.argv[2]
@@ -315,9 +339,8 @@ other() { [ -s "$1" ] || { echo 0; return; }; awk -v m="$2" '$1 != m {n += $2} E
 # this host; a journal line would only prove we decided to.
 mkdir -p "$CONF/.config/reac-pw"
 echo "REAC_ROLE_pin0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
-ip link add pin0 type veth peer name pbox0 || exit 90
-ip link set pin0 up; ip link set pbox0 up
-python3 "$RT/sniff.py" pbox0 "$RT/pin0.cnt" & SNIFF1=$!
+pair pin0 pbox0 || exit 90
+peer python3 "$RT/sniff.py" pbox0 "$RT/pin0.cnt" & SNIFF1=$!
 wait_for "\[pin0\] pinned master — driving on link" 10 || {
 	echo "FAIL: a pinned master did not say it was driving on link"; tail -20 "$LOG"; exit 1; }
 for i in $(seq 20); do [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] && break; sleep 0.1; done
@@ -326,14 +349,14 @@ for i in $(seq 20); do [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] && break; sleep 0
 	echo "      link -- which is the 2026-09-08 outage: it is waiting to be spoken to by"
 	echo "      a box that cannot speak first."; tail -20 "$LOG"; exit 1; }
 # ...and the box that could not have spoken first now answers, and establishes.
-"$BIN" --live pbox0 --tx pbox0 --role slave --box-channels 16 --name pbox \
+peer "$BIN" --live pbox0 --tx pbox0 --role slave --box-channels 16 --name pbox \
        --src-mac 00:40:ab:c4:80:42 >"$PEER" 2>&1 &
 PBOXPID=$!
 wait_for "\[pin0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
 	echo "FAIL: pinned master never served pin0"; tail -20 "$LOG"; exit 1; }
 kill -TERM $SNIFF1 2>/dev/null; wait $SNIFF1 2>/dev/null
 kill -TERM $PBOXPID 2>/dev/null; wait $PBOXPID 2>/dev/null
-ip link del pin0 2>/dev/null
+ip link del pin0 2>/dev/null   # takes the peer end with it
 
 # ---- THE KNOCK: AN UNPINNED WIRE WITH A COLD BOX ON IT. A final-user system has NO pins
 # on its first boot, so the pin above cannot be the whole answer. An unpinned interface
@@ -341,9 +364,8 @@ ip link del pin0 2>/dev/null
 # master cannot be present and silent -- knocks: one master announce every 2 s until
 # something answers. The peer here is again bare veth, so any 0x8819 frame it hears came
 # from us and nothing prompted it.
-ip link add cold0 type veth peer name kbox0 || exit 90
-ip link set cold0 up; ip link set kbox0 up
-python3 "$RT/sniff.py" kbox0 "$RT/cold0.cnt" & SNIFF2=$!
+pair cold0 kbox0 || exit 90
+peer python3 "$RT/sniff.py" kbox0 "$RT/cold0.cnt" & SNIFF2=$!
 wait_for "\[cold0\] unpinned — listening for REAC" 10 || {
 	echo "FAIL: cold0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
 wait_for "\[cold0\] no REAC heard — knocking" 10 || {
@@ -354,7 +376,7 @@ KNOCKMAC=$(srcs "$RT/cold0.cnt" | head -1)
 [ -n "$KNOCKMAC" ] || {
 	echo "FAIL: the daemon said it was knocking and the peer heard nothing"; tail -20 "$LOG"; exit 1; }
 # THE COLD BOX ANSWERS. It could not have started this exchange; the knock did.
-"$BIN" --live kbox0 --tx kbox0 --role slave --box-channels 16 --name kbox \
+peer "$BIN" --live kbox0 --tx kbox0 --role slave --box-channels 16 --name kbox \
        --src-mac 00:40:ab:c4:80:43 >"$PEER" 2>&1 &
 KBOXPID=$!
 wait_for "\[cold0\] stopped knocking after .* REAC heard" 20 || {
@@ -370,15 +392,14 @@ ip link del cold0 2>/dev/null
 # ---- A DESK ANSWERS THE KNOCK: WE STOP, WE SLAVE, WE NEVER FIGHT. The other half of the
 # safety argument. Being late to a master's wire must cost that master nothing, so the
 # knocking ends on its first frame and not one more announce of ours goes out.
-ip link add cold1 type veth peer name kdesk1 || exit 90
-ip link set cold1 up; ip link set kdesk1 up
-python3 "$RT/sniff.py" kdesk1 "$RT/cold1.cnt" & SNIFF3=$!
+pair cold1 kdesk1 || exit 90
+peer python3 "$RT/sniff.py" kdesk1 "$RT/cold1.cnt" & SNIFF3=$!
 wait_for "\[cold1\] no REAC heard — knocking" 10 || {
 	echo "FAIL: cold1 was never knocked on"; tail -20 "$LOG"; exit 1; }
 for i in $(seq 40); do [ "$(seen x "$RT/cold1.cnt" "")" -gt 0 ] && break; sleep 0.2; done
 KNOCKMAC=$(srcs "$RT/cold1.cnt" | head -1)
 [ -n "$KNOCKMAC" ] || { echo "FAIL: no knock reached kdesk1"; tail -20 "$LOG"; exit 1; }
-"$BIN" --live kdesk1 --tx kdesk1 --mixer m5000 --rate 96000 --name kdesk \
+peer "$BIN" --live kdesk1 --tx kdesk1 --mixer m5000 --rate 96000 --name kdesk \
        --src-mac 00:40:ab:de:5c:02 >"$PEER" 2>&1 &
 KDESKPID=$!
 wait_for "\[cold1\] a desk masters this segment" 20 || {
