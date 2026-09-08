@@ -16,6 +16,7 @@
 #define REAC_SOURCE_NODE_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include "reac_ring.h"
 #include "reac_rx.h"
@@ -80,6 +81,9 @@ struct reac_source_node_cfg {
  *   node from the sink's own 200 ms poll, so no timer of this node's own is
  *   needed either.
  * Returns the node or NULL. */
+/* `pacer` / `clock_ref`: the segment's clock discipline and the operator's designation,
+ * taken HERE rather than assigned after the call, because the RT callback reads them and
+ * pw_stream_connect can start it before a caller's next line runs. Both may be NULL. */
 struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               struct reac_ring *ring,
                                               struct reac_rx *rx,
@@ -87,7 +91,9 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               int channels,
                                               const char *inst,
                                               const char *label,
-                                              int master_role);
+                                              int master_role,
+                                              struct reac_pacer *pacer,
+                                              const char *clock_ref);
 
 void reac_source_node_destroy(struct reac_source_node *n);
 
@@ -203,6 +209,10 @@ int reac_source_node_take_reopen_role(struct reac_source_node *n);
  * transient — and then to REBUILD rather than to keep reporting success, because a
  * segment whose capture node is missing has no input patches at all. */
 int reac_source_node_on_graph(const struct reac_source_node *n, const char **why);
+
+/* MAIN LOOP. Print anything the RT callback queued (one line, one atomic handshake —
+ * the RT side never touches stdio). Safe with a NULL node. */
+void reac_source_node_drain_log(struct reac_source_node *n, FILE *out);
 
 int reac_source_node_ensure(struct reac_source_node **slot,
                             const struct reac_source_node_cfg *cfg,

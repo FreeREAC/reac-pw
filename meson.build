@@ -94,6 +94,7 @@ reac_pw_src = [
   'src/reac_ifscan.c',
   'src/reac_arbitration.c',
   'src/reac_hunt.c',
+  'src/reac_node_recover.c',
   'src/reac_conf.c',
   'src/reac_rt.c',
   'src/reac_tx.c',
@@ -606,6 +607,15 @@ envflag_test = executable('test_reac_envflag',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_envflag', envflag_test)
+
+# --- unit test: the bounded rebuild ladder for a node that never reached the graph ---
+# Pure decision (reac_node_recover): a grace before acting, a doubling window, a bound,
+# one terminal line, and a reset the moment the node appears. The defect it answers cost
+# nine minutes of dead input patches with a journal that read like success.
+recover_test = executable('test_reac_node_recover',
+  ['tests/test_reac_node_recover.c', 'src/reac_node_recover.c'],
+  include_directories : [include_directories('src')])
+test('reac_node_recover', recover_test)
 
 # --- unit test: the vacant-wire hunt (trunk-VLAN spec S7 step 4, arbitration S8b) --
 # Which end of the pairing a HEARD segment takes when nobody configured one. Frames come
