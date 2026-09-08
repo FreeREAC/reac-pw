@@ -4,11 +4,13 @@
 /* reac_hunt — WHICH END OF THE PAIRING WE TAKE ON A WIRE NOBODY CONFIGURED.
  *
  * THE RULE, and it is this daemon's own: no foreign master on the segment -> we drive
- * it, probe, grant, establish; a DESK mastering it -> we join as a slave and follow its
- * pace; a STAGEBOX mastering it -> we refuse and say so, because a box in the wrong
- * switch position is a mistake to report, not a topology to obey. Nothing has to be
- * written down for any of it: a role a normal box needs hand-set is a defect in the
- * defaults, exactly as a hand-set rate would be.
+ * it, probe, grant, establish; ANY master on it -> we join as a slave and follow its
+ * pace, a desk and a stagebox strapped to master alike (operator ruling 2026-09-09; the
+ * width the box announces is what the segment is then sized from, and it rides the
+ * verdict in `arb.rival_channels`); a rival whose geometry nobody has ever captured ->
+ * we refuse, because there is nothing to size a segment from. Nothing has to be written
+ * down for any of it: a role a normal box needs hand-set is a defect in the defaults,
+ * exactly as a hand-set rate would be.
  *
  * (openmixer's REAC master-arbitration and trunk-VLAN daemon notes describe the same
  * three outcomes from the CONSOLE's side, which is what its `auto` role projects. They
@@ -28,11 +30,17 @@
  * what a segment with nothing configured means. This module resolves the second into
  * the first; the clock axis is untouched by any of it.
  *
- * WHY IT REFUSES RATHER THAN FIGHTS. REAC keeps ONE master per segment. A stagebox
- * whose mode switch is on M masters the wire while emitting its own (box) width, and
- * slave-joining it would present this console as a box to a box, hide a whole box of
- * channels and obey a misconfiguration instead of naming it. So it is logged with the
- * remedy and left alone — never probed at, never out-shouted.
+ * WHY IT REFUSES RATHER THAN FIGHTS, AND WHERE THAT IS NOW THE ONLY REFUSAL. REAC keeps
+ * ONE master per segment, and we are never the second one. Until 2026-09-09 that was
+ * spelled "a stagebox on M is refused"; the rig proved the spelling wrong — an S-0808 on
+ * M was refused, nothing was served, and the segment disappeared from the console. A
+ * clock is a clock whichever end of the pairing sends it, so an unpinned wire (or one
+ * pinned `slave`) JOINS a box master. What survives is the contradiction: a wire the
+ * operator pinned MASTER with a box mastering it is refused, logged with the remedy — the
+ * switch on the box's own front — and left alone; never probed at, never out-shouted. A
+ * refused segment is still PUBLISHED, as a door-only node carrying the refusal props
+ * (DESIGN.md, 0.5.1), because a refusal nobody can see is indistinguishable from a
+ * daemon that is not running.
  *
  * Main-thread only, like the discovery table it holds: one hunt per passive sniffer,
  * alive only until its segment is served (or refused). It transmits nothing; hearing is
@@ -73,8 +81,9 @@
 enum reac_hunt_verdict {
 	REAC_HUNT_HUNTING = 0,   /* nothing decides it yet; keep listening */
 	REAC_HUNT_MASTER,        /* no master heard and a box is present: we drive and grant */
-	REAC_HUNT_SLAVE,         /* a desk masters this wire: join it and follow its pace */
-	REAC_HUNT_REFUSED,       /* a stagebox (or an unreadable rival) masters it: say so */
+	REAC_HUNT_SLAVE,         /* somebody masters this wire: join it and follow its pace */
+	REAC_HUNT_REFUSED,       /* an unreadable rival masters it, or a box does on a wire
+	                          * pinned MASTER: say so, and publish a door about it */
 };
 
 const char *reac_hunt_verdict_name(enum reac_hunt_verdict v);
@@ -125,9 +134,11 @@ void reac_hunt_init(struct reac_hunt *h, const uint8_t our_mac[6], uint64_t now_
 
 /* Pin this segment's role, from `REAC_ROLE_<segment>`. Call once, before or after the
  * first frame; `master` and `slave` pin, and `auto` is expressed by not calling this at
- * all. A pinned hunt never elects, never refuses and never waits: the next
- * `reac_hunt_step` answers with the pinned role on an empty table, so a pinned master
- * drives a wire whose box has not spoken and cannot speak until it does. */
+ * all. A pinned hunt never elects and never waits: the next `reac_hunt_step` answers
+ * with the pinned role on an empty table, so a pinned master drives a wire whose box has
+ * not spoken and cannot speak until it does. It refuses in exactly one case — pinned
+ * MASTER with a BOX already mastering the wire (2026-09-09) — and that case reads only
+ * what the table ALREADY holds, so it costs a cold wire nothing. */
 void reac_hunt_pin(struct reac_hunt *h, enum reac_role role);
 
 /* Grant the masterless licence (reac_knock.h): this wire carried nothing for the whole
@@ -148,9 +159,10 @@ int reac_hunt_observe(struct reac_hunt *h, const uint8_t *frame, size_t len,
  * the verdict CHANGED (log it), 0 when it stands. */
 int reac_hunt_step(struct reac_hunt *h, uint64_t now_ns);
 
-/* The wire role the verdict resolves to. MASTER for a vacant wire, SLAVE for a desk;
- * meaningless (and never acted on) while HUNTING or REFUSED, where it answers MASTER
- * only because `enum reac_role` has no third value — the caller gates on the verdict. */
+/* The wire role the verdict resolves to. MASTER for a vacant wire, SLAVE for a wire
+ * somebody else masters; meaningless (and never acted on) while HUNTING or REFUSED,
+ * where it answers MASTER only because `enum reac_role` has no third value — the caller
+ * gates on the verdict. */
 enum reac_role reac_hunt_role(const struct reac_hunt *h);
 
 /* Has any REAC gear been heard on this wire at all? Distinguishes "quiet" from

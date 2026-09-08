@@ -592,10 +592,12 @@ So the wire decides, and the only refusal left is a contradiction the operator w
 | a DESK masters it | unpinned, or `slave` | joined as a slave — unchanged |
 | a BOX masters it | unpinned, or `slave` | **joined as a slave**: its clock, its width |
 | a BOX masters it | `master` | REFUSED (`rival-master-box`), and the segment still publishes a DOOR |
-| an unreadable rival | any | REFUSED (`rival-master-unknown`): a frame kind nobody has captured must not flip a segment's topology |
+| an unreadable rival | unpinned, or `slave` | REFUSED (`rival-master-unknown`) where the wire was ours to take: a frame kind nobody has captured must not be JOINED either |
+| an unreadable rival | `master` | the pin stands and drives — §4's conservatism cuts both ways, and a frame nobody has captured must not flip a pinned segment's topology |
 
-A pin is the operator's own answer about that one wire, so a pinned master beside a box on M
-is the single case where two answers contradict each other — and the daemon never settles
+Only a BOX is read sharply enough to refuse a pin: its geometry is unambiguous, and the
+remedy is a switch on its front. A pin is the operator's own answer about that one wire, so a
+pinned master beside a box on M is the single case where two answers contradict each other — and the daemon never settles
 that by out-shouting. It says so, and the remedy is the box's own switch. Everywhere else
 the wire is obeyed, in the journal's own words: `box masters this wire — joining it as a
 slave (operator rule: a box that wants to be master gets the clock)`.

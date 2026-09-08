@@ -75,6 +75,18 @@ static int box_on_m(struct reac_hunt *h, uint64_t now)
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
+/* A RIVAL WITH NO READABLE GEOMETRY: a master-only record on a frame whose length matches
+ * no legal `52 + n*36` chassis. Nobody has captured such a peer, which is exactly §4's
+ * case — it is neither driven over nor joined. */
+static int rival_no_geometry(struct reac_hunt *h, uint64_t now)
+{
+	uint8_t f[2048];
+	size_t n = reac_ctrl_build_headamp(f, BCAST, BOXM, 0x30, 0x20, 0 /* phantom */, 1);
+	if (n == 0)
+		return -2;
+	return reac_hunt_observe(h, f, 64, now, NULL);
+}
+
 int main(void)
 {
 	struct reac_hunt h;
@@ -143,19 +155,37 @@ int main(void)
 	CHK(h.arb.rival == REAC_RIVAL_DESK);
 	CHK(memcmp(h.arb.mac, DESK, 6) == 0);
 
-	/* ---- E. A STAGEBOX MASTERS IT: REFUSED, AND NEVER FOUGHT. Slave-joining a box
-	 * would present this console as a box to a box and obey a misconfiguration instead
-	 * of naming it. The refusal is a code a surface can render a remedy for. */
+	/* ---- E. A STAGEBOX MASTERS AN UNPINNED WIRE: WE JOIN IT (operator, 2026-09-09).
+	 * This file used to assert the opposite, and the opposite is what the rig proved
+	 * wrong: an S-0808 on M was refused, nothing was served, and the segment vanished
+	 * from the console. A clock is a clock whichever end of the pairing is sending it,
+	 * so the wire is obeyed — and the width it announces is carried out of the verdict,
+	 * because the segment's nodes are sized from it. */
 	reac_hunt_init(&h, OURS, t0);
 	CHK(box_on_m(&h, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
-	CHK(h.verdict == REAC_HUNT_REFUSED);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
+	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(h.arb.rival == REAC_RIVAL_BOX);
-	CHK(strcmp(reac_rival_refusal(h.arb.rival), "rival-master-box") == 0);
+	CHK(h.arb.rival_channels == 32);          /* the S-4000S on M: 1204 B frames */
+	CHK(strcmp(reac_rival_refusal(h.arb.rival), "rival-master-box") == 0);  /* the CODE stands */
 	CHK(memcmp(h.arb.mac, BOXM, 6) == 0);
-	/* And it stays refused past the window: a wire with a rival on it is not vacant. */
+	/* And it stays joined past the window: a wire with a master on it is not vacant. */
 	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) == 0);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+
+	/* ---- E2. AN UNREADABLE RIVAL IS STILL REFUSED. §4's conservatism: a peer that
+	 * claims master while carrying no legal `52 + n*36` geometry has not been captured
+	 * by anybody, and a frame kind nobody has captured must not flip a segment's
+	 * topology — not into driving it, and not into joining it either. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(rival_no_geometry(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
 	CHK(h.verdict == REAC_HUNT_REFUSED);
+	CHK(h.arb.rival == REAC_RIVAL_UNKNOWN);
+	CHK(h.arb.rival_channels == 0);
+	CHK(strcmp(reac_rival_refusal(h.arb.rival), "rival-master-unknown") == 0);
 
 	/* ---- F. A 40-CHANNEL STREAM WHOSE OWNER HAS NOT ANNOUNCED IS NOT A VACANT WIRE.
 	 * A desk's downstream audio classifies UNKNOWN exactly as a box's flood does; only
@@ -248,12 +278,43 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_SLAVE);
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 
-	/* And a pin outranks a rival: a pinned MASTER is not turned into a refusal by a
-	 * stagebox on M. The pin is what we intend; the conflict is reported by the segment
-	 * once it is up, not by declining to serve it. */
+	/* A PINNED MASTER BESIDE A BOX ON M IS THE ONE CONTRADICTION, and it is REFUSED
+	 * (operator, 2026-09-09). Everywhere else the wire is obeyed; here the operator has
+	 * written down that this segment is ours to drive, and a box says it is not. The
+	 * daemon does not settle that by out-shouting a box — it refuses, names the code, and
+	 * the remedy is the box's own switch.
+	 *
+	 * IT STILL WAITS FOR NOTHING. The refusal fires on the FIRST step, from whatever the
+	 * table already holds — a box on M streams at wire cadence, so it is there within
+	 * microseconds of the sniffer opening — and a wire whose box is COLD leaves the table
+	 * empty and the pin drives, which is the cold-start rule, untouched. */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_MASTER);
 	CHK(box_on_m(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_REFUSED);
+	CHK(h.arb.rival == REAC_RIVAL_BOX);
+	CHK(h.arb.rival_channels == 32);
+	CHK(memcmp(h.arb.mac, BOXM, 6) == 0);
+	/* Nothing latches here either: the box is switched to S and stops mastering, the
+	 * sighting ages out, and the pin drives the wire it was pinned for. */
+	CHK(reac_hunt_step(&h, t0 + REAC_DISCO_STALE_NS + SEC) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+
+	/* A PINNED SLAVE JOINS THE SAME BOX: the pin and the wire agree, and there is
+	 * nothing to refuse — we were never going to drive this segment. */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_SLAVE);
+	CHK(box_on_m(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+
+	/* AND §4 CUTS BOTH WAYS FOR A PIN: an UNREADABLE rival does not flip a pinned
+	 * master into a refusal. Only a BOX is read sharply enough to out-rank a pin — its
+	 * geometry is unambiguous and its remedy is a switch on its front. */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_MASTER);
+	CHK(rival_no_geometry(&h, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
 	CHK(h.verdict == REAC_HUNT_MASTER);
 
@@ -273,8 +334,8 @@ int main(void)
 	CHK(reac_hunt_heard_anything(&h) == 0);   /* honest: it drove having heard nothing */
 
 	/* AND EVIDENCE STILL OUTRANKS THE LICENCE, which is the whole safety half. A desk
-	 * that turns up on a wire we were licensed to drive is JOINED, never out-shouted; a
-	 * stagebox strapped to master is still refused and never fought. The licence only
+	 * that turns up on a wire we were licensed to drive is JOINED, never out-shouted; so
+	 * is a stagebox strapped to master, on the same terms and for the same reason. The licence only
 	 * ever replaces "wait three cadences and find a box". */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_silence_proven(&h);
@@ -285,7 +346,12 @@ int main(void)
 	reac_hunt_silence_proven(&h);
 	CHK(box_on_m(&h, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
-	CHK(h.verdict == REAC_HUNT_REFUSED);
+	CHK(h.verdict == REAC_HUNT_SLAVE);      /* a box that masters it is JOINED (0.5.1) */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_silence_proven(&h);
+	CHK(rival_no_geometry(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_REFUSED);    /* an unreadable one still is not */
 
 	/* ---- The window itself, stated as the number and its reason: three master announce
 	 * cadences, and a cadence is one second (reac_master.c: announce_tick >= fps). */
@@ -293,8 +359,9 @@ int main(void)
 	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
 
 	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
-	       "refused, a pin drives on link with no frame at all, a wire proven silent is "
-	       "driven while evidence still outranks that, and nothing latches\n",
+	       "joined too unless the wire is pinned master (which refuses it), an unreadable "
+	       "rival is refused either way, a pin drives on link with no frame at all, a wire "
+	       "proven silent is driven while evidence still outranks that, nothing latches\n",
 	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
 	return 0;
 }
