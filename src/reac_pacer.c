@@ -455,10 +455,18 @@ void reac_pacer_rx_ingest(struct reac_pacer *p, const uint8_t *frame, size_t len
 	if (reac_disco_classify_on_segment(&p->disco_peer_lock, frame, len, p->src, &sight) == 0 &&
 	    reac_disco_gate_should_push(&p->disco_gate, &sight, mono_ns())) {
 		/* The ring slot is bytes, not pointers: the model travels as its index in the
-		 * fixed matrix, +1 so 0 reads as "unidentified". */
+		 * fixed matrix, +1 so 0 reads as "unidentified", and the frame's GEOMETRY
+		 * travels in the block's first byte. Without the width the main thread cannot
+		 * tell a desk from a stagebox strapped to master — which is the one distinction
+		 * arbitration exists to make, and it was being dropped here. A legal geometry is
+		 * at most REAC_MAX_CHANNELS, so it fits a byte. */
 		int mi = reac_disco_model_index(sight.model);
+		uint8_t blk[32];
+		memset(blk, 0, sizeof blk);
+		blk[0] = sight.channels > REAC_MAX_CHANNELS ? (uint8_t)REAC_MAX_CHANNELS
+		                                            : (uint8_t)sight.channels;
 		pev_push(p, REAC_PEV_SIGHTING, (uint8_t)sight.role,
-		         (uint8_t)(mi + 1), sight.mac, NULL);
+		         (uint8_t)(mi + 1), sight.mac, blk);
 	}
 
 	/* IDENTITY replies, BEFORE the FSM filter. The box answers the identity poll
@@ -793,6 +801,10 @@ int reac_pacer_log_drain(struct reac_pacer *p, FILE *out)
 			memcpy(s.mac, e.src, 6);
 			s.role = (enum reac_disco_role)e.a;
 			s.model = reac_disco_model_by_index((int)e.b - 1);
+			/* The geometry the classifier read, carried over the ring: it is what
+			 * separates a desk's 40-channel downstream from a stagebox strapped to
+			 * master, and the table merges the WIDEST it has seen from a peer. */
+			s.channels = e.blk[0];
 			int owned = (p->master.state == REAC_M_ESTABLISHED &&
 			             memcmp(p->master.box_mac, e.src, 6) == 0);
 			/* A box declares its model ONCE, at enrolment. Every frame after that is

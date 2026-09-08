@@ -180,7 +180,13 @@ enum reac_pacer_evkind {
 	REAC_PEV_WATCHDOG,       /* still PROBING after 10 s: a=box_seen           */
 	REAC_PEV_RECOGNIZED,     /* box declared its geometry: a=in_ch (declared),
 	                          * b=matrix model index+1 (0 = no row names it)   */
-	REAC_PEV_SIGHTING,       /* passive discovery: a=role, b=model idx+1 (0=?) */
+	REAC_PEV_SIGHTING,       /* passive discovery: a=role, b=model idx+1 (0=?),
+	                          * blk[0]=the frame's channel GEOMETRY (0 = none legal).
+	                          * The width is not decoration here: arbitration decides a
+	                          * DESK from a stagebox strapped to master by geometry alone
+	                          * (reac_arbitration.h §2b), and until 2026-09-09 it never
+	                          * crossed this ring — so the master side published every
+	                          * such rival as `unknown` and could not refuse one.        */
 	REAC_PEV_CLOCK,          /* clock discipline changed (#75): a=reac_clock_source,
 	                          * b=reac_clock_state | (reac_clock_quality << 4)
 	                          * (#77 — both enums are <16, and blk is full: 4 bytes
