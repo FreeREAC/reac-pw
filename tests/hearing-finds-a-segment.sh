@@ -95,7 +95,7 @@ kill -0 $PID 2>/dev/null || {
 	echo "hearing daemon never got running"; tail -3 "$LOG"; exit 1
 }
 grep -q "hearing: .* Ethernet interface" "$LOG" || { echo "FAIL: no hearing banner"; cat "$LOG"; exit 1; }
-grep -q "\[hear0\] link up — listening for REAC" "$LOG" || { echo "FAIL: hear0 not sniffed"; cat "$LOG"; exit 1; }
+grep -q "\[hear0\] unpinned — listening for REAC" "$LOG" || { echo "FAIL: hear0 not sniffed"; cat "$LOG"; exit 1; }
 if grep -q "\[hear0\] segment up" "$LOG"; then
 	echo "FAIL: hear0 became a segment before anything was heard"; cat "$LOG"; exit 1
 fi
@@ -147,7 +147,7 @@ fi
 ip link set desk0 down; sleep 4.5
 grep -q "\[hear0\] segment dropped" "$LOG" || { echo "FAIL: no drop after the hold"; cat "$LOG"; exit 1; }
 ip link set desk0 up; sleep 5
-[ "$(grep -c "\[hear0\] link up — listening for REAC" "$LOG")" -ge 2 ] || {
+[ "$(grep -c "\[hear0\] unpinned — listening for REAC" "$LOG")" -ge 2 ] || {
 	echo "FAIL: not sniffed again after the drop"; cat "$LOG"; exit 1; }
 [ "$(grep -c "\[hear0\] segment up" "$LOG")" -ge 2 ] || {
 	echo "FAIL: not served again after the drop"; cat "$LOG"; exit 1; }
@@ -262,18 +262,158 @@ ip link set desk0 up;   sleep 1
 "$BIN" --live desk0 --tx desk0 --role slave --box-channels 16 --name box \
        --src-mac 00:40:ab:c4:80:41 >"$PEER" 2>&1 &
 BOXPID=$!
-wait_for "\[hear0\] REAC heard, and REAC_ROLE_hear0 pins this segment as MASTER" 15 || {
+wait_for "\[hear0\] REAC_ROLE_hear0 pins this segment as MASTER — driving on link" 15 || {
 	echo "FAIL: the per-segment pin was not honoured on the first classifying frame"
 	tail -20 "$LOG"; exit 1; }
 wait_for "\[hear0\] segment up (master, pinned by REAC_ROLE_<segment>)" 10 || {
 	echo "FAIL: served, but not reported as pinned"; tail -20 "$LOG"; exit 1; }
 kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 
+# ---- THE PEER'S OWN EAR. Everything below asserts what left THIS daemon and landed on
+# the other end of the wire, so the other end needs a capture of its own. AF_PACKET bound
+# to 0x8819 in the same namespace, counting frames per SOURCE MAC into a file it replaces
+# atomically, so the shell never reads a half-written one. Counting rather than logging is
+# what lets it sit under a desk's 8000 fps flood without becoming the bottleneck.
+command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3 for the peer capture"; exit 77; }
+cat > "$RT/sniff.py" <<'PYEOF'
+import collections, os, socket, sys, time
+iface, out = sys.argv[1], sys.argv[2]
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x8819))
+s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+s.bind((iface, 0))
+s.settimeout(0.2)
+c, last = collections.Counter(), 0.0
+while True:
+    try:
+        d = s.recv(2048)
+        if len(d) >= 14:
+            c[d[6:12].hex()] += 1
+    except socket.timeout:
+        pass
+    now = time.time()
+    if now - last > 0.3:
+        last = now
+        with open(out + ".tmp", "w") as f:
+            for k, v in c.items():
+                f.write("%s %d\n" % (k, v))
+        os.replace(out + ".tmp", out)
+PYEOF
+# frames seen from one source ("" = every source), 0 when the file has nothing yet
+seen() { [ -s "$2" ] || { echo 0; return; }; awk -v m="$3" '(m == "" || $1 == m) {n += $2} END {print n+0}' "$2"; }
+# every source MAC the peer has heard, one per line
+srcs() { [ -s "$1" ] && awk '{print $1}' "$1"; }
+# frames from every source EXCEPT one -- the positive control's counter. Naming the
+# desk's MAC here instead would make the control depend on a second assumption about
+# what the peer daemon puts in its L2 source; "everything that is not us" needs none.
+other() { [ -s "$1" ] || { echo 0; return; }; awk -v m="$2" '$1 != m {n += $2} END {print n+0}' "$1"; }
+
+# ---- A PINNED MASTER DRIVES ON LINK, WITH A SILENT PEER. The 2026-09-08 22:10 defect
+# exactly: nothing on the far end says anything, ever, until a master announces to it, so
+# a pinned master that waits for a classifying frame waits forever. Here the peer is a
+# bare veth end -- no daemon, no box, not one byte -- and the assertion is that OUR
+# announce is on the wire within 2 s of LINK. The peer's capture is what proves it left
+# this host; a journal line would only prove we decided to.
+mkdir -p "$CONF/.config/reac-pw"
+echo "REAC_ROLE_pin0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
+ip link add pin0 type veth peer name pbox0 || exit 90
+ip link set pin0 up; ip link set pbox0 up
+python3 "$RT/sniff.py" pbox0 "$RT/pin0.cnt" & SNIFF1=$!
+wait_for "\[pin0\] pinned master — driving on link" 10 || {
+	echo "FAIL: a pinned master did not say it was driving on link"; tail -20 "$LOG"; exit 1; }
+for i in $(seq 20); do [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] && break; sleep 0.1; done
+[ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] || {
+	echo "FAIL: a pinned master on a silent wire put NOTHING on that wire within 2 s of"
+	echo "      link -- which is the 2026-09-08 outage: it is waiting to be spoken to by"
+	echo "      a box that cannot speak first."; tail -20 "$LOG"; exit 1; }
+# ...and the box that could not have spoken first now answers, and establishes.
+"$BIN" --live pbox0 --tx pbox0 --role slave --box-channels 16 --name pbox \
+       --src-mac 00:40:ab:c4:80:42 >"$PEER" 2>&1 &
+PBOXPID=$!
+wait_for "\[pin0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
+	echo "FAIL: pinned master never served pin0"; tail -20 "$LOG"; exit 1; }
+kill -TERM $SNIFF1 2>/dev/null; wait $SNIFF1 2>/dev/null
+kill -TERM $PBOXPID 2>/dev/null; wait $PBOXPID 2>/dev/null
+ip link del pin0 2>/dev/null
+
+# ---- THE KNOCK: AN UNPINNED WIRE WITH A COLD BOX ON IT. A final-user system has NO pins
+# on its first boot, so the pin above cannot be the whole answer. An unpinned interface
+# that has been OBSERVED masterless -- REAC_KNOCK_LISTEN_NS with not one frame, and a
+# master cannot be present and silent -- knocks: one master announce every 2 s until
+# something answers. The peer here is again bare veth, so any 0x8819 frame it hears came
+# from us and nothing prompted it.
+ip link add cold0 type veth peer name kbox0 || exit 90
+ip link set cold0 up; ip link set kbox0 up
+python3 "$RT/sniff.py" kbox0 "$RT/cold0.cnt" & SNIFF2=$!
+wait_for "\[cold0\] unpinned — listening for REAC" 10 || {
+	echo "FAIL: cold0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
+wait_for "\[cold0\] no REAC heard — knocking" 10 || {
+	echo "FAIL: an unpinned silent wire was never knocked on"; tail -20 "$LOG"; exit 1; }
+# ON THE WIRE, within two knock periods of link, and not merely in the journal.
+for i in $(seq 40); do [ "$(seen x "$RT/cold0.cnt" "")" -gt 0 ] && break; sleep 0.2; done
+KNOCKMAC=$(srcs "$RT/cold0.cnt" | head -1)
+[ -n "$KNOCKMAC" ] || {
+	echo "FAIL: the daemon said it was knocking and the peer heard nothing"; tail -20 "$LOG"; exit 1; }
+# THE COLD BOX ANSWERS. It could not have started this exchange; the knock did.
+"$BIN" --live kbox0 --tx kbox0 --role slave --box-channels 16 --name kbox \
+       --src-mac 00:40:ab:c4:80:43 >"$PEER" 2>&1 &
+KBOXPID=$!
+wait_for "\[cold0\] stopped knocking after .* REAC heard" 20 || {
+	echo "FAIL: the box answered and the daemon kept knocking"; tail -20 "$LOG"; exit 1; }
+wait_for "\[cold0\] segment up (master, chosen by hearing the wire)" 20 || {
+	echo "FAIL: the knock woke the box and the wire was never taken"; tail -20 "$LOG"; exit 1; }
+wait_for "\[cold0\] autodetected S-1608" 20 || {
+	echo "FAIL: took cold0 as master but the box was never autodetected"; tail -20 "$LOG"; exit 1; }
+kill -TERM $SNIFF2 2>/dev/null; wait $SNIFF2 2>/dev/null
+kill -TERM $KBOXPID 2>/dev/null; wait $KBOXPID 2>/dev/null
+ip link del cold0 2>/dev/null
+
+# ---- A DESK ANSWERS THE KNOCK: WE STOP, WE SLAVE, WE NEVER FIGHT. The other half of the
+# safety argument. Being late to a master's wire must cost that master nothing, so the
+# knocking ends on its first frame and not one more announce of ours goes out.
+ip link add cold1 type veth peer name kdesk1 || exit 90
+ip link set cold1 up; ip link set kdesk1 up
+python3 "$RT/sniff.py" kdesk1 "$RT/cold1.cnt" & SNIFF3=$!
+wait_for "\[cold1\] no REAC heard — knocking" 10 || {
+	echo "FAIL: cold1 was never knocked on"; tail -20 "$LOG"; exit 1; }
+for i in $(seq 40); do [ "$(seen x "$RT/cold1.cnt" "")" -gt 0 ] && break; sleep 0.2; done
+KNOCKMAC=$(srcs "$RT/cold1.cnt" | head -1)
+[ -n "$KNOCKMAC" ] || { echo "FAIL: no knock reached kdesk1"; tail -20 "$LOG"; exit 1; }
+"$BIN" --live kdesk1 --tx kdesk1 --mixer m5000 --rate 96000 --name kdesk \
+       --src-mac 00:40:ab:de:5c:02 >"$PEER" 2>&1 &
+KDESKPID=$!
+wait_for "\[cold1\] a desk masters this segment" 20 || {
+	echo "FAIL: a desk answered the knock and the hunt did not say so"; tail -20 "$LOG"; exit 1; }
+wait_for "\[cold1\] stopped knocking after .* REAC heard" 10 || {
+	echo "FAIL: a desk is on the wire and the daemon is still knocking"; tail -20 "$LOG"; exit 1; }
+# AND NOT ONE ANNOUNCE MORE. Three knock periods of hold, then the same count.
+# THE POSITIVE CONTROL IS NOT OPTIONAL HERE: this is an ABSENCE claim, and a capture that
+# has died reports absence exactly like a daemon that has stopped. The desk's own frames
+# must be piling up over the SAME window, on the SAME capture, or the silence means
+# nothing at all.
+BEFORE=$(seen x "$RT/cold1.cnt" "$KNOCKMAC")
+DESKBEFORE=$(other "$RT/cold1.cnt" "$KNOCKMAC")
+sleep 6
+DESKAFTER=$(other "$RT/cold1.cnt" "$KNOCKMAC")
+[ "$DESKAFTER" -gt "$((DESKBEFORE + 1000))" ] || {
+	echo "FAIL: the peer capture is not receiving (frames from everyone but us:"
+	echo "      $DESKBEFORE -> $DESKAFTER), so it cannot testify that we stopped"
+	echo "      announcing -- a dead capture reports silence exactly like a stopped daemon"
+	cat "$RT/cold1.cnt"; tail -20 "$LOG"; exit 1; }
+AFTER=$(seen x "$RT/cold1.cnt" "$KNOCKMAC")
+[ "$AFTER" -eq "$BEFORE" ] || {
+	echo "FAIL: a desk masters cold1 and we announced $((AFTER - BEFORE)) more time(s)"
+	echo "      over it in 6 s -- that is two masters on one segment"; exit 1; }
+kill -TERM $SNIFF3 2>/dev/null; wait $SNIFF3 2>/dev/null
+kill -TERM $KDESKPID 2>/dev/null; wait $KDESKPID 2>/dev/null
+ip link del cold1 2>/dev/null
+
 kill -TERM $PID; wait $PID; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: clean SIGTERM exited $rc"; tail -5 "$LOG"; exit 1; }
 echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the hold,
     heard again, took a vacant wire as master, established with the box and put BOTH of
-    its nodes on the graph, and served a per-segment pin without a hunt"
+    its nodes on the graph, served a per-segment pin without a hunt, DROVE A PINNED WIRE
+    ON LINK with a silent peer, KNOCKED an unpinned wire awake and established with the
+    cold box that answered, and stopped knocking the instant a desk spoke"
 exit 0
 INNER
 )

@@ -75,11 +75,10 @@ void reac_tx_close(struct reac_tx *tx)
 	tx->fd = -1;
 }
 
-int reac_tx_emit(struct reac_tx *tx, float *const *planar, int nch, int ns)
+int reac_tx_emit_frame(struct reac_tx *tx, const uint8_t *frame, size_t len)
 {
-	uint8_t frame[REAC_FRAME_BYTES];
-	reac_downstream_build(frame, planar, nch, ns, tx->counter, tx->src);
-
+	if (!tx || tx->fd < 0 || !frame || len == 0)
+		return -1;
 	struct sockaddr_ll sll;
 	memset(&sll, 0, sizeof sll);
 	sll.sll_family  = AF_PACKET;
@@ -87,8 +86,14 @@ int reac_tx_emit(struct reac_tx *tx, float *const *planar, int nch, int ns)
 	sll.sll_halen   = 6;
 	memset(sll.sll_addr, 0xFF, 6);  /* broadcast dst */
 
-	ssize_t r = sendto(tx->fd, frame, REAC_FRAME_BYTES, 0,
-	                   (struct sockaddr *)&sll, sizeof sll);
+	return (int)sendto(tx->fd, frame, len, 0, (struct sockaddr *)&sll, sizeof sll);
+}
+
+int reac_tx_emit(struct reac_tx *tx, float *const *planar, int nch, int ns)
+{
+	uint8_t frame[REAC_FRAME_BYTES];
+	reac_downstream_build(frame, planar, nch, ns, tx->counter, tx->src);
+	int r = reac_tx_emit_frame(tx, frame, REAC_FRAME_BYTES);
 	tx->counter++;  /* free-running, wraps at 16 bits like the desk's */
-	return (int)r;
+	return r;
 }

@@ -94,6 +94,7 @@ reac_pw_src = [
   'src/reac_ifscan.c',
   'src/reac_arbitration.c',
   'src/reac_hunt.c',
+  'src/reac_knock.c',
   'src/reac_node_recover.c',
   'src/reac_conf.c',
   'src/reac_rt.c',
@@ -325,11 +326,13 @@ test('reac_link_up_reestablishes',
 # test_reac_ifscan pins the table; this drives the real binary on a veth pair
 # with a second reac-pw mastering the peer end, inside an unprivileged user+net
 # namespace. Skips where that or PipeWire is unavailable. Timeout covers
-# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups.
+# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups, and since 2026-09-08 the three
+# cold-start phases (pinned-drives-on-link, the knock, a desk answering) with their own
+# peer captures and a 6 s no-further-announce hold.
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
   args : [reac_pw_exe],
-  timeout : 180)
+  timeout : 300)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
@@ -629,6 +632,18 @@ hunt_test = executable('test_reac_hunt',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_hunt', hunt_test)
+
+# --- unit test: the KNOCK, which wakes a cold stagebox on a wire nobody pinned -----
+# A box in slave mode transmits nothing until a master announces to it, so hearing alone
+# can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes
+# cabled and carrier-up, zero frames in eight seconds). This pins BOTH halves: nothing is
+# ever emitted before the wire has been observed masterless for the listening window, and
+# the first frame from anybody ends the knocking for good. Pure; no socket.
+knock_test = executable('test_reac_knock',
+  ['tests/test_reac_knock.c', 'src/reac_knock.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_knock', knock_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
