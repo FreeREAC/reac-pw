@@ -14,11 +14,11 @@ resolved).
 | `REACPW_GRANT_ON_DECLARE` | Master role: `0` opts OUT of ending the ENROLL -> grant dwell a short settle after the box has DECLARED and been armed, instead of running the dwell out; `grant_dwell` stays as the CAP for a box that has not declared. Event-driven, so it is also correct for a box that needs a long hold. Measured: S-1608 1.684 s -> 0.134 s, S-4000S 1.756 s -> 0.206 s, both audio-verified through a physical loopback. | **on** (spec §3c) |
 | `REAC_DEBUG` | Opt-in diagnostic telemetry on stderr, ~every 2 s: RX feeder counters (ok/dup/other/bad/gaps, locked box MAC) in `reac_rx.c` and source-node ring stats (active channels, peak, fill) in `reac_source_node.c`. Set to any value to enable. | unset (silent) |
 | `REAC_IFACES_ALLOW_WIRELESS` | Autodetect (`reac_ifscan.c`): opt a wireless interface INTO the scan/ether gate it is otherwise excluded from — comma-separated interface names, or `*` for every wireless NIC. Found 2026-09-03: `ifi_type == ARPHRD_ETHER` is true of Wi-Fi too, so the autodetect table's one filter passed it with no exclusion at all. Wi-Fi's jitter makes REAC unworkable without a repacer this project does not have — this knob exists for a deliberate, informed exception, not routine use. | unset (every wireless NIC excluded) |
-| `REACPW_CLOCK_FOLLOW` | Master role: DISCIPLINE the TX cadence to a clock reference instead of free-running on `CLOCK_MONOTONIC` (issue #75). Best available wins: NIC/external PHC > the PipeWire graph clock when driven by locked hardware > the box's counter slope. The slot period is steered continuously by a bounded DLL and the phase is never stepped; the reference in use is printed on every change — with its QUALITY tier since #77, see `REACPW_CLOCK_REF` below — and with none available reac-pw free-runs and says so. Unset = the pacer advances its deadline by the fixed nominal period exactly as before — the discipline is never consulted, so emission and timing are identical. **RIG-GATED — see below.** | unset (free-run) |
+| `REACPW_CLOCK_FOLLOW` | Master role: `0` opts OUT of disciplining the TX cadence to a clock reference and free-runs it on `CLOCK_MONOTONIC` instead (issue #75). FOLLOWING IS THE DEFAULT since 0.5.0 (arbitration spec §3): best available wins — NIC/external PHC > the PipeWire graph clock when driven by locked hardware > the box's counter slope. The slot period is steered continuously by a bounded DLL and the phase is never stepped; the reference in use is printed on every change — with its QUALITY tier since #77, see `REACPW_CLOCK_REF` below — and with none available reac-pw free-runs and says so. Opting out is announced too (`following DISABLED ... FREE-RUNS its pace`), because a segment whose pace is disciplined by nothing must be readable off the journal. | **on** (follow the best reference) |
 
 | `REACPW_CATCHUP_MAX_SLOTS` | Master role: how many OVERSLEPT slots the pacer repays by staying on its deadline grid instead of re-basing the phase to `now` and losing them. **This is the fix for a MEASURED 527 ppm transmit deficit** (2026-08-23, live rig): the pacer oversleeps ~3.6 slots/s and used to abandon every one, which is the entire reason the TX frame ring grew until the depth guard discarded 256 frames — 64 ms of audio — in one step. Leaving the deadline in the past makes the next `clock_nanosleep` return immediately and the owed slots go out back to back, 12 us of wire each. Bounded because an unbounded catch-up after a real stall would dump hundreds of frames in one burst; past the budget the pacer re-bases exactly as before and COUNTS what it abandoned. `-1` restores the pre-2026-08-23 behaviour. | 4 slots (measured: repays 417 of 423 late wakes, leaves 48 abandoned) |
 | `REACPW_RATE_MATCH` | Master role: `1` OPTS IN to publishing `io_rate_match` on the sink, so PipeWire's resampler absorbs the residual graph/wire difference instead of the depth guard discarding it in 64 ms blocks. The sink servos the TX ring depth to two producer bursts, bounded at +-`REAC_SINK_RATE_MATCH_MAX_PPM`. **Default OFF, and not because the loop is wrong:** its sign is verified on hardware (the correction crosses zero and reverses, which positive feedback cannot do) and it caused no discard in a 30-minute soak. It is off because its MEASUREMENT PHASE is wrong — the RT callback samples the ring depth before pushing the quantum, reads ~one quantum low, and holds a standing correction of +1310..+3810 ppm, 26-76% of its authority spent at rest. Fixing that (measure after the push) is queued and needs its own soak and its own before/after, because "near zero at rest" is the whole claim. | unset (**OFF**) |
-| `REACPW_CLOCK_REF` | Master role: DESIGNATE which device is the clock reference (issue #77) — a case-insensitive **substring** of the device name, e.g. `Babyface`. The operator knows their hardware; a designated device outranks the name heuristic. It does **not** rescue a structurally unusable reference (an HDMI/DisplayPort sink, a software timer) and it does **not** outrank measured instability — a designated reference that proves jittery is demoted and said so. Only consulted when `REACPW_CLOCK_FOLLOW` is set; on its own it changes nothing. | unset (nothing designated) |
+| `REACPW_CLOCK_REF` | Master role: DESIGNATE which device is the clock reference (issue #77) — a case-insensitive **substring** of the device name, e.g. `Babyface`. The operator knows their hardware; a designated device outranks the name heuristic. It does **not** rescue a structurally unusable reference (an HDMI/DisplayPort sink, a software timer) and it does **not** outrank measured instability — a designated reference that proves jittery is demoted and said so. Only consulted while following, which is the default; with `REACPW_CLOCK_FOLLOW=0` it changes nothing. | unset (nothing designated) |
 | `REACPW_RT_PRIO` | `SCHED_FIFO` priority for reac-pw's WIRE-CLOCK threads — the master cadence pacer and the slave upstream engine, neither of which is part of the PipeWire graph. The built-in sits **below the whole audio graph** (issue #31): the rig's PipeWire driver data-loop runs at 60, every client data-loop at 55, threaded IRQs at 50, and reac-pw's wire clocks at 45. Reasoning and the full ladder are in `src/reac_rt.h`; the short version is that the pacer can repay a late slot out of `REACPW_CATCHUP_MAX_SLOTS` and the audio driver cannot repay a late quantum. **Host-wide, not per-segment** — the scheduler ladder is a property of the machine, so the per-segment `<KEY>_<segment>` layer is deliberately not consulted for this key. A value outside 1..99, or one that is not a whole number, is REFUSED and reported, never clamped; a value at or above 55 is honoured and loudly warned about, because the xruns it causes land on the audio interface where nothing points back here. | unset (built-in 45) |
 | `REACPW_NO_ENROLL` | Master role: suppress the pre-grant ENROLL (cdea 01 03 000d) for a box whose width is already known. A wire differential across 82 captures found no real desk ever sends this frame to an S-1608 (0/11), while every S-0808 (9/10) and S-4000S (5/5) session gets one. A RIG-TEST SWITCH, not a new default: the rig's S-1608 is currently established WITH this ENROLL in flight, and removing it changes nothing else about the grant burst, dwell timing or the ESTABLISHED transition (`test_reac_master_no_enroll`) — but whether the box still enrols WITHOUT it is untested. Flip deliberately, one box at a time. | unset (ENROLL sent, today's behaviour) |
 
@@ -68,17 +68,35 @@ Every knob above is also listed in `reac-pw --help` (the `environment` section
 of `usage()` in `src/main.c`). Keep the three places in sync when a knob is
 added or removed: the code site, `usage()`, and this file.
 
-## `REACPW_CLOCK_FOLLOW` — the flip-on-or-delete commitment
+## `REACPW_CLOCK_FOLLOW` — the flip-on-or-delete commitment, RESOLVED BY FLIPPING IT ON
 
-This knob ships default-off because it changes real-time timing behaviour and
-merging `main` auto-deploys to the live master rig, so it cannot be proven
-without hardware. It is **not** an open-ended option: it is either turned on by
-default once the rig test below passes, or the whole clock-discipline path is
-deleted. It does not get to sit inert indefinitely — that is exactly how
-`REACPW_EST_COMMIT`, `REACPW_ANNOUNCE_BURST`, `REAC_TX_LAYOUT` and
-`REACPW_ANNOUNCE_UNGRANTED` rotted before being removed.
+**Resolved 2026-09-08, in the direction the commitment named: the discipline is ON
+by default and the knob survives only as the opt-out.** It shipped default-off
+because it changes real-time timing behaviour and merging `main` auto-deploys to the
+live master rig, so it could not be proven without hardware; it was never an
+open-ended option — either on by default once the procedure below passed, or the whole
+clock-discipline path deleted, because that is how `REACPW_EST_COMMIT`,
+`REACPW_ANNOUNCE_BURST`, `REAC_TX_LAYOUT` and `REACPW_ANNOUNCE_UNGRANTED` rotted before
+being removed.
 
-The rig procedure that decides it:
+What the rig has actually run, and it is the evidence for the flip: the live master
+rig has run `REACPW_CLOCK_FOLLOW=1` with `REACPW_CLOCK_REF=Babyface` continuously since
+**2026-09-07 20:55** with no incident, and the journal carries the transcript the
+procedure asks for — `locked to graph clock (api.alsa.0)` with the applied correction
+settling in the tens of ppm and reversing sign, `acquiring box counter slope (S-4000S
+(32 in / 8 out))` where the graph clock is not the elected driver, and
+`free-running (no reference)` announced at open. Steps 2 (a deliberate host-clock
+offset), 5 (reference removed mid-run: `holdover`) and 6's HDMI fall-through remain
+UNWALKED as deliberate experiments — they are exercised offline by `test_reac_clock`,
+which is why they are named here rather than claimed.
+
+Every safety the knob shipped with is what makes the default safe, and none of them
+moved: a structurally unusable reference (HDMI/DisplayPort sink, software timer) is
+refused whatever `REACPW_CLOCK_REF` designates; measured instability outranks the
+designation and demotes it loudly; the period is slewed and the phase never stepped;
+and with no reference at all the pacer free-runs AND SAYS SO.
+
+The rig procedure that decided it:
 
 1. **Graph clock (the expected configuration).** With the RME as the elected
    PipeWire driver and reac-pw as REAC master to a real box, run with

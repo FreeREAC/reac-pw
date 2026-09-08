@@ -148,11 +148,16 @@ accepting an empty value each turn the test red, and restoring turns it green.
 same file. Nothing about the clock should ever reach the daemon through the
 console: openmixer is a client of the segment's clock, not a source of it.
 
-**Should free-running still be the default?** See
+**Should free-running still be the default? NO, and it no longer is (0.5.0).** See
 `docs/rig-data/2026-08-23-clock/README.md`. The short version measured on this
 rig: following a reference would have changed nothing about the fault that was
 actually dropping audio, because the reference was never wrong — the RME reads
 −5.6 ppm and the boxes −6.1 and −20.0, while the pacer was −750. A daemon that
-owns the clock and free-runs is misconfigured in principle, and it should be
-disciplined by default once `ENV-KNOBS.md`'s rig procedure passes; but it must
-not be flipped on as a *fix for the discards*, because it is not one.
+owns the clock and free-runs is misconfigured in principle, and it is now
+disciplined by default — `ENV-KNOBS.md`'s procedure was walked on the rig, which
+has run `REACPW_CLOCK_FOLLOW=1` + `REACPW_CLOCK_REF=Babyface` since 2026-09-07
+20:55 without incident. `REACPW_CLOCK_FOLLOW=0` opts out and the free-run is
+announced rather than silent. The caveat above stands and is the reason this
+paragraph is kept: the flip is NOT a fix for the discards, because it is not one
+— the pacer's own −750 ppm was, and `REACPW_CATCHUP_MAX_SLOTS` is what addressed
+it.

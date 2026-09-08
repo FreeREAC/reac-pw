@@ -1638,11 +1638,19 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	reac_clock_disc_init(&p->clock, REAC_ROLE_MASTER, p->period_ns);
 	if (p->clock_follow) {
 		char line[160];
-		fprintf(stderr, "reac-clock: following ENABLED (REACPW_CLOCK_FOLLOW) — %s, "
-		        "nominal period %ld ns; the reference in use is reported on every "
-		        "change\n",
+		fprintf(stderr, "reac-clock: following ENABLED (the default; REACPW_CLOCK_FOLLOW=0 "
+		        "opts out) — %s, nominal period %ld ns; the reference in use is reported "
+		        "on every change\n",
 		        reac_clock_disc_describe(&p->clock, line, sizeof line),
 		        p->period_ns);
+	} else {
+		/* FREE-RUN IS THE FALLBACK, AND IT IS ANNOUNCED (arbitration §3). It stopped
+		 * being the silent normal when the discipline became the default: a segment
+		 * whose pace is disciplined by nothing is a state an operator must be able to
+		 * read off the journal, not one they infer from a missing line. */
+		fprintf(stderr, "reac-clock: following DISABLED (REACPW_CLOCK_FOLLOW=0) — this "
+		        "master FREE-RUNS its pace on CLOCK_MONOTONIC at %ld ns; every box on "
+		        "the segment locks to a rhythm disciplined by nothing\n", p->period_ns);
 	}
 	/* min starts at "unset" so the pacer thread's first slot records the true low;
 	 * the drain flattens min>max to the current depth if no slot has run yet. */

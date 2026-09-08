@@ -68,6 +68,7 @@
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
 #include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
+#include "reac_envflag.h"  /* one reading of a boolean knob, for every boolean knob */
 #include "reac_seglock.h"    /* one master per segment, across processes */
 #include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
 #include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
@@ -425,7 +426,7 @@ static void usage(const char *p)
 	  "                               comma separated (replaces N --headamp flags)\n"
 	  "    REAC_BOX_CHANNELS=N        slave role: our own input width; default 16\n"
 	  "  and REAC_RATE per segment exactly as a single-segment run already resolves it.\n"
-	  "environment (see docs/ENV-KNOBS.md; unset = default behavior, byte-identical):\n"
+	  "environment (see docs/ENV-KNOBS.md; unset = the default behaviour named below):\n"
 	  "  REACPW_GRANT_ON_DECLARE=0  master role: opt OUT of ending the grant dwell on the\n"
 	  "                box's declaration, restoring the full wall-clock hold. The dwell is\n"
 	  "                a CAP for an undeclared box, not a wait (default: end on declare).\n"
@@ -439,20 +440,20 @@ static void usage(const char *p)
 	  "  REACPW_NO_ENROLL=1  master role: suppress the pre-grant ENROLL for a box whose\n"
 	  "                width is already known (no real desk sends it to an S-1608). A\n"
 	  "                RIG-TEST SWITCH, not a new default — see docs/ENV-KNOBS.md.\n"
-	  "  REACPW_CLOCK_FOLLOW=1  master role: DISCIPLINE the TX cadence to the best\n"
-	  "                available clock reference (NIC/external PHC > a hardware-driven\n"
-	  "                PipeWire graph clock > the box's counter slope) instead of\n"
-	  "                free-running on CLOCK_MONOTONIC. The period is steered\n"
-	  "                continuously and bounded; the phase is never stepped. The\n"
-	  "                reference in use is printed on every change, and with none\n"
-	  "                available we free-run and SAY so. Unset = today's behaviour,\n"
-	  "                byte- and timing-identical. RIG-GATED.\n"
+	  "  REACPW_CLOCK_FOLLOW=0  master role: opt OUT of disciplining the TX cadence to\n"
+	  "                the best available clock reference (NIC/external PHC > a\n"
+	  "                hardware-driven PipeWire graph clock > the box's counter slope)\n"
+	  "                and free-run on CLOCK_MONOTONIC instead. FOLLOWING IS THE\n"
+	  "                DEFAULT (arbitration spec S3): the period is steered continuously\n"
+	  "                and bounded, the phase is never stepped, the reference in use is\n"
+	  "                printed on every change, and with none available we free-run and\n"
+	  "                SAY so.\n"
 	  "  REACPW_CLOCK_REF=<substring>  designate WHICH device is the clock reference\n"
 	  "                (case-insensitive substring of the device name, e.g. 'Babyface').\n"
 	  "                A designated device outranks the name heuristic; it does NOT\n"
 	  "                rescue a structurally unusable one (HDMI/DisplayPort sinks,\n"
 	  "                software timers) and it does NOT outrank measured instability.\n"
-	  "                Only consulted when REACPW_CLOCK_FOLLOW is set.\n"
+	  "                Only consulted while following (i.e. unless CLOCK_FOLLOW=0).\n"
 	  "  REACPW_CATCHUP_MAX_SLOTS=<n>  master role: how many OVERSLEPT slots the\n"
 	  "                pacer repays by staying on its deadline grid instead of\n"
 	  "                re-basing the phase and losing them. Unset = 4 (measured);\n"
@@ -857,9 +858,12 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                              .inst = c->inst_name, .label = NULL,
 		                              .headamps = c->n_headamps ? c->headamps : NULL,
 		                              .n_headamps = c->n_headamps,
-		                              /* #75: default OFF -> the pacer free-runs on
-		                               * CLOCK_MONOTONIC exactly as it always has. */
-		                              .clock_follow = getenv("REACPW_CLOCK_FOLLOW") != NULL,
+		                              /* #75, arbitration spec §3: the discipline is the
+		                               * DEFAULT. REACPW_CLOCK_FOLLOW=0 opts out and gets
+		                               * the free-run, which is then REPORTED rather than
+		                               * silent (reac_sink_node.h carries the ruling). */
+		                              .clock_follow = reac_envflag("REACPW_CLOCK_FOLLOW",
+		                                                  REAC_CLOCK_FOLLOW_DEFAULT),
 		                              /* --rate / a conf-file rate is an ASSERTION; only the
 		                               * built-in best-drivable pick is the convention. */
 		                              .rate_asserted = c->rate_layer != REAC_CONF_BUILTIN
@@ -877,9 +881,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * cfg.rate_match_off for the full measurement —
 		                               * unchanged by this refactor. */
 		                              .rate_match_off =
-		                                  (getenv("REACPW_RATE_MATCH") &&
-		                                   atoi(getenv("REACPW_RATE_MATCH")) != 0)
-		                                  ? 0 : -1 };
+		                                  reac_envflag("REACPW_RATE_MATCH", 0) ? 0 : -1 };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */

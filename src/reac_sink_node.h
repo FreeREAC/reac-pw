@@ -31,6 +31,25 @@ struct reac_source_node;       /* reac_source_node.h — the peer reac-capture n
 struct reac_box_model;         /* reac_ctrl.h — the autodetected box (in/out widths) */
 struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp table */
 
+/* THE CLOCK DISCIPLINE SHIPS ON (arbitration spec §3, promoted 2026-09-08).
+ *
+ * "The ruling PROMOTES the election from an opt-in, rig-gated env knob to the DEFAULT;
+ * free-run becomes the fallback that is reported, never the silent normal." A daemon
+ * that OWNS a segment's pace and free-runs it is misconfigured in principle: every box
+ * on the wire locks to our rhythm, so that rhythm has to be worth propagating.
+ *
+ * The rig gate ENV-KNOBS.md set for the promotion has been walked: the live master rig
+ * has run with REACPW_CLOCK_FOLLOW=1 and REACPW_CLOCK_REF=Babyface continuously since
+ * 2026-09-07 20:55 with no incident, the transcript naming the reference on every change
+ * (`locked to graph clock (api.alsa.0)`, applied correction settling in the tens of ppm,
+ * `acquiring box counter slope` when the graph clock is not there). Every safety the
+ * knob shipped with is unchanged and is what makes the default safe: a structurally
+ * unusable reference (a display sink, a software timer) is refused whatever is
+ * designated, measured instability outranks the operator's designation, the period is
+ * only ever slewed and never phase-stepped, and with no reference at all the pacer
+ * free-runs AND SAYS SO. REACPW_CLOCK_FOLLOW=0 opts out. */
+#define REAC_CLOCK_FOLLOW_DEFAULT 1
+
 struct reac_sink_cfg {
 	const char *ifname;   /* TX NIC (raw AF_PACKET 0x8819) */
 	int channels;         /* the box's input count (<= 40) */
@@ -45,9 +64,12 @@ struct reac_sink_cfg {
 	/* Optional MASTER head-amp send table (task #155), forwarded to the pacer. */
 	const struct reac_headamp_setting *headamps;
 	int n_headamps;
-	/* Clock discipline (#75), forwarded to the pacer. 0 (the default) = the pacer
-	 * free-runs on CLOCK_MONOTONIC exactly as before and no reference is even
-	 * read. See docs/ENV-KNOBS.md (REACPW_CLOCK_FOLLOW). */
+	/* Clock discipline (#75), forwarded to the pacer. 0 = the pacer free-runs on
+	 * CLOCK_MONOTONIC and no reference is ever read; 1 = the best-reference ladder
+	 * disciplines the cadence. THE SHIPPED DEFAULT IS ON — REAC_CLOCK_FOLLOW_DEFAULT
+	 * below, docs/ENV-KNOBS.md (REACPW_CLOCK_FOLLOW). A zero-initialised cfg still
+	 * means OFF: main.c carries the default because a default is a product decision,
+	 * not a property of a struct a test may zero. */
 	int clock_follow;
 	/* 1 when the opening rate was ASSERTED (--rate / conf) — see reac_pacer_cfg. */
 	int rate_asserted;
