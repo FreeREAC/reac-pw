@@ -44,12 +44,11 @@
  * enough to ride out a box power-cycle. The segment is NAMED after its
  * interface, and nothing about it lives in a file before it is heard.
  *
- * AND THE ROLE COMES OUT OF THE SAME HEARING (reac_hunt.h; trunk-VLAN §7 step 4,
- * arbitration §8b): no master on the wire and a box present -> we drive, probe,
- * grant; a DESK mastering it -> we join as a slave and follow its pace; a STAGEBOX
- * mastering it -> refused with the remedy named, never fought. `REAC_ROLE_<segment>`
- * overrides that; a bare `REAC_ROLE` is only the floor for a segment nobody has heard
- * yet, and it is superseded out loud.
+ * AND THE ROLE COMES OUT OF THE SAME HEARING (reac_hunt.h): no master on the wire
+ * and a box present -> we drive, probe, grant; a DESK mastering it -> we join as a
+ * slave and follow its pace; a STAGEBOX mastering it -> refused with the remedy named,
+ * never fought. `REAC_ROLE_<segment>` overrides that outright; a bare `REAC_ROLE` is
+ * only the floor for a segment nobody has heard yet, and it is superseded out loud.
  *
  * Only the FIRST --live segment honours the per-box flags below (--tx/--role/
  * --mixer/--name/--headamp/--box/--src-mac/--box-channels/--box-model),
@@ -561,11 +560,11 @@ struct listener_cfg {
 	char tx_if_buf[64];   /* generous over IFNAMSIZ: silences -Wformat-truncation against the 256-byte conf value buffer */
 	const char *tx_if;                 /* NULL = no TX side (RX-only monitor) */
 	enum reac_role role;
-	/* WHAT WAS ASKED FOR, and by whom (arbitration §8: intent and observation are two
-	 * facts). `role` above is what we present on the wire; these say whether anybody
-	 * chose it. `role_pinned` is set only by a PER-SEGMENT answer — `REAC_ROLE_<iface>`
-	 * or an explicit --role — which the wire never overrides; a BARE REAC_ROLE is the
-	 * launch floor and the hunt supersedes it (trunk-VLAN amendment 2026-09-02 §d). */
+	/* WHAT WAS ASKED FOR, and by whom — intent and observation are two facts. `role`
+	 * above is what we present on the wire; these say whether anybody chose it.
+	 * `role_pinned` is set only by a PER-SEGMENT answer — `REAC_ROLE_<iface>` or an
+	 * explicit --role — which the wire never overrides; a BARE REAC_ROLE describes every
+	 * segment on the host, so it is the launch floor and the hunt supersedes it. */
 	enum reac_role_intent role_intent;
 	enum reac_conf_layer role_layer;
 	int role_pinned;
@@ -630,10 +629,11 @@ static void listener_cfg_defaults(struct listener_cfg *c)
 {
 	memset(c, 0, sizeof *c);
 	c->rxcfg.pcap_realtime = 1;
-	/* NOTHING CONFIGURED MEANS `auto`, not master (arbitration §8b: "a parameter a
-	 * normal box needs hand-set is a defect in the defaults"). The wire role still
-	 * starts at master because the field holds one of two values; what it is on a
-	 * heard segment is decided by reac_hunt before anything is transmitted. */
+	/* NOTHING CONFIGURED MEANS `auto`, not master: a parameter a normal box needs
+	 * hand-set is a defect in the defaults, and the role is no more exempt from that
+	 * than the rate is. The wire role still starts at master because the field holds one
+	 * of two values; what it is on a heard segment is decided by reac_hunt before
+	 * anything is transmitted. */
 	c->role_intent = REAC_ROLE_INTENT_AUTO;
 	c->role_layer = REAC_CONF_NONE;
 	c->role_pinned = 0;
@@ -670,8 +670,8 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 	/* REAC_ROLE, and WHICH KEY answered it. A per-segment `REAC_ROLE_<iface>` is a
 	 * decision about THIS wire and is obeyed; a bare REAC_ROLE cannot know what is on
 	 * one particular segment, so it is the launch floor the hunt resolves against
-	 * (trunk-VLAN amendment 2026-09-02 §d: the console writes the bare key as
-	 * "`auto`'s launch role"). `auto` at either level asks for the hunt outright. */
+	 * — a console generating this file writes the bare key as the launch role for a
+	 * segment it has not seen. `auto` at either level asks for the hunt outright. */
 	c->role_layer = reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v);
 	if (c->role_layer != REAC_CONF_NONE) {
 		enum reac_role_intent i;
@@ -901,8 +901,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                              .inst = c->inst_name, .label = NULL,
 		                              .headamps = c->n_headamps ? c->headamps : NULL,
 		                              .n_headamps = c->n_headamps,
-		                              /* #75, arbitration spec §3: the discipline is the
-		                               * DEFAULT. REACPW_CLOCK_FOLLOW=0 opts out and gets
+		                              /* #75: the discipline is the DEFAULT since 0.5.0.
+		                               * REACPW_CLOCK_FOLLOW=0 opts out and gets
 		                               * the free-run, which is then REPORTED rather than
 		                               * silent (reac_sink_node.h carries the ruling). */
 		                              .clock_follow = reac_envflag("REACPW_CLOCK_FOLLOW",
@@ -1320,9 +1320,9 @@ static void sniffer_close(struct hearing *h, const char *name)
 
 /* Did the operator answer for THIS segment? `REAC_ROLE_<segment>` is the only layer that
  * can — a bare REAC_ROLE describes every segment on the host and cannot know what is on
- * one wire (trunk-VLAN amendment §d). Resolved once, when the sniffer opens, so a pinned
- * segment is served on its first classifying frame rather than after a hunt it never
- * needed (arbitration §8a: the role is a setting). */
+ * one wire. Resolved once, when the sniffer opens, so a pinned segment is served on its
+ * first classifying frame rather than after a hunt it never needed: a pin is a SETTING,
+ * and a daemon that made a setting wait for evidence would be second-guessing it. */
 static int segment_role_pin(const char *iface, enum reac_role *out)
 {
 	char v[256];
@@ -1401,8 +1401,8 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	memset(L, 0, sizeof *L);
 	listener_cfg_from_conf(&L->cfg, name, 0);
 	/* THE WIRE DECIDES, UNLESS SOMEONE DECIDED FOR THIS SEGMENT. `REAC_ROLE_<segment>`
-	 * is an answer about THIS wire and wins outright (arbitration §8a: the role is a
-	 * setting). A bare REAC_ROLE is the FLOOR — the launch role for a segment nobody has
+	 * is an answer about THIS wire and wins outright — the role is a setting, not a
+	 * guess. A bare REAC_ROLE is the FLOOR — the launch role for a segment nobody has
 	 * seen yet — and the hunt has now seen it, so the floor is named and superseded
 	 * rather than obeyed. That floor is what left two boxes ungranted on 2026-09-08:
 	 * `REAC_ROLE=slave` in a file described every segment on the host, including the two
@@ -1529,7 +1529,7 @@ static void on_hearing_nl_io(void *data, int fd, uint32_t mask)
  *
  * Only a MASTER or SLAVE verdict turns the interface into a segment. A refusal
  * (a stagebox on M, an unreadable rival) is said once and left alone: never joined,
- * never probed at, never fought (arbitration §2b). */
+ * never probed at, never fought. */
 static void hearing_hunt(struct hearing *h, uint64_t now)
 {
 	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
@@ -1582,7 +1582,7 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		case REAC_HUNT_HUNTING:
 		default:
 			/* Heard, but nothing decides it — said once, because a state nobody can
-			 * act on still has to be readable (§9: never a silent spinner). */
+			 * act on still has to be readable, and never a silent spinner. */
 			if (!sn->undecided_said && !sn->hunt.pinned &&
 			    reac_hunt_heard_anything(&sn->hunt) &&
 			    now - sn->hunt.opened_ns >= REAC_HUNT_WINDOW_NS) {

@@ -31,12 +31,11 @@ struct reac_source_node;       /* reac_source_node.h — the peer reac-capture n
 struct reac_box_model;         /* reac_ctrl.h — the autodetected box (in/out widths) */
 struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp table */
 
-/* THE CLOCK DISCIPLINE SHIPS ON (arbitration spec §3, promoted 2026-09-08).
+/* THE CLOCK DISCIPLINE SHIPS ON (0.5.0).
  *
- * "The ruling PROMOTES the election from an opt-in, rig-gated env knob to the DEFAULT;
- * free-run becomes the fallback that is reported, never the silent normal." A daemon
- * that OWNS a segment's pace and free-runs it is misconfigured in principle: every box
- * on the wire locks to our rhythm, so that rhythm has to be worth propagating.
+ * A daemon that OWNS a segment's pace and free-runs it is misconfigured in principle:
+ * every box on the wire locks to our rhythm, so that rhythm has to be worth propagating.
+ * Free-run becomes the fallback that is REPORTED, never the silent normal.
  *
  * The rig gate ENV-KNOBS.md set for the promotion has been walked: the live master rig
  * has run with REACPW_CLOCK_FOLLOW=1 and REACPW_CLOCK_REF=Babyface continuously since

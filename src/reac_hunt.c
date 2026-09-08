@@ -76,8 +76,8 @@ static int live(const struct reac_disco_entry *e, uint64_t now_ns)
  *     (reac_fsm.h, byte-verified 2026-07-11), and a broadcast FILLER is deliberately
  *     classified UNKNOWN because a master's downstream audio is byte-identical in kind.
  *     Its WIDTH is not ambiguous: 40 channels is the master downstream and nothing
- *     else, every smaller legal geometry is a box (arbitration §2b, the same law
- *     reac_rival_kind_from_channels applies to a rival). A 16- or 32-channel flood is a
+ *     else, every smaller legal geometry is a box — the same law
+ *     reac_rival_kind_from_channels applies to a rival. A 16- or 32-channel flood is a
  *     stagebox standing on the wire with its hand up.
  *
  * Refusing the second kind would be the founding bug of this whole area: two boxes sat
@@ -132,8 +132,8 @@ static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 		return h->table.n == 0 ? REAC_HUNT_HUNTING
 		     : (h->pin == REAC_ROLE_SLAVE ? REAC_HUNT_SLAVE : REAC_HUNT_MASTER);
 
-	/* A foreign master is unambiguous evidence, and §2b says WHAT it is decides what
-	 * we do about it: a desk is joined, a stagebox on M and an unreadable rival are
+	/* A foreign master is unambiguous evidence, and WHAT it is decides what we do about
+	 * it: a desk is joined, a stagebox on M and an unreadable rival are
 	 * refused. Immediate — a desk on the wire is not a maybe, and there is nothing a
 	 * longer wait could add. */
 	if (h->arb.state == REAC_SEGMENT_FOREIGN)
@@ -147,10 +147,10 @@ static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 	if (now_ns - h->opened_ns < REAC_HUNT_WINDOW_NS)
 		return REAC_HUNT_HUNTING;
 
-	/* The window closed on a silent wire with a box on it: §7 step 4's first half —
-	 * we drive, probe, grant, establish. A wire with nothing on it at all is NOT taken:
-	 * a segment is a place where REAC gear was heard, and driving needs evidence
-	 * (§7's observe-then-act gate). */
+	/* The window closed on a silent wire with a box on it: we drive, probe, grant,
+	 * establish. A wire with nothing on it at all is NOT taken — a segment is a place
+	 * where REAC gear was HEARD, and driving needs evidence. Listening is passive and
+	 * costs an idle socket; transmitting is what needs a reason. */
 	return box_present(&h->table, now_ns) ? REAC_HUNT_MASTER : REAC_HUNT_HUNTING;
 }
 

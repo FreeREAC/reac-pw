@@ -46,20 +46,20 @@ static inline const char *reac_role_name(enum reac_role r)
 }
 
 /* WHAT WE ASKED TO BE, which is not the same fact as what we present on the wire
- * (arbitration spec §8: "Intent and observation are two facts and must be two fields").
+ * Intent and observation are two facts, and two facts need two fields.
  * `enum reac_role` above is the WIRE vocabulary and has exactly two values, because a
  * frame goes out as one end of the pairing or the other. The INTENT has a third:
  *
- *   auto — observe first, then take the role the segment leaves open. §8b makes it the
+ *   auto — observe first, then take the role the segment leaves open, and it is the
  *          product default: no master on the wire, we master it; a DESK masters it, we
  *          slave to it; a STAGEBOX masters it, we refuse and say so. reac_hunt.h
  *          resolves it from what the wire actually says.
  *
- * The console face speaks `mixer`/`recorder` for the same two ends (§8a's vocabulary
- * ruling); REAC_ROLE and this parser stay on the wire's words, and the console's
- * actuator translates. */
+ * A console face may speak its own words for the same two ends (openmixer's shows
+ * `mixer`/`recorder`); REAC_ROLE and this parser stay on the WIRE's words, and the
+ * translation is the console's to do. */
 enum reac_role_intent {
-	REAC_ROLE_INTENT_AUTO = 0,   /* the default: the wire decides (arbitration §8b) */
+	REAC_ROLE_INTENT_AUTO = 0,   /* the default: the wire decides (reac_hunt.h) */
 	REAC_ROLE_INTENT_MASTER,
 	REAC_ROLE_INTENT_SLAVE,
 };

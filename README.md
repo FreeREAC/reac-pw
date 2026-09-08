@@ -173,6 +173,11 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   [docs/SLAVE-EMULATION-SCOPE.md](docs/SLAVE-EMULATION-SCOPE.md).
 - **Role selection** (`--role master|slave`, `reac_role.h`) — default master on a
   pinned `--live` run; parse + validation unit-tested.
+- **Segment naming** (0.5.0) — a segment IS its interface and is NAMED after it, so the
+  node pair is `reac-capture.enp131s0` / `reac-playback.enp131s0` and the per-segment conf
+  key is `REAC_ROLE_enp131s0`; `<iface>.env` files are no longer read at all. Node names
+  that follow the BOX instead are owed — see DESIGN.md's "what it owes". Later increments
+  are 0.5.1, 0.5.2, ...; the middle digit does not move again for them.
 - **Autodetect + role election** (0.5.0, `reac_ifscan` + `reac_hunt`) — the daemon
   finds its own segments (rtnetlink link state, a passive `0x8819` sniff) and elects
   its own role per segment from what it hears. Proven on a veth pair inside an
