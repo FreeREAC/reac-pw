@@ -97,8 +97,9 @@ meson test -C _build
   ensure it went through only rebuilds on a width or label change, and neither moves
   when a node simply fails to appear, so the node is destroyed first. The retry is
   bounded -- a 2 s grace, a window that doubles to 32 s, five attempts, then one line
-  naming PipeWire's reason -- and the "autodetected ... -> reac-capture N in" line is
-  said once per box and only once the node is really there.
+  naming PipeWire's reason -- and it says so when the node comes BACK, because a rebuild
+  followed by silence reads exactly like a rebuild that failed. The "autodetected ... ->
+  reac-capture N in" line is said once per box and only once the node is really there.
 - A rebuilt capture node is re-stamped with the box's badges. The sink's badge push
   rides a change guard, so a recovered node came back reading box-model "none",
   width "0x0" to every client.
