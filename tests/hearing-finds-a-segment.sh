@@ -31,6 +31,17 @@ BIN="$1"
 LOG=$(mktemp); PEER=$(mktemp); CONF=$(mktemp -d)
 trap 'rm -rf "$LOG" "$PEER" "$CONF"' EXIT
 
+# Wait up to N seconds for a line to appear, so a slow machine costs time and not a
+# false red. Returns 1 (and prints nothing) if it never appears.
+wait_for() {
+	local pat="$1" secs="$2" i
+	for ((i = 0; i < secs * 5; i++)); do
+		grep -q "$pat" "$LOG" && return 0
+		sleep 0.2
+	done
+	return 1
+}
+
 ip link add hear0 type veth peer name desk0 || exit 90
 ip link set hear0 up
 ip link set desk0 up
@@ -60,6 +71,13 @@ PPID2=$!
 sleep 4
 grep -q "\[hear0\] REAC heard" "$LOG" || { echo "FAIL: master on the peer never heard"; cat "$LOG"; tail -5 "$PEER"; exit 1; }
 grep -q "\[hear0\] segment up" "$LOG" || { echo "FAIL: heard but not served"; cat "$LOG"; exit 1; }
+# AND ON THE RIGHT END OF THE PAIRING. A desk masters this wire, so the daemon joins it as
+# a SLAVE and follows its pace (trunk-VLAN spec S7 step 4, arbitration S2). Nothing was
+# configured to say so; the verdict came from the frames.
+grep -q "\[hear0\] a desk masters this segment" "$LOG" || {
+	echo "FAIL: a desk was mastering the wire and the hunt did not say so"; cat "$LOG"; exit 1; }
+grep -q "\[hear0\] segment up (slave, chosen by hearing the wire)" "$LOG" || {
+	echo "FAIL: served, but not as the slave the wire called for"; cat "$LOG"; exit 1; }
 
 # A flap shorter than the hold: the segment is kept, nothing rebuilt.
 ip link set desk0 down; sleep 1
@@ -80,10 +98,30 @@ ip link set desk0 up; sleep 5
 [ "$(grep -c "\[hear0\] segment up" "$LOG")" -ge 2 ] || {
 	echo "FAIL: not served again after the drop"; cat "$LOG"; exit 1; }
 
+# ---- THE VACANT WIRE, WHICH IS THE 2026-09-08 OUTAGE IN MINIATURE. The desk goes away
+# and a BOX takes its place: a daemon that was told nothing, and that has just been
+# slaving to a desk, must now DRIVE the segment — hunt, grant, establish. On the rig two
+# boxes sat ungranted for exactly this hole, with a `REAC_ROLE=slave` floor in a file.
 kill -TERM $PPID2 2>/dev/null; wait $PPID2 2>/dev/null
+ip link set desk0 down; sleep 4.5        # past the hold: the segment closes, sniffing resumes
+ip link set desk0 up;   sleep 1
+"$BIN" --live desk0 --tx desk0 --role slave --box-channels 16 --name box \
+       --src-mac 00:40:ab:c4:80:41 >"$PEER" 2>&1 &
+BOXPID=$!
+wait_for "\[hear0\] no master heard in" 15 || {
+	echo "FAIL: a box on a vacant wire and the daemon never took it"; cat "$LOG"; tail -5 "$PEER"; exit 1; }
+wait_for "\[hear0\] segment up (master, chosen by hearing the wire)" 10 || {
+	echo "FAIL: the wire was taken but the segment did not come up as master"; cat "$LOG"; exit 1; }
+# The job, not the decision: the box it heard is ENROLLED. A role elected and nothing
+# granted would be the same silence the outage had.
+wait_for "reac-master: .* -> ESTABLISHED" 20 || {
+	echo "FAIL: took the wire as master but never established with the box"
+	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
+kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
+
 kill -TERM $PID; wait $PID; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: clean SIGTERM exited $rc"; tail -5 "$LOG"; exit 1; }
-echo "OK: heard, kept through a flap, dropped past the hold, heard again; clean exit"
+echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the hold,\n    heard again, then took a vacant wire as master and established with the box"
 exit 0
 INNER
 )

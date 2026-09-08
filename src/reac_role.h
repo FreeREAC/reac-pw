@@ -45,6 +45,57 @@ static inline const char *reac_role_name(enum reac_role r)
 	return r == REAC_ROLE_SLAVE ? "slave" : "master";
 }
 
+/* WHAT WE ASKED TO BE, which is not the same fact as what we present on the wire
+ * (arbitration spec §8: "Intent and observation are two facts and must be two fields").
+ * `enum reac_role` above is the WIRE vocabulary and has exactly two values, because a
+ * frame goes out as one end of the pairing or the other. The INTENT has a third:
+ *
+ *   auto — observe first, then take the role the segment leaves open. §8b makes it the
+ *          product default: no master on the wire, we master it; a DESK masters it, we
+ *          slave to it; a STAGEBOX masters it, we refuse and say so. reac_hunt.h
+ *          resolves it from what the wire actually says.
+ *
+ * The console face speaks `mixer`/`recorder` for the same two ends (§8a's vocabulary
+ * ruling); REAC_ROLE and this parser stay on the wire's words, and the console's
+ * actuator translates. */
+enum reac_role_intent {
+	REAC_ROLE_INTENT_AUTO = 0,   /* the default: the wire decides (arbitration §8b) */
+	REAC_ROLE_INTENT_MASTER,
+	REAC_ROLE_INTENT_SLAVE,
+};
+
+/* Parse a REAC_ROLE value. Returns 0 + sets *out on success, -1 on an unknown value
+ * (caller reports it). NULL/"" is unknown, never `auto`: an absent key is resolved by
+ * the caller's own default, and a key set to a word nobody can read is a mistake worth
+ * naming. */
+static inline int reac_role_intent_parse(const char *s, enum reac_role_intent *out)
+{
+	if (!s)
+		return -1;
+	if (!strcmp(s, "auto"))   { *out = REAC_ROLE_INTENT_AUTO;   return 0; }
+	if (!strcmp(s, "master")) { *out = REAC_ROLE_INTENT_MASTER; return 0; }
+	if (!strcmp(s, "slave"))  { *out = REAC_ROLE_INTENT_SLAVE;  return 0; }
+	return -1;
+}
+
+static inline const char *reac_role_intent_name(enum reac_role_intent i)
+{
+	switch (i) {
+	case REAC_ROLE_INTENT_MASTER: return "master";
+	case REAC_ROLE_INTENT_SLAVE:  return "slave";
+	case REAC_ROLE_INTENT_AUTO:
+	default:                      return "auto";
+	}
+}
+
+/* The wire role an intent LAUNCHES in before the wire has answered. `auto` launches as
+ * master only because a role field must hold one of two values; nothing is transmitted
+ * on it — the hunt gates the actual open (reac_hunt.h). */
+static inline enum reac_role reac_role_from_intent(enum reac_role_intent i)
+{
+	return i == REAC_ROLE_INTENT_SLAVE ? REAC_ROLE_SLAVE : REAC_ROLE_MASTER;
+}
+
 /* Validate a parsed role against the other CLI options. The slave role REQUIRES a
  * TX NIC (the upstream return + handshake socket); the master role can run RX-only
  * (a pure monitor) or with --tx for the downstream sink. Returns 0 if OK, -1 if

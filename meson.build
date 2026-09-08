@@ -93,6 +93,7 @@ reac_pw_src = [
   'src/reac_seglock.c',
   'src/reac_ifscan.c',
   'src/reac_arbitration.c',
+  'src/reac_hunt.c',
   'src/reac_conf.c',
   'src/reac_rt.c',
   'src/reac_tx.c',
@@ -327,7 +328,7 @@ test('reac_link_up_reestablishes',
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
   args : [reac_pw_exe],
-  timeout : 90)
+  timeout : 180)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
@@ -604,6 +605,19 @@ envflag_test = executable('test_reac_envflag',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep])
 test('reac_envflag', envflag_test)
+
+# --- unit test: the vacant-wire hunt (trunk-VLAN spec S7 step 4, arbitration S8b) --
+# Which end of the pairing a HEARD segment takes when nobody configured one. Frames come
+# from the reac_ctrl builders (the bytes the wire carries, checksum and all), so the four
+# outcomes are driven by real geometry: a desk masters -> we slave; a stagebox on M
+# masters -> refused and never fought; a silent wire with a box on it -> we master, but
+# only after the 3 s window; nothing heard -> never a segment. Pure; no socket.
+hunt_test = executable('test_reac_hunt',
+  ['tests/test_reac_hunt.c', 'src/reac_hunt.c', 'src/reac_arbitration.c',
+   'src/reac_disco.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_hunt', hunt_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
