@@ -456,8 +456,9 @@ sniffer, which transmits nothing; the first frame that classifies as REAC turns 
 interface into a SEGMENT (`reac_ifscan`). The role then comes out of the same hearing
 (`reac_hunt`): a desk mastering the wire is joined as a slave; a wire with a box on it
 and no master is taken as master after three master announce cadences (3 s) and the box
-is granted; a stagebox strapped to master is refused with the remedy named and never
-fought; a `REAC_ROLE_<segment>` pin skips the election and the hearing both, and is
+is granted; a stagebox strapped to master is JOINED as a slave at the width it announces
+(0.5.1's ruling below) and is refused only where the operator pinned that wire master;
+a `REAC_ROLE_<segment>` pin skips the election and the hearing both, and is
 served **on link up**; and an UNPINNED linked wired interface that carried nothing at all
 for 500 ms has been PROVEN masterless and is taken as master through the ordinary master
 role (see "A cold stagebox is silent" below). **The segment's NAME is
@@ -519,16 +520,19 @@ daemon serves. *A master cannot be present and silent.* So 500 ms of nothing —
 consecutive slots at that slowest cadence, and more than two of the 200 ms hearing polls —
 is PROOF the port is masterless, not a guess, and only a port proven masterless is ever
 driven. Any frame inside the window cancels the licence outright and the ordinary hunt
-rules: a desk is joined, a stagebox strapped to master is refused, a box is granted.
+rules: a desk is joined, a stagebox strapped to master is joined too (0.5.1), and a box
+with no master on its wire is granted.
 
 **And a bet stays watched.** A wire taken on silence KEEPS its sniffer, which every other
 segment drops when it is served, because this one was served on a bet that nothing was
 there — and the thing it bet against can only ever turn up later. If a foreign master that
 is a DESK is heard on it, the segment is handed over at once: master down, slave up, no
-shouting (`hearing_yield`, the arbitration's observe-then-act law). A stagebox strapped to
-master is reported and NOT yielded to — dropping our own master would take the segment
-from every other box on it to nobody's benefit. This closes, for wires taken this way
-only, the re-resolution item that the list below still owes in general.
+shouting (`hearing_yield`, the arbitration's observe-then-act law) — and since 0.5.1 a
+STAGEBOX that starts mastering it is yielded to on the same terms, because that wire is
+unpinned and a box that wants the clock gets it. Only a wire pinned master refuses, and it
+keeps its own master rather than yielding: dropping it would take the segment from every
+other box on it to nobody's benefit. This closes, for wires taken this way only, the
+re-resolution item that the list below still owes in general.
 
 **The accepted cost, ruled by the operator 2026-09-08.** A linked wired interface with
 nothing on it is driven at the master cadence indefinitely, and on an office LAN that is a
@@ -569,6 +573,104 @@ MASTER and probing until a box cold-connects`.
 **Versioning.** 0.5.0 is this release. The increments above go 0.5.1, 0.5.2, ... — the
 middle digit does not move again for them.
 
+## 0.5.1 — a box that masters the wire is JOINED, unless we forced master
+
+**Operator ruling, 2026-09-09, after the rig proof.** An S-0808 was rebooted with its REAC
+Mode switch on M and left on an unpinned wire. 0.5.0-3 logged `REFUSED (rival-master-box):
+… masters this wire at 8 ch, which is a BOX width, not a desk's 40 … Nothing is transmitted
+here and nothing is fought`, served nothing, and the segment vanished from the console —
+no node, no props, no remedy, just an absence. The ruling: *if the box wants to be master,
+unless we have forced the master mode, we can enslave the segment to the box's master
+clock.* The sentence this file used to carry — never slave-join a box — was not merely too
+narrow, it was WRONG. Taking a clock from the wire is what a REAC endpoint does, and which
+end of the pairing sent it changes nothing about the clock.
+
+So the wire decides, and the only refusal left is a contradiction the operator wrote down:
+
+| the wire | `REAC_ROLE_<segment>` | what the daemon does |
+|---|---|---|
+| a DESK masters it | unpinned, or `slave` | joined as a slave — unchanged |
+| a BOX masters it | unpinned, or `slave` | **joined as a slave**: its clock, its width |
+| a BOX masters it | `master` | REFUSED (`rival-master-box`), and the segment still publishes a DOOR |
+| an unreadable rival | any | REFUSED (`rival-master-unknown`): a frame kind nobody has captured must not flip a segment's topology |
+
+A pin is the operator's own answer about that one wire, so a pinned master beside a box on M
+is the single case where two answers contradict each other — and the daemon never settles
+that by out-shouting. It says so, and the remedy is the box's own switch. Everywhere else
+the wire is obeyed, in the journal's own words: `box masters this wire — joining it as a
+slave (operator rule: a box that wants to be master gets the clock)`.
+
+**What a box-master wire carries, and how it differs from a desk's.** The mode switch is read
+at boot and never re-read, and M is the SPLITTER's clock role rather than "act as a console":
+the S-4000S image carries a master parser AND a slave parser plus a clock driver, so it is
+clock-slave on its uplink and master on its split outputs
+(`reac-protocol/wire-format.md`, "The stagebox's REAC Mode switch — M / S / SP"). Three
+consequences decide everything below.
+
+- **The geometry is the box's own, not the fabric's.** A box on M broadcasts its UPSTREAM
+  geometry and never a master downstream frame: `52 + n × 36` bytes — 340 B at 8 channels,
+  628 B at 16, 1204 B at 32, the same at every rate — where a desk's downstream is the fixed
+  1492 B, 40-channel broadcast (`wire-format.md`, "Upstream (stagebox→master) audio layout").
+  That width IS the classification (`reac_rival_kind_from_channels`), and it is also what the
+  segment's nodes are sized to: 8 ch of box means an 8-port `reac-capture`, never a 40-slot
+  fabric with 32 silent rows.
+- **The packing is the same braid in both directions**, confirmed on real captures at all
+  three widths, so a box-master stream is decoded by the oracle the master role already uses
+  for a box's return — `REAC_RX_ACCEPT_UPSTREAM` and `reac_upstream_decode`. No second
+  decoder, and no new frame kind.
+- **A box on M runs no handshake at all.** Measured: zero control frames — no announce, no
+  grant, no heartbeat — so nothing pairs with it in either direction; it cannot be granted
+  (it never cold-connects) and it cannot be enrolled with (it never grants). Both were tried
+  (`wire-format.md`). With no uplink it free-runs at its last-known rate, measured +363 ppm
+  off nominal against −16 ppm for an enrolled box on the same rig.
+
+**Therefore the join is RECEIVE-ONLY, and that is the honest shape rather than a reduced
+one.** The segment locks to the arrival cadence, decodes the box-width stream into a
+`reac-capture` sized from what the box announces, and publishes the aggregate. It does NOT
+open the slave engine: that engine exists to answer a grant, and a peer that emits no control
+frame will never send one — a cold-connect flood aimed at it would be noise with a state
+machine behind it. What the operator gets is the box's channels in the graph, and props that
+name whose clock they arrived on.
+
+*(The rig's own S-0808 on M, 2026-09-09, put a MASTER-role frame on the wire beside that
+box-width geometry: the 0.5.0-3 refusal cannot fire without one, since only
+`REAC_DISCO_ROLE_MASTER` evidence reaches `reac_arbitrate`'s `foreign_master`. The S-4000S
+"zero control frames" measurement above is that box on that day; the two are not in conflict
+about anything this code depends on — the width is what classifies, and the width agreed.)*
+
+**A REFUSED WIRE STILL PUBLISHES A DOOR.** The 2026-09-09 rig proof's real cost was not the
+refusal, it was the SILENCE: a wire the daemon had decided about, and a console with nothing
+to render. A refusal that cannot be seen is indistinguishable from a daemon that is not
+running. So a refused segment is served as a door-only segment:
+
+- **One node**, `reac-capture.<segment>`, no ports carrying audio and no engine of any kind
+  behind it — no TX, no pacer, no segment lock, no RX feeder. Nothing is transmitted, and
+  now nothing is received either: the refusal is total, and the door is a statement about it.
+- **Not `reac-playback`**, although a segment pinned master would ordinarily carry its door
+  there: that node exists only where a pacer drives the wire, and publishing one over no
+  pacer would be a door onto an engine that is not there. One segment, one door, and the
+  door is on the node that exists.
+- **The props are the refusal, in the vocabulary that already exists** (`reac_link_state.h`,
+  `reac_segment_ident.h`) — never a second spelling of it:
+
+  | property | value |
+  |---|---|
+  | `reac.segment` | the segment's name, so a console can key its row on it |
+  | `reac.master.state` | `foreign` |
+  | `reac.master.mac` | the RIVAL's MAC — who is mastering this wire |
+  | `reac.master.rival.kind` | `box` (or `unknown`) |
+  | `reac.master.refusal` | `rival-master-box` (or `rival-master-unknown`) |
+  | `reac.pace.source` | `foreign-master` |
+  | `reac.master.conflict` | `0` — we are not mastering, so the mid-flight dispute cannot exist |
+
+  The remedy is not a property: `refusal` + `rival.kind` + the MAC are what a surface renders
+  one from, and the journal already carries the sentence.
+
+**And the yield follows the same table.** A wire taken on proven silence keeps its sniffer,
+and a box that turns up on it and masters it is now yielded to exactly as a desk is — master
+down, receive-only slave up — because the verdict, not the rival's kind, is what
+`hearing_yield` acts on.
+
 ## Files
 
 | File | Role |
@@ -597,7 +699,7 @@ middle digit does not move again for them.
 | `src/reac_link.{h,c}` | **is there a CABLE** — a dependency-free `/sys/class/net/<if>/carrier` predicate, 1/0/-1 UNKNOWN. Read by the PROBING watchdog so "the box is silent" and "the cable is out" stop reading the same (#95). Answers UNKNOWN for an admin-down interface, which the file cannot describe |
 | `src/reac_ifscan.{h,c}` | **WHICH interfaces to listen on, and which are segments** — the host's netdev table over rtnetlink, one decision per Ethernet interface. Link is the gate to LISTEN (a passive 0x8819 sniffer, `main.c`'s hearing supervisor), the first REAC frame heard is the gate to SERVE, and link loss drops the segment after a 3 s hold a box power-cycle cannot outlast; `RTM_DELLINK` and a re-enumerated ifindex drop at once. A segment is named after its interface; nothing names one in advance (openmixer's trunk-VLAN spec, amendment 2026-09-02). Pure table + event queue, netlink as a byte source, same shape as `reac_linkmon` |
 | `src/reac_ifname.{h,c}` | a segment's STABLE, bus+physical-address-derived name (`pci1`, `usb2`) — built, tested against real captured `/sys` paths, and DELIBERATELY NOT WIRED into segment identity. A segment IS its interface here and is NAMED after it, and a console generates its per-segment keys and its patch addresses from that published name — so swapping the identity renames every key and every patch on a live rig in one step. The answer to name instability is node names that follow the BOX (owed, see "What 0.5.0 does not do"), not a second name derived from the interface. Kept for that work; wired to nothing today |
-| `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is REFUSED by its frame geometry and left alone. A `REAC_ROLE_<segment>` pin skips all of it and is served ON LINK, with no frame required — a cold slave box is silent until a master announces to it, so waiting for a classifying frame on a pinned wire waits forever (2026-09-08, both rig boxes mute). Nothing latches: the table ages, and the verdict is recomputed. Pure |
+| `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is joined as a SLAVE too — at the width its frame geometry declares — unless the operator pinned that segment MASTER, which is the one contradiction the daemon refuses (`rival-master-box`) instead of out-shouting (0.5.1). A `REAC_ROLE_<segment>` pin skips all of it and is served ON LINK, with no frame required — a cold slave box is silent until a master announces to it, so waiting for a classifying frame on a pinned wire waits forever (2026-09-08, both rig boxes mute). Nothing latches: the table ages, and the verdict is recomputed. Pure |
 | `src/reac_knock.{h,c}` | **THE PROOF THAT A WIRE HAS NO MASTER ON IT**, which is the licence to drive. A stagebox in slave mode spends a bounded broadcast flood on PHY-up and then goes silent forever if no master answered it, so hearing alone can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes cabled and carrier-up, zero frames in eight seconds). An unpinned linked WIRED interface is listened to for REAC_KNOCK_LISTEN_NS (500 ms = 1837 slots at the slowest cadence; a master fills every slot, so silence there is PROOF of no master) and then TAKEN as master through the ordinary master role — not knocked on: a lone announce every 2 s was measured on the rig and the box never answered. Any frame inside the window cancels the licence. Pure: one clock, one verdict, no socket and no frame |
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
