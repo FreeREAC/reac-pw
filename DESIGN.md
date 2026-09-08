@@ -700,6 +700,70 @@ and a box that turns up on it and masters it is now yielded to exactly as a desk
 down, receive-only slave up — because the verdict, not the rival's kind, is what
 `hearing_yield` acts on.
 
+## 0.5.2 — a joined box master is a BOX, and it says which one (2026-09-09)
+
+**Measured on the rig with 0.5.1, 05:45.** The S-0808 on M was joined exactly as 0.5.1
+ruled: `reac-capture.enp128s20f0u2` came up at 8 channels on the box's own clock, carrying
+`reac.segment`, `reac.master.state=foreign`, `reac.master.rival.kind=box`,
+`reac.master.mac=00:40:ab:c4:dc:9c` and `reac.rate=96000`. The console rendered a segment
+and NO STAGEBOX: it keys a box off `reac.box.mac` / `reac.box-model` / `reac.box-width` /
+`reac.link-state`, and the join published none of the four — so the same chassis that is
+`box-676b3a9a` when we master it was a nameless width when it masters us, its inputs
+unpatchable. The node also read `reac.cfg.role.state=role_reestablish_pending` while the
+segment was up and streaming.
+
+**Same box, same MAC, same patches — whichever end of the pairing sends the clock.** A
+box's identity is the box's own; which of the two ends is mastering is a fact about the
+WIRE and belongs in the `reac.master.*` aggregate, where it already is. So a joined box
+master publishes the identity set a served box publishes, on the segment's one door (the
+capture node — a receive-only join has no playback node, `reac_segment_ident.h`).
+
+**WHERE THE IDENTITY COMES FROM: THE WIDTH, BECAUSE THERE IS NO ANNOUNCE TO READ.** A
+served box names itself in a cold-connect config-announce (link 1, opcode 0x82/0x84), and
+`reac_ctrl_identify_box` matches that 32-byte descriptor block against the fixed matrix —
+which is how the disco printed `recognized box = S-0808` for `00:40:ab:c4:dc:9c` on the day
+we mastered it. **A box on M sends no such frame.** What it broadcasts is its UPSTREAM
+geometry, `52 + n × 36` bytes (340 B at 8 channels), and the one control-bearing frame in
+it carries a master-only record, not a declaration: `reac_ctrl_identify_box` returns NULL on
+every frame of that stream, which is why the rig's own `REAC heard — master
+00:40:ab:c4:dc:9c (8 ch)` line named no model where a served box's names one.
+
+So the model is IMPLIED BY THE WIDTH, and only where the implication is exact:
+
+- `reac_box_master_model(width)` returns the matrix row whose `in_ch` EQUALS the broadcast
+  width, and NULL otherwise. It is deliberately not `reac_box_model_by_channels`, which
+  falls back to the S-1608 row for an unmatched width (`libreac reac_ctrlblk.c:521`) — the
+  same trap `reac_disco.c`'s classifier already refuses: a default would name a box that was
+  never identified.
+- `reac.box-model` and `reac.box-width` are published from that row (`s0808`, `8x8`), so the
+  console folds the join into the box it already knows by MAC and the operator's patches
+  survive the mode switch. A width no row matches publishes NEITHER key — absence is a fact,
+  and the width is still on the graph as the node's ports and its description.
+- `reac.box.mac` is the mastering peer's own address, from the sighting that decided the
+  verdict. A box on M grants nothing, so the sighting is the only evidence there is — the
+  same address `reac.master.mac` already carries, and deliberately both: one says WHO IS
+  MASTERING THIS WIRE, the other says WHICH CHASSIS THESE INPUTS ARE.
+- `reac.link-state` is `probing` until the stream is locked and `established` once it is,
+  where locked means the segment's own RX is accepting the box-width frames it decodes into
+  the graph (`reac_segment_heard_step`, the same evidence `reac.master.state=foreign` rests
+  on). There is no `granting`: nothing is granted in either direction here.
+
+**AND THE ROLE IS APPLIED, NOT PENDING.** `role_reestablish_pending` means the engine asked
+for is not the one performing; a receive-only join was reading it because the answer was
+derived from `reac_slave`'s enrolment flag and no slave engine runs here. It never will:
+that engine exists to answer a grant. The receive-only join IS the slave role performed —
+the segment follows the box's clock and delivers its channels — so it derives its answer
+from its own engine instead (`reac_role_engine_of_receive_only`): `role_hunting` while the
+wire has not been heard yet, `applied` once it is.
+
+**WHAT A BOX-MASTER WIRE CARRIES — the receive-only contract, stated as the operator reads
+it.** Its inputs arrive: the box's mic channels, at the box's width, on the box's clock.
+Nothing returns to it — no audio, no head-amp, no control frame of any kind — because it
+runs no handshake to receive one. And its OUTPUTS ARE NOT OURS: an S-0808 on M is splitting
+its 8 outputs from a stream we are not driving, so this segment has no `reac-playback` node,
+publishes no head-amp keys, and an operator cannot route to that box from here. The mode
+switch on the box's front panel is what changes any of that.
+
 ## Files
 
 | File | Role |
