@@ -79,6 +79,9 @@
 #include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
 #include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
 #include "reac_hunt.h"       /* which end of the pairing a heard segment takes */
+#include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */
+#include "reac_master.h"     /* reac_master_build_announce — the knock's one frame */
+#include "reac_tx.h"         /* the knock's raw socket */
 #include "reac_node_recover.h" /* what to do about a node we built that is not there */
 
 #include <pipewire/pipewire.h>
@@ -1330,6 +1333,15 @@ struct sniffer {
 	 * that is served, or a link that goes away, gets a fresh hunt next time. */
 	struct reac_hunt hunt;
 	int undecided_said;         /* the "heard, nothing decides it yet" line, said once */
+	/* THE KNOCK (reac_knock.h). A wire nobody pinned, observed to carry no master, is
+	 * knocked on: one master announce every REAC_KNOCK_PERIOD_NS until something
+	 * answers. A cold box in slave mode transmits NOTHING until a master announces to
+	 * it, so on an unpinned wire this is the only thing that can ever produce the first
+	 * frame. A PINNED interface never knocks — it is already opening its real listener
+	 * on link, with the real pacer behind it. */
+	struct reac_knock knock;
+	int knocks;                 /* 0 = this interface never knocks (pinned, or no TX) */
+	struct reac_tx ktx;         /* the knock's own raw socket; fd -1 when unopened */
 };
 
 struct hearing {
@@ -1384,7 +1396,17 @@ static void on_sniff_io(void *data, int fd, uint32_t mask)
 		 * the table's own: only an observable change earns a line, so a live wire
 		 * costs a handful of lines and not 8000 a second. */
 		struct reac_disco_sighting sight;
-		if (reac_hunt_observe(&sn->hunt, frame, (size_t)n, now, &sight) != 1)
+		int seen = reac_hunt_observe(&sn->hunt, frame, (size_t)n, now, &sight);
+		/* ANY REAC frame ends the knocking, sharper or not — this is the safety half of
+		 * reac_knock.h. A desk's stream means we are late to a master's wire, and one
+		 * more announce of ours over it would be the two-masters fault; a box's answer
+		 * means the hunt has its evidence. Our OWN knock comes back through this same
+		 * capture (AF_PACKET hands back outgoing frames) and is dropped by
+		 * reac_hunt_observe's knock_mac gate, which returns -1 — so it can never stop
+		 * our own knocking or make us slave to ourselves. */
+		if (seen >= 0)
+			reac_knock_heard(&sn->knock);
+		if (seen != 1)
 			continue;
 		fprintf(stderr, "reac-pw: [%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
 		        "%s%s (%u ch): this interface is a segment\n",
@@ -1404,6 +1426,8 @@ static void sniffer_close(struct hearing *h, const char *name)
 	if (sn->io)
 		pw_loop_destroy_source(h->loop, sn->io);
 	reac_capture_close(&sn->cap);
+	if (sn->knocks)
+		reac_tx_close(&sn->ktx);   /* the knock's socket dies with its sniffer */
 	memset(sn, 0, sizeof *sn);
 }
 
@@ -1446,9 +1470,11 @@ static int sniffer_open(struct hearing *h, const char *name)
 	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", name);
 	if (ioctl(sn->cap.fd, SIOCGIFHWADDR, &ifr) == 0)
 		memcpy(sn->mac, ifr.ifr_hwaddr.sa_data, 6);
-	reac_hunt_init(&sn->hunt, sn->mac, monotonic_ns());
+	uint64_t now = monotonic_ns();
+	reac_hunt_init(&sn->hunt, sn->mac, now);
 	enum reac_role pin;
-	if (segment_role_pin(name, &pin))
+	int pinned = segment_role_pin(name, &pin);
+	if (pinned)
 		reac_hunt_pin(&sn->hunt, pin);
 	snprintf(sn->name, IFNAMSIZ, "%s", name);
 	sn->io = pw_loop_add_io(h->loop, sn->cap.fd, SPA_IO_IN, false, on_sniff_io, sn);
@@ -1457,8 +1483,34 @@ static int sniffer_open(struct hearing *h, const char *name)
 		memset(sn, 0, sizeof *sn);
 		return -1;
 	}
-	fprintf(stderr, "reac-pw: [%s] link up — listening for REAC (nothing transmitted "
-	        "until something is heard)\n", name);
+	/* THE KNOCK, on an UNPINNED wire only. A pinned interface is about to open its real
+	 * listener with the real pacer behind it (reac_hunt: a pin is served on link), so a
+	 * knock there would be a second, weaker master on our own wire. An unpinned one gets
+	 * the knock because a cold box cannot speak first — reac_knock.h has the measurement
+	 * and the safety argument. The TX socket is opened HERE, once, rather than per knock:
+	 * a raw socket that cannot be opened is a fact to report at link, not every 2 s. */
+	if (!pinned) {
+		if (reac_tx_open(&sn->ktx, name) == 0) {
+			sn->knocks = 1;
+			reac_knock_init(&sn->knock, sn->mac, now);
+			/* Our own announce comes back through our own capture. Name its source as
+			 * ours or we slave to ourselves (reac_hunt.h, `knock_mac`). */
+			reac_hunt_knock_mac(&sn->hunt, sn->ktx.src);
+		} else {
+			fprintf(stderr, "reac-pw: [%s] link up but no raw TX socket (%s) — this "
+			        "interface can LISTEN and cannot knock, so a cold box on it will "
+			        "not wake\n", name, strerror(errno));
+		}
+	}
+	/* WHICH OF THE THREE THIS INTERFACE IS DOING, said once, at link. A journal that only
+	 * ever says "listening for REAC" cannot distinguish a wire we are driving from a wire
+	 * we are waiting on, and that is what made the 2026-09-08 outage unreadable. */
+	if (pinned && pin == REAC_ROLE_MASTER)
+		fprintf(stderr, "reac-pw: [%s] pinned master — driving on link\n", name);
+	else if (pinned)
+		fprintf(stderr, "reac-pw: [%s] pinned slave — listening for a master\n", name);
+	else
+		fprintf(stderr, "reac-pw: [%s] unpinned — listening for REAC\n", name);
 	return 0;
 }
 
@@ -1631,12 +1683,63 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		if (e->retry_after_ns != 0 && now < e->retry_after_ns)
 			continue;
 
+		/* KNOCK FIRST, then decide. A wire nobody pinned that has carried no REAC frame
+		 * across the masterless observation gets one master announce per period, because
+		 * a cold box in slave mode will never speak first (reac_knock.h). The decision
+		 * below is unchanged: whatever answers, the hunt classifies and rules on it. */
+		if (sn->knocks) {
+			switch (reac_knock_step(&sn->knock, now)) {
+			case REAC_KNOCK_ACT_BEGIN:
+			case REAC_KNOCK_ACT_SEND: {
+				uint8_t kframe[REAC_FRAME_BYTES];
+				int len = reac_master_build_announce(kframe, sn->ktx.src, sn->ktx.counter);
+				/* THE TWO FAILURES ARE NOT THE SAME FAILURE and must not share a
+				 * sentence: a frame that could not be BUILT made no syscall, so
+				 * printing strerror(errno) there reports whatever errno was left over
+				 * from something else (it read "No such file or directory" on the first
+				 * veth run, for a sendto that never happened). */
+				const char *why = NULL;
+				if (len <= 0) {
+					why = "the announce frame could not be built";
+				} else {
+					sn->ktx.counter++;
+					if (reac_tx_emit_frame(&sn->ktx, kframe, (size_t)len) < 0)
+						why = strerror(errno);
+				}
+				if (sn->knock.sent == 1)
+					fprintf(stderr, "reac-pw: [%s] no REAC heard — knocking (announce "
+					        "every %llu s) until something answers\n", sn->name,
+					        (unsigned long long)(REAC_KNOCK_PERIOD_NS / 1000000000ULL));
+				if (why) {
+					/* A knock that did not leave the NIC is not a knock. Reported once
+					 * and then stopped, because a socket that refuses every frame will
+					 * refuse the next thousand and a line per period is a log nobody
+					 * reads. The interface keeps LISTENING. */
+					fprintf(stderr, "reac-pw: [%s] the knock could not be put on the "
+					        "wire (%s) — this interface listens only\n", sn->name, why);
+					sn->knocks = 0;
+					reac_tx_close(&sn->ktx);
+				}
+				break;
+			}
+			case REAC_KNOCK_ACT_END:
+				fprintf(stderr, "reac-pw: [%s] stopped knocking after %lu announce(s) — "
+				        "%s\n", sn->name, sn->knock.sent,
+				        reac_knock_stop_reason(&sn->knock));
+				break;
+			case REAC_KNOCK_ACT_NONE:
+			default:
+				break;
+			}
+		}
+
 		int changed = reac_hunt_step(&sn->hunt, now);
 		switch (sn->hunt.verdict) {
 		case REAC_HUNT_SLAVE:
 			if (changed && sn->hunt.pinned)
-				fprintf(stderr, "reac-pw: [%s] REAC heard, and REAC_ROLE_%s pins this "
-				        "segment as SLAVE — served without a hunt\n", sn->name, sn->name);
+				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as SLAVE — "
+				        "opening the slave side on link, without waiting to be heard\n",
+				        sn->name, sn->name);
 			else if (changed)
 				fprintf(stderr, "reac-pw: [%s] a desk masters this segment "
 				        "(%02x:%02x:%02x:%02x:%02x:%02x) — joining it as SLAVE and "
@@ -1647,8 +1750,9 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			break;
 		case REAC_HUNT_MASTER:
 			if (changed && sn->hunt.pinned)
-				fprintf(stderr, "reac-pw: [%s] REAC heard, and REAC_ROLE_%s pins this "
-				        "segment as MASTER — served without a hunt\n", sn->name, sn->name);
+				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as MASTER — "
+				        "driving on link, with no frame waited for (a cold box has none "
+				        "to give)\n", sn->name, sn->name);
 			else if (changed)
 				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
 				        "present — taking the wire as MASTER: probe, grant, "

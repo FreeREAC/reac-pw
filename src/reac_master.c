@@ -8,6 +8,7 @@
 #include "reac_grant.h"  /* the generated enrollment sweep + slot allocator */
 
 #include <reac/reac.h>   /* REAC_FRAME_BYTES, REAC_END_MARKER_*, ... */
+#include <reac/reac_encode.h> /* reac_downstream_build — the knock's frame body */
 #include <stdlib.h>      /* getenv (the REACPW_* env overrides) */
 #include <string.h>
 
@@ -340,6 +341,37 @@ static int rebuild_grant_sweep(struct reac_master *m, int base, int in_ch)
 	m->alloc = a;
 	m->grant_burst_len = n;
 	return 0;
+}
+
+int reac_master_build_announce(uint8_t *frame, const uint8_t src[6], uint16_t counter)
+{
+	if (!frame || !src)
+		return -1;
+	/* SILENT AUDIO. A knock carries no signal — it is a question, and a box answers it
+	 * on the CONTROL block. Twelve zero samples on each of the forty slots is what
+	 * libreac's builder needs to produce a well-formed frame; the wire sees a legal
+	 * downstream frame that happens to be quiet, which is exactly what a real master's
+	 * announce frame is while it probes an empty wire. */
+	static const float silence[REAC_SAMPLES_PER_PKT] = { 0 };
+	const float *planar[REAC_MAX_CHANNELS];
+	for (int i = 0; i < REAC_MAX_CHANNELS; i++)
+		planar[i] = silence;
+	/* reac_downstream_build answers the frame LENGTH, not a 0/-1 status — reading it as
+	 * a status made this function return -1 on every successful build, and the knock's
+	 * caller then reported a sendto failure with a stale errno for a syscall it had
+	 * never made ("No such file or directory", on the first veth run). */
+	if (reac_downstream_build(frame, (float *const *)planar, REAC_MAX_CHANNELS,
+	                          REAC_SAMPLES_PER_PKT, counter, src) != REAC_FRAME_BYTES)
+		return -1;
+	/* The announce is generated from OUR src MAC and the idle console, exactly as
+	 * enter_probing does — a whole master is initialised for it rather than a second
+	 * hand-rolled cfea, so the knock can never drift from the announce a real listener
+	 * emits. It is ~50 kB of stack for one frame every two seconds on the main loop. */
+	struct reac_master m;
+	reac_master_init(&m, src, NULL, 8000);
+	if (reac_master_stamp(&m, frame, REAC_M_EMIT_ANNOUNCE, 0) != 0)
+		return -1;
+	return REAC_FRAME_BYTES;
 }
 
 const char *reac_master_state_name(enum reac_master_state s)

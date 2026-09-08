@@ -248,13 +248,35 @@ int main(void)
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
 	CHK(h.verdict == REAC_HUNT_MASTER);
 
+	/* ---- J. OUR OWN KNOCK IS NOT EVIDENCE OF ANYBODY. A knock goes out with the
+	 * Roland-OUI stand-in MAC, not this NIC's address, and libreac's capture is a plain
+	 * recv() on AF_PACKET, which hands back locally generated OUTGOING frames too. So the
+	 * frame we put on the wire to wake a box comes straight back at us looking exactly
+	 * like a foreign master at desk geometry — and without this defence a knocking daemon
+	 * reads its own announce, calls the wire taken, and slaves itself to itself on every
+	 * wire in the house. Sabotage check: the SAME frame from a MAC we did not declare
+	 * IS a sighting, so this drops our echo and not the wire. */
+	static const uint8_t KNOCKER[6] = { 0x00, 0x40, 0xab, 0x9f, 0x9e, 0xbe };
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_knock_mac(&h, KNOCKER);
+	CHK(desk_headamp(&h, KNOCKER, t0) == -1);      /* our own knock: not a sighting */
+	CHK(reac_hunt_heard_anything(&h) == 0);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);           /* and above all: NOT slave to ourselves */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_knock_mac(&h, KNOCKER);
+	CHK(desk_headamp(&h, DESK, t0) == 1);          /* the control: a real desk still lands */
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+
 	/* ---- The window itself, stated as the number and its reason: three master announce
 	 * cadences, and a cadence is one second (reac_master.c: announce_tick >= fps). */
 	CHK(REAC_HUNT_WINDOW_NS == 3 * SEC);
 	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
 
 	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
-	       "refused, a pin drives on link with no frame at all, and nothing latches\n",
+	       "refused, a pin drives on link with no frame at all, our own knock is nobody, "
+	       "and nothing latches\n",
 	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
 	return 0;
 }

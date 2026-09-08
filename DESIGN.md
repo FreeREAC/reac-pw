@@ -458,7 +458,9 @@ interface into a SEGMENT (`reac_ifscan`). The role then comes out of the same he
 and no master is taken as master after three master announce cadences (3 s) and the box
 is granted; a stagebox strapped to master is refused with the remedy named and never
 fought; a `REAC_ROLE_<segment>` pin skips the election and the hearing both, and is
-served **on link up** (see "A cold stagebox is silent" below). **The segment's NAME is
+served **on link up**; and an UNPINNED linked wire that has been observed to carry no
+master is KNOCKED on — one master announce every 2 s until something answers (see "A cold
+stagebox is silent" below). **The segment's NAME is
 its interface's**, and so is the node suffix
 (`reac-capture.enp131s0`), which is also the key the per-segment conf is written under —
 `REAC_ROLE_enp131s0`. There is no per-interface file any more; there is one conf and
@@ -476,31 +478,60 @@ problem only because it drove from the first instant with no gate at all. This i
 hearing model's one hole and it is not a small one: two boxes, both mute, forever.
 
 Therefore the model needs an answer that does not depend on being spoken to first, and
-there are exactly two. **The pin is the one this release builds.** `REAC_ROLE_<iface>=master`
-is the operator's explicit answer about that wire, and a setting is not evidence to be
-weighed — so a PINNED interface opens its side the moment it has CARRIER, with no frame
-required: a pinned master probes and announces exactly as 0.4.8 did, a pinned slave opens
-its slave engine and still transmits nothing until a master is heard. Only the UNPINNED
-path is still passive-until-heard, and on an unpinned wire a passive sniffer remains the
-right cost. The journal says which of the three an interface did, in one line at link up:
-`pinned master — driving on link`, `pinned slave — listening for a master`, or
-`unpinned — listening for REAC`.
+there are two. Both are built, because a final-user system has no pins on its first boot
+and the pin alone would leave that system exactly as mute as the rig was.
 
-**OPEN DECISION (the operator's ruling is pending; NOT built here) — the knock.** The
-second answer is a periodic knock: on a LINKED, wired interface that has carried zero
-REAC traffic for N seconds, emit ONE master announce, and if a desk answers, back off to
-slave. It would wake a cold box on a wire nobody configured, which is the whole promise
-of "nobody writes a config file", and it is the only thing that closes the hole for an
-UNPINNED segment. Against it: an announce is a transmission onto a wire we were told
-nothing about. On an office LAN, or a NIC that shares a switch with the house network,
-that is this daemon periodically shouting a Roland-OUI frame at machines that never
-asked, forever, with nothing to hear it — and the passive sniffer's whole argument is
-that listening costs one idle socket and transmitting is what needs a reason. The
-trade-off is therefore: a box that never wakes on an unpinned wire, versus an unsolicited
-announce on every linked NIC in the house. A middle ground exists and is also unruled —
-knock only where the interface has never carried non-REAC traffic either, or only on a
-NIC the operator named. Until it is ruled, an unpinned cold box is woken by pinning its
-interface, and the journal line above is what tells the operator which case they are in.
+**The pin, for a wire the operator answered for.** `REAC_ROLE_<iface>=master` is an
+explicit answer about that wire, and a setting is not evidence to be weighed — so a
+PINNED interface opens its side the moment it has CARRIER, with no frame required: a
+pinned master probes and announces exactly as 0.4.8 did, a pinned slave opens its slave
+engine and still transmits nothing until a master is heard. It never knocks; it is
+already driving.
+
+**The knock, for a wire nobody answered for — the DEFAULT on every unpinned linked wired
+interface.** While such an interface has carrier and has heard no REAC frame, the daemon
+sends ONE master announce every `REAC_KNOCK_PERIOD_NS` (2 s) — the same cfea a probing
+master emits once a second, built by `reac_master_build_announce` from the same
+`reac_master_init` + `reac_master_stamp` pair the pacer uses, so the knock can never
+drift from the real thing. A box's parser learns a master's MAC from exactly that frame
+(`reac_fsm.c`, `is_master_frame`), which is the whole mechanism by which a cold box
+wakes. The first REAC frame heard stops the knocking at once and hands the wire to the
+existing hunt, unchanged: a box answering is the vacant-wire path and we drive; a DESK
+heard means we are late to a master's wire and we slave to it and never fight; a stagebox
+strapped to master is refused with its remedy as before. Two seconds comes from the box's
+own cold-connect timing this codebase already carries — `REAC_FSM_FLOOD_BURST` = 5460
+frames ≈ 1.36 s at the 48 k box cadence — rounded up to the next whole second so a second
+knock never lands inside the answer round the first one started; a bounded jitter of an
+eighth of a period keeps two daemons on one switch from locking step.
+
+**Why the knock is safe, which is the whole argument for transmitting at all (operator
+ruling 2026-09-08).** A REAC master transmits CONTINUOUSLY at the wire cadence: one frame
+per audio slot, ~125 µs at 96 k, ~272 µs at the slowest rate this daemon serves. *A master
+cannot be present and silent.* So before the first knock the interface is listened to for
+`REAC_KNOCK_LISTEN_NS` (500 ms — 1837 consecutive slots at that slowest cadence, and more
+than two of the 200 ms hearing polls), and total silence over that window is PROOF that no
+master is on the port, not a guess. A knock is only ever emitted onto a port that has been
+observed masterless, and from the first frame heard onwards it is never emitted again. The
+knock therefore cannot race a master and cannot make two masters on one segment.
+
+**The accepted cost, ruled by the operator 2026-09-08.** On a linked wired interface with
+no REAC traffic this daemon puts one small 0x8819 broadcast frame on the wire every two
+seconds, indefinitely. On an office LAN that is an unsolicited Roland-OUI frame nothing
+will ever answer. That is the price of a box that wakes with no configuration, and it is
+the price the operator chose over a box that never wakes. Wireless interfaces are excluded
+from the scan entirely and never reach the knock.
+
+**One trap the knock created and closed.** libreac's capture is a plain `recv()` on
+AF_PACKET, which delivers LOCALLY GENERATED OUTGOING frames as well as received ones, and
+a knock goes out with the Roland-OUI stand-in MAC rather than the NIC's own — so without a
+defence the daemon hears its own announce, reads it as a foreign master at desk geometry
+and slaves itself to itself on every wire it knocks on. `reac_hunt_knock_mac` names that
+second address as ours and the echo is dropped before it is classified.
+
+**The journal says which of the three an interface did**, in one line at link up:
+`pinned master — driving on link`, `pinned slave — listening for a master`, or
+`unpinned — listening for REAC`; and, on an unpinned wire, one line when the knocking
+starts and one when it stops with the reason. Never a line per knock.
 
 **What it owes, in this order.**
 
@@ -553,9 +584,10 @@ middle digit does not move again for them.
 | `src/reac_ifscan.{h,c}` | **WHICH interfaces to listen on, and which are segments** — the host's netdev table over rtnetlink, one decision per Ethernet interface. Link is the gate to LISTEN (a passive 0x8819 sniffer, `main.c`'s hearing supervisor), the first REAC frame heard is the gate to SERVE, and link loss drops the segment after a 3 s hold a box power-cycle cannot outlast; `RTM_DELLINK` and a re-enumerated ifindex drop at once. A segment is named after its interface; nothing names one in advance (openmixer's trunk-VLAN spec, amendment 2026-09-02). Pure table + event queue, netlink as a byte source, same shape as `reac_linkmon` |
 | `src/reac_ifname.{h,c}` | a segment's STABLE, bus+physical-address-derived name (`pci1`, `usb2`) — built, tested against real captured `/sys` paths, and DELIBERATELY NOT WIRED into segment identity. A segment IS its interface here and is NAMED after it, and a console generates its per-segment keys and its patch addresses from that published name — so swapping the identity renames every key and every patch on a live rig in one step. The answer to name instability is node names that follow the BOX (owed, see "What 0.5.0 does not do"), not a second name derived from the interface. Kept for that work; wired to nothing today |
 | `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is REFUSED by its frame geometry and left alone. A `REAC_ROLE_<segment>` pin skips all of it and is served ON LINK, with no frame required — a cold slave box is silent until a master announces to it, so waiting for a classifying frame on a pinned wire waits forever (2026-09-08, both rig boxes mute). Nothing latches: the table ages, and the verdict is recomputed. Pure |
+| `src/reac_knock.{h,c}` | **WAKING A COLD BOX ON A WIRE NOBODY PINNED** — the knock. A stagebox in slave mode spends a bounded broadcast flood on PHY-up and then goes silent forever if no master answered it, so hearing alone can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes cabled and carrier-up, zero frames in eight seconds). An unpinned linked interface is listened to for REAC_KNOCK_LISTEN_NS (500 ms = 1837 slots at the slowest cadence; a master fills every slot, so silence there is PROOF of no master) and then sent one master announce every REAC_KNOCK_PERIOD_NS (2 s, from REAC_FSM_FLOOD_BURST, plus bounded jitter) until anything REAC is heard — at which point it stops for good and the hunt rules. Pure: state and two clocks, no socket; main.c owns the TX and reac_master_build_announce the frame |
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
-| `tests/` | 54 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |
+| `tests/` | 55 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |
 | `meson.build`, `meson_options.txt` | build: pipewire/spa + libreac via pkg-config, libreac subproject fallback; no build options |
 | `subprojects/libreac.wrap` + `packagefiles/libreac/meson.build` | libreac as a meson subproject |

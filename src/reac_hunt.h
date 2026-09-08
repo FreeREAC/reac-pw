@@ -88,6 +88,15 @@ struct reac_hunt {
 	 * pacer's own classifier runs; the hunt is a segment too. */
 	struct reac_disco_peer_lock lock;
 	uint8_t our_mac[6];
+	/* OUR KNOCK'S SOURCE, WHICH IS NOT THIS NIC'S ADDRESS. A knock (reac_knock.h) goes
+	 * out with the Roland-OUI stand-in reac_mac builds, not with `our_mac`, and libreac's
+	 * capture is a plain `recv()` on AF_PACKET — which delivers LOCALLY GENERATED
+	 * OUTGOING frames as well as received ones. So without this the daemon hears its own
+	 * announce, classifies it as a foreign master at desk geometry, and slaves itself to
+	 * itself on every wire it knocks on. A watcher that sees its own writes is the oldest
+	 * trap in this codebase; the defence is to name the second address that is ours. */
+	uint8_t knock_mac[6];
+	int have_knock_mac;
 	/* When the window started: the hunt's own opening, re-anchored to the FIRST sighting
 	 * (reac_hunt_observe explains why). Never moved again — a second peer does not buy
 	 * the wire another three seconds. */
@@ -119,6 +128,11 @@ void reac_hunt_init(struct reac_hunt *h, const uint8_t our_mac[6], uint64_t now_
  * `reac_hunt_step` answers with the pinned role on an empty table, so a pinned master
  * drives a wire whose box has not spoken and cannot speak until it does. */
 void reac_hunt_pin(struct reac_hunt *h, enum reac_role role);
+
+/* Tell the hunt the source address our own KNOCK goes out with, so the frame we put on
+ * the wire is never mistaken for somebody else's. Call once, when the knock's TX opens;
+ * without it a knocking daemon slaves to its own announce (see `knock_mac`). */
+void reac_hunt_knock_mac(struct reac_hunt *h, const uint8_t mac[6]);
 
 /* Offer one raw frame. Returns 1 when it was a sighting that changed the table
  * OBSERVABLY (a new peer, a sharper role or model) — which is what deserves a log line;

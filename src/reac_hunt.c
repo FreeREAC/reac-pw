@@ -37,10 +37,27 @@ void reac_hunt_pin(struct reac_hunt *h, enum reac_role role)
 	h->pin = role;
 }
 
+void reac_hunt_knock_mac(struct reac_hunt *h, const uint8_t mac[6])
+{
+	if (!mac)
+		return;
+	memcpy(h->knock_mac, mac, 6);
+	h->have_knock_mac = 1;
+}
+
 int reac_hunt_observe(struct reac_hunt *h, const uint8_t *frame, size_t len,
                       uint64_t now_ns, struct reac_disco_sighting *out)
 {
 	struct reac_disco_sighting s;
+	/* OUR OWN KNOCK IS NOT EVIDENCE OF ANYBODY. The classifier already drops frames
+	 * sourced from this NIC's address, but a knock carries the Roland-OUI stand-in
+	 * (reac_mac.h) so that it cannot collide with a real box — and an AF_PACKET capture
+	 * delivers our own outgoing frames back to us. Left in, the daemon would read its
+	 * own 40-channel announce as a desk mastering the wire and go slave to itself on the
+	 * first wire it knocked on. Dropped here rather than inside reac_disco, which
+	 * answers about the WIRE and has no business knowing what we transmit. */
+	if (h->have_knock_mac && len >= 12 && memcmp(frame + 6, h->knock_mac, 6) == 0)
+		return -1;
 	if (reac_disco_classify_on_segment(&h->lock, frame, len, h->our_mac, &s) != 0)
 		return -1;
 	if (out)
