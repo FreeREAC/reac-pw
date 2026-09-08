@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_master.h"
+#include "reac_envflag.h"   /* one reading of a boolean knob (this one defaults ON) */
 #include "reac_master_fsm.h" /* the pure (state, event) -> edge decision table */
 #include "reac_ctrl.h"   /* reac_ctrl_checksum_apply, REAC_CTRL_* offsets */
 #include "reac_grant.h"  /* the generated enrollment sweep + slot allocator */
@@ -429,11 +430,8 @@ const char *reac_master_drop_name(enum reac_master_drop_reason r)
 static int grant_on_declare(void)
 {
 	static int cached = -1;
-	if (cached < 0) {
-		const char *v = getenv("REACPW_GRANT_ON_DECLARE");
-		cached = (v && (v[0] == '0' || v[0] == 'n' || v[0] == 'N' ||
-		                v[0] == 'f' || v[0] == 'F')) ? 0 : 1;
-	}
+	if (cached < 0)
+		cached = reac_envflag("REACPW_GRANT_ON_DECLARE", 1);
 	return cached;
 }
 

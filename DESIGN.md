@@ -466,7 +466,7 @@ M-5000-internal HOLD-drop trigger (REAC-CONNECTION-FSM.md gap list).
 | `src/reac_grant.{h,c}` | the master's per-channel ENROLLMENT SWEEP (the `cdea 04 03` grant): group A head-amp records + group B, over the HEAD-AMP space |
 | `src/reac_headamp_tx.{h,c}` | **master-role** head-amp SEND model: edge on change + the complete scene at every establishment, plus a periodic re-assert of the SET cells that is built and SHIPPED DISABLED ([docs/HEADAMP-REASSERT-POLICY.md](docs/HEADAMP-REASSERT-POLICY.md)) |
 | `src/reac_headamp_prop.{h,c}` | parse live head-amp changes out of `SPA_PARAM_Props` (`reac.headamp.<ch>.<phantom\|pad\|sens>` over `SPA_PROP_params`) |
-| `src/reac_clock.{h,c}` | the clock-discipline core: role-dependent reference hierarchy, quality grading, and a bounded period DLL. INERT unless `REACPW_CLOCK_FOLLOW` (#75/#77) |
+| `src/reac_clock.{h,c}` | the clock-discipline core: role-dependent reference hierarchy, quality grading, and a bounded period DLL. ON by default since 0.5.0; INERT under `REACPW_CLOCK_FOLLOW=0` (#75/#77) |
 | `src/reac_gain.{h,c}` | pure RT-safe output-gain staging for `reac:playback` (linear `SPA_PROP` volume/mute, ramped) |
 | `src/reac_lat.{h,c}` | `ProcessLatency` smoothing for the sink: the pacer ring depth sawtooths, the advertised contract must not (#152) |
 | `src/reac_link_state.{h,c}` | pure mapping from the master FSM state onto the node-property badge a consumer (openmixer's stagebox card) reads |

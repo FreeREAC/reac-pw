@@ -595,6 +595,16 @@ disco_test = executable('test_reac_disco',
   dependencies : [libreac_dep, m_dep])
 test('reac_disco', disco_test)
 
+# --- unit test: the boolean-knob reader + the clock-discipline default ---------
+# One reading for every boolean knob (REACPW_CLOCK_FOLLOW=0 used to mean ON, because
+# the reader only asked whether the variable was set), and the shipped default of the
+# clock discipline: FOLLOW (arbitration spec S3). Pure; no socket, no PipeWire.
+envflag_test = executable('test_reac_envflag',
+  ['tests/test_reac_envflag.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_envflag', envflag_test)
+
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
 # main.c uses, with no PipeWire / socket. Asserts: default is master; --role slave
