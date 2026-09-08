@@ -332,11 +332,12 @@ test('reac_hearing_finds_a_segment',
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
-# auto-spine §5 gives the unit no flags and has it read REAC_IFACES from the
-# layered conf. An `argc < 2` guard answered before the conf was consulted, so
-# that shape was unreachable and the packaged service could never start. Needs
-# no NIC: it asserts help still works with nothing configured, and that
-# REAC_IFACES gets the daemon past argument handling.
+# auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
+# (2026-09-02 §d) nothing is configured for it either — REAC_IFACES retired with the
+# per-interface files, so the daemon HEARS its segments. An `argc < 2` guard answered
+# usage before any of that was reached, and the packaged service could never start
+# (measured on the rig, 2026-08-31). Needs no NIC: it asserts help still works with
+# nothing configured, and that a bare `reac-pw` gets PAST argument handling.
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
   args : [reac_pw_exe],
