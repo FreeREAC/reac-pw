@@ -61,10 +61,11 @@ if grep -q "\[hear0\] segment up" "$LOG"; then
 	echo "FAIL: hear0 became a segment before anything was heard"; cat "$LOG"; exit 1
 fi
 
-# A master on the peer end: the wire now carries REAC. It speaks from a Roland-OUI
-# address because that is the sniffer's bar for "REAC gear" (reac_disco_classify: the
-# OUI and a checksum-valid control block, never a packet count) — a veth's random MAC
-# would be exactly the non-Roland traffic the bar exists to ignore.
+# A master on the peer end: the wire now carries REAC. The sniffer's bar for "REAC gear"
+# is the PROTOCOL FRAME and nothing else (reac_disco_classify: a 0x8819 frame whose
+# control block verifies, or a filler — never a packet count, and since 2026-09-03 never
+# a MAC's vendor prefix either). The source address below is a real Roland one only
+# because it is what this rig's captures carry; the classifier would take any.
 "$BIN" --live desk0 --tx desk0 --mixer m5000 --rate 96000 --name desk \
        --src-mac 00:40:ab:de:5c:01 >"$PEER" 2>&1 &
 PPID2=$!
@@ -117,11 +118,28 @@ wait_for "\[hear0\] segment up (master, chosen by hearing the wire)" 10 || {
 wait_for "reac-master: .* -> ESTABLISHED" 20 || {
 	echo "FAIL: took the wire as master but never established with the box"
 	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
+# ---- A PIN IS SERVED WITHOUT A HUNT. `REAC_ROLE_<segment>` is an answer about this
+# wire (arbitration S8a: the role is a setting), so it waits only for the wire to BE a
+# segment. The box stays where it is; only the conf changes, and the segment is bounced
+# so the sniffer re-reads it.
+mkdir -p "$CONF/.config/reac-pw"
+echo "REAC_ROLE_hear0=master" > "$CONF/.config/reac-pw/reac-pw.env"
+kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
+ip link set desk0 down; sleep 4.5      # both ends of a veth lose carrier together
+ip link set desk0 up;   sleep 1
+"$BIN" --live desk0 --tx desk0 --role slave --box-channels 16 --name box \
+       --src-mac 00:40:ab:c4:80:41 >"$PEER" 2>&1 &
+BOXPID=$!
+wait_for "\[hear0\] REAC heard, and REAC_ROLE_hear0 pins this segment as MASTER" 15 || {
+	echo "FAIL: the per-segment pin was not honoured on the first classifying frame"
+	tail -20 "$LOG"; exit 1; }
+wait_for "\[hear0\] segment up (master, pinned by REAC_ROLE_<segment>)" 10 || {
+	echo "FAIL: served, but not reported as pinned"; tail -20 "$LOG"; exit 1; }
 kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 
 kill -TERM $PID; wait $PID; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: clean SIGTERM exited $rc"; tail -5 "$LOG"; exit 1; }
-echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the hold,\n    heard again, then took a vacant wire as master and established with the box"
+echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the hold,\n    heard again, took a vacant wire as master and established with the box, and\n    served a per-segment pin without a hunt"
 exit 0
 INNER
 )

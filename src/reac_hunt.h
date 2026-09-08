@@ -91,6 +91,14 @@ struct reac_hunt {
 	 * (reac_hunt_observe explains why). Never moved again — a second peer does not buy
 	 * the wire another three seconds. */
 	uint64_t opened_ns;
+	/* A PER-SEGMENT ROLE THE OPERATOR SET (`REAC_ROLE_<segment>`). A pin is a SETTING
+	 * (arbitration §8a), so it does not wait on evidence about who else is on the wire:
+	 * the segment serves in the pinned role as soon as the interface is a segment at
+	 * all, which is the first classifying frame (trunk-VLAN amendment §a). Whether the
+	 * wire agrees is then the listener's own arbitration to publish — §8c's
+	 * intent-versus-observation disagreement, which only exists once an intent does. */
+	int pinned;
+	enum reac_role pin;
 	enum reac_hunt_verdict verdict;
 	/* The aggregate the current verdict was read from — the rival's MAC and kind for
 	 * the refusal sentence, never re-derived by the caller. */
@@ -100,6 +108,12 @@ struct reac_hunt {
 /* Start hunting on a segment. `our_mac` is this NIC's own address: our echo is not
  * evidence of anybody else. */
 void reac_hunt_init(struct reac_hunt *h, const uint8_t our_mac[6], uint64_t now_ns);
+
+/* Pin this segment's role, from `REAC_ROLE_<segment>`. Call once, before or after the
+ * first frame; `master` and `slave` pin, and `auto` is expressed by not calling this at
+ * all. A pinned hunt never elects and never refuses — it waits only for the wire to BE a
+ * REAC segment. */
+void reac_hunt_pin(struct reac_hunt *h, enum reac_role role);
 
 /* Offer one raw frame. Returns 1 when it was a sighting that changed the table
  * OBSERVABLY (a new peer, a sharper role or model) — which is what deserves a log line;
