@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.0}
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,31 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-3
+- A COLD STAGEBOX NOW WAKES. Measured on the rig at 22:10 with 0.5.0-2: an S-0808 and
+  an S-1608, both freshly powered, both cabled, both NICs carrier up at 100 Mb full,
+  and rx_packets moved by ZERO in five seconds on both with no 0x8819 frame in eight
+  seconds of capture. A REAC box in slave mode spends a bounded broadcast flood on
+  PHY-up and then says nothing at all until a master announces to it, so a box powered
+  before the daemon can never open the "first classifying frame" gate, and both boxes
+  sat mute where 0.4.8 had driven them from the first instant.
+- A segment with a REAC_ROLE_<iface> pin is served ON LINK, with no frame waited for.
+  A pin is the operator's answer about that wire, and requiring a second kind of
+  evidence for it is what left the two pinned masters hunting.
+- An UNPINNED linked wired interface KNOCKS, which is what a system with no pins on
+  its first boot needs: after 500 ms of proven silence -- a master transmits one frame
+  per audio slot and cannot be present and silent, so silence over 1837 consecutive
+  slots is proof the port is masterless -- one master announce goes out every 2 s until
+  anything REAC is heard. The first frame heard stops it for good; the existing hunt
+  then rules, so a box answering is driven, a desk heard is slaved to and never fought,
+  and a stagebox strapped to master is refused with its remedy as before. The accepted
+  cost, ruled by the operator: one small broadcast frame every two seconds on a linked
+  wired port that carries no REAC traffic. Wireless is excluded from the scan as ever.
+- The journal says which of the three an interface did, once, at link: "pinned master
+  -- driving on link", "pinned slave -- listening for a master", or "unpinned --
+  listening for REAC"; plus one line when knocking starts and one when it stops with
+  the reason, and never a line per knock.
+
 * Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-2
 - The recovery for a capture node that never reached the graph now RE-BUILDS it: the
   ensure it went through only rebuilds on a width or label change, and neither moves
