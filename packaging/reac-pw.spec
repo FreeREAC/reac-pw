@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.0}
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,21 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-2
+- The recovery for a capture node that never reached the graph now RE-BUILDS it: the
+  ensure it went through only rebuilds on a width or label change, and neither moves
+  when a node simply fails to appear, so the node is destroyed first. The retry is
+  bounded -- a 2 s grace, a window that doubles to 32 s, five attempts, then one line
+  naming PipeWire's reason -- and the "autodetected ... -> reac-capture N in" line is
+  said once per box and only once the node is really there.
+- A rebuilt capture node is re-stamped with the box's badges. The sink's badge push
+  rides a change guard, so a recovered node came back reading box-model "none",
+  width "0x0" to every client.
+- No stdio on the realtime callback: the graph-clock diagnostic is composed into a
+  fixed buffer and printed by the main loop, and the pacer the RT path reads is set
+  before the stream is connected.
+- An unusable graph driver publishes nothing instead of "not present", so a segment's
+  two nodes in different driver groups cannot flap the reference between them.
 * Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-1
 - NOTHING IS CONFIGURED. Started with no flags and an empty conf, the daemon finds
   its own segments -- every linked Ethernet interface is sniffed passively, and the
