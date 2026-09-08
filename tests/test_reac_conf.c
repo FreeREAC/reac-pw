@@ -56,7 +56,6 @@ static void rm(const char *rel)
 	unlink(path);
 }
 
-#define SEG  ".config/reac-pw/eth0.env"
 #define HOST ".config/reac-pw/reac-pw.env"
 #define LAST ".config/openmixer/reac.env"
 
@@ -91,28 +90,42 @@ int main(void)
 	assert(look(v, sizeof v) == REAC_CONF_HOST);
 	assert(!strcmp(v, "48000"));
 
-	/* Layer 3 over 4 over 5 — the per-segment file is what a two-segment rig
-	 * needs, and it must beat the per-host one. */
-	wr(SEG, "REAC_RATE=44100\n");
+	/* Layer 3 over 4 over 5 — the per-segment KEY is what a two-segment rig
+	 * needs, and it must beat the bare key in the same file. */
+	wr(HOST, "REAC_RATE=48000\nREAC_RATE_eth0=44100\n");
 	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
 	assert(!strcmp(v, "44100"));
 
-	/* Layer 2 over everything below it. */
+	/* The per-segment key beats the bare key EVEN IN THE ENVIRONMENT: systemd's
+	 * EnvironmentFile= exports the whole of reac-pw.env, so a bare REAC_RATE in
+	 * the environment is the same file speaking, not an operator overriding it. */
 	setenv("REAC_RATE", "96000", 1);
-	assert(look(v, sizeof v) == REAC_CONF_ENV);
+	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
+	assert(!strcmp(v, "44100"));
+	setenv("REAC_RATE_eth0", "96000", 1);
+	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
 	assert(!strcmp(v, "96000"));
+	unsetenv("REAC_RATE_eth0");
 	unsetenv("REAC_RATE");
 	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
+	assert(!strcmp(v, "44100"));
 
-	/* A per-segment file for a DIFFERENT segment must not answer. The two
-	 * segments on this rig are not interchangeable and neither are their files. */
+	/* Layer 2 over everything below it, for a segment with no key of its own. */
+	setenv("REAC_RATE", "96000", 1);
+	assert(reac_conf_lookup("REAC_RATE", "eth9", home, v, sizeof v) == REAC_CONF_ENV);
+	assert(!strcmp(v, "96000"));
+	unsetenv("REAC_RATE");
+
+	/* A per-segment key for a DIFFERENT segment must not answer. The two
+	 * segments on this rig are not interchangeable and neither are their keys. */
 	assert(reac_conf_lookup("REAC_RATE", "eth9", home, v, sizeof v) == REAC_CONF_HOST);
-	/* ...and with no interface at all, layer 3 is skipped rather than guessed. */
+	assert(!strcmp(v, "48000"));
+	/* ...and with no segment at all, layer 3 is skipped rather than guessed. */
 	assert(reac_conf_lookup("REAC_RATE", NULL, home, v, sizeof v) == REAC_CONF_HOST);
 
 	/* An EMPTY value is not an answer: a key someone blanked out is a key they
 	 * turned off. It must fall THROUGH to the next layer, not return "". */
-	wr(SEG, "REAC_RATE=\n");
+	wr(HOST, "REAC_RATE=48000\nREAC_RATE_eth0=\n");
 	assert(look(v, sizeof v) == REAC_CONF_HOST);
 	assert(!strcmp(v, "48000"));
 	setenv("REAC_RATE", "", 1);
@@ -120,26 +133,25 @@ int main(void)
 	unsetenv("REAC_RATE");
 
 	/* Comments, blanks, quotes, `export`, and surrounding whitespace. */
-	wr(SEG, "\n # REAC_RATE=11111\n\n  export  REAC_RATE = \"96000\"  \n");
+	wr(HOST, "\n # REAC_RATE_eth0=11111\n\n  export  REAC_RATE_eth0 = \"96000\"  \n");
 	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
 	assert(!strcmp(v, "96000"));
-	wr(SEG, "REAC_RATE='44100'\n");
+	wr(HOST, "REAC_RATE_eth0='44100'\n");
 	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
 	assert(!strcmp(v, "44100"));
 
-	/* A key that merely STARTS with ours must not match. */
-	wr(SEG, "REAC_RATE_OVERRIDE=11111\n");
-	assert(look(v, sizeof v) == REAC_CONF_HOST);
+	/* A key that merely STARTS with ours must not match — neither the bare one
+	 * nor the suffixed one. */
+	wr(HOST, "REAC_RATE_OVERRIDE=11111\nREAC_RATE_eth0_OVERRIDE=22222\n");
+	assert(look(v, sizeof v) == REAC_CONF_LAST_RESORT);
 
 	/* Last assignment in a file wins, as a shell and EnvironmentFile both do. */
-	wr(SEG, "REAC_RATE=44100\nREAC_RATE=96000\n");
+	wr(HOST, "REAC_RATE_eth0=44100\nREAC_RATE_eth0=96000\n");
 	assert(look(v, sizeof v) == REAC_CONF_SEGMENT);
 	assert(!strcmp(v, "96000"));
 
 	/* An unreadable/absent layer is a MISS, not a failure that hides the ones
 	 * below it. Removing the top file must expose the next, not return NONE. */
-	rm(SEG);
-	assert(look(v, sizeof v) == REAC_CONF_HOST);
 	rm(HOST);
 	assert(look(v, sizeof v) == REAC_CONF_LAST_RESORT);
 	rm(LAST);

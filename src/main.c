@@ -33,18 +33,25 @@
  * host faces, spawning one internal LISTENER per interface against ONE shared
  * PipeWire main loop — the daemon-per-NIC shape (a templated unit per
  * interface) was considered and REJECTED there. `--live` may be repeated (or
- * given as a comma list) to run several segments from one command line; the
- * packaged service gives none at all and reads which NICs face REAC from the
- * layered conf (REAC_IFACES) — the ONE config-once fact auto-spine names.
- * Only the FIRST segment honours the per-box flags below (--tx/--role/
+ * given as a comma list) to run several segments from one command line.
+ *
+ * THE PACKAGED SERVICE GIVES NO INTERFACE AT ALL, AND NONE IS CONFIGURED
+ * (openmixer's 2026-08-23-reac-trunk-vlan-daemon.md §7-§9, amendment
+ * 2026-09-02): with no --live/--pcap the daemon HEARS its segments. Every
+ * Ethernet interface with link is sniffed by a passive 0x8819 socket; the
+ * first frame that classifies as REAC gear turns that interface into a
+ * segment and a listener opens on it; link loss drops it after a hold long
+ * enough to ride out a box power-cycle. The segment is NAMED after its
+ * interface, and nothing about it lives in a file before it is heard.
+ *
+ * Only the FIRST --live segment honours the per-box flags below (--tx/--role/
  * --mixer/--name/--headamp/--box/--src-mac/--box-channels/--box-model),
- * exactly as every invocation before this one; every other segment reads its
- * own REAC_TX/REAC_ROLE/REAC_MIXER/REAC_NAME/REAC_HEADAMP/REAC_BOX_CHANNELS
- * from `~/.config/reac-pw/<iface>.env` (reac_conf.h's per-segment layer,
- * already generic key/value — nothing there needed to change). This is what
- * lets a single-interface invocation stay BYTE-IDENTICAL to today: a lone
- * listener is the same code path it always was, just reached through an
- * array of one. */
+ * exactly as every invocation before this one; every other segment — and
+ * every HEARD one — reads its own REAC_TX/REAC_ROLE/REAC_MIXER/REAC_NAME/
+ * REAC_HEADAMP/REAC_BOX_CHANNELS from the layered conf, keyed by its own name
+ * (reac_conf.h: `REAC_ROLE_<segment>` above `REAC_ROLE`). This is what lets a
+ * single-interface invocation stay BYTE-IDENTICAL to today: a lone listener
+ * is the same code path it always was, just reached through an array of one. */
 
 #include "reac_ring.h"
 #include "reac_rx.h"
@@ -62,9 +69,14 @@
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
 #include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
 #include "reac_seglock.h"    /* one master per segment, across processes */
+#include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
+#include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
+#include <reac/reac_capture.h>
+#include <sys/ioctl.h>
+#include <time.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -355,7 +367,7 @@ static int parse_headamp_list(const char *s, struct reac_headamp_setting *out, i
 static void usage(const char *p)
 {
 	fprintf(stderr,
-	  "usage: %s (--pcap FILE | --live IFNAME) [--role master|slave] [--rate R] [--tx IFNAME]\n"
+	  "usage: %s [--pcap FILE | --live IFNAME] [--role master|slave] [--rate R] [--tx IFNAME]\n"
 	  "         [--mixer M] [--box MODEL[:LABEL]] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
 	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW).\n"
@@ -393,26 +405,26 @@ static void usage(const char *p)
 	  "                roles: the --tx NIC's OWN hardware address, verbatim — our frames\n"
 	  "                carry OUR identity (real boxes and desks sync to it; a borrowed\n"
 	  "                MAC collides with the real device and makes captures ambiguous).\n"
+	  "no --live and no --pcap: the packaged-service shape. The daemon HEARS its segments:\n"
+	  "  every Ethernet interface with link is sniffed (a passive 0x8819 socket), the first\n"
+	  "  REAC frame heard makes that interface a segment named after it, and link loss\n"
+	  "  drops it after a %d s hold. Nothing names an interface in advance.\n"
 	  "auto-spine (ONE daemon, N listeners — 2026-08-20-reac-auto-spine.md §5): only the\n"
-	  "  FIRST segment honours the per-box flags above. Every OTHER segment — and a daemon\n"
-	  "  started with NO --live/--pcap at all, the packaged-service shape — reads its own\n"
-	  "  settings from the layered conf, keyed by ITS interface\n"
-	  "  (~/.config/reac-pw/<iface>.env; reac_conf.h's precedence, unchanged):\n"
+	  "  FIRST --live segment honours the per-box flags above. Every OTHER segment, and\n"
+	  "  every heard one, reads its own settings from the layered conf, keyed by its name:\n"
+	  "  REAC_<KEY>_<segment> in ~/.config/reac-pw/reac-pw.env above the bare REAC_<KEY>\n"
+	  "  (reac_conf.h's precedence):\n"
 	  "    REAC_TX=IFNAME             default: the same interface (this rig's masters\n"
 	  "                               always tx == live)\n"
 	  "    REAC_ROLE=master|slave     default: master\n"
 	  "    REAC_MIXER=m200|m300|m5000 default: m200\n"
 	  "    REAC_NAME=NAME             node suffix; default: the interface name (the FIRST\n"
-	  "                               segment defaults to bare names instead, matching\n"
-	  "                               every invocation before this one)\n"
+	  "                               --live segment defaults to bare names instead,\n"
+	  "                               matching every invocation before this one)\n"
 	  "    REAC_HEADAMP=\"CH:PARAM:VALUE ...\"  the head-amp re-assertion table, space or\n"
 	  "                               comma separated (replaces N --headamp flags)\n"
 	  "    REAC_BOX_CHANNELS=N        slave role: our own input width; default 16\n"
 	  "  and REAC_RATE per segment exactly as a single-segment run already resolves it.\n"
-	  "  Which interfaces to serve with NO --live/--pcap at all comes from REAC_IFACES (a\n"
-	  "  comma/space list) at the env/per-host/last-resort conf layers — the ONE fact a\n"
-	  "  fixed installation configures once (there is no segment yet to key a per-segment\n"
-	  "  lookup on, so only those three layers can answer it).\n"
 	  "environment (see docs/ENV-KNOBS.md; unset = default behavior, byte-identical):\n"
 	  "  REACPW_GRANT_ON_DECLARE=0  master role: opt OUT of ending the grant dwell on the\n"
 	  "                box's declaration, restoring the full wall-clock hold. The dwell is\n"
@@ -421,6 +433,9 @@ static void usage(const char *p)
 	  "                the built-in ~1.6 s; a real M-200 holds a cold box ~27 s)\n"
 	  "  REAC_DEBUG=1  opt-in RX/source telemetry on stderr (~every 2 s: frame/dup/gap\n"
 	  "                counters, ring fill, active channels)\n"
+	  "  REAC_IFACES_ALLOW_WIRELESS=ifname[,ifname...]|*  autodetect: opt a wireless\n"
+	  "                NIC INTO the scan (default: every wireless NIC excluded — Wi-Fi's\n"
+	  "                jitter has no repacer here)\n"
 	  "  REACPW_NO_ENROLL=1  master role: suppress the pre-grant ENROLL for a box whose\n"
 	  "                width is already known (no real desk sends it to an S-1608). A\n"
 	  "                RIG-TEST SWITCH, not a new default — see docs/ENV-KNOBS.md.\n"
@@ -455,7 +470,8 @@ static void usage(const char *p)
 	  "                that fills its own ring, and the xruns land on the audio\n"
 	  "                interface, not here. Raise it only on a host whose graph runs\n"
 	  "                somewhere else; see src/reac_rt.h for the ladder.\n",
-	  p, REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX);
+	  p, REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX,
+	  (int)(REAC_IFSCAN_DOWN_HOLD_NS / 1000000000ULL));
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
@@ -541,6 +557,9 @@ struct listener_cfg {
 	int n_headamps;
 	enum reac_conf_layer rate_layer;    /* ARGV when a whole-invocation --rate forced it */
 	char tag[IFNAMSIZ + 4];             /* "[iface] " once N>1, "" for a lone listener */
+	char iface_buf[IFNAMSIZ];           /* a heard segment's own interface name: rxcfg.source
+	                                     * points here, because the table it was heard from
+	                                     * reuses its slots */
 };
 
 struct listener {
@@ -604,7 +623,9 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 {
 	listener_cfg_defaults(c);
 	c->rxcfg.kind = REAC_RX_LIVE;
-	c->rxcfg.source = iface;
+	snprintf(c->iface_buf, sizeof c->iface_buf, "%s", iface);
+	c->rxcfg.source = c->iface_buf;
+	iface = c->iface_buf;
 
 	char v[256];
 
@@ -1154,6 +1175,311 @@ static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, en
 	                               : reac_role_engine_of_slave(L->slave_open, 0)));
 }
 
+/* ---- HEARING: the segments are discovered, not declared ---------------------
+ *
+ * openmixer's 2026-08-23-reac-trunk-vlan-daemon.md §7-§9, amendment 2026-09-02.
+ * reac_ifscan keeps the interface table and says what to do; this block owns
+ * what the verbs refer to — one passive sniffer per linked interface, and the
+ * listener slots a heard segment is served from — and runs on the main loop
+ * only. Sniffers and the netlink watch only FEED the table from their io
+ * callbacks; the table's events are applied from the 200 ms poll, so no
+ * source is ever destroyed from inside its own callback. */
+
+struct sniffer {
+	char name[IFNAMSIZ];        /* "" = free slot */
+	struct reac_capture cap;
+	struct spa_source *io;
+	uint8_t mac[6];             /* the NIC's own address: our echo, if any, is not a sighting */
+	unsigned long frames;       /* 0x8819 frames read, whether or not they classified */
+};
+
+struct hearing {
+	int enabled;
+	struct reac_ifscan scan;
+	struct spa_source *nl_io;
+	struct sniffer sniff[REAC_IFSCAN_MAX];
+	struct listener *listeners;
+	int n_slots;
+	struct pw_loop *loop;
+	int forced_rate;            /* a whole-invocation --rate, applied to every heard segment */
+	unsigned long served, dropped;
+};
+
+static struct hearing g_hear;
+
+static uint64_t monotonic_ns(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static struct sniffer *sniffer_find(struct hearing *h, const char *name)
+{
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++)
+		if (h->sniff[i].name[0] && strcmp(h->sniff[i].name, name) == 0)
+			return &h->sniff[i];
+	return NULL;
+}
+
+/* A sniffer's socket is readable: read it dry, classify, and tell the table
+ * about the first frame that IS REAC gear. Never transmits, never touches a
+ * listener. */
+static void on_sniff_io(void *data, int fd, uint32_t mask)
+{
+	(void)fd;
+	struct sniffer *sn = data;
+	if (!(mask & SPA_IO_IN))
+		return;
+	uint8_t frame[2048];
+	for (int i = 0; i < 64; i++) {
+		long n = reac_capture_next(&sn->cap, frame, sizeof frame);
+		if (n <= 0)
+			break;
+		sn->frames++;
+		struct reac_disco_sighting sight;
+		if (reac_disco_classify(frame, (size_t)n, sn->mac, &sight) != 0)
+			continue;
+		const struct reac_ifscan_entry *e = reac_ifscan_find(&g_hear.scan, sn->name);
+		if (e && e->state == REAC_IFSCAN_LINKED &&
+		    (e->retry_after_ns == 0 || monotonic_ns() >= e->retry_after_ns))
+			fprintf(stderr, "reac-pw: [%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
+			        "%s%s (%u ch): this interface is a segment\n",
+			        sn->name, reac_disco_role_name(sight.role),
+			        sight.mac[0], sight.mac[1], sight.mac[2],
+			        sight.mac[3], sight.mac[4], sight.mac[5],
+			        sight.model ? " " : "", sight.model ? sight.model->display : "",
+			        sight.channels);
+		reac_ifscan_heard(&g_hear.scan, sn->name, monotonic_ns());
+		break;
+	}
+}
+
+static void sniffer_close(struct hearing *h, const char *name)
+{
+	struct sniffer *sn = sniffer_find(h, name);
+	if (!sn)
+		return;
+	if (sn->io)
+		pw_loop_destroy_source(h->loop, sn->io);
+	reac_capture_close(&sn->cap);
+	memset(sn, 0, sizeof *sn);
+}
+
+static int sniffer_open(struct hearing *h, const char *name)
+{
+	if (sniffer_find(h, name))
+		return 0;
+	struct sniffer *sn = NULL;
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++)
+		if (!h->sniff[i].name[0]) { sn = &h->sniff[i]; break; }
+	if (!sn)
+		return -1;
+	memset(sn, 0, sizeof *sn);
+	if (reac_capture_open(&sn->cap, name) != 0) {
+		fprintf(stderr, "reac-pw: [%s] link is up but the 0x8819 sniffer could not open: %s "
+		        "— this interface is not watched\n", name, strerror(errno));
+		memset(sn, 0, sizeof *sn);
+		return -1;
+	}
+	reac_capture_set_nonblock(&sn->cap, 1);
+	struct ifreq ifr;
+	memset(&ifr, 0, sizeof ifr);
+	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", name);
+	if (ioctl(sn->cap.fd, SIOCGIFHWADDR, &ifr) == 0)
+		memcpy(sn->mac, ifr.ifr_hwaddr.sa_data, 6);
+	snprintf(sn->name, IFNAMSIZ, "%s", name);
+	sn->io = pw_loop_add_io(h->loop, sn->cap.fd, SPA_IO_IN, false, on_sniff_io, sn);
+	if (!sn->io) {
+		reac_capture_close(&sn->cap);
+		memset(sn, 0, sizeof *sn);
+		return -1;
+	}
+	fprintf(stderr, "reac-pw: [%s] link up — listening for REAC (nothing transmitted "
+	        "until something is heard)\n", name);
+	return 0;
+}
+
+static struct listener *hearing_listener(struct hearing *h, const char *name)
+{
+	for (int i = 0; i < h->n_slots; i++) {
+		struct listener *L = &h->listeners[i];
+		if (L->opened && L->cfg.rxcfg.source && strcmp(L->cfg.rxcfg.source, name) == 0)
+			return L;
+	}
+	return NULL;
+}
+
+/* Open the full listener on a heard segment: the same body every --live
+ * segment gets, configured from the layered conf under the segment's own
+ * name, with no first-is-bare exception — bare node names belong to the
+ * --live dev shape alone, so two heard segments can never collide. */
+static void hearing_serve(struct hearing *h, const char *name)
+{
+	struct listener *L = NULL;
+	for (int i = 0; i < h->n_slots; i++)
+		if (!h->listeners[i].opened) { L = &h->listeners[i]; break; }
+	if (!L) {
+		fprintf(stderr, "reac-pw: [%s] REAC heard but every listener slot (%d) is in use — "
+		        "this segment is NOT served (bounded, reported)\n", name, h->n_slots);
+		reac_ifscan_serve_failed(&h->scan, name, monotonic_ns());
+		return;
+	}
+	memset(L, 0, sizeof *L);
+	listener_cfg_from_conf(&L->cfg, name, 0);
+	if (h->forced_rate != 0) {
+		L->cfg.rxcfg.forced_rate = h->forced_rate;
+		L->cfg.rate_layer = REAC_CONF_ARGV;
+	}
+	snprintf(L->cfg.tag, sizeof L->cfg.tag, "[%s] ", name);
+	reac_role_swap_init(&L->role_swap, L->cfg.role);
+	/* listener_open cleans up after its own refusal (its contract); a feeder
+	 * that will not start leaves an opened listener to close, as in main(). */
+	int up = listener_open(L, h->loop) == 0;
+	if (up && reac_rx_start(&L->rx) != 0) {
+		listener_close(L, h->loop);
+		up = 0;
+	}
+	if (!up) {
+		memset(L, 0, sizeof *L);
+		fprintf(stderr, "reac-pw: [%s] heard, but the segment did not come up — sniffing "
+		        "again in %d s\n", name, (int)(REAC_IFSCAN_RETRY_NS / 1000000000ULL));
+		reac_ifscan_serve_failed(&h->scan, name, monotonic_ns());
+		return;
+	}
+	L->opened = 1;
+	L->rx_started = 1;
+	h->served++;
+	fprintf(stderr, "reac-pw: [%s] segment up (%s) — %lu served so far\n", name,
+	        reac_role_name(L->cfg.role), h->served);
+}
+
+static void hearing_drop(struct hearing *h, const char *name, const char *why)
+{
+	struct listener *L = hearing_listener(h, name);
+	if (!L)
+		return;
+	listener_close(L, h->loop);
+	L->opened = 0;
+	L->rx_started = 0;
+	h->dropped++;
+	fprintf(stderr, "reac-pw: [%s] segment dropped — %s\n", name, why);
+}
+
+/* Do what the table says. Main loop only. */
+static void hearing_apply(struct hearing *h)
+{
+	struct reac_ifscan_event ev;
+	while (reac_ifscan_next(&h->scan, &ev)) {
+		const struct reac_ifscan_entry *e = reac_ifscan_find(&h->scan, ev.name);
+		switch (ev.verb) {
+		case REAC_IFSCAN_LISTEN:
+			sniffer_open(h, ev.name);
+			break;
+		case REAC_IFSCAN_UNLISTEN:
+			sniffer_close(h, ev.name);
+			fprintf(stderr, "reac-pw: [%s] link down — no longer listening\n", ev.name);
+			break;
+		case REAC_IFSCAN_SERVE:
+			sniffer_close(h, ev.name);
+			hearing_serve(h, ev.name);
+			break;
+		case REAC_IFSCAN_DROP:
+			hearing_drop(h, ev.name, e ? "link down past the hold, or the interface went away"
+			                           : "the interface went away");
+			break;
+		case REAC_IFSCAN_KEPT:
+			fprintf(stderr, "reac-pw: [%s] link back inside the hold — segment kept "
+			        "(flaps so far: %u)\n", ev.name, e ? e->flaps : 0);
+			break;
+		case REAC_IFSCAN_NONE:
+			break;
+		}
+	}
+	if (h->scan.dropped_ev) {
+		fprintf(stderr, "reac-pw: hearing: %lu interface events could not be queued\n",
+		        h->scan.dropped_ev);
+		h->scan.dropped_ev = 0;
+	}
+	if (h->scan.unbounded) {
+		fprintf(stderr, "reac-pw: hearing: %lu Ethernet interfaces beyond the %d tracked — "
+		        "NOT watched (bounded, reported)\n", h->scan.unbounded, REAC_IFSCAN_MAX);
+		h->scan.unbounded = 0;
+	}
+}
+
+static void on_hearing_nl_io(void *data, int fd, uint32_t mask)
+{
+	(void)fd;
+	struct hearing *h = data;
+	if (mask & SPA_IO_IN)
+		reac_ifscan_drain(&h->scan, monotonic_ns());
+}
+
+/* The 200 ms poll's share: expire holds, apply whatever the table queued. A
+ * listener whose capture socket lost its interface is a DROP here, not a
+ * process exit — failure is isolated to its segment (§9). */
+static void hearing_poll(struct hearing *h)
+{
+	if (!h->enabled)
+		return;
+	uint64_t now = monotonic_ns();
+	for (int i = 0; i < h->n_slots; i++) {
+		struct listener *L = &h->listeners[i];
+		if (L->opened && L->rx_started &&
+		    atomic_load_explicit(&L->rx.iface_lost, memory_order_acquire))
+			reac_ifscan_gone(&h->scan, L->cfg.rxcfg.source, 0, now);
+	}
+	reac_ifscan_tick(&h->scan, now);
+	hearing_apply(h);
+}
+
+static int hearing_start(struct hearing *h, struct pw_loop *loop, struct listener *slots,
+                         int n_slots, int forced_rate)
+{
+	memset(h, 0, sizeof *h);
+	h->loop = loop;
+	h->listeners = slots;
+	h->n_slots = n_slots;
+	h->forced_rate = forced_rate;
+	uint64_t now = monotonic_ns();
+	if (reac_ifscan_open(&h->scan, now) != 0) {
+		fprintf(stderr, "reac-pw: cannot watch the interface table over netlink: %s\n",
+		        strerror(errno));
+		return -1;
+	}
+	h->nl_io = pw_loop_add_io(loop, reac_ifscan_fd(&h->scan), SPA_IO_IN, false,
+	                          on_hearing_nl_io, h);
+	if (!h->nl_io) {
+		reac_ifscan_close(&h->scan);
+		return -1;
+	}
+	h->enabled = 1;
+	int eth = 0;
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++)
+		if (h->scan.ifs[i].state != REAC_IFSCAN_ABSENT)
+			eth++;
+	fprintf(stderr, "reac-pw: hearing: %d Ethernet interface(s), %d with link — a segment "
+	        "appears where REAC is heard, and drops %d s after link is lost\n",
+	        eth, reac_ifscan_count(&h->scan, REAC_IFSCAN_LINKED),
+	        (int)(REAC_IFSCAN_DOWN_HOLD_NS / 1000000000ULL));
+	hearing_apply(h);
+	return 0;
+}
+
+static void hearing_stop(struct hearing *h)
+{
+	if (!h->enabled)
+		return;
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++)
+		if (h->sniff[i].name[0])
+			sniffer_close(h, h->sniff[i].name);
+	if (h->nl_io)
+		pw_loop_destroy_source(h->loop, h->nl_io);
+	reac_ifscan_close(&h->scan);
+	h->enabled = 0;
+}
+
 struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
 
 /* Set when a segment's capture socket lost its interface (see reac_rx.h's
@@ -1191,6 +1517,8 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		 * on a segment whose interface is gone. */
 		if (L->rx_started &&
 		    atomic_load_explicit(&L->rx.iface_lost, memory_order_acquire)) {
+			if (g_hear.enabled)
+				continue;   /* hearing_poll drops this one segment and keeps the rest */
 			g_iface_lost = 1;
 			pw_main_loop_quit(g_loop);
 			return;
@@ -1219,6 +1547,7 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		if (hz > 0)
 			listener_reopen_at_rate(L, c->loop, hz);
 	}
+	hearing_poll(&g_hear);
 }
 
 
@@ -1229,22 +1558,11 @@ int main(int argc, char **argv)
 	 * yet — answering that with the CAP_NET_RAW refusal hides the very sentence
 	 * that tells them how to fix it. Answered before the preflight, which then
 	 * guards every real start unchanged. */
-	/* NO ARGUMENTS IS THE PACKAGED SHAPE, NOT AN ERROR — but it is only a start when
-	 * something is CONFIGURED. auto-spine §5 gives the unit no flags at all and has
-	 * it read REAC_IFACES from the layered conf; refusing an empty command line
-	 * outright made that shape unreachable and the config-once design dead on
-	 * arrival. Asking the conf HERE keeps the property the old guard protected:
-	 * an operator running `reac-pw` on a box with nothing set up gets the usage
-	 * text, not the CAP_NET_RAW refusal — help is pure text and must never need a
-	 * capability. With REAC_IFACES set we fall through into the ordinary path and
-	 * the preflight guards the real start unchanged. */
-	if (argc < 2) {
-		char probe[512];
-		if (reac_conf_lookup("REAC_IFACES", NULL, NULL, probe, sizeof probe) == REAC_CONF_NONE) {
-			usage(argv[0]);
-			return 2;
-		}
-	}
+	/* NO ARGUMENTS IS THE PACKAGED SHAPE, NOT AN ERROR, AND NOTHING NEEDS TO BE
+	 * CONFIGURED FOR IT: the daemon hears its segments (see HEARING below). An
+	 * operator who wants the text asks for it with --help, which is answered
+	 * before the preflight because help is pure text and must never need a
+	 * capability. */
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
 			usage(argv[0]);
@@ -1443,20 +1761,9 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (!rxcfg.source) {
-		/* Neither --pcap nor --live: the packaged-service shape (auto-spine
-		 * §5 — "the unit needs no per-box flags"). Pull the ONE config-once
-		 * fact — which NICs face REAC — from the layered conf. There is no
-		 * segment yet to key a per-segment lookup on, so only the process
-		 * environment / per-host / last-resort layers can answer it. */
-		char v[512];
-		if (reac_conf_lookup("REAC_IFACES", NULL, NULL, v, sizeof v) != REAC_CONF_NONE)
-			n_extra_ifaces = split_list(v, extra_ifaces, REAC_PW_MAX_LISTENERS);
-		if (n_extra_ifaces == 0) {
-			usage(argv[0]);
-			return 2;
-		}
-	}
+	/* Neither --pcap nor --live: the packaged-service shape. Nothing is read from
+	 * anywhere to decide which interfaces to serve — the daemon HEARS them. */
+	int hearing = rxcfg.source == NULL;
 	if (reac_role_validate(role, tx_if != NULL) != 0) {
 		fprintf(stderr, "reac-pw: --role slave needs --tx IFNAME (the REAC NIC for the "
 		                "upstream return + handshake)\n");
@@ -1483,8 +1790,11 @@ int main(int argc, char **argv)
 	/* ---- assemble the listener array --------------------------------- */
 	struct listener listeners[REAC_PW_MAX_LISTENERS];
 	int n_listeners = 0;
+	memset(listeners, 0, sizeof listeners);
 
-	if (rxcfg.source && rxcfg.kind == REAC_RX_PCAP) {
+	if (hearing) {
+		/* The slots are filled as segments are heard; see hearing_serve. */
+	} else if (rxcfg.source && rxcfg.kind == REAC_RX_PCAP) {
 		/* Exactly today: one listener, pcap replay, the CLI template verbatim. */
 		n_listeners = 1;
 		struct listener_cfg *c = &listeners[0].cfg;
@@ -1504,22 +1814,12 @@ int main(int argc, char **argv)
 		c->n_headamps = n_headamps;
 		c->rate_layer = rate_layer;
 	} else {
-		/* LIVE: either the operator named interface(s) on the command line
-		 * (have_live), or REAC_IFACES supplied them above with no CLI at all. */
+		/* LIVE: the operator named interface(s) on the command line. */
 		const char *ifaces[REAC_PW_MAX_LISTENERS];
 		int n_ifaces = 0;
-		if (have_live) {
-			ifaces[n_ifaces++] = rxcfg.source;
-			for (int k = 0; k < n_extra_ifaces && n_ifaces < REAC_PW_MAX_LISTENERS; k++)
-				ifaces[n_ifaces++] = extra_ifaces[k];
-		} else {
-			for (int k = 0; k < n_extra_ifaces && n_ifaces < REAC_PW_MAX_LISTENERS; k++)
-				ifaces[n_ifaces++] = extra_ifaces[k];
-		}
-		if (n_ifaces == 0) {
-			usage(argv[0]);
-			return 2;
-		}
+		ifaces[n_ifaces++] = rxcfg.source;
+		for (int k = 0; k < n_extra_ifaces && n_ifaces < REAC_PW_MAX_LISTENERS; k++)
+			ifaces[n_ifaces++] = extra_ifaces[k];
 		n_listeners = n_ifaces;
 		for (int i = 0; i < n_ifaces; i++) {
 			struct listener_cfg *c = &listeners[i].cfg;
@@ -1580,8 +1880,18 @@ int main(int argc, char **argv)
 	 * listener that fails to open ends the process exactly as it always has;
 	 * with more than one, a segment's refusal is that segment's problem, not
 	 * every other segment's — the daemon keeps whatever else came up. */
+	if (hearing) {
+		if (hearing_start(&g_hear, loop, listeners, REAC_PW_MAX_LISTENERS,
+		                  rxcfg.forced_rate) != 0) {
+			pw_main_loop_destroy(g_loop);
+			pw_deinit();
+			return 1;
+		}
+		n_listeners = REAC_PW_MAX_LISTENERS;
+	}
+
 	int n_opened = 0;
-	for (int i = 0; i < n_listeners; i++) {
+	for (int i = 0; i < n_listeners && !hearing; i++) {
 		if (listener_open(&listeners[i], loop) != 0) {
 			if (n_listeners == 1) {
 				pw_main_loop_destroy(g_loop);
@@ -1596,7 +1906,7 @@ int main(int argc, char **argv)
 		listeners[i].opened = 1;
 		n_opened++;
 	}
-	if (n_opened == 0) {
+	if (n_opened == 0 && !hearing) {
 		fprintf(stderr, "reac-pw: no segment came up; nothing to run\n");
 		pw_main_loop_destroy(g_loop);
 		pw_deinit();
@@ -1604,7 +1914,7 @@ int main(int argc, char **argv)
 	}
 
 	int any_running = 0;
-	for (int i = 0; i < n_listeners; i++) {
+	for (int i = 0; i < n_listeners && !hearing; i++) {
 		if (!listeners[i].opened)
 			continue;
 		if (reac_rx_start(&listeners[i].rx) != 0) {
@@ -1622,7 +1932,7 @@ int main(int argc, char **argv)
 		listeners[i].rx_started = 1;
 		any_running = 1;
 	}
-	if (!any_running) {
+	if (!any_running && !hearing) {
 		fprintf(stderr, "reac-pw: no segment is running; nothing to do\n");
 		pw_main_loop_destroy(g_loop);
 		pw_deinit();
@@ -1639,6 +1949,7 @@ int main(int argc, char **argv)
 
 	pw_main_loop_run(g_loop);
 
+	hearing_stop(&g_hear);
 	for (int i = 0; i < n_listeners; i++)
 		if (listeners[i].opened)
 			listener_close(&listeners[i], loop);

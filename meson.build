@@ -91,6 +91,7 @@ reac_pw_src = [
   'src/reac_pace_watch.c',
   'src/reac_box_pin.c',
   'src/reac_seglock.c',
+  'src/reac_ifscan.c',
   'src/reac_arbitration.c',
   'src/reac_conf.c',
   'src/reac_rt.c',
@@ -258,6 +259,28 @@ test('reac_link_edge_observed',
   args : [linkmon_test],
   timeout : 30)
 
+# --- unit test: WHICH interfaces are listened on, and which are segments -----
+# The autodetect table (openmixer trunk-VLAN spec, amendment 2026-09-02): a NIC
+# with link is sniffed, the first REAC frame makes it a segment, a flap shorter
+# than the hold changes nothing, a longer loss drops it, DELLINK drops at once.
+# The netlink half is fed kernel-shaped datagrams; the live arm dumps the real
+# host through the same parser (unprivileged).
+ifscan_test = executable('test_reac_ifscan',
+  ['tests/test_reac_ifscan.c', 'src/reac_ifscan.c'],
+  include_directories : [include_directories('src')])
+test('reac_ifscan', ifscan_test)
+
+# --- unit test: the segment's bus+address-derived name ------------------------
+# reac_ifname is NOT YET WIRED into main.c/reac_ifscan.c's segment identity (see
+# docs/ENV-KNOBS.md-adjacent per-segment conf keys, which are keyed by raw ifname
+# today on the live rig — replacing that identity is a deployment-affecting change
+# of its own, left to the operator). This proves the pure derive function alone,
+# against real captured /sys paths from a real box, not synthetic strings.
+ifname_test = executable('test_reac_ifname',
+  ['tests/test_reac_ifname.c', 'src/reac_ifname.c'],
+  include_directories : [include_directories('src')])
+test('reac_ifname', ifname_test)
+
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 'src/reac_rx.c', 'src/reac_ring.c',
    'src/reac_pace_watch.c'],
@@ -294,6 +317,17 @@ test('reac_link_up_reestablishes',
   find_program('tests/link-up-reestablishes.sh'),
   args : [reac_pw_exe],
   timeout : 60)
+
+# --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
+# drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
+# test_reac_ifscan pins the table; this drives the real binary on a veth pair
+# with a second reac-pw mastering the peer end, inside an unprivileged user+net
+# namespace. Skips where that or PipeWire is unavailable. Timeout covers
+# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups.
+test('reac_hearing_finds_a_segment',
+  find_program('tests/hearing-finds-a-segment.sh'),
+  args : [reac_pw_exe],
+  timeout : 90)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #

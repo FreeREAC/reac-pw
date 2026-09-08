@@ -51,7 +51,8 @@ meson setup   build
 meson compile -C build
 meson test    -C build                              # unit tests, no PipeWire needed
 ./build/reac-pw --pcap capture.pcap --rate 48000    # offline replay
-sudo ./build/reac-pw --live reac0 --tx reac0        # MASTER (default): a box slaves to us
+sudo ./build/reac-pw                                # the packaged shape: HEARS its segments on every linked NIC
+sudo ./build/reac-pw --live reac0 --tx reac0        # MASTER (default) pinned to one NIC: a box slaves to us
 sudo ./build/reac-pw --live reac0 --role slave --tx reac0   # SLAVE: we slave to a desk
 ```
 
