@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.4.8}
+Version:        %{?version_override}%{!?version_override:0.5.0}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -92,6 +92,34 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Tue Sep 08 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.0-1
+- NOTHING IS CONFIGURED. Started with no flags and an empty conf, the daemon finds
+  its own segments -- every linked Ethernet interface is sniffed passively, and the
+  first REAC frame heard turns that interface into a segment -- and then takes the
+  end of the pairing the wire leaves open: a desk mastering it is joined as a slave,
+  a wire with a box on it and no master is taken as master after a three-second hunt
+  (three master announce cadences) and the box is granted, and a stagebox strapped to
+  master mode is refused with the remedy named, never fought. REAC_IFACES and the
+  per-interface env files are gone; a per-segment fact is a suffixed key in the one
+  conf. REAC_ROLE_<segment> still wins outright; a bare REAC_ROLE is a floor and is
+  superseded out loud.
+- reac-pw with no arguments STARTS. It used to answer the usage text and exit 2,
+  which is what the packaged unit passes, so the service could not come up at all.
+- The clock discipline is ON by default. A daemon that owns a segment's pace and
+  free-runs it is misconfigured in principle: every box on the wire locks to that
+  rhythm. The best-reference ladder (NIC/external PHC > a hardware-driven graph clock
+  > the box's counter slope) is what the live rig has run since 2026-09-07 20:55
+  without incident. Every safety it shipped with stands -- a structurally unusable
+  reference is refused whatever is designated, measured instability outranks the
+  designation, the period is slewed and never phase-stepped -- and free-run is now
+  announced rather than silent. REACPW_CLOCK_FOLLOW=0 opts out.
+- Boolean knobs are read one way. REACPW_CLOCK_FOLLOW=0 used to mean ON, because
+  that reader only asked whether the variable was set.
+- Wireless interfaces are excluded from the autodetect scan unless opted in
+  (REAC_IFACES_ALLOW_WIRELESS): ARPHRD_ETHER is true of Wi-Fi too, and Wi-Fi's
+  jitter has no repacer here.
+- Discovery trusts no MAC. REAC gear is recognized by protocol frame alone, with a
+  per-segment peer lock closing the checksum-exempt FILLER gap that leaves.
 * Mon Aug 31 2026 Pau Aliagas <linuxnow@gmail.com> - 0.4.8-1
 - The binding is an IFINDEX. An AF_PACKET socket binds to an index resolved once
   from the name, so a USB NIC re-enumerating under the SAME name and MAC left the
