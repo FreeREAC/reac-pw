@@ -231,6 +231,10 @@ done
 [ -n "$NEWID" ] && [ "$NEWID" != "$CAPID" ] || {
 	echo "FAIL: the daemon said it was rebuilding and no new capture node appeared"
 	echo "      (was $CAPID, now '${NEWID:-none}')"; tail -10 "$LOG"; exit 1; }
+# A REBUILD THAT WORKED SAYS SO. "rebuilding it" followed by silence is what a segment
+# that is still broken looks like, which is the same silence this path exists to end.
+wait_for "reac-capture is back on the graph (attempt 1)" 10 || {
+	echo "FAIL: the node came back and the daemon never said so"; tail -10 "$LOG"; exit 1; }
 # ...and it is a whole node again, not a stub: same segment, same box, same width.
 NODES=$(daemon_nodes $PID)
 [ "$(echo "$NODES" | awk '$1 == "reac-capture.hear0" {print $2" "$3}')" = "hear0 16x8" ] || {

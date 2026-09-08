@@ -549,8 +549,19 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		 * width, and no capture node, for as long as nobody looks at the graph. */
 		const char *why = "no node was ever created";
 		int on_graph = reac_source_node_on_graph(*c->src, &why);
+		/* Read BEFORE the step, which resets the ladder the moment the node is back. */
+		int attempts = c->recover.attempts;
 		switch (reac_node_recover_step(&c->recover, on_graph)) {
 		case REAC_RECOVER_WAIT:
+			/* A REBUILD THAT WORKED SAYS SO. Without this the journal reads
+			 * "rebuilding it (attempt 1 of 5)" and then nothing at all, which is
+			 * exactly what a still-broken segment reads like — the failure this whole
+			 * path exists to stop being silent about, moved one line down. Only after
+			 * an attempt: a node that was never missing has nothing to report. */
+			if (on_graph && attempts > 0)
+				fprintf(stderr, "reac-pw: %sreac-capture is back on the graph "
+				        "(attempt %d) — this segment's input patches can be made "
+				        "again.\n", c->tag, attempts);
 			/* Healthy, inside the window, or already reported. The announcement lives
 			 * here too: the node is CONNECTING when it is built, so "it is there" is
 			 * only ever true on a later tick. */
