@@ -1318,6 +1318,23 @@ static void sniffer_close(struct hearing *h, const char *name)
 	memset(sn, 0, sizeof *sn);
 }
 
+/* Did the operator answer for THIS segment? `REAC_ROLE_<segment>` is the only layer that
+ * can — a bare REAC_ROLE describes every segment on the host and cannot know what is on
+ * one wire (trunk-VLAN amendment §d). Resolved once, when the sniffer opens, so a pinned
+ * segment is served on its first classifying frame rather than after a hunt it never
+ * needed (arbitration §8a: the role is a setting). */
+static int segment_role_pin(const char *iface, enum reac_role *out)
+{
+	char v[256];
+	if (reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v) != REAC_CONF_SEGMENT)
+		return 0;
+	enum reac_role_intent i;
+	if (reac_role_intent_parse(v, &i) != 0 || i == REAC_ROLE_INTENT_AUTO)
+		return 0;
+	*out = reac_role_from_intent(i);
+	return 1;
+}
+
 static int sniffer_open(struct hearing *h, const char *name)
 {
 	if (sniffer_find(h, name))
@@ -1341,6 +1358,9 @@ static int sniffer_open(struct hearing *h, const char *name)
 	if (ioctl(sn->cap.fd, SIOCGIFHWADDR, &ifr) == 0)
 		memcpy(sn->mac, ifr.ifr_hwaddr.sa_data, 6);
 	reac_hunt_init(&sn->hunt, sn->mac, monotonic_ns());
+	enum reac_role pin;
+	if (segment_role_pin(name, &pin))
+		reac_hunt_pin(&sn->hunt, pin);
 	snprintf(sn->name, IFNAMSIZ, "%s", name);
 	sn->io = pw_loop_add_io(h->loop, sn->cap.fd, SPA_IO_IN, false, on_sniff_io, sn);
 	if (!sn->io) {
@@ -1525,7 +1545,10 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		int changed = reac_hunt_step(&sn->hunt, now);
 		switch (sn->hunt.verdict) {
 		case REAC_HUNT_SLAVE:
-			if (changed)
+			if (changed && sn->hunt.pinned)
+				fprintf(stderr, "reac-pw: [%s] REAC heard, and REAC_ROLE_%s pins this "
+				        "segment as SLAVE — served without a hunt\n", sn->name, sn->name);
+			else if (changed)
 				fprintf(stderr, "reac-pw: [%s] a desk masters this segment "
 				        "(%02x:%02x:%02x:%02x:%02x:%02x) — joining it as SLAVE and "
 				        "following its pace\n", sn->name,
@@ -1534,7 +1557,10 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			reac_ifscan_heard(&h->scan, sn->name, now);
 			break;
 		case REAC_HUNT_MASTER:
-			if (changed)
+			if (changed && sn->hunt.pinned)
+				fprintf(stderr, "reac-pw: [%s] REAC heard, and REAC_ROLE_%s pins this "
+				        "segment as MASTER — served without a hunt\n", sn->name, sn->name);
+			else if (changed)
 				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
 				        "present — taking the wire as MASTER: probe, grant, "
 				        "establish\n", sn->name,
@@ -1557,7 +1583,8 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		default:
 			/* Heard, but nothing decides it — said once, because a state nobody can
 			 * act on still has to be readable (§9: never a silent spinner). */
-			if (!sn->undecided_said && reac_hunt_heard_anything(&sn->hunt) &&
+			if (!sn->undecided_said && !sn->hunt.pinned &&
+			    reac_hunt_heard_anything(&sn->hunt) &&
 			    now - sn->hunt.opened_ns >= REAC_HUNT_WINDOW_NS) {
 				fprintf(stderr, "reac-pw: [%s] REAC heard but nothing decides the role "
 				        "yet — no box announce and no master announce in %llu s; still "

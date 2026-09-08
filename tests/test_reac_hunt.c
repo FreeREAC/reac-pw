@@ -189,6 +189,43 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_HUNTING);
 	CHK(reac_hunt_heard_anything(&h) == 0);
 
+	/* ---- I. A PIN IS SERVED WITHOUT A HUNT. `REAC_ROLE_<segment>` is an answer about
+	 * this wire (arbitration §8a: the role is a SETTING), so it waits only for the wire
+	 * to BE a segment — the first classifying frame (trunk-VLAN amendment §a). Making a
+	 * pinned segment sit out the window, or find box evidence, would be the daemon
+	 * second-guessing a setting; and a pinned segment the hunt could not decide would
+	 * never be served at all, which is the shape of the outage this all comes from. */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_MASTER);
+	CHK(reac_hunt_step(&h, t0 + 10 * SEC) == 0);   /* nothing heard: still not a segment */
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_MASTER);
+	CHK(box_flood(&h, BOX, 16, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);  /* 10 ms in, not 3 s */
+	CHK(h.verdict == REAC_HUNT_MASTER);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
+
+	/* A pinned SLAVE likewise, and on a wire with no desk on it at all: the operator
+	 * said be a box here, and the daemon does not require evidence of a master before
+	 * obeying. Whether the wire agrees is the listener's own arbitration to publish
+	 * (§8c's intent-versus-observation disagreement). */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_SLAVE);
+	CHK(box_flood(&h, BOX, 16, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
+
+	/* And a pin outranks a rival: a pinned MASTER is not turned into a refusal by a
+	 * stagebox on M. The pin is what we intend; the conflict is reported by the segment
+	 * once it is up, not by declining to serve it. */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_MASTER);
+	CHK(box_on_m(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+
 	/* ---- The window itself, stated as the number and its reason: three master announce
 	 * cadences, and a cadence is one second (reac_master.c: announce_tick >= fps). */
 	CHK(REAC_HUNT_WINDOW_NS == 3 * SEC);

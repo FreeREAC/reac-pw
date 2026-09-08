@@ -31,6 +31,12 @@ void reac_hunt_init(struct reac_hunt *h, const uint8_t our_mac[6], uint64_t now_
 	h->verdict = REAC_HUNT_HUNTING;
 }
 
+void reac_hunt_pin(struct reac_hunt *h, enum reac_role role)
+{
+	h->pinned = 1;
+	h->pin = role;
+}
+
 int reac_hunt_observe(struct reac_hunt *h, const uint8_t *frame, size_t len,
                       uint64_t now_ns, struct reac_disco_sighting *out)
 {
@@ -115,6 +121,17 @@ static int desk_geometry_live(const struct reac_disco_table *t, const uint8_t ou
 
 static enum reac_hunt_verdict decide(const struct reac_hunt *h, uint64_t now_ns)
 {
+	/* A PIN IS AN ANSWER ABOUT THIS WIRE AND OUTRANKS THE HUNT. It is not an opinion the
+	 * election weighs: `REAC_ROLE_<segment>` says which end of the pairing the operator
+	 * wants here, and the hunt exists only for the segments nobody answered for. So the
+	 * ONLY thing still waited on is the wire being a REAC segment at all — no window, no
+	 * box evidence, no rival classification. A pinned segment that had to wait three
+	 * seconds and find a box would be a setting the daemon second-guesses; worse, a
+	 * pinned segment the hunt could not decide would never be served at all. */
+	if (h->pinned)
+		return h->table.n == 0 ? REAC_HUNT_HUNTING
+		     : (h->pin == REAC_ROLE_SLAVE ? REAC_HUNT_SLAVE : REAC_HUNT_MASTER);
+
 	/* A foreign master is unambiguous evidence, and §2b says WHAT it is decides what
 	 * we do about it: a desk is joined, a stagebox on M and an unreadable rival are
 	 * refused. Immediate — a desk on the wire is not a maybe, and there is nothing a
