@@ -108,6 +108,14 @@ meson test -C _build
   read anywhere. Node names that follow the BOX are owed and are listed with the other
   owed increments in DESIGN.md; those go 0.5.1, 0.5.2, ... -- the middle digit does not
   move again for them.
+- A segment is BOTH of its nodes. reac-capture publishes reac.segment in the master
+  role too, so a client keying a stagebox off the reac.* identity finds one segment
+  and not half of one; and a capture node that fails to reach the graph is reported
+  with PipeWire's own reason and REBUILT, instead of a journal line claiming a width
+  over a node nobody can patch.
+- The clock reference no longer waits for the playback side to be patched. An
+  unlinked reac-playback is suspended and its RT callback never runs, so the
+  graph-clock sample is taken by whichever of the segment's nodes the graph drives.
 - reac-pw with no arguments STARTS. It used to answer the usage text and exit 2,
   which is what the packaged unit passes, so the service could not come up at all.
 - The clock discipline is ON by default. A daemon that owns a segment's pace and
