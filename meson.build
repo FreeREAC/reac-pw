@@ -210,6 +210,22 @@ rx_gate_test = executable('test_reac_rx_gate',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
 
+# --- job proof: the AUDIO a joined box master delivers ------------------------
+# A box on M broadcasts its own upstream geometry and we join it receive-only
+# (DESIGN.md 0.5.2). This replays the fake box master's own frames -- the same
+# libreac builder tests/fake_box_master.c calls, carrying a distinct constant per
+# channel -- through the real feeder in the accept mode main.c sets for that join,
+# and reads the ring the capture node's process() copies into the port planes:
+# eight rows each with ITS OWN value, the other 32 silent. The veth proof cannot
+# read this far (no session manager in its namespace, so no ports materialise), so
+# the values are asserted here and the acceptance on the wire is asserted there.
+box_master_audio_test = executable('test_reac_box_master_audio',
+  ['tests/test_reac_box_master_audio.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_pace_watch.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_box_master_audio', box_master_audio_test)
+
 # --- unit test: the OHRCA duplicate-frame guard (frames_dup) ------------------
 # Runs the real feeder thread over a temp pcap of DOUBLED byte-identical
 # delivery (the mirrored-RX-path / doubled-cadence granulated-audio bug):
