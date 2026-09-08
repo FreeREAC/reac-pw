@@ -188,15 +188,38 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_HUNTING);
 	CHK(reac_hunt_heard_anything(&h) == 0);
 
-	/* ---- I. A PIN IS SERVED WITHOUT A HUNT. `REAC_ROLE_<segment>` is an answer about
-	 * this wire — a SETTING, not a guess — so it waits only for the wire to BE a
-	 * segment, which is its first classifying frame. Making a
+	/* ---- I. A PIN IS SERVED WITHOUT A HUNT AND WITHOUT A FRAME. `REAC_ROLE_<segment>`
+	 * is an answer about this wire — a SETTING, not a guess — so it waits on nothing at
+	 * all: the pinned role is the verdict from the first step after link. Making a
 	 * pinned segment sit out the window, or find box evidence, would be the daemon
 	 * second-guessing a setting; and a pinned segment the hunt could not decide would
-	 * never be served at all, which is the shape of the outage this all comes from. */
+	 * never be served at all, which is the shape of the outage this all comes from.
+	 *
+	 * THE COLD-BOX DEFECT, measured 2026-09-08 22:10 on 0.5.0-2 (DESIGN.md, "A cold
+	 * stagebox is silent"): the S-0808 and the S-1608 were powered, cabled and carrier
+	 * up, and neither emitted a single 0x8819 frame — a REAC box in slave mode says
+	 * nothing until a master announces to IT. So a pin that waited for "the wire to BE a
+	 * segment" waited forever, and both boxes stayed mute. THE FIRST STEP DECIDES, on an
+	 * utterly silent table, or a pinned master can never wake the box it was pinned for. */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_MASTER);
-	CHK(reac_hunt_step(&h, t0 + 10 * SEC) == 0);   /* nothing heard: still not a segment */
+	CHK(reac_hunt_step(&h, t0) == 1);              /* silent wire, zero frames, no window */
+	CHK(h.verdict == REAC_HUNT_MASTER);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
+	CHK(reac_hunt_heard_anything(&h) == 0);        /* and it is honest about hearing nothing */
+	/* A pinned SLAVE opens its own side on the same silence. It transmits nothing until a
+	 * master is heard — that is the slave engine's own law, not a reason to withhold the
+	 * role — so the operator's `REAC_ROLE_<iface>=slave` is obeyed on link, too. */
+	reac_hunt_init(&h, OURS, t0);
+	reac_hunt_pin(&h, REAC_ROLE_SLAVE);
+	CHK(reac_hunt_step(&h, t0) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
+	/* AND THE UNPINNED PATH IS UNTOUCHED: a silent wire nobody answered for is still
+	 * passive after the whole window. This is the control that keeps the fix from being
+	 * "drive every NIC in the house". */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(reac_hunt_step(&h, t0 + 10 * SEC) == 0);
 	CHK(h.verdict == REAC_HUNT_HUNTING);
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_MASTER);
@@ -231,7 +254,7 @@ int main(void)
 	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
 
 	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
-	       "refused, and nothing latches\n",
+	       "refused, a pin drives on link with no frame at all, and nothing latches\n",
 	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
 	return 0;
 }

@@ -36,7 +36,9 @@
  *
  * Main-thread only, like the discovery table it holds: one hunt per passive sniffer,
  * alive only until its segment is served (or refused). It transmits nothing; hearing is
- * the gate to serve and this is what reads the hearing.
+ * the gate to serve on an UNPINNED wire, and this is what reads the hearing. On a PINNED
+ * wire LINK is the gate — the pin is the operator's answer and a cold box has no frame
+ * to offer — so the same object answers immediately and the sniffer is closed unused.
  */
 #ifndef REAC_HUNT_H
 #define REAC_HUNT_H
@@ -91,9 +93,12 @@ struct reac_hunt {
 	 * the wire another three seconds. */
 	uint64_t opened_ns;
 	/* A PER-SEGMENT ROLE THE OPERATOR SET (`REAC_ROLE_<segment>`). A pin is a SETTING
-	 * — an intent, not an observation — so it does not wait on evidence about who else is
-	 * on the wire: the segment serves in the pinned role as soon as the interface is a
-	 * segment at all, which is its first classifying frame. Whether the wire AGREES with
+	 * — an intent, not an observation — so it does not wait on evidence of any kind,
+	 * including a frame: the segment serves in the pinned role from the first step after
+	 * link. It waited for a classifying frame until 2026-09-08, and a cold stagebox in
+	 * slave mode emits nothing until a master announces to IT, so two pinned masters on
+	 * the rig hunted forever for a frame only their own announce could have caused
+	 * (DESIGN.md, "A cold stagebox is silent"). Whether the wire AGREES with
 	 * the pin is then the listener's own arbitration to publish, and that disagreement
 	 * only exists once an intent does. */
 	int pinned;
@@ -110,8 +115,9 @@ void reac_hunt_init(struct reac_hunt *h, const uint8_t our_mac[6], uint64_t now_
 
 /* Pin this segment's role, from `REAC_ROLE_<segment>`. Call once, before or after the
  * first frame; `master` and `slave` pin, and `auto` is expressed by not calling this at
- * all. A pinned hunt never elects and never refuses — it waits only for the wire to BE a
- * REAC segment. */
+ * all. A pinned hunt never elects, never refuses and never waits: the next
+ * `reac_hunt_step` answers with the pinned role on an empty table, so a pinned master
+ * drives a wire whose box has not spoken and cannot speak until it does. */
 void reac_hunt_pin(struct reac_hunt *h, enum reac_role role);
 
 /* Offer one raw frame. Returns 1 when it was a sighting that changed the table
