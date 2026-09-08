@@ -267,12 +267,16 @@ int reac_disco_table_observe(struct reac_disco_table *t,
 		}
 		if (s->model && e->model != s->model) {
 			e->model = s->model;
-		if (s->channels > e->channels) {
-			/* WIDEST WINS. Control frames carry no audio geometry, so a peer's data frames
-			 * are what answer; last-wins would let one short control frame erase them. */
-			e->channels = s->channels;
 			changed = 1;
 		}
+		/* WIDEST WINS, ON ITS OWN. Control frames carry no audio geometry, so a peer's
+		 * data frames are what answer, and last-wins would let one short control frame
+		 * erase them. It is a SEPARATE fact from the model, and it used to be nested
+		 * inside the model branch — so a peer that never declares a model never widened,
+		 * which is precisely a stagebox strapped to master mode: it emits no config
+		 * announce, and its width is the only thing that classifies it (2026-09-09). */
+		if (s->channels > e->channels) {
+			e->channels = s->channels;
 			changed = 1;
 		}
 		if (owned && !e->owned) {

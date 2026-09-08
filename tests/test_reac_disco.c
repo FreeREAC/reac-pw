@@ -230,6 +230,28 @@ int main(void)
 	CHK(t.n == REAC_DISCO_MAX);
 	CHK(t.overflowed == 1);
 
+	/* ---- (d3) WIDEST WINS, AND IT MUST NOT DEPEND ON THE MODEL. A peer's control frames
+	 * carry no audio geometry, so its DATA frames are the only answer about how wide it is
+	 * — and a box strapped to master mode declares no model at all (it emits no config
+	 * announce), so a width that only widened when the MODEL changed never widened for
+	 * exactly the peer whose width decides the segment's topology. Found 2026-09-09 reading
+	 * this merge for the box-master join: the widening branch sat inside the model branch. */
+	reac_disco_table_init(&t);
+	struct reac_disco_sighting narrow = { .role = REAC_DISCO_ROLE_UNKNOWN, .model = NULL,
+	                                      .channels = 8 };
+	memcpy(narrow.mac, MASTER, 6);
+	CHK(reac_disco_table_observe(&t, &narrow, 0, S_(1)) == 1);   /* a new MAC */
+	CHK(t.e[0].channels == 8);
+	struct reac_disco_sighting wide = narrow;
+	wide.channels = 32;
+	CHK(reac_disco_table_observe(&t, &wide, 0, S_(2)) == 1);     /* wider IS a change */
+	CHK(t.e[0].channels == 32);
+	CHK(t.seq == 2);
+	/* ...and a later narrow frame does not take it back: a control frame with no geometry
+	 * would otherwise erase what the data frames established. */
+	CHK(reac_disco_table_observe(&t, &narrow, 0, S_(3)) == 0);
+	CHK(t.e[0].channels == 32);
+
 	/* ---- (d2) the RT announce gate: the event ring must not be flooded. */
 	struct reac_disco_gate g;
 	reac_disco_gate_init(&g);
