@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+
+/* reac_hunt — which end of the pairing a HEARD segment takes when nobody configured
+ * one (trunk-VLAN spec §7 step 4, arbitration §8b's `auto`).
+ *
+ * THE DEFECT THIS EXISTS AGAINST, 2026-09-08: reac-pw was launched with `REAC_ROLE=slave`
+ * standing in a conf file as the floor for every segment, and both of the rig's boxes —
+ * an S-1608 and an S-4000S, powered, cabled and waiting to be granted — sat there while
+ * the daemon hunted for a master that was never going to speak. Only an explicit master
+ * role brought them up. A wire with a box on it and no master IS a wire we drive, and no
+ * file should have to say so.
+ *
+ * Frames are built with the libreac builders — the bytes the wire carries, checksum and
+ * all — never hand-rolled, because the classifier's own false positives are what this
+ * decision now rests on. The four outcomes are driven by real geometry.
+ */
+#include "reac_hunt.h"
+
+#include <reac/reac.h>
+#include <reac/reac_ctrlblk.h>
+
+#include <stdio.h>
+#include <string.h>
+
+#define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
+
+#define SEC 1000000000ULL
+
+static const uint8_t OURS[6]  = { 0x34, 0x5a, 0x60, 0x9f, 0x9e, 0xbe };  /* this rig's NIC */
+static const uint8_t DESK[6]  = { 0x00, 0x40, 0xab, 0xc9, 0xcc, 0x03 };  /* a real M-200 */
+static const uint8_t BOX[6]   = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };  /* the S-1608 */
+static const uint8_t BOXM[6]  = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };  /* the S-4000S on M */
+static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+/* A box's own heartbeat: unambiguous BOX evidence, 16-channel geometry. */
+static int box_heartbeat(struct reac_hunt *h, uint64_t now)
+{
+	uint8_t f[2048];
+	size_t n = reac_ctrl_build_box_hb(f, DESK, BOX, 0x11, 16);
+	return reac_hunt_observe(h, f, n, now, NULL);
+}
+
+/* A box that has lost its master: BROADCAST filler at wire rate, which classifies as
+ * role UNKNOWN (a master's downstream audio is byte-identical in kind) and is separated
+ * from one only by its WIDTH. */
+static int box_flood(struct reac_hunt *h, const uint8_t src[6], int n_ch, uint64_t now)
+{
+	uint8_t f[2048];
+	size_t n = reac_ctrl_build_flood_filler(f, BCAST, src, 0x20, n_ch, NULL, 12);
+	return reac_hunt_observe(h, f, n, now, NULL);
+}
+
+/* A DESK: only a console emits head-amp records, and it emits them at the 40-channel
+ * downstream width. Role master AND desk geometry, in one frame. */
+static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+{
+	uint8_t f[2048];
+	size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, 0x20, 0 /* phantom */, 1);
+	if (n == 0)
+		return -2;
+	return reac_hunt_observe(h, f, n, now, NULL);
+}
+
+/* A STAGEBOX STRAPPED TO MASTER: the same master-only record, emitted at the box's OWN
+ * width — measured 2026-08-30 as 1204 B on a wire where a desk had emitted 1492 B. The
+ * frame claims master; the geometry says box; §2b says the geometry wins. */
+static int box_on_m(struct reac_hunt *h, uint64_t now)
+{
+	uint8_t f[2048];
+	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, 32, NULL, 12);
+	if (n == 0 || reac_ctrl_stamp_headamp(f, 0x20, 0 /* phantom */, 1) != 0)
+		return -2;
+	reac_ctrl_checksum_apply(f);
+	return reac_hunt_observe(h, f, n, now, NULL);
+}
+
+int main(void)
+{
+	struct reac_hunt h;
+	uint64_t t0 = 100 * SEC;
+
+	/* ---- A. A SILENT WIRE IS NEVER TAKEN. Link is the gate to listen; HEARING is the
+	 * gate to serve (trunk-VLAN amendment §a). A NIC that carries no REAC frame is not a
+	 * segment however long we wait, and driving needs evidence. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	CHK(reac_hunt_step(&h, t0 + 10 * SEC) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	CHK(reac_hunt_heard_anything(&h) == 0);
+
+	/* ---- B. A BOX AND NO MASTER: WE DRIVE — but only after the window.
+	 * §7 step 4: "no foreign master -> we drive, probe, grant, establish". */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(box_heartbeat(&h, t0) == 1);          /* a new peer: an observable change */
+	CHK(reac_hunt_heard_anything(&h) == 1);
+	/* Inside the window nothing is taken. A desk announces once a second; taking the
+	 * wire before three of its cadences have passed is a race we would sometimes win
+	 * against a desk that was there all along. */
+	CHK(reac_hunt_step(&h, t0 + 1) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS - 1) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	/* The window closes on a wire that never answered: it is ours. */
+	CHK(box_heartbeat(&h, t0 + REAC_HUNT_WINDOW_NS) >= 0);   /* still live */
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 1);  /* CHANGED: worth a line */
+	CHK(h.verdict == REAC_HUNT_MASTER);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
+	CHK(strcmp(reac_hunt_verdict_name(h.verdict), "master") == 0);
+	/* Said once: the second step agrees and reports no change. */
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC / 2) == 0);
+
+	/* ---- B2. THE WINDOW IS ANCHORED ON THE FIRST SIGHTING, not on the socket. A sniffer
+	 * that has watched a quiet NIC for an hour must still spend three cadences HEARING a
+	 * segment that has just powered up — otherwise the first box to speak takes a wire
+	 * whose desk is two seconds behind it. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(reac_hunt_step(&h, t0 + 3600 * SEC) == 0);          /* an hour of silence */
+	CHK(box_heartbeat(&h, t0 + 3600 * SEC) == 1);           /* now a box appears */
+	CHK(reac_hunt_step(&h, t0 + 3600 * SEC + SEC) == 0);    /* one cadence: not yet */
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	CHK(box_heartbeat(&h, t0 + 3600 * SEC + REAC_HUNT_WINDOW_NS) == 0);
+	CHK(reac_hunt_step(&h, t0 + 3600 * SEC + REAC_HUNT_WINDOW_NS) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+
+	/* ---- C. THE OUTAGE'S OWN SHAPE. A box whose master went away floods BROADCAST
+	 * filler, which classifies UNKNOWN — so a rule that waited for an unambiguous BOX
+	 * role would hunt forever with a box in plain sight. Its 16-channel width is not
+	 * ambiguous at all. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(box_flood(&h, BOX, 16, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+
+	/* ---- D. A DESK MASTERS IT: WE JOIN AS SLAVE, and we do not wait out the window to
+	 * do it — a desk on the wire is not a maybe (§7 step 4's second half, §2b's `desk`
+	 * row: slave-join, never refuse). */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(desk_headamp(&h, DESK, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
+	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
+	CHK(h.arb.rival == REAC_RIVAL_DESK);
+	CHK(memcmp(h.arb.mac, DESK, 6) == 0);
+
+	/* ---- E. A STAGEBOX MASTERS IT: REFUSED, AND NEVER FOUGHT. Slave-joining a box
+	 * would present this console as a box to a box and obey a misconfiguration instead
+	 * of naming it (§2b). The refusal is a code the surface can render a remedy for. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(box_on_m(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
+	CHK(h.verdict == REAC_HUNT_REFUSED);
+	CHK(h.arb.rival == REAC_RIVAL_BOX);
+	CHK(strcmp(reac_rival_refusal(h.arb.rival), "rival-master-box") == 0);
+	CHK(memcmp(h.arb.mac, BOXM, 6) == 0);
+	/* And it stays refused past the window: a wire with a rival on it is not vacant. */
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) == 0);
+	CHK(h.verdict == REAC_HUNT_REFUSED);
+
+	/* ---- F. A 40-CHANNEL STREAM WHOSE OWNER HAS NOT ANNOUNCED IS NOT A VACANT WIRE.
+	 * A desk's downstream audio classifies UNKNOWN exactly as a box's flood does; only
+	 * the width separates them, and 40 is the master downstream and nothing else.
+	 * Taking that wire is the two-masters fault, so the window does NOT expire into it. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(box_flood(&h, DESK, REAC_MAX_CHANNELS, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	/* Its announce arrives one cadence later and settles it: slave. */
+	CHK(desk_headamp(&h, DESK, t0 + REAC_HUNT_WINDOW_NS + SEC) >= 0);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+
+	/* ---- G. NOTHING LATCHES. The desk is unplugged and the box is still there: the
+	 * sightings age out on the table's own staleness bar and the same wire becomes ours.
+	 * A verdict that could not be revisited would need a restart to notice a cable. */
+	uint64_t t1 = t0 + REAC_HUNT_WINDOW_NS + SEC;
+	CHK(box_heartbeat(&h, t1) == 1);                       /* the box arrives beside it */
+	uint64_t t2 = t1 + REAC_DISCO_STALE_NS + SEC;          /* the desk stops talking */
+	CHK(box_heartbeat(&h, t2) == 0);                       /* the box does not: liveness only */
+	CHK(reac_hunt_step(&h, t2) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+
+	/* ---- H. OUR OWN ECHO IS NOT EVIDENCE OF ANYBODY. A hub or a loopback that hands
+	 * our own master traffic back must not make us slave to ourselves. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(desk_headamp(&h, OURS, t0) == -1);      /* not a sighting at all */
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	CHK(reac_hunt_heard_anything(&h) == 0);
+
+	/* ---- The window itself, stated as the number and its reason: three master announce
+	 * cadences, and a cadence is one second (reac_master.c: announce_tick >= fps). */
+	CHK(REAC_HUNT_WINDOW_NS == 3 * SEC);
+	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
+
+	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
+	       "refused, and nothing latches\n",
+	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
+	return 0;
+}

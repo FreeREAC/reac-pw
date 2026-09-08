@@ -44,6 +44,13 @@
  * enough to ride out a box power-cycle. The segment is NAMED after its
  * interface, and nothing about it lives in a file before it is heard.
  *
+ * AND THE ROLE COMES OUT OF THE SAME HEARING (reac_hunt.h; trunk-VLAN §7 step 4,
+ * arbitration §8b): no master on the wire and a box present -> we drive, probe,
+ * grant; a DESK mastering it -> we join as a slave and follow its pace; a STAGEBOX
+ * mastering it -> refused with the remedy named, never fought. `REAC_ROLE_<segment>`
+ * overrides that; a bare `REAC_ROLE` is only the floor for a segment nobody has heard
+ * yet, and it is superseded out loud.
+ *
  * Only the FIRST --live segment honours the per-box flags below (--tx/--role/
  * --mixer/--name/--headamp/--box/--src-mac/--box-channels/--box-model),
  * exactly as every invocation before this one; every other segment — and
@@ -72,6 +79,7 @@
 #include "reac_seglock.h"    /* one master per segment, across processes */
 #include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
 #include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
+#include "reac_hunt.h"       /* which end of the pairing a heard segment takes */
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
@@ -408,8 +416,9 @@ static void usage(const char *p)
 	  "                MAC collides with the real device and makes captures ambiguous).\n"
 	  "no --live and no --pcap: the packaged-service shape. The daemon HEARS its segments:\n"
 	  "  every Ethernet interface with link is sniffed (a passive 0x8819 socket), the first\n"
-	  "  REAC frame heard makes that interface a segment named after it, and link loss\n"
-	  "  drops it after a %d s hold. Nothing names an interface in advance.\n"
+	  "  REAC frame heard makes that interface a segment named after it, the ROLE is taken\n"
+	  "  from what is heard on it (REAC_ROLE below), and link loss drops it after a %d s\n"
+	  "  hold. Nothing names an interface in advance.\n"
 	  "auto-spine (ONE daemon, N listeners — 2026-08-20-reac-auto-spine.md §5): only the\n"
 	  "  FIRST --live segment honours the per-box flags above. Every OTHER segment, and\n"
 	  "  every heard one, reads its own settings from the layered conf, keyed by its name:\n"
@@ -417,7 +426,14 @@ static void usage(const char *p)
 	  "  (reac_conf.h's precedence):\n"
 	  "    REAC_TX=IFNAME             default: the same interface (this rig's masters\n"
 	  "                               always tx == live)\n"
-	  "    REAC_ROLE=master|slave     default: master\n"
+	  "    REAC_ROLE=master|slave|auto  default: auto — the daemon LISTENS and takes\n"
+	  "                               the end the segment leaves open: a desk mastering\n"
+	  "                               the wire is joined as a slave, a wire with a box\n"
+	  "                               and no master is taken as master after a 3 s hunt\n"
+	  "                               and granted, a stagebox strapped to master is\n"
+	  "                               REFUSED and logged, never fought. Only the\n"
+	  "                               PER-SEGMENT key overrides the wire; a bare\n"
+	  "                               REAC_ROLE is a floor and is superseded, out loud.\n"
 	  "    REAC_MIXER=m200|m300|m5000 default: m200\n"
 	  "    REAC_NAME=NAME             node suffix; default: the interface name (the FIRST\n"
 	  "                               --live segment defaults to bare names instead,\n"
@@ -545,6 +561,14 @@ struct listener_cfg {
 	char tx_if_buf[64];   /* generous over IFNAMSIZ: silences -Wformat-truncation against the 256-byte conf value buffer */
 	const char *tx_if;                 /* NULL = no TX side (RX-only monitor) */
 	enum reac_role role;
+	/* WHAT WAS ASKED FOR, and by whom (arbitration §8: intent and observation are two
+	 * facts). `role` above is what we present on the wire; these say whether anybody
+	 * chose it. `role_pinned` is set only by a PER-SEGMENT answer — `REAC_ROLE_<iface>`
+	 * or an explicit --role — which the wire never overrides; a BARE REAC_ROLE is the
+	 * launch floor and the hunt supersedes it (trunk-VLAN amendment 2026-09-02 §d). */
+	enum reac_role_intent role_intent;
+	enum reac_conf_layer role_layer;
+	int role_pinned;
 	const struct reac_mixer_profile *mixer;
 	char name_buf[64];    /* same reasoning as tx_if_buf */
 	const char *inst_name;              /* NULL = bare node names */
@@ -606,6 +630,13 @@ static void listener_cfg_defaults(struct listener_cfg *c)
 {
 	memset(c, 0, sizeof *c);
 	c->rxcfg.pcap_realtime = 1;
+	/* NOTHING CONFIGURED MEANS `auto`, not master (arbitration §8b: "a parameter a
+	 * normal box needs hand-set is a defect in the defaults"). The wire role still
+	 * starts at master because the field holds one of two values; what it is on a
+	 * heard segment is decided by reac_hunt before anything is transmitted. */
+	c->role_intent = REAC_ROLE_INTENT_AUTO;
+	c->role_layer = REAC_CONF_NONE;
+	c->role_pinned = 0;
 	c->role = REAC_ROLE_MASTER;
 	c->mixer = reac_mixer_profile_by_name("m200");
 	c->box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;
@@ -636,13 +667,25 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 		snprintf(c->tx_if_buf, sizeof c->tx_if_buf, "%s", iface);
 	c->tx_if = c->tx_if_buf;
 
-	if (reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
-		enum reac_role r;
-		if (reac_role_parse(v, &r) == 0)
-			c->role = r;
-		else
-			fprintf(stderr, "reac-pw: [%s] ignoring REAC_ROLE='%s' (master|slave)\n",
-			        iface, v);
+	/* REAC_ROLE, and WHICH KEY answered it. A per-segment `REAC_ROLE_<iface>` is a
+	 * decision about THIS wire and is obeyed; a bare REAC_ROLE cannot know what is on
+	 * one particular segment, so it is the launch floor the hunt resolves against
+	 * (trunk-VLAN amendment 2026-09-02 §d: the console writes the bare key as
+	 * "`auto`'s launch role"). `auto` at either level asks for the hunt outright. */
+	c->role_layer = reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v);
+	if (c->role_layer != REAC_CONF_NONE) {
+		enum reac_role_intent i;
+		if (reac_role_intent_parse(v, &i) == 0) {
+			c->role_intent = i;
+			c->role = reac_role_from_intent(i);
+			c->role_pinned = (i != REAC_ROLE_INTENT_AUTO &&
+			                  c->role_layer == REAC_CONF_SEGMENT);
+		} else {
+			fprintf(stderr, "reac-pw: [%s] ignoring REAC_ROLE='%s' from %s "
+			        "(master|slave|auto)\n",
+			        iface, v, reac_conf_layer_name(c->role_layer));
+			c->role_layer = REAC_CONF_NONE;
+		}
 	}
 
 	if (reac_conf_lookup("REAC_MIXER", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
@@ -1193,6 +1236,11 @@ struct sniffer {
 	struct spa_source *io;
 	uint8_t mac[6];             /* the NIC's own address: our echo, if any, is not a sighting */
 	unsigned long frames;       /* 0x8819 frames read, whether or not they classified */
+	/* WHICH END OF THE PAIRING THIS SEGMENT WILL TAKE (reac_hunt.h). The sniffer is
+	 * where the evidence arrives, so the hunt lives here and dies with it: a segment
+	 * that is served, or a link that goes away, gets a fresh hunt next time. */
+	struct reac_hunt hunt;
+	int undecided_said;         /* the "heard, nothing decides it yet" line, said once */
 };
 
 struct hearing {
@@ -1234,26 +1282,28 @@ static void on_sniff_io(void *data, int fd, uint32_t mask)
 	if (!(mask & SPA_IO_IN))
 		return;
 	uint8_t frame[2048];
+	uint64_t now = monotonic_ns();
 	for (int i = 0; i < 64; i++) {
 		long n = reac_capture_next(&sn->cap, frame, sizeof frame);
 		if (n <= 0)
 			break;
 		sn->frames++;
+		/* EVERY frame in the batch is offered, not just the first that classifies.
+		 * One frame says REAC is here; WHO is here takes several — a desk's cfea
+		 * announce comes once a second between thousands of FILLER frames, and it is
+		 * the frame that decides whether this segment is ours to drive. The gate is
+		 * the table's own: only an observable change earns a line, so a live wire
+		 * costs a handful of lines and not 8000 a second. */
 		struct reac_disco_sighting sight;
-		if (reac_disco_classify(frame, (size_t)n, sn->mac, &sight) != 0)
+		if (reac_hunt_observe(&sn->hunt, frame, (size_t)n, now, &sight) != 1)
 			continue;
-		const struct reac_ifscan_entry *e = reac_ifscan_find(&g_hear.scan, sn->name);
-		if (e && e->state == REAC_IFSCAN_LINKED &&
-		    (e->retry_after_ns == 0 || monotonic_ns() >= e->retry_after_ns))
-			fprintf(stderr, "reac-pw: [%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
-			        "%s%s (%u ch): this interface is a segment\n",
-			        sn->name, reac_disco_role_name(sight.role),
-			        sight.mac[0], sight.mac[1], sight.mac[2],
-			        sight.mac[3], sight.mac[4], sight.mac[5],
-			        sight.model ? " " : "", sight.model ? sight.model->display : "",
-			        sight.channels);
-		reac_ifscan_heard(&g_hear.scan, sn->name, monotonic_ns());
-		break;
+		fprintf(stderr, "reac-pw: [%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
+		        "%s%s (%u ch): this interface is a segment\n",
+		        sn->name, reac_disco_role_name(sight.role),
+		        sight.mac[0], sight.mac[1], sight.mac[2],
+		        sight.mac[3], sight.mac[4], sight.mac[5],
+		        sight.model ? " " : "", sight.model ? sight.model->display : "",
+		        sight.channels);
 	}
 }
 
@@ -1290,6 +1340,7 @@ static int sniffer_open(struct hearing *h, const char *name)
 	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", name);
 	if (ioctl(sn->cap.fd, SIOCGIFHWADDR, &ifr) == 0)
 		memcpy(sn->mac, ifr.ifr_hwaddr.sa_data, 6);
+	reac_hunt_init(&sn->hunt, sn->mac, monotonic_ns());
 	snprintf(sn->name, IFNAMSIZ, "%s", name);
 	sn->io = pw_loop_add_io(h->loop, sn->cap.fd, SPA_IO_IN, false, on_sniff_io, sn);
 	if (!sn->io) {
@@ -1316,7 +1367,7 @@ static struct listener *hearing_listener(struct hearing *h, const char *name)
  * segment gets, configured from the layered conf under the segment's own
  * name, with no first-is-bare exception — bare node names belong to the
  * --live dev shape alone, so two heard segments can never collide. */
-static void hearing_serve(struct hearing *h, const char *name)
+static void hearing_serve(struct hearing *h, const char *name, const struct reac_hunt *hunt)
 {
 	struct listener *L = NULL;
 	for (int i = 0; i < h->n_slots; i++)
@@ -1329,6 +1380,25 @@ static void hearing_serve(struct hearing *h, const char *name)
 	}
 	memset(L, 0, sizeof *L);
 	listener_cfg_from_conf(&L->cfg, name, 0);
+	/* THE WIRE DECIDES, UNLESS SOMEONE DECIDED FOR THIS SEGMENT. `REAC_ROLE_<segment>`
+	 * is an answer about THIS wire and wins outright (arbitration §8a: the role is a
+	 * setting). A bare REAC_ROLE is the FLOOR — the launch role for a segment nobody has
+	 * seen yet — and the hunt has now seen it, so the floor is named and superseded
+	 * rather than obeyed. That floor is what left two boxes ungranted on 2026-09-08:
+	 * `REAC_ROLE=slave` in a file described every segment on the host, including the two
+	 * that had nothing to slave to. */
+	if (hunt && !L->cfg.role_pinned) {
+		enum reac_role elected = reac_hunt_role(hunt);
+		if (L->cfg.role_layer != REAC_CONF_NONE &&
+		    L->cfg.role_intent != REAC_ROLE_INTENT_AUTO && elected != L->cfg.role)
+			fprintf(stderr, "reac-pw: [%s] REAC_ROLE=%s from %s is a floor for every "
+			        "segment, not an answer about this one — the wire says %s. "
+			        "REAC_ROLE_%s=%s pins it if that is wrong.\n",
+			        name, reac_role_name(L->cfg.role),
+			        reac_conf_layer_name(L->cfg.role_layer), reac_role_name(elected),
+			        name, reac_role_name(L->cfg.role));
+		L->cfg.role = elected;
+	}
 	if (h->forced_rate != 0) {
 		L->cfg.rxcfg.forced_rate = h->forced_rate;
 		L->cfg.rate_layer = REAC_CONF_ARGV;
@@ -1352,8 +1422,10 @@ static void hearing_serve(struct hearing *h, const char *name)
 	L->opened = 1;
 	L->rx_started = 1;
 	h->served++;
-	fprintf(stderr, "reac-pw: [%s] segment up (%s) — %lu served so far\n", name,
-	        reac_role_name(L->cfg.role), h->served);
+	fprintf(stderr, "reac-pw: [%s] segment up (%s, %s) — %lu served so far\n", name,
+	        reac_role_name(L->cfg.role),
+	        L->cfg.role_pinned ? "pinned by REAC_ROLE_<segment>" : "chosen by hearing the wire",
+	        h->served);
 }
 
 static void hearing_drop(struct hearing *h, const char *name, const char *why)
@@ -1382,10 +1454,19 @@ static void hearing_apply(struct hearing *h)
 			sniffer_close(h, ev.name);
 			fprintf(stderr, "reac-pw: [%s] link down — no longer listening\n", ev.name);
 			break;
-		case REAC_IFSCAN_SERVE:
+		case REAC_IFSCAN_SERVE: {
+			/* The verdict is read BEFORE the sniffer that holds it is closed — the
+			 * hunt dies with its sniffer, and the role it elected is the one thing
+			 * the listener needs out of it. */
+			struct sniffer *sn = sniffer_find(h, ev.name);
+			struct reac_hunt verdict;
+			int have = sn != NULL;
+			if (have)
+				verdict = sn->hunt;
 			sniffer_close(h, ev.name);
-			hearing_serve(h, ev.name);
+			hearing_serve(h, ev.name, have ? &verdict : NULL);
 			break;
+		}
 		case REAC_IFSCAN_DROP:
 			hearing_drop(h, ev.name, e ? "link down past the hold, or the interface went away"
 			                           : "the interface went away");
@@ -1418,6 +1499,77 @@ static void on_hearing_nl_io(void *data, int fd, uint32_t mask)
 		reac_ifscan_drain(&h->scan, monotonic_ns());
 }
 
+/* THE HUNT'S OWN CLOCK. Evidence arrives in the sniffer's io callback; the DECISION is
+ * taken here, on the 200 ms poll, for two reasons. A window that only advances when a
+ * frame arrives cannot expire on a wire that has gone quiet — which is the case it
+ * exists to answer. And `reac_ifscan_heard` is what queues a SERVE, so calling it from
+ * inside a sniffer's own callback would arrange for that sniffer to be destroyed from
+ * within itself; every verb this block owns is applied from the poll for exactly that
+ * reason.
+ *
+ * Only a MASTER or SLAVE verdict turns the interface into a segment. A refusal
+ * (a stagebox on M, an unreadable rival) is said once and left alone: never joined,
+ * never probed at, never fought (arbitration §2b). */
+static void hearing_hunt(struct hearing *h, uint64_t now)
+{
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
+		struct sniffer *sn = &h->sniff[i];
+		if (!sn->name[0])
+			continue;
+		const struct reac_ifscan_entry *e = reac_ifscan_find(&h->scan, sn->name);
+		if (!e || e->state != REAC_IFSCAN_LINKED)
+			continue;   /* already a segment, or on the serve-failed retry hold */
+		if (e->retry_after_ns != 0 && now < e->retry_after_ns)
+			continue;
+
+		int changed = reac_hunt_step(&sn->hunt, now);
+		switch (sn->hunt.verdict) {
+		case REAC_HUNT_SLAVE:
+			if (changed)
+				fprintf(stderr, "reac-pw: [%s] a desk masters this segment "
+				        "(%02x:%02x:%02x:%02x:%02x:%02x) — joining it as SLAVE and "
+				        "following its pace\n", sn->name,
+				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
+				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5]);
+			reac_ifscan_heard(&h->scan, sn->name, now);
+			break;
+		case REAC_HUNT_MASTER:
+			if (changed)
+				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
+				        "present — taking the wire as MASTER: probe, grant, "
+				        "establish\n", sn->name,
+				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL));
+			reac_ifscan_heard(&h->scan, sn->name, now);
+			break;
+		case REAC_HUNT_REFUSED:
+			if (changed)
+				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): %02x:%02x:%02x:%02x:%02x:%02x "
+				        "masters this wire at %u ch, which is a BOX width, not a desk's "
+				        "40. If that is a stagebox, set its REAC Mode switch to slave and "
+				        "power-cycle it. Nothing is transmitted here and nothing is "
+				        "fought.\n", sn->name,
+				        reac_rival_refusal(sn->hunt.arb.rival),
+				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
+				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
+				        sn->hunt.table.n ? sn->hunt.table.e[0].channels : 0);
+			break;
+		case REAC_HUNT_HUNTING:
+		default:
+			/* Heard, but nothing decides it — said once, because a state nobody can
+			 * act on still has to be readable (§9: never a silent spinner). */
+			if (!sn->undecided_said && reac_hunt_heard_anything(&sn->hunt) &&
+			    now - sn->hunt.opened_ns >= REAC_HUNT_WINDOW_NS) {
+				fprintf(stderr, "reac-pw: [%s] REAC heard but nothing decides the role "
+				        "yet — no box announce and no master announce in %llu s; still "
+				        "listening, transmitting nothing\n", sn->name,
+				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL));
+				sn->undecided_said = 1;
+			}
+			break;
+		}
+	}
+}
+
 /* The 200 ms poll's share: expire holds, apply whatever the table queued. A
  * listener whose capture socket lost its interface is a DROP here, not a
  * process exit — failure is isolated to its segment (§9). */
@@ -1432,6 +1584,7 @@ static void hearing_poll(struct hearing *h)
 		    atomic_load_explicit(&L->rx.iface_lost, memory_order_acquire))
 			reac_ifscan_gone(&h->scan, L->cfg.rxcfg.source, 0, now);
 	}
+	hearing_hunt(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	hearing_apply(h);
 }
