@@ -152,6 +152,16 @@ void reac_sink_node_set_role_swap(struct reac_sink_node *n, struct reac_role_swa
 void reac_sink_node_set_peer_source(struct reac_sink_node *n,
                                     struct reac_source_node **src_slot);
 
+/* THE PEER reac-capture NODE WAS REPLACED — stamp the live badges onto the new one NOW.
+ *
+ * The badge push rides a CHANGE guard (link-state / model / width / box MAC), which is
+ * right for a poll and wrong for a rebuild: a capture node rebuilt because it never
+ * reached the graph comes back at the create-time seed — box-model "none", width "0x0",
+ * no MAC — and nothing has changed from the sink's point of view, so the guard keeps it
+ * that way until the box next drops or swaps. Measured 2026-09-08 in the veth job proof,
+ * on the recovery path that exists to fix exactly this class of silence. Main loop only. */
+void reac_sink_node_restamp_peer(struct reac_sink_node *n);
+
 /* The segment's clock discipline, so the OTHER node of the pair can publish the
  * graph-clock sample into it (reac_source_node_cfg.pacer). Borrowed: it lives as long as
  * this sink does, which outlives every source rebuild. NULL for a sink that is not a

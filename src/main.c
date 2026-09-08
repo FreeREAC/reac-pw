@@ -79,6 +79,7 @@
 #include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
 #include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
 #include "reac_hunt.h"       /* which end of the pairing a heard segment takes */
+#include "reac_node_recover.h" /* what to do about a node we built that is not there */
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
@@ -511,21 +512,33 @@ struct autodetect_ctx {
 	const char                  *pin;   /* a retired --box value, for the disagreement
 	                                     * notice; NULL once reported (report ONCE)  */
 	const char                  *tag;   /* "[iface] " once N>1, "" for a lone listener */
-	int                          absent; /* consecutive ticks reac-capture was NOT on
-	                                      * the graph after we said we had sized it */
+	/* The bounded rebuild ladder for a reac-capture that never reached the graph
+	 * (reac_node_recover.h). Separate from `last` because a rebuild is not a model
+	 * change and must not re-announce one. */
+	struct reac_node_recover     recover;
+	int                          restamp; /* a rebuilt peer needs the sink's badges again */
+	const struct reac_box_model *announced;  /* the model the "autodetected" line named */
 };
 
-/* How many 200 ms ticks a freshly built reac-capture may take to become a node before
- * we call it missing and rebuild. CONNECTING is a normal transient and a loaded graph
- * can take a moment; 2 s is far longer than any healthy path and far shorter than the
- * NINE MINUTES a segment spent on 2026-09-08 with a playback node, a journal line
- * claiming "-> reac-capture 16 in", and no capture node in the graph at all. */
-#define REAC_AD_ABSENT_TICKS 10
+/* THE SEGMENT IS READY, SAID ONCE PER BOX AND ONLY WHEN IT IS TRUE. This line is what an
+ * operator reads as "the nodes are there"; the node is CONNECTING for a moment after it
+ * is built, so the announcement waits for it to be real and then never repeats — a
+ * rebuild attempt has its own line and must not read as a fresh success. */
+static void autodetect_announce(struct autodetect_ctx *c, const struct reac_box_model *bm)
+{
+	if (c->announced == bm || !reac_source_node_on_graph(*c->src, NULL))
+		return;
+	c->announced = bm;
+	fprintf(stderr, "reac-pw: %sautodetected %s -> reac-capture %d in / reac-playback "
+	        "%d out\n", c->tag, bm->display, bm->in_ch, bm->out_ch);
+}
 
 static void on_autodetect_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct autodetect_ctx *c = data;
+	/* Whatever the RT callback queued for us — it never prints for itself. */
+	reac_source_node_drain_log(*c->src, stderr);
 	const struct reac_box_model *bm = reac_sink_node_recognized_box(c->sink);
 	if (!bm)
 		return;                      /* nothing recognized yet */
@@ -535,18 +548,40 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		 * how a segment can hold a playback node, a log line naming its capture
 		 * width, and no capture node, for as long as nobody looks at the graph. */
 		const char *why = "no node was ever created";
-		if (reac_source_node_on_graph(*c->src, &why)) {
-			c->absent = 0;
+		int on_graph = reac_source_node_on_graph(*c->src, &why);
+		switch (reac_node_recover_step(&c->recover, on_graph)) {
+		case REAC_RECOVER_WAIT:
+			/* Healthy, inside the window, or already reported. The announcement lives
+			 * here too: the node is CONNECTING when it is built, so "it is there" is
+			 * only ever true on a later tick. */
+			autodetect_announce(c, bm);
 			return;
+		case REAC_RECOVER_GIVE_UP:
+			fprintf(stderr, "reac-pw: %sreac-capture for %s is STILL not on the graph "
+			        "after %d rebuilds (%s) — giving up on it. This segment has no input "
+			        "patches and nothing here will change that; the box's outputs are "
+			        "unaffected. It is retried the moment the node appears or the box "
+			        "is re-recognized.\n",
+			        c->tag, bm->display, REAC_RECOVER_MAX_ATTEMPTS, why);
+			return;
+		case REAC_RECOVER_REBUILD:
+			fprintf(stderr, "reac-pw: %sreac-capture is NOT on the graph %.1f s after it "
+			        "was sized to %s (%s) — rebuilding it (attempt %d of %d). A segment "
+			        "without its capture node has no input patches at all.\n",
+			        c->tag, reac_node_recover_spent(&c->recover) * 0.2, bm->display, why,
+			        c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS);
+			/* FORCE IT. reac_source_node_ensure rebuilds on a CHANGE of width or
+			 * label, and neither moved — the node it would compare against is the one
+			 * that failed, at exactly the width we want. Tearing it down first is what
+			 * makes the next ensure() build rather than agree. */
+			reac_source_node_destroy(*c->src);
+			*c->src = NULL;
+			c->restamp = 1;   /* the new node starts blank; see below */
+			break;
 		}
-		if (++c->absent < REAC_AD_ABSENT_TICKS)
-			return;                  /* still inside the connect grace */
-		fprintf(stderr, "reac-pw: %sreac-capture is NOT on the graph %.1f s after it was "
-		        "sized to %s (%s) — rebuilding it. A segment without its capture node has "
-		        "no input patches at all.\n", c->tag,
-		        REAC_AD_ABSENT_TICKS * 0.2, bm->display, why);
-		c->absent = 0;
-		c->last = NULL;              /* fall through and build it again */
+	} else {
+		/* A different box: a fresh ladder, and a line to announce it. */
+		reac_node_recover_init(&c->recover);
 	}
 	c->last = bm;
 	/* A pin that DISAGREES with the wire, said ONCE and never again. Once per frame is
@@ -570,8 +605,15 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	if (reac_sink_node_ensure(c->sink, bm->out_ch, bm->display) != 0)
 		fprintf(stderr, "reac-pw: %scould not size reac-playback to %d ch (%s)\n",
 		        c->tag, bm->out_ch, bm->display);
-	fprintf(stderr, "reac-pw: %sautodetected %s -> reac-capture %d in / reac-playback "
-	        "%d out\n", c->tag, bm->display, bm->in_ch, bm->out_ch);
+	/* A REBUILT CAPTURE NODE IS BLANK UNTIL SOMEBODY STAMPS IT. The sink's badge push
+	 * fires on a CHANGE, and a rebuild changes nothing it watches — so the recovered
+	 * node would carry box-model "none" and width "0x0" until the box next dropped,
+	 * which is a segment that looks broken to every client that reads those props. */
+	if (c->restamp) {
+		c->restamp = 0;
+		reac_sink_node_restamp_peer(c->sink);
+	}
+	autodetect_announce(c, bm);
 }
 
 /* ---- one listener per segment (auto-spine §5) ----------------------------

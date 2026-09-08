@@ -204,6 +204,38 @@ while read -r name seg rest; do
 	  *) echo "FAIL: node '$name' does not belong to segment '$seg'"; echo "$NODES"; exit 1 ;;
 	esac
 done <<< "$NODES"
+# ---- AND A NODE THAT GOES AWAY COMES BACK. The recovery, driven end to end rather
+# than argued: something outside the daemon destroys the capture node (`pw-cli destroy`,
+# which is exactly the shape of the rig's own failure — the node is gone and the daemon's
+# stream still thinks it succeeded), and the daemon has to NOTICE, say so with PipeWire's
+# own reason, and rebuild it within the bounded ladder. The rig went nine minutes.
+CAPID=$(pw-dump | python3 -c "
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get('type')=='PipeWire:Interface:Node' and o['info']['props'].get('node.name')=='reac-capture.hear0':
+        print(o['id'])" | head -1)
+[ -n "$CAPID" ] || { echo "FAIL: cannot find the capture node to destroy"; exit 1; }
+pw-cli destroy "$CAPID" >/dev/null 2>&1
+wait_for "reac-capture is NOT on the graph .* rebuilding it (attempt 1 of" 15 || {
+	echo "FAIL: the capture node was destroyed and the daemon never noticed"
+	tail -10 "$LOG"; exit 1; }
+for i in $(seq 40); do
+	NEWID=$(pw-dump | python3 -c "
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get('type')=='PipeWire:Interface:Node' and o['info']['props'].get('node.name')=='reac-capture.hear0':
+        print(o['id'])" | head -1)
+	[ -n "$NEWID" ] && [ "$NEWID" != "$CAPID" ] && break
+	sleep 0.25
+done
+[ -n "$NEWID" ] && [ "$NEWID" != "$CAPID" ] || {
+	echo "FAIL: the daemon said it was rebuilding and no new capture node appeared"
+	echo "      (was $CAPID, now '${NEWID:-none}')"; tail -10 "$LOG"; exit 1; }
+# ...and it is a whole node again, not a stub: same segment, same box, same width.
+NODES=$(daemon_nodes $PID)
+[ "$(echo "$NODES" | awk '$1 == "reac-capture.hear0" {print $2" "$3}')" = "hear0 16x8" ] || {
+	echo "FAIL: the rebuilt capture node lost its identity"; echo "$NODES"; exit 1; }
+
 # WHAT THIS RIG CANNOT PROVE, said here rather than left as a gap: the graph-clock
 # reference. A pw_stream only runs when the graph drives it, no adapter node here even
 # materialises its ports without a session manager, and this namespace deliberately has

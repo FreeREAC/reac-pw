@@ -1241,9 +1241,20 @@ void reac_pacer_clock_publish_graph(struct reac_pacer *p, const char *name, int 
 {
 	if (!p || !p->clock_follow)
 		return;
-	int usable = !freewheel && reac_clock_name_is_hardware(name);
+	/* AN UNUSABLE DRIVER PUBLISHES NOTHING, rather than publishing "not present".
+	 *
+	 * Both of a segment's nodes take this sample now, and they need not sit in the same
+	 * PipeWire driver group: a capture node linked to a console driven by the RME and a
+	 * playback node nobody has patched, idle in the dummy driver's group, would take
+	 * turns setting and clearing one presence bit — the reference would flap at graph
+	 * rate on our own report. Silence from the node that has nothing to offer removes
+	 * that by construction, and it costs no honesty: presence AGES OUT
+	 * (REAC_CLOCK_STALE_NS in reac_pacer_clock_tick), so a graph clock that really goes
+	 * away is dropped by the same holdover path as a publisher that died. */
+	if (freewheel || !reac_clock_name_is_hardware(name))
+		return;
 	enum reac_clock_quality q = reac_clock_grade_name(name, clock_ref);
-	reac_pacer_clock_publish(p, REAC_CLOCK_SRC_GRAPH, usable,
+	reac_pacer_clock_publish(p, REAC_CLOCK_SRC_GRAPH, 1,
 	                         (int)(reac_clock_ppm_from_rate_diff(rate_diff) * 1000.0),
 	                         name, q, nsec);
 }

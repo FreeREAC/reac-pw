@@ -1771,6 +1771,23 @@ static void sink_on_session(void *ctx, const uint8_t mac[6], unsigned session)
 		reac_rx_session_end((struct reac_rx *)ctx);   /* the session ended */
 }
 
+void reac_sink_node_restamp_peer(struct reac_sink_node *n)
+{
+	if (!n || !n->peer_src || !*n->peer_src)
+		return;
+	/* From the SHADOWS, which are what is currently stamped on this sink — so the two
+	 * nodes of the segment agree by construction rather than by a second derivation. */
+	const struct reac_box_model *bm = n->box_model_last;
+	char width[16];
+	if (bm)
+		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
+	else
+		snprintf(width, sizeof width, "0x0");
+	reac_source_node_publish_link(*n->peer_src,
+	                              reac_link_state_name(n->link_state_last),
+	                              bm ? bm->token : "none", width, n->box_mac_last);
+}
+
 struct reac_pacer *reac_sink_node_pacer(struct reac_sink_node *n)
 {
 	return n ? &n->pacer : NULL;

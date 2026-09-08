@@ -63,6 +63,11 @@ struct reac_source_node {
 	const char *clock_ref;
 	struct spa_io_position *position;   /* SPA_IO_Position area; NULL until configured */
 	char graph_clock[64];               /* last driver clock name seen (REAC_DEBUG line) */
+	/* One diagnostic line, composed by the RT callback and printed by the main loop.
+	 * The flag is the whole handshake: RT writes the buffer only while it is 0 and then
+	 * sets it; main reads only while it is 1 and then clears it. */
+	_Atomic int log_pending;
+	char log_line[160];
 	float scratch[REAC_MAX_QUANTUM]; /* sink for absent planes; never read back */
 
 	/* Set around source_reconnect_rate's pw_stream_disconnect/connect pair —
@@ -121,12 +126,21 @@ static void on_process(void *data)
 		 * callback that a suspended node never runs, so "no reference" and "nobody
 		 * asked" read identically. One bounded string compare per cycle, a line per
 		 * change, exactly like this node's existing ring telemetry. */
-		if (n->debug && strncmp(n->graph_clock, c->name, sizeof n->graph_clock - 1) != 0) {
+		/* THE RT CALLBACK DOES NOT PRINT (this file's own law, and reac_pacer.h's).
+		 * The line is COMPOSED here into a fixed buffer — bounded, no allocation, no
+		 * syscall — and handed to the main loop through one atomic flag, which is the
+		 * same shape as the pacer's event ring in miniature. One line per driver
+		 * change, only under REAC_DEBUG, and dropped rather than queued twice if the
+		 * main loop has not drained the last one. */
+		if (n->debug && strncmp(n->graph_clock, c->name, sizeof n->graph_clock - 1) != 0 &&
+		    atomic_load_explicit(&n->log_pending, memory_order_acquire) == 0) {
 			snprintf(n->graph_clock, sizeof n->graph_clock, "%s", c->name);
-			fprintf(stderr, "reac-pw: %s: graph clock = %s (%s)\n", n->nodename,
-			        c->name[0] ? c->name : "(unnamed)",
-			        reac_clock_name_is_hardware(c->name) ? "a hardware clock"
-			                                             : "refused: not a hardware clock");
+			snprintf(n->log_line, sizeof n->log_line,
+			         "reac-pw: %s: graph clock = %s (%s)\n", n->nodename,
+			         c->name[0] ? c->name : "(unnamed)",
+			         reac_clock_name_is_hardware(c->name) ? "a hardware clock"
+			                                              : "refused: not a hardware clock");
+			atomic_store_explicit(&n->log_pending, 1, memory_order_release);
 		}
 	}
 	if (atomic_load_explicit(&n->rate_reconnecting, memory_order_relaxed))
@@ -293,11 +307,19 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               int channels,
                                               const char *inst,
                                               const char *label,
-                                              int master_role)
+                                              int master_role,
+                                              struct reac_pacer *pacer,
+                                              const char *clock_ref)
 {
 	struct reac_source_node *n = calloc(1, sizeof *n);
 	if (!n)
 		return NULL;
+	/* BEFORE pw_stream_connect, which can have the RT callback running by the time
+	 * this function returns: a field the RT path reads is never filled by the caller
+	 * afterwards. */
+	n->pacer = pacer;
+	n->clock_ref = clock_ref;
+	atomic_init(&n->log_pending, 0);
 	n->ring = ring;
 	n->rx = rx;
 	n->sample_rate = sample_rate;
@@ -581,6 +603,16 @@ void reac_source_node_publish_rate(struct reac_source_node *n, int hz)
 		source_reconnect_rate(n, hz);
 }
 
+void reac_source_node_drain_log(struct reac_source_node *n, FILE *out)
+{
+	if (!n || !out)
+		return;
+	if (atomic_load_explicit(&n->log_pending, memory_order_acquire) != 1)
+		return;
+	fputs(n->log_line, out);
+	atomic_store_explicit(&n->log_pending, 0, memory_order_release);
+}
+
 int reac_source_node_on_graph(const struct reac_source_node *n, const char **why)
 {
 	const char *reason = "no node was ever created";
@@ -637,14 +669,11 @@ int reac_source_node_ensure(struct reac_source_node **slot,
 		reac_source_node_destroy(cur);
 		*slot = NULL;
 	}
+	/* The clock door travels with every rebuild — a resized node is a NEW stream, and a
+	 * graph-clock sample that stopped at the first box swap would be a reference that
+	 * quietly disappeared — and it is set INSIDE the constructor, before the connect. */
 	*slot = reac_source_node_new(cfg->loop, cfg->ring, cfg->rx, cfg->sample_rate,
-	                             want, cfg->inst, label, cfg->master_role);
-	if (!*slot)
-		return -1;
-	/* The clock door, re-attached on every rebuild — a resized node is a NEW stream,
-	 * and a graph-clock sample that stopped at the first box swap would be a
-	 * reference that quietly disappears. */
-	(*slot)->pacer = cfg->pacer;
-	(*slot)->clock_ref = cfg->clock_ref;
-	return 0;
+	                             want, cfg->inst, label, cfg->master_role,
+	                             cfg->pacer, cfg->clock_ref);
+	return *slot ? 0 : -1;
 }
