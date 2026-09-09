@@ -125,6 +125,38 @@ static int test_slave_hunts_until_enrolled(void)
 	return 0;
 }
 
+static int test_receive_only_join_is_the_role_performed(void)
+{
+	/* THE RIG'S OWN READING (2026-09-09): a segment joined to a box mastering the wire
+	 * was up, locked and streaming, and published role_reestablish_pending — because the
+	 * answer was derived from reac_slave's enrolment flag and no slave engine runs on
+	 * that join. None ever will: that engine exists to answer a grant, and a box on M
+	 * emits no control frame at all. Following its clock and delivering its channels IS
+	 * the slave role, done (DESIGN.md 0.5.2). */
+	CHK(reac_role_engine_of_receive_only(1, 1) == REAC_ROLE_ENGINE_PERFORMING);
+	/* Heard nothing yet: the same honest hunt a slave with no desk reports. */
+	CHK(reac_role_engine_of_receive_only(1, 0) == REAC_ROLE_ENGINE_HUNTING);
+	/* No feeder, no segment: DOWN, whatever was last heard. */
+	CHK(reac_role_engine_of_receive_only(0, 1) == REAC_ROLE_ENGINE_DOWN);
+
+	/* And through the published answer, which is what a console reads. */
+	struct reac_role_swap s;
+	reac_role_swap_init(&s, REAC_ROLE_SLAVE);
+	reac_role_swap_opened(&s, REAC_ROLE_SLAVE);
+	CHK_STATE(&s, reac_role_engine_of_receive_only(1, 0), REAC_ROLE_STATE_HUNTING);
+	CHK_STATE(&s, reac_role_engine_of_receive_only(1, 1), REAC_ROLE_STATE_APPLIED);
+	/* The old derivation, on the very same record, is what the rig published — kept
+	 * here so the two cannot be confused again. */
+	CHK_STATE(&s, reac_role_engine_of_slave(0, 0), REAC_ROLE_STATE_REESTABLISH_PENDING);
+
+	/* A MASTER PIN OVER A JOINED BOX IS STILL PENDING. `applied` is only ever reached
+	 * by the engine that was ASKED for getting on with the job. */
+	CHK(reac_role_swap_request(&s, REAC_ROLE_MASTER) != 0);
+	CHK_STATE(&s, reac_role_engine_of_receive_only(1, 1),
+	          REAC_ROLE_STATE_REESTABLISH_PENDING);
+	return 0;
+}
+
 /* ---- the round trip, answer by answer ------------------------------------ */
 
 static int test_round_trip_master_slave_master(void)
@@ -520,6 +552,7 @@ int main(void)
 	if (test_same_role_is_a_no_op()) return 1;
 	if (test_master_performs_by_pacing()) return 1;
 	if (test_slave_hunts_until_enrolled()) return 1;
+	if (test_receive_only_join_is_the_role_performed()) return 1;
 	if (test_round_trip_master_slave_master()) return 1;
 	if (test_failed_reopen_never_settles()) return 1;
 	if (test_two_assertions_settle_against_the_live_engine()) return 1;

@@ -467,6 +467,22 @@ void reac_source_node_publish_link(struct reac_source_node *n,
 	pw_properties_free(props);
 }
 
+/* See the header: the receive-only join's identity, composed and stamped by the ONE
+ * composer (reac_link_state.c) through this node's own pw_properties adapter. Same MERGE
+ * semantics as publish_link above. */
+void reac_source_node_publish_box_master(struct reac_source_node *n,
+                                         unsigned width, uint64_t mac48, int locked)
+{
+	if (!n || !n->stream)
+		return;
+	struct pw_properties *props = pw_properties_new(NULL, NULL);
+	if (!props)
+		return;
+	reac_box_master_identity_publish(width, mac48, locked, source_prop_set, props);
+	pw_stream_update_properties(n->stream, &props->dict);
+	pw_properties_free(props);
+}
+
 /* MAIN LOOP: the SLAVE segment's whole published answer, in one update. In the
  * MASTER role the sink publishes all of this on reac-playback and this is never
  * called; in the SLAVE role there is no sink node at all, so this is the only

@@ -417,9 +417,15 @@ static void *rx_loop(void *arg)
 			dbg = getenv("REAC_DEBUG") != NULL;
 		if (dbg && now - last_stat_ns >= 2000000000ull) {
 			last_stat_ns = now;
-			fprintf(stderr, "reac_rx: ok=%llu dup=%llu other=%llu bad=%llu gaps=%llu"
+			/* NAMED BY ITS SOURCE, because one daemon runs several feeders. The
+			 * counters used to be printed unattributed, so on a host serving more
+			 * than one segment there was no way to tell whose stream a line was
+			 * about — and a peer that broadcasts (a box mastering the wire) never
+			 * locks `src`, so the address on the line cannot stand in for it. */
+			fprintf(stderr, "reac_rx: [%s] ok=%llu dup=%llu other=%llu bad=%llu gaps=%llu"
 			        " src=%02x:%02x:%02x:%02x:%02x:%02x%s | out: active_ch=%d"
 			        " peak=%.6f fill=%d\n",
+			        rx->cfg.source ? rx->cfg.source : "?",
 			        (unsigned long long)atomic_load(&rx->frames_ok),
 			        (unsigned long long)atomic_load(&rx->frames_dup),
 			        (unsigned long long)atomic_load(&rx->frames_other),

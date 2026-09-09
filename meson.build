@@ -613,6 +613,20 @@ link_state_test = executable('test_reac_link_state',
   dependencies : [libreac_dep])
 test('reac_link_state', link_state_test)
 
+# --- unit test: the identity a JOINED BOX MASTER publishes (DESIGN.md 0.5.2) ---
+# A box on M declares no model, so its identity is implied by the width it
+# broadcasts -- exactly, or not at all: libreac's reac_box_model_by_channels
+# defaults to the S-1608 row for an unmatched width and would name a chassis
+# nobody identified. Composition and stamp are one act, driven through a
+# recording fake, because "is the key written at all" is the half that was wrong
+# on the rig (2026-09-09: a joined S-0808 published none of the four keys a
+# console keys a stagebox off).
+box_master_identity_test = executable('test_reac_box_master_identity',
+  ['tests/test_reac_box_master_identity.c', 'src/reac_link_state.c', 'src/reac_mac.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_box_master_identity', box_master_identity_test)
+
 # --- unit test: passive discovery — the sighting classifier + table ------------
 # Pins the bars that make a device list trustworthy: presence ONLY from a real
 # 0x8819 Roland-OUI frame (never a packet count — openmixer #161), role from the

@@ -104,7 +104,8 @@ for o in d:
 # every node in this graph reports zero, which reads exactly like a node with none. The
 # description is composed from the very argument that sizes the ports
 # (reac_source_node_new), and it is how the master phase above proves its width too.
-# Prints: state|rival.kind|refusal|master.mac|segment|node.description
+# Prints: state|rival.kind|refusal|master.mac|segment|node.description|box.mac|
+#         box-model|box-width|link-state|cfg.role.state
 daemon_node_props() {
 	pw-dump | python3 -c '
 import json,sys
@@ -122,7 +123,12 @@ for o in d:
                     p.get("reac.master.refusal","(none)"),
                     p.get("reac.master.mac","(none)"),
                     p.get("reac.segment","(none)"),
-                    p.get("node.description","(none)")]))
+                    p.get("node.description","(none)"),
+                    p.get("reac.box.mac","(none)"),
+                    p.get("reac.box-model","(none)"),
+                    p.get("reac.box-width","(none)"),
+                    p.get("reac.link-state","(none)"),
+                    p.get("reac.cfg.role.state","(none)")]))
 ' "$1" "$2"
 }
 fld() { echo "$1" | cut -d'|' -f"$2"; }
@@ -583,6 +589,52 @@ BP=$(daemon_node_props $PID reac-capture.boxm0)
 [ "$(fld "$BP" 4)" = "$BOXMAC" ] || {
 	echo "FAIL: the joined node names a master other than the box: $BP"; exit 1; }
 [ "$(fld "$BP" 5)" = "boxm0" ] || { echo "FAIL: the joined node names another segment: $BP"; exit 1; }
+# AND IT IS THE SAME BOX IT IS WHEN WE MASTER IT (0.5.2). A console keys a stagebox off
+# reac.box.mac / reac.box-model / reac.box-width / reac.link-state; a join that published
+# none of them left the rig showing a segment and no device at all, with the box's eight
+# inputs unpatchable (2026-09-09 05:45). The model is IMPLIED BY THE WIDTH here -- a box on
+# M broadcasts upstream geometry and no config-announce, so there is nothing to identify it
+# from -- and 8 in is the S-0808 row of the fixed matrix, exactly.
+[ "$(fld "$BP" 7)" = "$BOXMAC" ] || {
+	echo "FAIL: the joined box has no address of its own (reac.box.mac), so a console"
+	echo "      cannot fold it into the box it knows by MAC: $BP"; exit 1; }
+[ "$(fld "$BP" 8)" = "s0808" ] || {
+	echo "FAIL: an 8-ch box master is the S-0808 row of the matrix and must say so"
+	echo "      (reac.box-model): $BP"; exit 1; }
+[ "$(fld "$BP" 9)" = "8x8" ] || {
+	echo "FAIL: reac.box-width must be the recognised model's own geometry: $BP"; exit 1; }
+[ "$(fld "$BP" 10)" = "established" ] || {
+	echo "FAIL: the stream is locked and decoding, so reac.link-state must be"
+	echo "      established: $BP"; exit 1; }
+# AND THE ROLE IS APPLIED. role_reestablish_pending means the engine asked for is not the
+# one performing; the receive-only join IS the slave role performed -- there is no
+# enrolment to wait for on a peer that grants nothing -- and the rig published pending over
+# a segment that was up and streaming.
+[ "$(fld "$BP" 11)" = "applied" ] || {
+	echo "FAIL: a locked receive-only join must publish reac.cfg.role.state=applied: $BP"
+	exit 1; }
+# THE AUDIO IS ARRIVING, and it is the box's own frames that carry it. The counter is the
+# feeder's own (REAC_DEBUG telemetry): ok= counts frames DECODED INTO THE RING, which is
+# where reac_source_node's process() reads the port planes from. The samples themselves are
+# read by value in tests/test_reac_box_master_audio.c -- not here, because no session
+# manager runs in this namespace, no node in this graph materialises a port, and nothing
+# schedules the process() that would fill one (measured: this same telemetry reads
+# active_ch=0 peak=0.000000 for the whole run while ok= climbs into the tens of thousands).
+# THE LINE IS KEYED BY SEGMENT, not by the source address: a box that MASTERS the wire
+# broadcasts, and a broadcast never locks the feeder's peer, so src reads all-zero here.
+# The telemetry prints its first line on the first frame (ok=1) and then every 2 s, so a
+# read taken right after the segment came up is a read of the FIRST line -- which is why
+# this waits for a line that clears the bar instead of asserting on whatever is there.
+RXOK=0
+for _i in $(seq 30); do
+	RXOK=$(sed -n 's/^reac_rx: \[boxm0\] ok=\([0-9]*\) .*/\1/p' "$LOG" | tail -1)
+	[ -n "$RXOK" ] && [ "$RXOK" -gt 100 ] && break
+	sleep 0.4
+done
+[ -n "$RXOK" ] && [ "$RXOK" -gt 100 ] || {
+	echo "FAIL: the feeder decoded no audio from the box master $BOXMAC (ok='$RXOK'), so"
+	echo "      the 8 ports it published carry nothing"; grep "reac_rx: \[boxm0\]" "$LOG" | tail -3
+	exit 1; }
 # AND WE PUT NOTHING ON THAT WIRE. A box on M runs no handshake, so a slave engine
 # flooding at it would be noise: the join is receive-only. This is an ABSENCE claim, so its
 # positive control is the SAME capture counting the box's own frames over the same window.
