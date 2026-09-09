@@ -9,6 +9,7 @@
  * the segment. So the tests below are mostly about what must NOT become a master.
  */
 #include "reac_arbitration.h"
+#include "reac_clock.h"
 #include <reac/reac.h>   /* the geometry that outranks the control plane */
 
 #include <stdio.h>
@@ -206,6 +207,43 @@ int main(void)
 	reac_disco_table_init(&t);
 	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
 	CHK(a.rival == REAC_RIVAL_NONE && a.rival_channels == 0);
+
+	/* ---- THE PACE SOURCE IS THE PACER'S OWN, NOT A CONSTANT (0.5.4). The playback door
+	 * built its arbitration with REAC_PACE_FREE_RUN written in, from a 2026-08-21 config
+	 * of record in which clock-follow was off. Following has been the DEFAULT since 0.5.0,
+	 * and on the rig 2026-09-08/09 the journal read `locked to graph clock (api.alsa.0)`
+	 * while the console's segment row read `free-run` — the daemon contradicting itself in
+	 * public. This is the map that ends it. */
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_LOCKED) == REAC_PACE_GRAPH_REF);
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_PHC, REAC_CLOCK_LOCKED) == REAC_PACE_PHC);
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_BOX, REAC_CLOCK_LOCKED) == REAC_PACE_BOX_SLOPE);
+	/* ONLY LOCKED NAMES A REFERENCE. LOCKING is a claim about the future and HOLDOVER is a
+	 * frozen period nothing is steering right now: both run on CLOCK_MONOTONIC at this
+	 * instant, which is what free-run MEANS. Naming the device we are no longer following
+	 * would be the same lie as a soft meter. */
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_LOCKING) == REAC_PACE_FREE_RUN);
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_HOLDOVER) == REAC_PACE_FREE_RUN);
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_UNLOCKED) == REAC_PACE_FREE_RUN);
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_FREERUN, REAC_CLOCK_LOCKED) == REAC_PACE_FREE_RUN);
+	/* THE WIRE IS THE SLAVE PATH'S REFERENCE AND IT NEVER REACHES THIS MAP — the slave
+	 * runs no pacer at all, and a segment whose pace comes off a foreign master is told so
+	 * by the arbitration itself. Mapped defensively rather than left to fall through as a
+	 * reference we are disciplining ourselves to. */
+	CHK(reac_pace_from_clock(REAC_CLOCK_SRC_WIRE, REAC_CLOCK_LOCKED) == REAC_PACE_FOREIGN_MASTER);
+	/* And a foreign master still overrides whatever we would have disciplined to: what we
+	 * would run on is not what the wire is running on. */
+	reac_disco_table_init(&t);
+	put(&t, DESK, REAC_DISCO_ROLE_MASTER, now);
+	t.e[0].channels = REAC_MAX_CHANNELS;
+	reac_arbitrate(&t, OURS, REAC_M_IDLE,
+	               reac_pace_from_clock(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_LOCKED), now, &a);
+	CHK(a.pace == REAC_PACE_FOREIGN_MASTER);
+	/* With nobody else on the wire, it is published as read. */
+	reac_disco_table_init(&t);
+	reac_arbitrate(&t, OURS, REAC_M_ESTABLISHED,
+	               reac_pace_from_clock(REAC_CLOCK_SRC_GRAPH, REAC_CLOCK_LOCKED), now, &a);
+	CHK(a.pace == REAC_PACE_GRAPH_REF);
+	CHK(strcmp(reac_pace_source_name(a.pace), "graph-ref") == 0);
 
 	printf("test_reac_arbitration: OK\n");
 	return 0;

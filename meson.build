@@ -496,7 +496,7 @@ test('reac_lat', lat_test)
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
-  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
+  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -534,6 +534,7 @@ test('reac_clock', clock_test)
 # name, and a measurably jittery one flagged rather than ejected.
 pacer_clock_test = executable('test_reac_pacer_clock',
   ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_clock.c',
+   'src/reac_arbitration.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
@@ -626,7 +627,7 @@ test('sink_buffer_pairing', python3,
 # the box leaves, and must follow a swap.
 box_badge_test = executable('test_reac_box_badge',
   ['tests/test_reac_box_badge.c', 'src/reac_link_state.c', 'src/reac_mac.c',
-   'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
+   'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
@@ -788,7 +789,7 @@ test('reac_headamp_prop', headamp_prop_test)
 # directly (no socket/RT privilege): functional queue->drain->emit, ring-full
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
-  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c',
+  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c',
    'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -809,7 +810,7 @@ test('reac_headamp_live', headamp_live_test)
 # drivability probe exists yet to supply that mask from the wire (see
 # reac_rate_cfg.h's honesty clause).
 rate_cfg_test = executable('test_reac_rate_cfg',
-  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
+  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
    'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c',
    'src/reac_clock.c'],
@@ -959,7 +960,7 @@ test('reac_conformance', conformance_test)
 # drift the moment either one changed.
 bench_hotpath = executable('bench_hotpath',
   ['tools/bench_hotpath.c', 'src/reac_ring.c', 'src/reac_pace_watch.c',
-   'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
+   'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src'), include_directories('tests')],

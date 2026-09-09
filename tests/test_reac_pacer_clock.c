@@ -24,6 +24,7 @@
  */
 #include "reac_pacer.h"
 #include "reac_clock.h"
+#include "reac_arbitration.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -126,6 +127,7 @@ int main(void)
 		CHK(run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now) == NOMINAL_NS);
 		CHK(p.clock.src == REAC_CLOCK_SRC_FREERUN);
 		CHK(p.clock.state == REAC_CLOCK_UNLOCKED);
+		CHK(reac_pacer_pace_source(&p) == REAC_PACE_FREE_RUN);
 
 		/* The RME appears as the graph driver, running +18 ppm vs the host. */
 		for (int i = 0; i < 200; i++) {
@@ -137,6 +139,12 @@ int main(void)
 		CHK(p.clock.state == REAC_CLOCK_LOCKED);
 		CHK(p.slot_period_ns < NOMINAL_NS);        /* fast reference -> shorter */
 		CHK(p.slot_period_ns == 124998L);          /* 125000 / 1.000018 */
+		/* AND THE SEGMENT'S PUBLISHED PACE SAYS SO (0.5.4). This is the rig's own
+		 * state, measured 2026-09-08/09: the journal read "locked to graph clock
+		 * (api.alsa.0)" and reac.pace.source read "free-run", because the playback
+		 * door built its arbitration with the constant. The discipline lives on the
+		 * pacer thread, so what the door reads is this mirror. */
+		CHK(reac_pacer_pace_source(&p) == REAC_PACE_GRAPH_REF);
 
 		/* The transcript names the device, not just the tier. */
 		{
@@ -165,6 +173,10 @@ int main(void)
 		run_slots(&p, REAC_CLOCK_TICK_SLOTS, &now);
 		CHK(p.clock.state == REAC_CLOCK_HOLDOVER);
 		CHK(p.slot_period_ns == held);
+		/* HOLDOVER IS NOT A REFERENCE. The period is the last good one and nothing is
+		 * steering it now, so the published pace is free-run: naming the device we
+		 * stopped following would tell a console we are locked to a box that is out. */
+		CHK(reac_pacer_pace_source(&p) == REAC_PACE_FREE_RUN);
 		{
 			char *buf = NULL;
 			size_t len = 0;
@@ -215,6 +227,7 @@ int main(void)
 		CHK(p.clock.state == REAC_CLOCK_LOCKED);
 		CHK(p.slot_period_ns > NOMINAL_NS);        /* slow reference -> longer */
 		CHK(p.slot_period_ns == 125003L);          /* 125000 / 0.999977 */
+		CHK(reac_pacer_pace_source(&p) == REAC_PACE_BOX_SLOPE);
 		{
 			char *buf = NULL;
 			size_t len = 0;

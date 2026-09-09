@@ -30,6 +30,7 @@
 
 #include "reac_disco.h"
 #include "reac_master.h"   /* enum reac_master_state: the FSM's OWN state */
+#include "reac_clock.h"    /* the discipline this vocabulary reports on */
 
 #include <stdint.h>
 
@@ -154,6 +155,31 @@ const char *reac_segment_refusal(enum reac_rival_kind rival, int probing,
 /** Wire names, stable across versions — these strings ARE the published prop values. */
 const char *reac_segment_master_name(enum reac_segment_master s);
 const char *reac_pace_source_name(enum reac_pace_source p);
+
+/**
+ * The pacer's clock discipline, in the vocabulary a segment PUBLISHES (0.5.4).
+ *
+ * Two enums describe one fact from opposite ends: `reac_clock_source` is what the DLL is
+ * steering to, `reac_pace_source` is what a console reads off the segment's row. Nothing
+ * mapped between them until 0.5.4, so the playback door published the constant
+ * `REAC_PACE_FREE_RUN` — true under the 2026-08-21 config of record, in which clock-follow
+ * was off, and false since 0.5.0 made following the default. Measured on the rig
+ * 2026-09-08/09: the journal said `locked to graph clock (api.alsa.0)` and the prop said
+ * `free-run`, which is the daemon contradicting itself in public.
+ *
+ * ONLY `REAC_CLOCK_LOCKED` NAMES A REFERENCE. LOCKING is a claim about the future and
+ * HOLDOVER is a frozen period nothing is steering right now; both are running on
+ * CLOCK_MONOTONIC at this instant, which is what free-run MEANS. Naming the device we
+ * stopped following would be the same lie as a soft meter.
+ *
+ * The WIRE never reaches here in practice — a slave runs no pacer, and a segment paced by
+ * a foreign master is told so by the arbitration itself — and is mapped anyway rather than
+ * falling through as a reference we discipline ourselves to.
+ *
+ * PURE.
+ */
+enum reac_pace_source reac_pace_from_clock(enum reac_clock_source src,
+                                           enum reac_clock_state state);
 
 /**
  * Compute the segment aggregate.
