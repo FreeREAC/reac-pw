@@ -101,6 +101,13 @@ struct reac_sink_cfg {
 	 *     joined and are driving audio into. Its own identity, the segment name, the
 	 *     head-amp control keys and the discovery table are unaffected. */
 	int joined_box_master;
+	/* THE BOX THIS WIRE'S WIDTH IDENTIFIED, when `joined_box_master` is set — the
+	 * matrix row `reac_box_master_model` matched EXACTLY (0.5.2), never a fallback.
+	 * A box on M runs no handshake, so nothing about its preamps is ever announced
+	 * to us; this row is what the wire already said. Read for the head-amp
+	 * capability keys and nothing else. NULL where no row matched the width, and
+	 * then those keys stay absent — the console's own bar for "not answered". */
+	const struct reac_box_model *box_master_model;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX

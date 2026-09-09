@@ -1098,6 +1098,35 @@ grant sweep. On a box-master wire there is no sweep to protect and there never w
 guard admits `tick_on_rx` as well; every other emission on that path is a FILLER, which is what
 the overlay is allowed to overwrite in either role.
 
+**AND THE CAPABILITIES THE BOX NEVER DECLARES ARE PUBLISHED FROM WHAT THE WIRE ALREADY SAID.**
+Found on the rig with 0.5.5 running, 2026-09-09: the wire proof held — 8000 box frames a second
+(340 B from `00:40:ab:c4:dc:9c`) against 8000 downstream frames a second (1492 B from our NIC),
+1:1 — and the console still could not move a preamp. `reac-playback.enp128s20f0u2` published
+`reac.headamp.channels=0` beside `reac.headamp.channels=16` on the S-1608's segment, so the
+console's row for the S-0808's input 1 read `delivery.reached=false` and refused every gain, pad
+and phantom write BEFORE it reached the wire. The keys are seeded empty in the master role and
+filled the moment a box is recognized off its cold-connect; a stagebox on M sends no
+cold-connect and no config-announce, so there was nothing to recognize and there never would
+have been. The ruling covers it — sending is always the same — so the two keys come from the
+evidence this wire does carry:
+
+| key | where it comes from on a box-master wire |
+|---|---|
+| `reac.headamp.channels` | the model row's own `in_ch`, from the row whose `in_ch` EQUALS the geometry the box broadcasts (0.5.2's exact match; a fallback row would publish preamps for a chassis nobody identified) |
+| `reac.headamp.base` | that row's DECLARATION byte, `config_block[7] × 0x10` — the chassis strap the model announces when it announces at all (`reac_ports.h`, `REAC_HEADAMP_BASE_FROM_CONFIG_BYTE7`) |
+| `reac.headamp.caps` | the constant phantom/pad/sens trio, exactly as in the master role |
+
+**The base is READ, not derived, and that distinction is one the master role already paid for.**
+It is not a function of the width and must never become one: an S-1608 is 16 inputs at base 32
+and an S-4000S is 32 inputs at base 0. Reading it out of the matrix row the width identified is
+reading the same declaration a served box would have sent us; computing it from the width is the
+re-derivation `sink_publish_link_props` retired. A width no row matches publishes neither key,
+and the console's "not answered" bar stands.
+
+The proof issues the write THROUGH that published path — it reads `channels`/`base`/`caps` off
+the node and composes input 1's key as a console does — so a wrong base cannot hide behind a test
+that composes with its own assumption.
+
 ### The rejoin-after-drop defect, and what the veth could not reproduce
 
 **Measured on the rig, 2026-09-09 13:36** (`/home/pau/.claude/jobs/87a4861e/tmp/s0808-rejoin.log`),
@@ -1152,7 +1181,8 @@ than a second implementation of the frame layout — reports what arrived. Measu
 | a 0.5 FS 1 kHz sine into `reac-playback.<segment>` | **−17.02 dBFS RMS on slots 0 and 1**, peak −14.00 (a sine's own 3.01 dB crest, so the wire carries the waveform and not an interleave of it with silence) |
 | the same tone 20 dB down | **−37.02 dBFS**, a delta of **20.01 dB** |
 | a slot nobody fed | **−999 dBFS** — digital silence |
-| a head-amp write on the segment | decoded off the wire as **ch 2, param 0 (phantom), value 1** |
+| head-amp capabilities published | **channels 8, base 0, caps phantom,pad,sens** — the S-0808 row's own width and strap |
+| a head-amp write composed from them (input 1 → wire ch 0) | decoded off the wire as **ch 0, param 2 (sens), value 20** |
 | the box goes quiet for 1.5 s | **0** frames sent |
 | the box comes back, same window | **2658** frames sent |
 
@@ -1221,7 +1251,7 @@ cycle with the first join still passing.
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
-| `tests/box-master-sends-downstream.sh` | **the 0.5.5 job, measured at the far end of the cable**: the emission ratio, the 1492 B frame, nothing before the box's first frame, a tone through `reac-playback` decoded back off the wire at two levels 20 dB apart, a head-amp write read out of a control block we sent, and a quiet box stopping the downstream. Needs a session manager (a tone has to be LINKED) and skips without one |
+| `tests/box-master-sends-downstream.sh` | **the 0.5.5 job, measured at the far end of the cable**: the emission ratio, the 1492 B frame, nothing before the box's first frame, a tone through `reac-playback` decoded back off the wire at two levels 20 dB apart, the head-amp capabilities the node publishes and a write COMPOSED FROM THEM read out of a control block we sent, and a quiet box stopping the downstream. Needs a session manager (a tone has to be LINKED) and skips without one |
 | `tests/box-master-rejoins.sh` | **a box-master segment dropped and heard again still carries audio, both ways**, twice in a row — the 2026-09-09 13:36 rig defect's measurement. The accepted-frame count is read only from the journal written AFTER the drop, because a feeder that accepts nothing prints no telemetry line at all |
 | `tests/fake_box_master.c` | the stagebox on M: broadcast box geometry with a distinct constant per channel and one master-only record a second, built by the same libreac builders the unit fixtures use. Since 0.5.5 it also LISTENS — counting, decoding and reporting what the daemon sends back, through libreac's own oracles so it cannot agree with a daemon that got the layout wrong. `SIGUSR1` pauses transmission while it keeps listening |
 | `tests/` | 69 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |

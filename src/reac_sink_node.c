@@ -47,6 +47,7 @@
 
 #include <reac/reac.h>
 #include <reac/reac_encode.h>  /* reac_downstream_build — libreac owns the frame layout */
+#include <reac/reac_ports.h>   /* the head-amp base law: strap byte 7 x 0x10 (0.5.5) */
 #include <pipewire/pipewire.h>
 #include <pipewire/stream.h>
 #include <spa/param/param.h>
@@ -244,6 +245,7 @@ struct reac_sink_node {
 	struct spa_io_rate_match *rate_match;
 	int rate_match_off;              /* const after open; REACPW_RATE_MATCH=0 */
 	int joined_box_master;           /* 0.5.5: a box masters this wire; we drive it anyway */
+	const struct reac_box_model *box_master_model;  /* the row its width matched; may be NULL */
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -1499,6 +1501,38 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	char desc[128];
 	sink_build_desc(desc, sizeof desc, n->label[0] ? n->label : NULL, n->channels);
 
+	/* THE HEAD-AMP CAPABILITIES A BOX MASTER NEVER DECLARES (0.5.5). In the master
+	 * role these two seed empty and are filled by sink_publish_link_props the moment
+	 * a box is recognized off its cold-connect. A stagebox on M sends no
+	 * cold-connect and no config-announce — there is nothing to recognize and there
+	 * never will be — so the console read `reac.headamp.channels=0` on a joined
+	 * segment, took it as "this box has no preamps", and every gain, pad and phantom
+	 * write for it was refused before it reached the wire (rig, 2026-09-09, against
+	 * the S-1608 on the neighbouring segment reading 16).
+	 *
+	 * Both come from what the wire ALREADY told us, and neither is a guess:
+	 *   - `channels` is the model row's own input width, and the row is the one whose
+	 *     `in_ch` EQUALS the geometry the box broadcasts (0.5.2's exact match — a
+	 *     fallback row would publish preamps for a chassis nobody identified);
+	 *   - `base` is that row's DECLARATION byte, `config_block[7] * 0x10` — the
+	 *     chassis strap this model announces when it does announce
+	 *     (reac_ports.h's REAC_HEADAMP_BASE_FROM_CONFIG_BYTE7). It is READ from the
+	 *     declaration, not computed from the width: the width and the strap are not
+	 *     collinear (an S-1608 is 16 in at base 32, an S-4000S 32 in at base 0), which
+	 *     is exactly why the master role stopped deriving it and carries it on its own
+	 *     atomic instead.
+	 * A width no row matches leaves both at the master role's seeds, because then
+	 * nothing on this wire has said which chassis it is. */
+	char ha_seed_channels[16] = "0";
+	char ha_seed_base[16] = REAC_BOX_SOURCE_NONE;
+	if (n->joined_box_master && n->box_master_model) {
+		snprintf(ha_seed_channels, sizeof ha_seed_channels, "%d",
+		         n->box_master_model->in_ch);
+		snprintf(ha_seed_base, sizeof ha_seed_base, "%d",
+		         n->box_master_model->config_block[REAC_HEADAMP_BASE_OFF]
+		           * REAC_HEADAMP_BASE_MULTIPLIER);
+	}
+
 	n->stream = pw_stream_new_simple(
 		n->loop,
 		"reac:playback",
@@ -1526,14 +1560,14 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			REAC_PROP_BOX_WIDTH, "0x0",
 			REAC_PROP_BOX_SOURCE, REAC_BOX_SOURCE_NONE,
 			REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE,
-			REAC_PROP_HEADAMP_BASE, REAC_BOX_SOURCE_NONE,
+			REAC_PROP_HEADAMP_BASE, ha_seed_base,
 			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
 			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
 			 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
 			 * box's preamp shape and drives it on ONE node. `channels` seeds "0" and
 			 * is bumped to the model's input width by sink_publish_link_props on
 			 * recognition; `caps` is the constant phantom/pad/sens trio. */
-			REAC_PROP_HEADAMP_CHANNELS, "0",
+			REAC_PROP_HEADAMP_CHANNELS, ha_seed_channels,
 			REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
 			/* Correct-at-(re)build discovery (task #178): from this node's t=0 we are
 			 * listening on this NIC; seq "0"/"[]" is re-stamped from the pacer's disco
@@ -1639,6 +1673,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->inst = cfg->inst;          /* stable for the process; used by every filter build */
 	n->disco_ifname = cfg->ifname;
 	n->joined_box_master = cfg->joined_box_master;
+	n->box_master_model = cfg->box_master_model;
 	n->channels = 0;              /* no graph filter yet — DEFERRED to reac_sink_node_ensure */
 	n->sample_rate = cfg->sample_rate;
 	snprintf(n->label, sizeof n->label, "%s", cfg->label ? cfg->label : "");
