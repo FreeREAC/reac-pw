@@ -1068,6 +1068,14 @@ for SEG in trunk0.11 trunk0.12; do
 	done
 	[ -n "$OK" ] && [ "$OK" -gt 100 ] || {
 		echo "FAIL: $SEG is up and decoded no audio (ok='$OK'), so its ports carry nothing"
+		# WHAT THE COUNTER WAS DOING, not just what it ended at. ok=1 with a live wire has
+		# two very different causes and the line already carries both: `other=` climbing is
+		# the gate refusing a source it locked onto, and a SEQUENCE of ok=1 lines is a
+		# segment being served again and again. A failure that cannot tell them apart
+		# costs a whole rig session to reproduce.
+		echo "      the feeder's own telemetry, last 6 lines:"
+		grep "reac_rx: \[$SEG\]" "$LOG" | tail -6 | sed "s/^/        /"
+		echo "      serves=$(grep -c "\[$SEG\] segment up" "$LOG") drops=$(grep -c "\[$SEG\] segment dropped" "$LOG")"
 		grep "reac_rx: \[$SEG\]" "$LOG" | tail -3
 		grep -E "trunk" "$LOG" | tail -40; ip -o link show | cut -d: -f2
 		tail -3 "$RT/tb11.log" "$RT/tb12.log" "$RT/tb13.log"; exit 1; }
