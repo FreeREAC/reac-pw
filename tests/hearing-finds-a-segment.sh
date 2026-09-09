@@ -824,18 +824,29 @@ done
 	echo "FAIL: the feeder decoded no audio from the box master $BOXMAC (ok='$RXOK'), so"
 	echo "      the 8 ports it published carry nothing"; grep "reac_rx: \[boxm0\]" "$LOG" | tail -3
 	exit 1; }
-# AND WE PUT NOTHING ON THAT WIRE. A box on M runs no handshake, so a slave engine
-# flooding at it would be noise: the join is receive-only. This is an ABSENCE claim, so its
-# positive control is the SAME capture counting the box's own frames over the same window.
+# AND WE DRIVE THAT WIRE (0.5.5). Until 0.5.4 this phase asserted the opposite -- a
+# receive-only join that put NOTHING on the wire -- and the operator's ruling of 2026-09-09
+# overturned it: "sending is always the same, being clock slave is only part of the
+# enrollment". The downstream is what a box CONSUMES whoever owns the clock. Here that is
+# asserted at the coarse grain this file works at, on the peer's own capture and against the
+# same live control; the CADENCE (one frame per box frame), the placement of the audio and
+# the head-amp are measured frame by frame in tests/box-master-sends-downstream.sh.
 sleep 1
 OURS_B=$(other "$RT/boxm0.cnt" "$(echo $BOXMAC | tr -d :)")
 BOXFR=$(seen x "$RT/boxm0.cnt" "$(echo $BOXMAC | tr -d :)")
 [ "$BOXFR" -gt 500 ] || {
-	echo "FAIL: the peer capture has only $BOXFR frames from the box master itself, so it"
-	echo "      cannot testify that we sent nothing"; cat "$RT/boxm0.cnt"; exit 1; }
-[ "$OURS_B" -lt 50 ] || {
-	echo "FAIL: a receive-only join put $OURS_B frames on the wire -- there is nothing on"
-	echo "      the far end that could answer them"; cat "$RT/boxm0.cnt"; exit 1; }
+	echo "FAIL: the peer capture has only $BOXFR frames from the box master itself, so what"
+	echo "      it says about our own frames cannot be trusted either"
+	cat "$RT/boxm0.cnt"; exit 1; }
+[ "$OURS_B" -gt 500 ] || {
+	echo "FAIL: a joined box master received $OURS_B frames from us. Since 0.5.5 this wire"
+	echo "      carries our downstream -- the box's outputs come from it"
+	cat "$RT/boxm0.cnt"; exit 1; }
+# AND ITS OUTPUTS ARE ON THE GRAPH. A segment whose box we can only listen to is what
+# 0.5.1 shipped; the playback node is how an operator routes to it.
+daemon_nodes $PID | grep -q "^reac-playback.boxm0 " || {
+	echo "FAIL: a joined box master published no reac-playback.boxm0, so its outputs are"
+	echo "      unroutable"; daemon_nodes $PID; exit 1; }
 kill -TERM $SNIFF4 2>/dev/null; wait $SNIFF4 2>/dev/null
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 down_pair boxm0 mbox0

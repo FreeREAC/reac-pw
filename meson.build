@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '0.5.4',
+  version: '0.5.5',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -368,13 +368,38 @@ test('reac_link_up_reestablishes',
 fake_box_master = executable('fake-box-master',
   ['tests/fake_box_master.c'],
   include_directories : [include_directories('src')],
-  dependencies : [libreac_dep],
+  dependencies : [libreac_dep, m_dep],
   install : false)
 
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
   args : [reac_pw_exe, fake_box_master],
   timeout : 600)
+
+# --- whole-binary test: a box master is JOINED **AND DRIVEN** (0.5.5) ---------
+#
+# The operator's ruling of 2026-09-09 — "sending is always the same, being clock slave is
+# only part of the enrollment" — measured at the far end of the cable: the emission ratio
+# (one downstream frame per box frame), the 1492 B frame, a tone played into
+# reac-playback.<segment> and decoded back off the wire, a head-amp write decoded out of a
+# control block the daemon sent, and that a box going quiet stops the downstream. Needs a
+# session manager (the tone has to be LINKED) and skips without one.
+test('reac_box_master_sends_downstream',
+  find_program('tests/box-master-sends-downstream.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 420)
+
+# --- whole-binary test: the rejoin after a drop still carries audio ----------
+#
+# The 2026-09-09 13:36 rig defect: a box-master segment dropped by a link loss past the hold
+# and heard again published digital silence and its create-time property seeds over a wire
+# carrying 8019 frames a second. Two full cycles, and the accepted-frame count is read ONLY
+# from the journal written after the drop — a feeder that accepts nothing prints no
+# telemetry line at all, and the previous listener's healthy number is one `tail -1` away.
+test('reac_box_master_rejoins',
+  find_program('tests/box-master-rejoins.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 300)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
