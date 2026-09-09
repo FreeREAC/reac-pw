@@ -141,6 +141,26 @@ See [DESIGN.md](DESIGN.md) for the data path, the clock topologies, and the TX
 master handshake + pacer (S2/S6). This realizes `NATIVE-REAC-DESIGN.md` §3.4 (REAC
 as pw-filter nodes, adaptive resample via `io_rate_match`).
 
+## Releasing
+
+`.github/workflows/release-rpm.yml` builds the reac-pw RPM in a `fedora:44`
+container from `packaging/reac-pw.spec` and publishes it into the same shared
+dnf tree FreeMixer/openmixer's own release publishes into (one repo, one
+`openmixer.repo`, one GPG key — `dnf install openmixer-full` needs `reac-pw`
+resolvable from it). It is `workflow_dispatch` only, never on push:
+
+```
+gh workflow run release-rpm.yml -f tag=v0.5.3 -f sign=false   # dry run, publishes nothing
+gh workflow run release-rpm.yml -f tag=v0.5.3 -f sign=true    # signs and pushes to the shared R2 bucket
+```
+
+`tag` must already exist and match `v[0-9]*`. `sign` defaults to `false`, which
+runs `packaging/publish-repo.sh --no-sign` and stops before the push step — the
+assembled tree is still attached to the run as an artifact for inspection.
+Building needs `pkgconfig(libreac) >= 0.7.1` resolvable from the same shared
+tree (`dnf builddep` against the spec), so libreac's own equivalent publish
+must have landed there first.
+
 ## Status
 
 - **RX source node** — implemented (pcap + live), follower clock with ppm
