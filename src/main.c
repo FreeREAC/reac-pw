@@ -1257,7 +1257,11 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                                .box_master_frame_box =
 		                                    (getenv("REACPW_BOX_MASTER_FRAME") &&
 		                                     strcmp(getenv("REACPW_BOX_MASTER_FRAME"),
-		                                            "box") == 0) };
+		                                            "box") == 0),
+		                                .box_master_burst_chanmap =
+		                                    (getenv("REACPW_BOX_MASTER_BURST") &&
+		                                     strcmp(getenv("REACPW_BOX_MASTER_BURST"),
+		                                            "chanmap") == 0) };
 		if (reac_slave_open(&L->slave, &slcfg, &L->tx_ring) == 0) {
 			L->slave_open = 1;
 			if (reac_slave_start(&L->slave) == 0) {

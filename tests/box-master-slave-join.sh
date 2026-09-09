@@ -267,6 +267,21 @@ HBP=$(awk '$1 == "up" && $2 == "hb_period" { print $3 }' "$RT/box.rep")
 python3 -c "import sys; sys.exit(0 if 0.3 < $HBP < 4.0 else 1)" || {
 	echo "FAIL: the heartbeat period is $HBP s — a linked box beats about once a second"
 	exit 1; }
+# THE STATE CLAIM AND WHEN IT WAS MADE. The rig sent the ESTABLISHED descriptor (007a) from
+# its first unicast frame and was never granted; the box that WAS granted sent zeros there
+# until after its grant. The emulator refuses a pre-grant descriptor now, so this reads the
+# frame index of each and requires the order.
+DESC=$(awk '$1 == "descriptor" { print $3 }' "$RT/box.rep")
+GRF=$(awk '$1 == "descriptor" { print $5 }' "$RT/box.rep")
+DBG=$(awk '$1 == "descriptor" { print $7 }' "$RT/box.rep")
+[ "$DBG" = "0" ] || {
+	echo "FAIL: the ESTABLISHED descriptor was on the wire before the grant — we told the"
+	echo "      box we were linked to it before it granted anything"; exit 1; }
+[ -n "$DESC" ] && [ "$DESC" != "0" ] && [ "$DESC" -gt "${GRF:-0}" ] || {
+	echo "FAIL: the descriptor never appeared after the grant (first='$DESC' grant='$GRF'),"
+	echo "      so an established peer is indistinguishable from a joining one"; exit 1; }
+echo "MEASURED: ESTABLISHED descriptor first at peer frame $DESC, grant at $GRF — after, as"
+echo "          the granted box sent it"
 echo "MEASURED: established; $HB heartbeats, period $HBP s (frame-counted: this emulator"
 echo "          paces slower than the rate the daemon recovered, and it scales with that)"
 

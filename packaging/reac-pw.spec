@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,18 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-5
+- WE WERE CLAIMING THE LINK BEFORE IT WAS GRANTED. Our unicast fillers carried the ESTABLISHED
+  descriptor (00 7a x 16) from the first frame; the box that WAS granted sent zeros there for
+  the whole cold-connect and started the descriptor only after its grant. The claim now
+  follows the FSM in either carrier, because it is a statement about the pairing and not about
+  the geometry it rides in.
+- The veth emulator was granting on the control bytes alone and would have passed all three
+  refused builds. It now refuses a peer whose pre-grant frames carry the descriptor, and the
+  proof prints where the descriptor appears against where the grant was given.
+- REACPW_BOX_MASTER_BURST=free|chanmap, unproven and labelled so: the granted box's burst
+  landed 1.0 ms after a chanmap, which is one sample, so it is a knob rather than a change.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-4
 - REAC_SRC_MAC / REAC_SRC_MAC_<segment>: the source address per wire, from the layered conf,
   because --src-mac has always existed and the packaged daemon takes no arguments. It

@@ -81,6 +81,9 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->ch_base = (s->box_channels == 16) ? 0x20 : 0x00;
 	s->box_master = cfg && cfg->box_master;
 	s->bm_frame_box = cfg && cfg->box_master_frame_box;
+	s->bm_burst_chanmap = cfg && cfg->box_master_burst_chanmap;
+	s->bm_chanmap_hit = 0;
+	s->bm_announced = 0;
 	(void)0;   /* the box-master declaration is a captured golden, not a width */
 	s->bm_seq = 0;
 	s->bm_burst = 0;
@@ -267,6 +270,27 @@ static const uint8_t BM_ANNOUNCE_BLK[34] = {
 	0x00, 0x50,
 };
 
+/* THE ESTABLISHED DESCRIPTOR, AND WHEN IT MAY BE CLAIMED (0.5.6-5).
+ *
+ * `00 7a` sixteen times, filling the control area [18:50] of a FILLER frame. This file
+ * already named it — "the descriptor, not the audio, is what marks the ESTABLISHED unicast" —
+ * and the rig showed we were saying it too early. Byte for byte against the box that WAS
+ * granted (`box-to-box-enroll.pcap`), its unicast fillers carry ZEROS there from the moment
+ * it goes unicast (t=6.619) until after the grant lands (6.84), and the descriptor only from
+ * 7.619 on. Every frame we sent carried it from the first, which tells a box we are already
+ * linked to it before it has granted anything, and a box asked to enrol a peer that claims to
+ * be enrolled has nothing left to do.
+ *
+ * So the claim follows the FSM and nothing else, in either carrier: the descriptor is a
+ * statement about the pairing, not about the geometry it rides in. */
+static void bm_mark_established(uint8_t *frame)
+{
+	for (int i = 0; i < 16; i++) {
+		frame[18 + i * 2]     = 0x00;
+		frame[18 + i * 2 + 1] = 0x7a;
+	}
+}
+
 /* ---- THE MIXER'S SIDE OF A BOX-MASTER WIRE (0.5.6, operator ruling) ---------------
  *
  * "mixer always sends 40ch, boxes send their width only."
@@ -347,20 +371,41 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		size_t cl = 0;
 		int flooding = (d->emit == REAC_SLAVE_EMIT_FLOOD_FILLER);
 		stage_inputs(s, buf, planar);
+		/* NOT LINKED UNTIL THE GRANT IS ACCEPTED. The FSM is the only thing that
+		 * knows, and it is what the descriptor below follows. */
+		int linked = (s->fsm.state == FSM_ESTABLISHED);
 		if (s->bm_frame_box) {
 			/* THE EXPERIMENT'S OTHER CORNER (0.5.6-3): an exact S-1608 imitation.
 			 * The frame is the box's own 340 B geometry at the master's width, in
 			 * the flood, as the carrier of the announce and the burst, and in the
 			 * steady state — and everything after the flood is unicast to the box,
-			 * which is how the box that WAS granted sent it. */
-			len = flooding
-				? reac_ctrl_build_flood_filler(frame, BCAST, s->src, counter,
-				      s->box_channels, planar, REAC_SAMPLES_PER_PKT)
-				: reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src,
-				      counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+			 * which is how the box that WAS granted sent it.
+			 *
+			 * BEFORE THE GRANT THE CARRIER IS THE FLOOD'S, JUST UNICAST (0.5.6-5):
+			 * that builder leaves the control area ZERO, which is what the granted
+			 * box sent for the whole cold-connect. The upstream filler — the one
+			 * that stamps the ESTABLISHED descriptor — is only reached once we are
+			 * actually established. */
+			if (flooding)
+				len = reac_ctrl_build_flood_filler(frame, BCAST, s->src, counter,
+				          s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+			else if (linked)
+				len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+				          s->src, counter, s->box_channels, planar,
+				          REAC_SAMPLES_PER_PKT);
+			else
+				len = reac_ctrl_build_flood_filler(frame, s->fsm.master_mac,
+				          s->src, counter, s->box_channels, planar,
+				          REAC_SAMPLES_PER_PKT);
 			sll = flooding ? bcast_sll : uni_sll;
 		} else {
+			/* `reac_downstream_build` leaves the control area zero by contract, so
+			 * the mixer carrier is already honest before the grant; the claim is
+			 * ADDED once the pairing is real. Same state, same field, either
+			 * geometry. */
 			len = bm_downstream(s, frame, planar, counter);
+			if (linked && len)
+				bm_mark_established(frame);
 			sll = bcast_sll;    /* a desk's downstream is broadcast */
 		}
 
@@ -378,7 +423,33 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					      REAC_SAMPLES_PER_PKT);
 				s->bm_burst--;
 			} else if (d->with_join) {
-				if (s->bm_seq == 0) {
+				if (s->bm_burst_chanmap) {
+					/* ARMED BY THE BOX, NOT BY OUR OWN GRID. The announce goes
+					 * out once and then the burst waits for the box's chanmap —
+					 * the frame the granted box's burst landed one millisecond
+					 * behind. Re-announce only if the wait is not answered
+					 * within a full grid cycle, so a box that never chanmaps
+					 * cannot leave us silent for ever. */
+					if (!s->bm_announced) {
+						memcpy(ctl + 16, BM_ANNOUNCE_BLK,
+						       sizeof BM_ANNOUNCE_BLK);
+						cl = 34;
+						s->bm_announced = 1;
+						s->bm_chanmap_hit = 0;
+					} else if (s->bm_chanmap_hit) {
+						s->bm_chanmap_hit = 0;
+						s->bm_burst = 3;
+					}
+					if (s->bm_burst == 3) {
+						cl = reac_ctrl_build_coldconnect(ctl,
+						         s->fsm.master_mac, s->src, counter,
+						         s->box_channels, planar,
+						         REAC_SAMPLES_PER_PKT);
+						s->bm_burst--;
+					}
+					if (++s->bm_seq >= 24)
+						{ s->bm_seq = 0; s->bm_announced = 0; }
+				} else if (s->bm_seq == 0) {
 					/* WE DECLARE OURSELVES, NOT THE PEER — and we declare the
 					 * one thing this chassis has ever granted. 0.5.6-1 derived
 					 * the declaration from the MASTER's width and announced
@@ -712,6 +783,11 @@ static void *slave_loop(void *arg)
 		 * master MAC from the L2 source of a master-kind frame. */
 		if (memcmp(p.src, s->src, 6) == 0)
 			continue;   /* our own echo on a hub/loopback — not a tick */
+
+		/* THE BOX'S CHANMAP, when the burst is armed by it (0.5.6-5). Same thread as
+		 * the emit below, so a plain flag is the whole synchronisation. */
+		if (s->bm_burst_chanmap && p.kind == REAC_CTRL_MASTER_HB)
+			s->bm_chanmap_hit = 1;
 
 		atomic_fetch_add_explicit(&s->rx_master_frames, 1, memory_order_relaxed);
 

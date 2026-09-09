@@ -1669,6 +1669,45 @@ chanmap walk (0.5.1 measured the same thing as "no handshake"). The burst does l
 after a chanmap, which is striking, but it is one sample and it follows from a fixed 214 ms
 delay after the announce. **No probe-response relation is established, so none is implemented.**
 
+### The state we were claiming before we had it (0.5.6-5)
+
+The box-shaped run was byte-identical to the granted S-1608 everywhere the control layer
+looks, and was still refused. Below it, one field:
+
+```
+                                   control area [16:50]
+S-1608  t=6.619  unicast begins    0000 0000000000000000000000000000000000
+        t=6.84   GRANT
+S-1608  t=7.619  after the grant   0000 007a007a007a007a007a007a007a007a…
+ours    t=0.000  first frame on    0000 007a007a007a007a007a007a007a007a…
+```
+
+`00 7a` × 16 is the ESTABLISHED descriptor, and this file already said so: *"the descriptor,
+not the audio, is what marks the ESTABLISHED unicast."* The granted box sends ZEROS there for
+the whole cold-connect and starts the descriptor only after its grant. We sent it from the
+first unicast frame — telling the box we were already linked to it before it had granted
+anything, and a box asked to enrol a peer that claims to be enrolled has nothing left to do.
+
+**The claim now follows the FSM and nothing else, in EITHER carrier**, because it is a
+statement about the pairing rather than about the geometry it rides in. In `box` shape the
+pre-grant filler is the FLOOD's builder, just unicast — that one leaves the control area zero,
+which is exactly what the granted box sent; the upstream filler that stamps the descriptor is
+only reached once established. In `mixer` shape `reac_downstream_build` already leaves it
+zero, and the descriptor is stamped after the grant.
+
+**AND THE EMULATOR WAS GRANTING ON THE CONTROL BYTES ALONE.** It would have passed all three
+refused builds: it read the announce and the burst and never looked at the carrier they rode
+in. It now refuses a peer whose pre-grant frames carry the descriptor, and the proof prints
+the frame index where the descriptor first appears against the frame the grant was given at —
+measured, `mixer`: descriptor at peer frame 14261, grant at 7061; `box`: 8801 against 1601.
+Sabotage-verified: claiming it before the grant takes the proof red at the establishment.
+
+**`REACPW_BOX_MASTER_BURST=free|chanmap`** ships beside it, unproven and labelled so. `free`
+(the default) is the grid the granted box appeared to use — announce, then the burst ~200 ms
+later. `chanmap` arms the burst on the box's own chanmap instead, because the S-1608's burst
+landed **1.0 ms** after one; that is striking at n=1 and a coincidence until a rig says
+otherwise, so it is a knob and not a change.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does

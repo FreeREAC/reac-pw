@@ -216,3 +216,16 @@ stand-in a box-master join uses. Its first use is that experiment: putting a REA
 box's address, `00:40:ab:c4:80:41`, on the wire to see whether the S-0808 grants an address
 it has enrolled before. **Two devices must never carry one address at the same time** — the
 box whose MAC is borrowed has to be off the segment.
+
+## `REACPW_BOX_MASTER_BURST` — `free` (default) | `chanmap`
+
+WHAT ARMS THE COLD-CONNECT BURST on a box-master wire. `free` is the grid the granted S-1608
+appeared to use: the config-announce, then the burst about 200 ms later, retried. `chanmap`
+arms it on the box's own chanmap (`cdea 01 03 0019`) instead, sending the burst on the next
+frame after one arrives.
+
+It exists because the S-1608's burst landed **1.0 ms** after a chanmap in the ground-truth
+capture. That is striking, and it is one sample: with a chanmap about once a second and a
+fixed 214 ms delay from the announce, the coincidence has a plausible innocent explanation.
+So it is a knob to try on the rig, not a claim about the protocol — flip it without a rebuild
+and read the box's lamp.
