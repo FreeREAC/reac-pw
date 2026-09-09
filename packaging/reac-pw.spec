@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.5}
+Version:        %{?version_override}%{!?version_override:0.5.6}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -92,6 +92,36 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-1
+- A WIRE A STAGEBOX MASTERS IS NOW ENROLLED WITH, THE WAY A STAGEBOX ENROLS. Operator
+  ruling: "It is only a matter of following the same protocol that we expect." A 75 s
+  capture of a real S-1608 in slave mode meeting the real S-0808 in master mode, with
+  reac-pw stopped, is the recipe and it is followed exactly: read the master's width off
+  its broadcast (340 B = 8 slots), flood broadcast FILLER at THAT width, stop broadcasting
+  and unicast the config-announce, ~200 ms later the cold-connect burst, accept the grant
+  the master echoes back inside its own broadcast, then unicast at the wire rate with a
+  1 s heartbeat. The segment's reac-playback node feeds that upstream, so an operator can
+  route to the box master's outputs.
+- 0.5.5's desk downstream to a box master is RETIRED. It was the wrong shape: the capture
+  shows a box on M sends no announce at all, never changes a byte of its broadcast on
+  enrolment, and grants a SLAVE. The pacer is the master role's again.
+- NO HEAD-AMP KEYS ON A BOX-MASTER SEGMENT. 0.5.5 published channels=8/base=0 from the
+  model row; the write then reached the node and the real S-0808's preamp did not move
+  (floor -91.4 dBFS at gain 32, 52 and 32 again, against +18.9 dB on an enrolled S-1608 by
+  the same path), and the capture says why: no head-amp record travels in either direction
+  on that wire. A capability the wire cannot carry is a control that moves nothing.
+- reac.link-state FOLLOWS THE ENGINE, NOT THE HEARING. The rig: "S-0808 is not enrolled but
+  omx sees it available", with the box's own lamp unlocked. `probing` while listening,
+  flooding and waiting for the grant; `established` only once the unicast stream and the
+  heartbeat run. 0.5.2's rule that a receive-only join IS the slave role performed is
+  overturned with it, and the predicate that encoded it is gone.
+- Measured on a veth against the box-master emulator, which now grants the way the S-0808
+  does: flood 5142 frames of 340 B broadcast; announce then a 3-record cold-connect burst;
+  established with a heartbeat; a 0.5 FS tone into reac-playback read back off the UPSTREAM
+  at -17.0 dBFS on slots 0/1 with -999 on an unfed slot and 19.99 dB of delta for 20 dB at
+  the source; 0 frames before the box spoke; link-state probing during the recipe and
+  established after; two drop/rejoin cycles carrying audio both ways.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.5-1
 - A STAGEBOX THAT MASTERS THE WIRE NOW GETS THE SAME DOWNSTREAM WE SEND A BOX WE MASTER.
   Operator ruling: sending is always the same, and being clock slave is only part of the
