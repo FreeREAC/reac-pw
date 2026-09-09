@@ -281,24 +281,55 @@ python3 -c "import sys; sys.exit(0 if abs(($L0) - ($S0) - 20.0) < 1.5 else 1)" |
 echo "MEASURED: tone at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed slot 5 = $LQ dBFS;"
 echo "          -20 dB at the source reads $S0 dBFS, a delta of $DELTA dB"
 
-# ---- 5. A HEAD-AMP WRITE REACHES THE WIRE. -----------------------------------------
-# The write door is the playback node's SPA_PROP_params, exactly as in the master role; the
-# read is the emulator decoding the control block of a frame the daemon SENT.
-pw-cli set-param "$PLAY" Props '{ params = [ "reac.headamp.2.phantom", 1 ] }' >/dev/null 2>&1
+# ---- 5. A HEAD-AMP WRITE REACHES THE WIRE, THROUGH THE PUBLISHED PATH. -------------
+# The console does not know a wire channel. It reads reac.headamp.channels / .base off the
+# node and composes the key for INPUT 1 as base + 1 - 1; a `channels` of 0 means "this box
+# has no preamps" and its gain, pad and phantom writes are refused before they are sent.
+# That is what the rig read on a joined box master (2026-09-09, S-0808 at 0 against the
+# S-1608 on the neighbouring segment at 16) — so the capabilities are read HERE, from the
+# node, and the write is composed from them exactly as the console composes it.
+HA_CH=$(pw-dump | python3 -c '
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get("type") == "PipeWire:Interface:Node" and \
+       o["info"]["props"].get("node.name") == "reac-playback.bmx0":
+        p = o["info"]["props"]
+        print(p.get("reac.headamp.channels","(none)"), p.get("reac.headamp.base","(none)"),
+              p.get("reac.headamp.caps","(none)"))
+        break')
+set -- $HA_CH; HACH="${1:-}"; HABASE="${2:-}"; HACAPS="${3:-}"
+[ "$HACH" = "8" ] || {
+	echo "FAIL: reac-playback.bmx0 publishes reac.headamp.channels=$HACH. An S-0808 has 8"
+	echo "      preamps and its width is on the wire; a console reads 0 as 'no preamps'"
+	echo "      and never sends the write at all"; exit 1; }
+# The S-0808's chassis strap is 0 and the S-1608's is 32: the base is READ from the model
+# row's declaration byte, never computed from the width, so this pins the row and not a
+# formula that happens to agree at one width.
+[ "$HABASE" = "0" ] || {
+	echo "FAIL: reac.headamp.base=$HABASE; the S-0808 declares strap byte 0, so base 0"; exit 1; }
+case "$HACAPS" in
+  *phantom*|*sens*) : ;;
+  *) echo "FAIL: reac.headamp.caps=$HACAPS names no capability"; exit 1 ;;
+esac
+# COMPOSED THE WAY A CONSOLE COMPOSES IT: input 1 of this box is wire channel base + 0.
+WIRECH=$((HABASE + 0))
+pw-cli set-param "$PLAY" Props \
+	"{ params = [ \"reac.headamp.$WIRECH.sens\", 20 ] }" >/dev/null 2>&1
 for i in $(seq 40); do
 	HA=$(awk '$1 == "headamp" { print $3, $5, $7 }' "$RT/box.rep" 2>/dev/null)
 	[ -n "$HA" ] && break
 	sleep 0.25
 done
 [ -n "$HA" ] || {
-	echo "FAIL: a head-amp write on the segment never appeared in any control block the"
-	echo "      daemon sent — the reac.headamp.* keys on this node are decoration"
+	echo "FAIL: a head-amp write composed from this node's own published capabilities never"
+	echo "      appeared in any control block the daemon sent"
 	cat "$RT/box.rep"; exit 1; }
 set -- $HA
-[ "$1" = "2" ] && [ "$2" = "0" ] && [ "$3" = "1" ] || {
-	echo "FAIL: the head-amp record on the wire reads ch=$1 param=$2 value=$3; the write"
-	echo "      was channel 2, phantom (param 0), value 1"; exit 1; }
-echo "MEASURED: head-amp on the wire — ch $1, param $2 (phantom), value $3"
+[ "$1" = "$WIRECH" ] && [ "$2" = "2" ] && [ "$3" = "20" ] || {
+	echo "FAIL: the head-amp record on the wire reads ch=$1 param=$2 value=$3; the write was"
+	echo "      wire channel $WIRECH, sens (param 2), value 20"; exit 1; }
+echo "MEASURED: head-amp published as channels=$HACH base=$HABASE caps=$HACAPS; a write on"
+echo "          input 1 (wire ch $WIRECH) arrives as ch $1, param $2 (sens), value $3"
 
 # ---- 6. THE BOX GOES QUIET AND THE DOWNSTREAM STOPS WITH IT. -----------------------
 # A timeout is not a slot. This is the same law as "nothing before the first frame", in the

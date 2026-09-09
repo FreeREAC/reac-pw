@@ -1133,7 +1133,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * the pacer's tick and stops this node publishing a
 		                               * second copy of the segment's answer; every byte it
 		                               * sends is the same. */
-		                              .joined_box_master = c->join_box_master };
+		                              .joined_box_master = c->join_box_master,
+		                              /* And WHICH box, so the node can publish the
+		                               * head-amp capabilities a peer that runs no
+		                               * handshake will never declare. NULL where the
+		                               * width matched no row exactly. */
+		                              .box_master_model = c->join_box_master
+		                                  ? reac_box_master_model(c->wire_channels)
+		                                  : NULL };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
