@@ -315,21 +315,23 @@ esac
 WIRECH=$((HABASE + 0))
 pw-cli set-param "$PLAY" Props \
 	"{ params = [ \"reac.headamp.$WIRECH.sens\", 20 ] }" >/dev/null 2>&1
+# READ THE CELL, NOT THE LAST RECORD. Since the engine is handed its establishment
+# (0.5.5) the wire also carries the COMPLETE head-amp scene replay an enrolled box gets,
+# so "the last head-amp record" is whatever cell that sweep ended on.
 for i in $(seq 40); do
-	HA=$(awk '$1 == "headamp" { print $3, $5, $7 }' "$RT/box.rep" 2>/dev/null)
-	[ -n "$HA" ] && break
+	HAV=$(awk -v c="$WIRECH" '$1 == "headampcell" && $2 == c && $3 == 2 { print $4 }' \
+	      "$RT/box.rep" 2>/dev/null)
+	[ "$HAV" = "20" ] && break
 	sleep 0.25
 done
-[ -n "$HA" ] || {
-	echo "FAIL: a head-amp write composed from this node's own published capabilities never"
-	echo "      appeared in any control block the daemon sent"
+[ -n "$HAV" ] || {
+	echo "FAIL: no head-amp record for wire channel $WIRECH ever reached the wire"
 	cat "$RT/box.rep"; exit 1; }
-set -- $HA
-[ "$1" = "$WIRECH" ] && [ "$2" = "2" ] && [ "$3" = "20" ] || {
-	echo "FAIL: the head-amp record on the wire reads ch=$1 param=$2 value=$3; the write was"
-	echo "      wire channel $WIRECH, sens (param 2), value 20"; exit 1; }
+[ "$HAV" = "20" ] || {
+	echo "FAIL: wire channel $WIRECH's sens cell reads $HAV on the wire; the write was 20"
+	exit 1; }
 echo "MEASURED: head-amp published as channels=$HACH base=$HABASE caps=$HACAPS; a write on"
-echo "          input 1 (wire ch $WIRECH) arrives as ch $1, param $2 (sens), value $3"
+echo "          input 1 (wire ch $WIRECH) arrives as ch $WIRECH, param 2 (sens), value $HAV"
 
 # ---- 6. THE BOX GOES QUIET AND THE DOWNSTREAM STOPS WITH IT. -----------------------
 # A timeout is not a slot. This is the same law as "nothing before the first frame", in the
@@ -352,6 +354,105 @@ RD=$((R2 - R1))
 	echo "      window above measured a dead daemon rather than an obeyed cadence"; exit 1; }
 echo "MEASURED: box quiet -> $QD frames sent in 1.5 s; box back -> $RD frames in 1.5 s"
 
+# ---- 7. AND THE CONTROL AREA IS THE ONE AN ENROLLED BOX RECEIVES. ------------------
+# "Sending is always the same" is literal, and until now the joined wire was NOT the same:
+# measured on the rig over matched 3 s windows, the joined downstream carried 343
+# scene-transfer pushes an established master sends none of, one chanmap where an
+# established master sends three, and an announce whose enrolled-box count byte read 0
+# against 1. All three are one fact -- the master FSM's state -- so the fix is that the
+# engine is told which box the wire identified, and the SAME table emits everything.
+#
+# THE COMPARISON IS AGAINST A REAL ENROLLED WIRE IN THIS SAME RUN, not against numbers
+# copied out of a rig journal: a second veth whose peer is a reac-pw SLAVE, which this
+# daemon hunts, grants and establishes with in the ordinary way. Both wires are decoded by
+# ONE tool -- fake-box-master's own ear, transmitting nothing (fps 0) on the enrolled side.
+ip link add enr0 type veth peer name ebox0 || exit 90
+ip link set ebox0 netns $NSPID || exit 90
+ip link set enr0 up; peer ip link set ebox0 up
+$in_peer "$BIN" --live ebox0 --tx ebox0 --role slave --box-channels 16 --name ebox \
+	--src-mac 00:40:ab:c4:80:41 >"$RT/ebox.log" 2>&1 &
+EBOXPID=$!
+$in_peer "$FAKE" ebox0 00:40:ab:00:00:01 8 0 "$RT/enr.rep" >"$RT/enr.log" 2>&1 &
+EARPID=$!
+wait_for "\[enr0\] segment up (master" 40 || {
+	echo "FAIL: the reference wire never came up as master, so there is nothing to"
+	echo "      compare the joined wire against"; tail -20 "$LOG"; exit 1; }
+wait_for "reac-master: .* -> ESTABLISHED" 40 || {
+	echo "FAIL: the reference box never enrolled"; tail -20 "$LOG"; tail -5 "$RT/ebox.log"; exit 1; }
+sleep 4     # let both wires settle past their establishment bursts
+
+# One field out of EITHER report.
+repf() { [ -s "$2" ] || return 1
+         awk -v k="$1" '$1 == k { print $2; f = 1 } END { exit !f }' "$2"; }
+kindf() { awk -v k="$2" '$1 == "kind" && $2 == k { print $3 }' "$1"; }
+
+J="$RT/box.rep"; E="$RT/enr.rep"
+[ -s "$E" ] || { echo "FAIL: the enrolled wire's ear wrote no report"; tail -5 "$RT/enr.log"; exit 1; }
+# THE PROBE'S POSITIVE CONTROL: the reference ear must be hearing a master at all.
+EFILL=$(kindf "$E" filler)
+[ -n "$EFILL" ] && [ "$EFILL" -gt 100 ] || {
+	echo "FAIL: the reference ear decoded $EFILL filler frames — it is not hearing the"
+	echo "      master it is supposed to be the reference for"; cat "$E"; exit 1; }
+# THE SCENE PUSH IS ONE-SHOT PER ESTABLISHMENT, so what is asserted is that the two wires
+# carry the SAME one and not that either carries none. (The rig's enrolled capture read 0
+# because that box had been established for hours; its joined capture read 343 because
+# PROBING keeps pushing at a peer that never accepts. Both are consistent with one push
+# per establishment, and the ears here are started before either wire establishes.)
+JSC=$(kindf "$J" scene_transfer); ESC=$(kindf "$E" scene_transfer)
+[ "${JSC:-0}" = "${ESC:-0}" ] || {
+	echo "FAIL: the joined wire carried ${JSC:-0} scene-transfer frames and the enrolled"
+	echo "      wire ${ESC:-0}. The push is one per establishment on both or the two"
+	echo "      downstreams are not the same"; exit 1; }
+JANN=$(repf announce "$J"); EANN=$(repf announce "$E")
+[ -n "$JANN" ] && [ -n "$EANN" ] || {
+	echo "FAIL: no announce block on one of the wires (joined='$JANN' enrolled='$EANN')"
+	exit 1; }
+# THE ENROLLED-BOX COUNT, block byte 21, and the whole-block diff around it. The two
+# announces MUST differ in the source MAC (two NICs) and the box width (8 against 16), and
+# in NOTHING ELSE -- that residue is what "the same downstream" means here.
+python3 - "$JANN" "$EANN" <<'PYEOF'
+import sys
+j = bytes.fromhex(sys.argv[1]); e = bytes.fromhex(sys.argv[2])
+diff = [i for i in range(min(len(j), len(e))) if j[i] != e[i]]
+# The four fields that describe WHICH BOX and WHICH RATE, and nothing else:
+#   11..16 our source MAC (two NICs), 18 the box's input width (8 against 16),
+#   19 the console FAMILY byte, which on this protocol is the RATE GATE and is derived
+#      from each wire's own pace (the joined wire runs at the box's 44.1 k, the enrolled
+#      one at the rate we chose) -- reac_pacer.c, tool+rig verified 2026-08-26,
+#   33 the block checksum, which follows from any of the above.
+# What must NOT differ is the enrolment state, and byte 21 is where the wire carries it.
+allowed = set(range(11, 17)) | {18, 19, 33}
+stray = [i for i in diff if i not in allowed]
+if j[21] != 1 or e[21] != 1:
+    print("FAIL: announce enrolled-box count (byte 21) reads %d joined, %d enrolled;"
+          " both must read 1 — the joined box IS the one box" % (j[21], e[21]))
+    sys.exit(1)
+if stray:
+    print("FAIL: the two announce blocks differ outside the source MAC and the width, at "
+          "offsets %s (joined %s / enrolled %s)"
+          % (stray, [j[i] for i in stray], [e[i] for i in stray]))
+    sys.exit(1)
+print("MEASURED: announce blocks differ only at %s (source MAC, box width, the "
+      "family/rate-gate byte and the checksum); enrolled-box count byte 21 = 1 on both,"
+      " family %d joined / %d enrolled" % (diff, j[19], e[19]))
+PYEOF
+[ $? -eq 0 ] || exit 1
+JCM=$(repf chanmap "$J"); ECM=$(repf chanmap "$E")
+[ -n "$JCM" ] && [ -n "$ECM" ] || {
+	echo "FAIL: no chanmap on one of the wires — an established master walks it ~1/s"
+	echo "      (joined='$JCM' enrolled='$ECM')"; exit 1; }
+# The chanmap enumerates each box's OWN cells, so its bytes are expected to differ; what
+# must match is its SHAPE -- the same opcode, segment and block length.
+[ "${JCM:0:12}" = "${ECM:0:12}" ] || {
+	echo "FAIL: the two chanmaps are not the same frame shape:"
+	echo "      joined  ${JCM:0:12}"
+	echo "      enrolled ${ECM:0:12}"; exit 1; }
+echo "MEASURED: chanmap present on both, same shape ${JCM:0:12}; joined cells ${JCM:12:24}"
+echo "MEASURED: scene push ${JSC:-0} frames joined / ${ESC:-0} enrolled (one per establishment)"
+echo "MEASURED: control kinds joined  [$(awk '$1=="kind"{printf "%s=%s ", $2, $3}' "$J")]"
+echo "MEASURED: control kinds enrolled[$(awk '$1=="kind"{printf "%s=%s ", $2, $3}' "$E")]"
+
+kill -TERM $EARPID 2>/dev/null; kill -TERM $EBOXPID 2>/dev/null
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 kill -TERM $PID 2>/dev/null; wait $PID 2>/dev/null
 echo "PASS: a box master is joined AND driven — one downstream per box frame, audio placed, head-amp delivered"

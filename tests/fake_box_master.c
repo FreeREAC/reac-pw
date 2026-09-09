@@ -81,7 +81,20 @@ struct ear {
 	double sumsq[REAC_MAX_CHANNELS];
 	double peak[REAC_MAX_CHANNELS];
 	unsigned long nsamp;
-	/* the last head-amp record decoded out of a control block, and how many */
+	/* THE CONTROL-FRAME HISTOGRAM, by libreac's own classification, plus the raw
+	 * announce and chanmap blocks as they last arrived. This is what makes two wires
+	 * COMPARABLE: the joined one and an enrolled one are decoded by one tool, and
+	 * "sending is always the same" is a diff of these lines rather than a reading of
+	 * two journals (0.5.5). */
+	unsigned long kind[24];
+	uint8_t announce_blk[34]; int have_announce;
+	uint8_t chanmap_blk[34];  int have_chanmap;
+	/* THE LAST VALUE SEEN PER CELL, not the last record seen. An established master
+	 * replays the COMPLETE head-amp scene at establishment, so "the last record" is
+	 * whatever cell that sweep ended on and says nothing about the write under test
+	 * (0.5.5: it read ch 7 sens 32 while the write was ch 0 sens 20). -1 = never seen. */
+	short ha_val[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS];
+	unsigned long ha_n[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS];
 	int ha_seen;
 	unsigned ha_ch, ha_param, ha_value;
 	unsigned long ha_count;
@@ -122,12 +135,26 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 
 	/* THE CONTROL BLOCK, through libreac's own classifier. */
 	struct reac_ctrl_parsed pr;
-	if (reac_ctrl_parse(f, n, &pr) == REAC_CTRL_HEADAMP) {
+	enum reac_ctrl_kind kind = reac_ctrl_parse(f, n, &pr);
+	if ((unsigned)kind < 24)
+		e->kind[kind]++;
+	if (kind == REAC_CTRL_MASTER_ANNOUNCE) {
+		memcpy(e->announce_blk, f + 16, sizeof e->announce_blk);
+		e->have_announce = 1;
+	} else if (kind == REAC_CTRL_MASTER_HB) {
+		memcpy(e->chanmap_blk, f + 16, sizeof e->chanmap_blk);
+		e->have_chanmap = 1;
+	}
+	if (kind == REAC_CTRL_HEADAMP) {
 		e->ha_seen = 1;
 		e->ha_ch = pr.ch;
 		e->ha_param = pr.param;
 		e->ha_value = pr.value;
 		e->ha_count++;
+		if (pr.ch < REAC_HEADAMP_MAX_CH && pr.param < REAC_HEADAMP_NPARAMS) {
+			e->ha_val[pr.ch][pr.param] = (short)pr.value;
+			e->ha_n[pr.ch][pr.param]++;
+		}
 	}
 }
 
@@ -159,9 +186,29 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 		double pdb = e->peak[c] > 0 ? 20.0 * log10(e->peak[c]) : -999.0;
 		fprintf(f, "ch%d rms %.2f peak %.2f\n", c, db, pdb);
 	}
+	for (int k = 0; k < 24; k++)
+		if (e->kind[k])
+			fprintf(f, "kind %s %lu\n", reac_ctrl_kind_name(k), e->kind[k]);
+	if (e->have_announce) {
+		fprintf(f, "announce ");
+		for (size_t i = 0; i < sizeof e->announce_blk; i++)
+			fprintf(f, "%02x", e->announce_blk[i]);
+		fprintf(f, "\n");
+	}
+	if (e->have_chanmap) {
+		fprintf(f, "chanmap ");
+		for (size_t i = 0; i < sizeof e->chanmap_blk; i++)
+			fprintf(f, "%02x", e->chanmap_blk[i]);
+		fprintf(f, "\n");
+	}
 	if (e->ha_seen)
 		fprintf(f, "headamp ch %u param %u value %u count %lu\n",
 		        e->ha_ch, e->ha_param, e->ha_value, e->ha_count);
+	for (int c = 0; c < REAC_HEADAMP_MAX_CH; c++)
+		for (int q = 0; q < REAC_HEADAMP_NPARAMS; q++)
+			if (e->ha_val[c][q] >= 0)
+				fprintf(f, "headampcell %d %d %d %lu\n",
+				        c, q, e->ha_val[c][q], e->ha_n[c][q]);
 	fclose(f);
 	rename(tmp, path);
 	memset(e->sumsq, 0, sizeof e->sumsq);
@@ -195,11 +242,17 @@ int main(int argc, char **argv)
 	int n_ch = atoi(argv[3]);
 	int fps = argc > 4 ? atoi(argv[4]) : 2000;
 	const char *report = argc > 5 ? argv[5] : NULL;
-	if (n_ch <= 0 || n_ch >= REAC_MAX_CHANNELS || fps <= 0) {
-		fprintf(stderr, "fake-box-master: a box width is 1..%d channels and fps > 0\n",
-		        REAC_MAX_CHANNELS - 1);
+	/* fps 0 IS A MODE, NOT A REFUSAL (0.5.5): transmit nothing and only listen. It is
+	 * how the SAME decoder is pointed at a wire somebody else's box is enrolled on, so
+	 * the two downstreams can be diffed by one tool instead of two readings. */
+	int listen_only = (fps == 0);
+	if (n_ch <= 0 || n_ch >= REAC_MAX_CHANNELS || fps < 0) {
+		fprintf(stderr, "fake-box-master: a box width is 1..%d channels and fps >= 0 "
+		        "(0 = listen only)\n", REAC_MAX_CHANNELS - 1);
 		return 2;
 	}
+	if (listen_only)
+		fps = 2000;   /* the drain/report cadence only; nothing is transmitted */
 
 	int fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
 	if (fd < 0) {
@@ -233,6 +286,9 @@ int main(int argc, char **argv)
 	struct ear ear;
 	memset(&ear, 0, sizeof ear);
 	ear.fd = -1;
+	for (int c = 0; c < REAC_HEADAMP_MAX_CH; c++)
+		for (int q = 0; q < REAC_HEADAMP_NPARAMS; q++)
+			ear.ha_val[c][q] = -1;
 	const struct reac_mode *dmode = reac_mode_for(fps * REAC_SAMPLES_PER_PKT);
 	if (!dmode)
 		dmode = &REAC_MODE_48K;
@@ -304,7 +360,7 @@ int main(int argc, char **argv)
 				ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
 			}
 		}
-		if (tx_paused) {
+		if (tx_paused || listen_only) {
 			nanosleep(&period, NULL);
 			continue;
 		}

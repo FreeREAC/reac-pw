@@ -1198,8 +1198,8 @@ their own ~1/s background cadence, hundreds of frames away. The whole delta over
 The chanmaps enumerate each box's own cells correctly (0x00..0x07 for the 8-in box at base 0,
 0x1e.. for the 16-in box at base 32); only their cadence differs, PROBING against ESTABLISHED.
 The one field-level difference anywhere outside the head-amp record is in the announce, block
-byte 20: `01` enrolled against `00` joined, immediately after `28` (40 fabric slots) and the box
-width — plausibly an enrolled-box count. Unexplained, and NOT around a SET.
+byte **21**: `01` enrolled against `00` joined — `gen_cfea`'s ENROLLED-BOX COUNT, named and
+acted on in the section below. NOT around a SET.
 
 **So ranking 2 is dead and this is ranking 3, and it is a protocol finding rather than a code
 change.** There is no field the enrolled path fills that the box-master path leaves at a seed:
@@ -1214,6 +1214,61 @@ filling fields on our side can test it. It goes to the operator.
 **What 0.5.5 still delivers on that wire is unchanged and proven:** the box's inputs, its clock,
 and the downstream carrying our audio to its outputs at 1:1. Only the preamps are the box's own,
 and the remedy for them is the switch on its front panel.
+
+### Making the joined downstream the SAME downstream — a hypothesis under rig test
+
+The frame diff above found no field the enrolled path fills around a SET. It did find that
+the two DOWNSTREAMS were not the same, which the ruling is literal about. Over matched 3 s
+rig windows the joined wire carried 343 scene-transfer pushes an established master sends
+none of, one chanmap where an established master sends three, and an announce whose
+**enrolled-box count byte (block offset 21, `gen_cfea`'s `box_count`) read 0 against 1**.
+That byte is not cosmetic: the 2026-07-12 blink fix is recorded in `reac_master.c` — a box
+announced to with count 0 "sees itself UNACKNOWLEDGED", withholds its heartbeat and keeps its
+light blinking despite a clean grant. The joined box IS the one box on its wire.
+
+**All three are one fact — the master FSM's state — so nothing is copied.** A box on M sends
+no cold-connect, so the FSM stayed in PROBING for ever, and PROBING is a different downstream.
+`reac_pacer_declare_box_master` hands the engine the two things this wire cannot say — the
+width and strap of the matrix row its broadcast geometry matched, and one JOIN event carrying
+that row's own declaration block — and the SAME table then generates every frame: ENROLL,
+dwell, grant sweep, self-complete, ESTABLISHED. The link-check budget is reloaded by every box
+RX event, and a box on M floods at the wire rate, so it cannot flap. It is called in the one
+window where no thread owns the FSM, between `reac_pacer_open` and `reac_pacer_start`.
+
+**It is not a claim that the box is enrolled with us.** Nothing is granted in either
+direction; the segment's door still publishes `foreign` / `foreign-master`, derived from its
+own RX evidence and never from this FSM.
+
+**Measured on the veth, joined wire against an ENROLLED wire in the same run** — a second veth
+whose peer is a `reac-pw --role slave` box this daemon hunts, grants and establishes, with the
+emulator's own ear (`fps 0`, listen only) decoding it, so one tool reads both:
+
+| | joined | enrolled |
+|---|---|---|
+| control kinds | filler, scene_transfer, master_hb, master_announce, **grant**, headamp, **group_map** | the same set |
+| scene push (one per establishment) | 343 | 343 |
+| grant / group_map | 8 / 2 | 8 / 2 |
+| announce byte 21 (enrolled-box count) | **1** | **1** |
+| announce, byte for byte | differs only at 11–16, 18, 19, 33 | — |
+
+Those four are the source MAC (two NICs), the box's input width (8 against 16), the console
+FAMILY byte — which on this protocol is the RATE GATE, derived from each wire's own pace, and
+the joined wire runs at the box's 44.1 k while the enrolled one runs at 96 k — and the block
+checksum that follows from them. Nothing about the enrolment state differs any more. The
+chanmap is present on both with the same frame shape (`cdea 01 03 0019`), each enumerating its
+own box's cells.
+
+Sabotage-verified: disabling the declaration puts the joined wire back to 1715 scene pushes
+against the enrolled wire's 343 and the proof goes red.
+
+**THIS IS A HYPOTHESIS, AND THE RIG DECIDES IT.** What is proven is that the control area a
+joined box master receives is now the one an enrolled box receives. Whether an S-0808 on M
+ACTS on a head-amp SET inside it is a question about that box's firmware, and the null result
+already measured (input-1 floor −91.4 dBFS at gain 32, 52 and 32 again, against +18.9 dB on
+the enrolled S-1608) stands until the rig is re-measured against this build. If it still does
+not move, ranking 3 stands: `wire-format.md` has M as the SPLITTER's clock role, so our
+downstream arrives on the port the box is MASTERING, where its master parser reads upstream
+frames — and no field we fill can test that.
 
 ### The rejoin-after-drop defect, and what the veth could not reproduce
 
