@@ -1127,6 +1127,42 @@ The proof issues the write THROUGH that published path — it reads `channels`/`
 the node and composes input 1's key as a console does — so a wrong base cannot hide behind a test
 that composes with its own assumption.
 
+### The head-amp write reaches the wire and the box does not act (rig, 2026-09-09)
+
+**Measured, then decoded.** With 0.5.5 on the rig the console's write reaches the node
+(`delivery.reached=true`, `channels=8 base=0 caps=phantom,pad,sens`) and the S-0808 on M does
+not move: its input-1 floor read −91.4 dBFS at gain 32, −91.4 at 52 and −91.4 back at 32, and a
+phantom write drew nothing. The method is proven — the same console path on the enrolled S-1608
+took its input-1 floor from −87.5 to −68.6 dBFS (+18.9 dB) — so this is the box declining, not
+the console missing.
+
+**Our downstream during those writes, decoded from `ha-write.pcap` with `reac_ctrl_parse`**
+(24000 frames, 3.00 s, all ours, all broadcast):
+
+| what | count |
+|---|---|
+| FILLER | 23647 |
+| scene_transfer (`cdea 01 00/01`) | 343 |
+| master_announce (`cfea ff ff`) | 3 |
+| chanmap (`cdea 01 03 0019`) | 1 |
+| **HEADAMP SET (`cdea 04 03`, link 4 seg 3, DT1 tag 0x0101)** | **6** |
+| GRANT burst | **0** |
+| ENROLL (`cdea 01 03 000d`) | **0** |
+
+The six are the two console edges, each sending the channel's whole cell trio once: frames
+7754–7756 at t=0.969 s (ch 0 phantom 0, pad 0, **sens 52**) and 15813–15815 at t=1.977 s (ch 0
+**phantom 1**, pad 0, sens 52). All six pass `reac_ctrl_headamp_record_verify`, address cell
+base 0 + input 1 − 1 = 0, and are byte-identical to a master-role SET apart from param, value
+and the record checksum. The t≈4 s revert is outside the capture's window.
+
+**Two candidates are ruled out by this capture.** The ADDRESSING is not it: every frame is
+broadcast `ff:ff:ff:ff:ff:ff`, which is exactly what the enrolled S-1608 receives and acts on.
+The RECORD is not it: it verifies, and it names the right cell. What the capture shows missing
+is the ESTABLISHMENT around it — no grant, no enroll, and a master FSM deliberately left
+PROBING (0.5.5's own choice, because that is what makes the segment publish `foreign`). Whether
+a box on M can act on a downstream SET at all, having never entered LINKED, is a question about
+the box and is settled by a rig test, not by this file.
+
 ### The rejoin-after-drop defect, and what the veth could not reproduce
 
 **Measured on the rig, 2026-09-09 13:36** (`/home/pau/.claude/jobs/87a4861e/tmp/s0808-rejoin.log`),
