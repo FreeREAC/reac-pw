@@ -67,6 +67,7 @@
 #include "reac_role_cfg.h"   /* the reac.cfg.role vocabulary + refusal codes */
 #include "reac_role_swap.h"  /* the role swap's lifecycle answer (arbitration §8) */
 #include "reac_segment_ident.h"  /* the segment identity + a slave's own answer set */
+#include "reac_watch.h"          /* what a fresh verdict means on a segment already up */
 #include "reac_role.h"
 #include "reac_rate_cfg.h"
 #include "reac_mac.h"
@@ -1467,10 +1468,14 @@ struct sniffer {
 	 * A PINNED interface does not need it: it is already driving. */
 	struct reac_knock knock;
 	int watch_silence;          /* 0 = pinned, so the observation does not apply */
-	/* A WIRE TAKEN ON SILENCE KEEPS ITS SNIFFER. Every other segment is served on
-	 * evidence and its hunt dies with it; this one was served on a BET — that nothing
-	 * was there — so the wire goes on being classified, and a desk that turns up is
-	 * yielded to rather than driven over (hearing_yield). */
+	/* EVERY WIRE WE TOOK AND NOBODY PINNED KEEPS ITS SNIFFER (0.5.4, reac_watch.h).
+	 * The wire is ours only while nobody else claims it, so it goes on being
+	 * classified and hearing_yield acts on what it hears: a desk that turns up second
+	 * is yielded to, and one that goes home hands the segment back. Until 0.5.4 this
+	 * was set only where the wire had been taken on proven SILENCE, and a wire won
+	 * because a box was heard on it kept nothing — the venue case, exactly. */
+	int watched;
+	/* HOW the wire was won, kept for the sentence the yield prints and nothing else. */
 	int driven_on_silence;
 };
 
@@ -1843,6 +1848,14 @@ static void topo_watch_iface(struct hearing *h, const char *name)
 		return;
 	}
 	if (reac_topo_watch(&h->topo, name) != 0) {
+		/* SAID, NEVER SILENT — the table is bounded like the tap array and its
+		 * refusal costs the same thing: a trunk on this parent is invisible and
+		 * every VLAN on it is served as one flat segment. It returned quietly until
+		 * 0.5.4, and a full table then looked exactly like a parent with no tags on
+		 * it (found when the venue phase pushed a run past the bound). */
+		fprintf(stderr, "reac-pw: [%s] the topology table is full (%d parents) — "
+		        "a trunk on this parent would be invisible\n",
+		        name, REAC_TOPO_MAX_PARENTS);
 		reac_topo_tap_close(fd);
 		return;
 	}
@@ -1872,6 +1885,23 @@ static void topo_unwatch_iface(struct hearing *h, const char *name)
 		pw_loop_destroy_source(h->loop, tp->io);
 	reac_topo_tap_close(tp->fd);
 	memset(tp, 0, sizeof *tp);
+}
+
+/* THE PARENT IS REALLY GONE — past the ifscan hold, or the netdev itself withdrawn — so
+ * the TABLE slot goes with the tap, and the netdevs we minted on it are released: its
+ * sub-interfaces carry nothing now. A link BOUNCE never comes here (that is UNLISTEN,
+ * above, which keeps the table so a power-cycle does not destroy a segment).
+ *
+ * WHY IT EXISTS AT ALL: both bounds are 8, and until 0.5.4 neither was ever given back on
+ * this path. A served interface goes LISTEN -> SERVE -> DROP and never through UNLISTEN,
+ * so every segment that ever dropped kept its tap AND its table row for the life of the
+ * process. Past the eighth the daemon serves every trunk as a flat segment — measured on
+ * the veth proof, where the ninth interface in the run made the trunk phase's parent
+ * untappable. */
+static void topo_forget_iface(struct hearing *h, const char *name, uint64_t now)
+{
+	topo_unwatch_iface(h, name);
+	reac_topo_unwatch(&h->topo, name, now);
 }
 
 /* One ENSURE: adopt what is there, create what is not, and say which. */
@@ -2008,23 +2038,19 @@ static void hearing_apply(struct hearing *h)
 			 * hunt normally dies with its sniffer, and the role it elected is the one
 			 * thing the listener needs out of it.
 			 *
-			 * A WIRE TAKEN ON SILENCE KEEPS BOTH. Every other segment is served on
-			 * evidence: something was heard, it was classified, and there is nothing
-			 * left to watch for. This one was served on a BET — that the wire was
-			 * empty — and a bet has to stay watched, because the thing it bet against
-			 * (a desk) can only ever show up later. So the sniffer lives on beside the
-			 * listener and hearing_yield reads it. Two AF_PACKET sockets on one
-			 * interface cost one more idle fd. */
+			 * A WIRE WE TOOK AND NOBODY PINNED KEEPS BOTH (reac_watch.h). The role we
+			 * elected on it is ours only while nobody else claims it, and the thing
+			 * that could claim it — a desk, a box switched to M — can only ever turn
+			 * up later. So the sniffer lives on beside the listener and hearing_yield
+			 * reads it, on a wire won by hearing a box exactly as on one won by
+			 * proving silence: 0.5.0 kept only the second, and the venue case is the
+			 * first. A refused wire keeps its sniffer for the same reason (0.5.1):
+			 * a door has no engine that could ever notice the rival leaving. Two
+			 * AF_PACKET sockets on one interface cost one more idle fd. */
 			struct sniffer *sn = sniffer_find(h, ev.name);
 			struct reac_hunt verdict;
 			int have = sn != NULL;
-			/* A REFUSED WIRE KEEPS ITS SNIFFER TOO (0.5.1). It is served as a door,
-			 * and a refusal that could not be revisited would need a restart to
-			 * notice the switch being moved — nothing in this module latches. So the
-			 * wire goes on being classified and hearing_yield takes the door down the
-			 * moment the rival stops mastering it. */
-			int keep = have && (sn->driven_on_silence ||
-			                    sn->hunt.verdict == REAC_HUNT_REFUSED);
+			int keep = have && reac_watch_keep(sn->hunt.verdict, sn->hunt.pinned);
 			if (have)
 				verdict = sn->hunt;
 			if (!keep)
@@ -2038,6 +2064,16 @@ static void hearing_apply(struct hearing *h)
 			/* A retained sniffer dies with the segment it was watching, or the next
 			 * link-up finds one already open and opens no fresh hunt. */
 			sniffer_close(h, ev.name);
+			/* AND SO DOES ITS TOPOLOGY TAP, or the taps LEAK — one per segment that
+			 * ever drops. Only UNLISTEN released them, and a SERVED interface never
+			 * passes through UNLISTEN: it goes LISTEN -> SERVE -> DROP, so its tap
+			 * outlived it every time. The bound is REAC_TOPO_MAX_PARENTS, and past it
+			 * the daemon says "no room for a topology tap ... a trunk on this parent
+			 * would be invisible" and every later trunk is served as a flat segment.
+			 * Found by the 0.5.4 venue phase: one more segment in the run and the
+			 * trunk phase's parent could not be tapped at all. The next link-up opens
+			 * a fresh tap, exactly as it opens a fresh sniffer. */
+			topo_forget_iface(h, ev.name, monotonic_ns());
 			break;
 		case REAC_IFSCAN_KEPT:
 			fprintf(stderr, "reac-pw: [%s] link back inside the hold — segment kept "
@@ -2166,9 +2202,11 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        "present — taking the wire as MASTER: probe, grant, "
 				        "establish\n", sn->name,
 				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL));
-			/* HOW THE WIRE WAS WON DECIDES WHETHER WE KEEP WATCHING IT. Won on
-			 * evidence, the hunt has done its job and dies with the sniffer. Won on
-			 * SILENCE, it was a bet that nothing was there, and a bet stays watched. */
+			/* THE PIN DECIDES WHETHER WE KEEP WATCHING IT, not the evidence we won
+			 * it with (0.5.4). A wire nobody answered for is ours only while nobody
+			 * else claims it, however we came to be driving it; a pinned one keeps
+			 * its role. `driven_on_silence` survives as the wording of the yield. */
+			sn->watched = reac_watch_keep(REAC_HUNT_MASTER, sn->hunt.pinned);
 			sn->driven_on_silence = sn->hunt.silence_proven && !sn->hunt.pinned;
 			reac_ifscan_heard(&h->scan, sn->name, now);
 			break;
@@ -2218,26 +2256,33 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 	}
 }
 
-/* WE BET THIS WIRE WAS EMPTY; A DESK PROVES US WRONG AND WE GET OUT OF ITS WAY.
+/* THE WIRE WAS OURS ONLY WHILE NOBODY ELSE CLAIMED IT, AND CLAIMS ARRIVE LATE.
  *
- * Only a segment taken on SILENCE is watched here (its sniffer is the one that was kept).
- * A wire we drove because nothing was on it can acquire a master afterwards — a desk
- * powered up second, a cable moved — and two masters on one segment is the fault the
- * seglock exists to make impossible between our own processes. It is no better against a
- * real desk, and the arbitration's law is not to fight: OBSERVE, then act, and a foreign
- * master that is a DESK is joined, never out-shouted.
+ * Every segment we took on a wire nobody pinned is watched here (its sniffer is the one
+ * that was kept), and so is every REFUSED one. A wire we are driving can acquire a master
+ * afterwards — a desk powered up second, a cable moved — and two masters on one segment is
+ * the fault the seglock exists to make impossible between our own processes. It is no
+ * better against a real desk, and the arbitration's law is not to fight: OBSERVE, then
+ * act, and a foreign master is joined rather than out-shouted, a desk and a stagebox on M
+ * alike (0.5.1: that wire is unpinned, and a box that wants the clock gets it).
+ *
+ * AND A YIELD IS NOT A ONE-WAY DOOR (0.5.4). The desk goes home, its sighting ages out of
+ * the discovery table, and the segment must come back rather than sit slaved to a wire
+ * nobody is driving — with the console's own boxes still on it. The sniffer is therefore
+ * kept ACROSS the yield, not just up to it.
  *
  * Our own stream is not evidence: the sniffer's classifier is given this NIC's address
  * and every emitting role of ours sources from it (reac_mac.h), so the frames we are
  * putting on this very wire never reach the table.
  *
- * A REFUSAL IS NOT A YIELD, AND SINCE 0.5.1 IT IS ALSO NOT A LATCH. On a wire we are
- * driving because it was silent, a stagebox that starts mastering it is now YIELDED to
- * like a desk — that wire is unpinned, and a box that wants the clock gets it. What is
- * still refused is a wire pinned MASTER, and that segment is published as a DOOR rather
- * than dropped; its sniffer is kept for the same reason this one is, so the door comes
- * down and the segment comes up the moment the rival stops mastering the wire. Nothing
- * here latches, in either direction. */
+ * NOTHING LATCHES, IN ANY DIRECTION, AND NOTHING HERE DECIDES. reac_watch.h holds the
+ * table — which of yield, retake, unrefuse or stand a fresh verdict means — because the
+ * only thing that could exercise it in this file is a 70-second veth run that cannot
+ * choose which route took the wire. This is the acting half: log the transition, then
+ * drop and serve.
+ *
+ * A PIN IS NEVER OVERTURNED HERE. The operator answered for that wire; the one thing a
+ * rival can do to it is the 0.5.1 refusal, decided by the segment's own engine below. */
 static void hearing_yield(struct hearing *h, uint64_t now)
 {
 	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
@@ -2247,34 +2292,24 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 		struct listener *L = hearing_listener(h, sn->name);
 		if (!L)
 			continue;   /* the segment went away; nothing to yield */
-		/* Two kinds of segment keep their sniffer: one taken on a BET that the wire
-		 * was empty, and (since 0.5.1) one REFUSED, which is published as a door and
-		 * must stop being refused the moment the rival does. */
-		int door = L->cfg.door_only;
-		if (!sn->driven_on_silence && !door)
-			continue;
+		struct reac_watch_in in = {
+			.door       = L->cfg.door_only,
+			.we_master  = !L->cfg.door_only && L->cfg.role == REAC_ROLE_MASTER,
+			.pinned     = L->cfg.role_pinned,
+			.verdict    = sn->hunt.verdict,
+			.now_ns     = now,
+			.opened_ns  = sn->hunt.opened_ns,
+		};
+		if (!in.door && !sn->watched)
+			continue;   /* we never had this wire, or a pin answered for it */
 		if (!reac_hunt_step(&sn->hunt, now))
 			continue;   /* the verdict stands */
-		if (door) {
-			if (sn->hunt.verdict == REAC_HUNT_REFUSED)
-				continue;                      /* still refused; the door stands */
-			/* AN EMPTY TABLE IS NOT EVIDENCE THAT THE RIVAL LEFT. This sniffer was
-			 * opened when the door went up, so for its first moments it has heard
-			 * nothing at all — and a pinned master on a silent wire decides MASTER at
-			 * once, by design. Undoing a refusal on that would take the door down 200 ms
-			 * after putting it up, and put it back a second later when the box's next
-			 * master record arrived: measured as exactly that flap. The bar is the
-			 * table's OWN withdrawal window, which is what "the rival stopped mastering"
-			 * means everywhere else in this daemon.
-			 *
-			 * UNSIGNED TIME COMPARES IN THE RIGHT ORDER OR NOT AT ALL: the poll's
-			 * `now` is read once at the top and the sniffer this door just opened
-			 * stamps a LATER one, so `now - opened_ns` wrapped to ~584 years and the
-			 * dwell passed on the very first poll — measured, as a door that came down
-			 * 200 ms after going up. */
-			if (now <= sn->hunt.opened_ns ||
-			    now - sn->hunt.opened_ns < REAC_DISCO_STALE_NS)
-				continue;
+		in.verdict = sn->hunt.verdict;
+
+		switch (reac_watch_decide(&in)) {
+		case REAC_WATCH_STAND:
+			continue;
+		case REAC_WATCH_UNREFUSE: {
 			/* THE REFUSAL ENDED. The box was switched to S, or unplugged, and its
 			 * sighting aged out — so the wire the operator pinned is ours to drive
 			 * after all. Down with the door, up with the segment, through the same
@@ -2287,24 +2322,42 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 			hearing_serve(h, sn->name, &after);
 			continue;
 		}
-		if (sn->hunt.verdict != REAC_HUNT_SLAVE)
+		case REAC_WATCH_YIELD: {
+			fprintf(stderr, "reac-pw: [%s] a %s masters this segment "
+			        "(%02x:%02x:%02x:%02x:%02x:%02x) — we took this wire %s and it is "
+			        "not ours to keep: yielding the master role and joining as SLAVE\n",
+			        sn->name, reac_rival_kind_name(sn->hunt.arb.rival),
+			        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
+			        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
+			        sn->driven_on_silence ? "because it was SILENT"
+			                              : "because nothing was mastering it");
+			/* Drop first, then serve: the two engines are exclusive (one AF_PACKET
+			 * TX, one segment lock, one node pair) and the swap passes through a
+			 * window in which nothing owns the segment — reac_role_swap.h says so
+			 * and main() has always done it in this order. The sniffer is NOT
+			 * closed, in either direction: the wire keeps being classified, so a
+			 * desk that goes away again leaves a segment that can be re-decided
+			 * rather than a latch. */
+			struct reac_hunt verdict = sn->hunt;
+			hearing_drop(h, sn->name, "yielding the master role to the wire's master");
+			hearing_serve(h, sn->name, &verdict);
 			continue;
-		fprintf(stderr, "reac-pw: [%s] a %s masters this segment "
-		        "(%02x:%02x:%02x:%02x:%02x:%02x) — we took this wire because it was "
-		        "SILENT and it is not: yielding the master role and joining as SLAVE\n",
-		        sn->name, reac_rival_kind_name(sn->hunt.arb.rival),
-		        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
-		        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5]);
-		/* Drop first, then serve: the two engines are exclusive (one AF_PACKET TX, one
-		 * segment lock, one node pair) and the swap passes through a window in which
-		 * nothing owns the segment — reac_role_swap.h says so and main() has always
-		 * done it in this order. The sniffer is NOT closed: the wire keeps being
-		 * classified, so a desk that goes away again leaves a segment that can be
-		 * re-decided rather than a latch. */
-		struct reac_hunt verdict = sn->hunt;
-		hearing_drop(h, sn->name, "yielding the master role to a desk");
-		sn->driven_on_silence = 0;   /* the next verdict is evidence, not a bet */
-		hearing_serve(h, sn->name, &verdict);
+		}
+		case REAC_WATCH_RETAKE: {
+			/* THE VENUE CASE, the other half. The desk that took this wire from us
+			 * has stopped mastering it — powered off at the end of the night, a
+			 * cable pulled — and its sighting has aged out of the discovery table,
+			 * which is what "it is really gone" means everywhere else here. The
+			 * boxes on this segment are still ours to drive, so we take it back. */
+			fprintf(stderr, "reac-pw: [%s] the desk stopped mastering this wire — "
+			        "taking the segment back as MASTER: probe, grant, establish\n",
+			        sn->name);
+			struct reac_hunt verdict = sn->hunt;
+			hearing_drop(h, sn->name, "the wire's master went away — taking it back");
+			hearing_serve(h, sn->name, &verdict);
+			continue;
+		}
+		}
 	}
 }
 

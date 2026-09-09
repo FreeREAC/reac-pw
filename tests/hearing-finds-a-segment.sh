@@ -176,6 +176,7 @@ mkpair boxm0 mbox0  || exit 90
 mkpair pinm0 mbox1  || exit 90
 mkpair cold0 kbox0  || exit 90
 mkpair cold1 kdesk1 || exit 90
+mkpair venue0 vbox0 || exit 90
 # THE TRUNK. trunk0 carries two VLANs and neither netdev exists on our side; trunk1
 # carries one whose sub-interface is pre-created below, so adoption and creation are told
 # apart in the same run.
@@ -559,6 +560,150 @@ kill -TERM $SNIFF3 2>/dev/null; wait $SNIFF3 2>/dev/null
 kill -TERM $KDESKPID 2>/dev/null; wait $KDESKPID 2>/dev/null
 down_pair cold1 kdesk1
 
+# ---- THE VENUE CASE, END TO END (0.5.4): the console drives the boxes, the desk is
+# switched on afterwards, and later switched off again. This is the wire's whole life and
+# no phase above covers it: cold1 yields a wire that had NOTHING on it, so nothing was
+# lost by yielding and nothing came back. Here a box is GRANTED and carrying audio when
+# the desk arrives -- the case 0.5.0 refused to yield ("taken on evidence") and the
+# operator ruled on 2026-09-09 -- and the desk then goes away, which the daemon had no
+# path back from at all: it stayed slaved to a wire nobody was driving.
+#
+# BOTH PEERS SIT ON THE SAME PEER END. A veth pair is point-to-point, so the box and the
+# desk are two daemons in the peer namespace sourcing from two different addresses onto
+# vbox0 -- which is exactly what a stagebox and a desk on one venue switch look like from
+# our side of the wire.
+VBOXMAC=00:40:ab:c4:80:51
+VDESKMAC=00:40:ab:de:5c:03
+$in_peer python3 "$RT/sniff.py" vbox0 "$RT/venue.cnt" & SNIFFV=$!
+up_pair venue0 vbox0
+wait_for "\[venue0\] unpinned — listening for REAC" 10 || {
+	echo "FAIL: venue0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
+# EITHER ROUTE TO THE WIRE IS CORRECT HERE, and which one runs is a race nobody needs to
+# win -- since 0.5.4 both keep the sniffer, which is the whole point of the release. The
+# box floods broadcast FILLER on its PHY-up, and a FILLER from a peer no control frame has
+# proved yet is deliberately NOT a sighting (reac_disco's peer lock), so a box that has not
+# joined yet leaves the wire looking empty: measured here, the licence route ran.
+for ((i = 0; i < 60; i++)); do
+	grep -qE "\[venue0\] (no master heard in|no REAC heard in .* taking it as MASTER)" "$LOG" && break
+	sleep 0.2
+done
+grep -qE "\[venue0\] (no master heard in|no REAC heard in .* taking it as MASTER)" "$LOG" || {
+	echo "FAIL: a masterless wire with a box on it was taken by neither route"
+	tail -25 "$LOG"; tail -5 "$RT/venue-box.log"; exit 1; }
+wait_for "\[venue0\] segment up (master, chosen by hearing the wire)" 15 || {
+	echo "FAIL: venue0 was taken and never served"; tail -20 "$LOG"; exit 1; }
+# THE BOX IS POWERED ON A WIRE THAT IS ALREADY BEING DRIVEN -- the rig's own case, and the
+# only order in which a stagebox enrols: it leaves BOOT for ANNOUNCE on ITS OWN PHY-up
+# edge and cold-connects then, so a box already up when we start driving floods once and
+# is never heard from again (measured here: rx_box_frames climbing with rx_joins=0).
+$in_peer "$BIN" --live vbox0 --tx vbox0 --role slave --box-channels 16 --name vbox \
+       --src-mac $VBOXMAC >"$RT/venue-box.log" 2>&1 &
+VBOXPID=$!
+# AND THE BOX IS OURS: granted, enrolled, established. "The box is no longer granted by
+# us" below is an ABSENCE claim, so it is worth nothing until this presence is on record.
+wait_for "\[venue0\] autodetected" 25 || {
+	echo "FAIL: driving venue0 never enrolled the box that answered"
+	tail -25 "$LOG"; tail -5 "$RT/venue-box.log"; exit 1; }
+sleep 1
+daemon_nodes $PID | grep -q "^reac-playback.venue0 " || {
+	echo "FAIL: venue0 is master and has no playback door -- the graph probe would then"
+	echo "      report its absence below whatever the daemon did. Nodes:"; daemon_nodes $PID; exit 1; }
+# THE DESK IS SWITCHED ON, on the wire we are mastering with a box enrolled on it.
+$in_peer "$BIN" --live vbox0 --tx vbox0 --mixer m5000 --rate 96000 --name vdesk \
+       --src-mac $VDESKMAC >"$RT/venue-desk.log" 2>&1 &
+VDESKPID=$!
+# WITHIN ONE ANNOUNCE CADENCE. A desk announces itself once a second; the hunt reads the
+# table on the 200 ms poll, so the yield is a second's business and not a window's. The
+# bar is 5 s because a loaded machine may miss the first announce, and it still cannot
+# pass by waiting the 3 s hunt window out.
+wait_for "\[venue0\] a desk masters this segment .* yielding the master role" 5 || {
+	echo "FAIL: a desk took a wire we had won by hearing a box, and we did not yield"
+	tail -30 "$LOG"; tail -5 "$RT/venue-desk.log"; exit 1; }
+wait_for "\[venue0\] segment up (slave, chosen by hearing the wire)" 15 || {
+	echo "FAIL: yielded, but never came back up as the desk's slave"; tail -30 "$LOG"; exit 1; }
+# AND THE BOX IS NO LONGER GRANTED BY US. Two independent facts, because one of them
+# alone is a shape: the master DOOR is off the graph (a slave publishes no
+# reac-playback.<segment> -- reac_source_node.c's "what is not here is not an omission"),
+# and we have stopped BROADCASTING, which is what granting and driving a box IS.
+sleep 2
+if daemon_nodes $PID | grep -q "^reac-playback.venue0 "; then
+	echo "FAIL: we yielded venue0 to a desk and the master door is still on the graph"
+	daemon_nodes $PID; exit 1
+fi
+daemon_nodes $PID | grep -q "^reac-capture.venue0 " || {
+	echo "FAIL: the segment lost its capture node in the yield -- the absence above is"
+	echo "      then a missing segment, not a surrendered master role"; daemon_nodes $PID; exit 1; }
+# OUR ADDRESS IS READ, NOT GUESSED. cold1 takes the busiest source on the wire as ours,
+# which is true there because nothing else was driving; here a desk is, so the phase asks
+# the kernel for venue0's own MAC -- the address every emitting role of ours sources from
+# (reac_mac.h) -- and the capture keys on it.
+# OVER NETLINK, NOT SYSFS: /sys is not remounted in this namespace, so
+# /sys/class/net still lists the HOST's interfaces and venue0 is simply not there.
+OURV=$(ip -o link show venue0 | awk '{for (i = 1; i <= NF; i++) if ($i == "link/ether") print $(i+1)}' | tr -d ':')
+[ ${#OURV} -eq 12 ] || {
+	echo "FAIL: could not read venue0's own address (got '$OURV')"; ip -o link show venue0; exit 1; }
+[ "$(seen x "$RT/venue.cnt" "$OURV")" -gt 0 ] || {
+	echo "FAIL: nothing of ours ever reached vbox0"; cat "$RT/venue.cnt"; tail -20 "$LOG"; exit 1; }
+BEFOREV=$(seen x "$RT/venue.cnt" "$OURV-b"); DESKB=$(other "$RT/venue.cnt" "$OURV")
+sleep 4
+AFTERV=$(seen x "$RT/venue.cnt" "$OURV-b");  DESKA=$(other "$RT/venue.cnt" "$OURV")
+[ "$DESKA" -gt "$((DESKB + 1000))" ] || {
+	echo "FAIL: the peer capture is not receiving ($DESKB -> $DESKA frames from everyone"
+	echo "      but us), so it cannot testify that we stopped driving"; cat "$RT/venue.cnt"; exit 1; }
+[ "$((AFTERV - BEFOREV))" -lt 500 ] || {
+	echo "FAIL: we yielded venue0 and BROADCAST $((AFTERV - BEFOREV)) frames in 4 s anyway"
+	echo "      -- the box is still being granted by us, over a desk"; exit 1; }
+# A FRESH EAR FOR THE LAST MEASUREMENT, AND THIS IS NOT TIDINESS. The counter above has
+# been reading a wire carrying two masters and a box at 8000 frames a second each; a
+# python capture cannot drain that in real time, so its counts are minutes behind the
+# cable by now -- measured, as a segment that had just come up MASTER and whose freshly
+# read broadcast total had not moved in two seconds because the file was still describing
+# the phase before. A capture that lags reports a silent daemon exactly like a silent one.
+kill -TERM $SNIFFV 2>/dev/null; wait $SNIFFV 2>/dev/null
+$in_peer python3 "$RT/sniff.py" vbox0 "$RT/venue2.cnt" & SNIFFV=$!
+# THE DESK IS SWITCHED OFF AT THE END OF THE NIGHT. The wire must come back to us: a
+# segment slaved to nobody is a dead segment, and the console's boxes are still on it.
+kill -TERM $VDESKPID 2>/dev/null; wait $VDESKPID 2>/dev/null
+# AFTER THE HOLD, and not before it: the bar is the discovery table's own withdrawal
+# window (REAC_DISCO_STALE_NS, 5 s), which is what "the rival is really gone" means
+# everywhere else in this daemon. 20 s covers it on a loaded machine.
+wait_for "\[venue0\] the desk stopped mastering this wire" 20 || {
+	echo "FAIL: the desk went away and the wire never came back to us -- the segment is"
+	echo "      slaved to something that is not there"; tail -30 "$LOG"; exit 1; }
+wait_for "\[venue0\] segment up (master, chosen by hearing the wire)" 15 || {
+	echo "FAIL: the reclaim was announced and the segment never came up as master"
+	tail -30 "$LOG"; exit 1; }
+# AND WE ARE DRIVING IT AGAIN -- the whole point of taking the wire back. The journal
+# line is a claim; the peer's own capture is the measurement, and it is the same bar cold0
+# uses for "a master, not a knock": thousands of broadcasts a second, not half of one.
+RB0=$(seen x "$RT/venue2.cnt" "$OURV-b"); RB1=$RB0
+for ((i = 0; i < 60; i++)); do
+	sleep 0.5
+	RB1=$(seen x "$RT/venue2.cnt" "$OURV-b")
+	[ "$((RB1 - RB0))" -gt 500 ] && break
+done
+[ "$((RB1 - RB0))" -gt 500 ] || {
+	echo "FAIL: venue0 came back as master and only $((RB1 - RB0)) frames reached the peer"
+	echo "      in 30 s -- the segment is master in the journal and silent on the cable"
+	cat "$RT/venue2.cnt"; tail -30 "$LOG"; exit 1; }
+# THE NODES COME BACK WITH THE BOX, NOT WITH THE ROLE, and that is asserted nowhere here
+# because it is not this release's to promise: a master in autodetect sizes
+# reac-capture/reac-playback from the box it RECOGNIZES, so a retaken segment whose box
+# has not cold-connected again publishes no node until it does. Measured on this run --
+# the graph held nothing for venue0 at this point -- and stated rather than forgotten.
+# WHAT THE RETAKE DOES NOT DO, AND MUST NOT BE READ AS DOING: it does not re-enrol the
+# box by itself. A REAC stagebox leaves BOOT for ANNOUNCE on ITS OWN PHY-up edge and on
+# nothing else (reac_linkmon.h, #95), and this peer proves it -- its transcript ends at
+# ESTABLISHED and stays there through the desk's whole visit, so it has no reason to
+# cold-connect to anybody. What we owe it is a master that is DRIVING when it does, which
+# is what the frame count above measures; the master engine probes for exactly that.
+grep -q "reac_slave: STATE .* -> ESTABLISHED" "$RT/venue-box.log" || {
+	echo "FAIL: this phase's box never established at all, so nothing above is about a"
+	echo "      granted box"; tail -20 "$RT/venue-box.log"; exit 1; }
+kill -TERM $SNIFFV 2>/dev/null; wait $SNIFFV 2>/dev/null
+kill -TERM $VBOXPID 2>/dev/null; wait $VBOXPID 2>/dev/null
+down_pair venue0 vbox0
+
 # ---- A BOX MASTERS AN UNPINNED WIRE: WE JOIN IT, AT ITS OWN WIDTH (0.5.1).
 # The 2026-09-09 rig proof in miniature, with the ruling applied: an S-0808 on M is not a
 # hazard to refuse, it is a clock to follow. The peer is the fake box master -- broadcast
@@ -778,6 +923,11 @@ wait_for "\[trunk0\] vid 12: created trunk0.12 (marked reac-pw:minted)" 20 || {
 	echo "FAIL: vid 12 was heard and trunk0.12 was never created"; tail -30 "$LOG"; exit 1; }
 wait_for "\[trunk1\] vid 13: adopted trunk1.13 — the host made it" 20 || {
 	echo "FAIL: a pre-created sub-interface must be ADOPTED, not re-created"
+	# THE FIRST THING TO LOOK AT IS WHETHER THE PARENT WAS WATCHED AT ALL. Both bounds
+	# are 8 (taps and table rows), and until 0.5.4 a dropped segment gave neither back:
+	# past the eighth interface of a run this phase failed here, with the daemon behaving
+	# perfectly and simply unable to see the tag.
+	grep -E "no room for a topology tap|topology table is full" "$LOG" | tail -5
 	tail -30 "$LOG"; exit 1; }
 # AND ADOPTION IS NOT A RE-CREATION. The one line that would prove the opposite must be
 # absent, and its positive control is the two creates asserted above: the same daemon said

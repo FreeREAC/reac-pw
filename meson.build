@@ -96,6 +96,7 @@ reac_pw_src = [
   'src/reac_vlan.c',
   'src/reac_arbitration.c',
   'src/reac_hunt.c',
+  'src/reac_watch.c',
   'src/reac_knock.c',
   'src/reac_node_recover.c',
   'src/reac_conf.c',
@@ -401,6 +402,17 @@ headamp_test = executable('test_reac_headamp',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, m_dep])
 test('reac_headamp', headamp_test)
+
+# --- unit test: re-deciding a segment that is already UP (0.5.4) --------------
+# The yield, the retake and the door's end, as one pure table. It lived inline in
+# main.c, where the only thing that could exercise it was the 70 s veth run -- which
+# cannot choose which route took the wire, so the case this release is about was
+# untestable by construction.
+watch_test = executable('test_reac_watch',
+  ['tests/test_reac_watch.c', 'src/reac_watch.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_watch', watch_test)
 
 # --- unit test: the multi-box registry (fabric slot allocation + names) -------
 boxreg_test = executable('test_reac_boxreg',
