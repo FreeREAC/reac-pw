@@ -1270,6 +1270,66 @@ not move, ranking 3 stands: `wire-format.md` has M as the SPLITTER's clock role,
 downstream arrives on the port the box is MASTERING, where its master parser reads upstream
 frames — and no field we fill can test that.
 
+### GROUND TRUTH: a real box enrolling to a real box master (2026-09-09)
+
+`box-to-box-enroll.pcap`, 75 s on a bridge between the two REAC NICs with reac-pw STOPPED: a
+real S-1608 in SLAVE mode (`00:40:ab:c4:80:41`) meeting a real S-0808 in MASTER mode
+(`00:40:ab:c4:dc:9c`). Decoded read-only with `reac_ctrl_parse`. **This supersedes every
+reconstruction below it about how a box on M is joined, and it says the daemon has been
+solving the wrong half of the problem.**
+
+**The timeline, in seconds.**
+
+| t | direction | what |
+|---|---|---|
+| 0.000–1.964 | S-1608 → 34:5a:… (628 B, 16 ch) | its OLD enrolment to us draining — FILLER only, then silence |
+| 1.964–5.937 | — | **~4 s of nothing** from the S-1608 |
+| 5.937–6.619 | S-1608 → BROADCAST (**340 B, 8 ch**) | 5459 FILLER frames, 0.682 s at ~8000 fps. **No cold-connect, no announce, no control of any kind** — and already at the MASTER's width, not its own |
+| 6.619 | S-1608 → S-0808 **UNICAST** | it stops broadcasting AND sends its **config-announce** `cdea 0103 0010 80 00 00 02 02 02 02 01 01 03 03 03 03 03 03` as the first unicast frame |
+| 6.833–6.834 | S-1608 → S-0808 unicast | the **cold-connect burst**, 3 × `cdea 04 03` records (two `0014`, one `0013`) |
+| 6.837–6.841 | S-0808 → BROADCAST | the **grant**: 3 × `cdea 04 03`, two of them BYTE-IDENTICAL to the box's own records — the master echoes them back |
+| 6.834–74.112 | S-1608 → S-0808 unicast | `cdea 0103 0001 81` heartbeat, 68 beats, mean **1.004 s** (min 1.003, max 1.009) |
+| throughout | S-1608 → S-0808 unicast | 546880 FILLER frames at 8000 fps, **340 B** |
+
+**The box switches to unicast BEFORE the grant, not after.** S7's reconstructed sequence has
+the master granting first and the box then muting its broadcast; the wire says the box floods
+for ~0.7 s, goes unicast on its own timer, announces, cold-connects, and only then is granted.
+
+**THE S-0808'S BROADCAST DOES NOT CHANGE ON ENROLMENT.** It sends **no `cfea` announce at
+all** — so the enrolled-box count byte a desk carries does not exist on this wire. Its scene
+pushes (`cdea 0100/0102`, 755 frames) ran t=0–5.526, *before* the box was even flooding, and
+stopped on their own. Its chanmap (`cdea 0103 0019`) walks the head-amp space ~1/s with the
+same value bytes across the boundary. Apart from the three grant frames at 6.837–6.841, every
+byte the master puts on the wire is the same before and after.
+
+**The upstream is at the MASTER's geometry, and it costs the box eight inputs.** The S-1608
+has 16 and sent 628 B to us; to the S-0808 it sends **340 B, 8 slots**. The one identifiable
+signal in the capture — a live source on its input 9, `−60.8 dBFS` in slot 8 of the 628 B
+stream against a `−87` floor everywhere else — appears in **no slot** of either 8-channel
+stream. So the mapping is its inputs 1–8 into slots 0–7 and inputs 9–16 do not reach the box
+master at all. (In the unicast steady state slots 0–6 read −102 dBFS RMS at −74 peak and slot
+7 reads −86.8/−72.1: mostly digital silence with bursts, against a continuous floor in the
+0.68 s flood. Not explained here.)
+
+**THE RECIPE, and what of it reac_slave already does.** To be accepted by a box on M a daemon
+must be a SLAVE TO IT, on the master's own geometry:
+
+1. read the master's width off its broadcast (340 B → 8) — **new**: `reac_slave` sizes its
+   upstream from `box_channels`, OUR configured width, and would send 628 B where the wire
+   wants 340;
+2. broadcast FILLER at THAT width, ~0.7 s at the wire rate — `reac_slave` floods, but at its
+   own width;
+3. stop broadcasting and unicast the config-announce to the master's MAC — **new ordering**:
+   S7 mutes only after the grant;
+4. ~200 ms later, unicast the `cdea 04 03` cold-connect burst — `reac_slave` has the builder
+   (`reac_ctrl_build_coldconnect`) but broadcasts it;
+5. accept the master's broadcast grant echo;
+6. steady state: unicast FILLER at the wire rate + `cdea 0103 0001 81` at 1.00 s —
+   `reac_slave` does exactly this, at the wrong width and to a MAC it learns differently.
+
+So the engine exists; what is new is that its width comes from the PEER's broadcast rather
+than from configuration, and that the announce leads the burst. Nothing here is built yet.
+
 ### The rejoin-after-drop defect, and what the veth could not reproduce
 
 **Measured on the rig, 2026-09-09 13:36** (`/home/pau/.claude/jobs/87a4861e/tmp/s0808-rejoin.log`),
