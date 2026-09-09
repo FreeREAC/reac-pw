@@ -19,6 +19,11 @@ BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
 BuildRequires:  pkgconfig(libreac) >= 0.8.0
 Requires:       pipewire
+# THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
+# is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
+# at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
+# recounts, one soname later. The version floor has to be written down.
+Requires:       libreac >= 0.8.0
 
 %description
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
