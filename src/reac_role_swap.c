@@ -52,17 +52,10 @@ enum reac_role_engine reac_role_engine_of_slave(int engine_up, int established)
 	if (!engine_up)
 		return REAC_ROLE_ENGINE_DOWN;
 	/* Flooding, cold-connecting and the post-grant mute dwell are all the HUNT:
-	 * a recorder is not recording until a desk has enrolled it. */
+	 * a recorder is not recording until a desk has enrolled it — and since 0.5.6
+	 * that is equally true of a wire a stagebox on M masters, which is joined by
+	 * this same engine. */
 	return established ? REAC_ROLE_ENGINE_PERFORMING : REAC_ROLE_ENGINE_HUNTING;
-}
-
-enum reac_role_engine reac_role_engine_of_receive_only(int engine_up, int locked)
-{
-	if (!engine_up)
-		return REAC_ROLE_ENGINE_DOWN;
-	/* No grant is coming and none is owed: the wire being heard is the whole of
-	 * "performing" here (see the header). */
-	return locked ? REAC_ROLE_ENGINE_PERFORMING : REAC_ROLE_ENGINE_HUNTING;
 }
 
 const char *reac_role_swap_state(const struct reac_role_swap *s,

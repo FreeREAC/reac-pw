@@ -78,6 +78,9 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	 * slot offset the console addresses head-amp by: a 16-input S-1608 sits at 0x20,
 	 * every other width (S-0808/S-4000S) at 0x00 (m200-headamp-re/DECODE.md). */
 	s->ch_base = (s->box_channels == 16) ? 0x20 : 0x00;
+	s->box_master = cfg && cfg->box_master;
+	s->bm_seq = 0;
+	s->bm_burst = 0;
 	for (int c = 0; c < REAC_MAX_CHANNELS; c++)
 		s->ha_gain[c] = 1.0f;
 
@@ -275,7 +278,47 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		 * master echoes its block back as the grant); otherwise a unicast audio
 		 * FILLER. One frame either way, always to the learned master. */
 		stage_inputs(s, buf, planar);
-		if (d->with_join) {
+		if (s->box_master) {
+			/* THE ORDER A REAL BOX USES TOWARDS A BOX ON M (0.5.6, ground truth in
+			 * DESIGN.md). The S-1608 went unicast at t=6.619 s WITH its
+			 * config-announce as that very frame, and sent the cold-connect as
+			 * three CONSECUTIVE frames 214 ms later — not one record per grid slot.
+			 * So the grid carries the announce at slot 0 and arms a 3-frame burst
+			 * at slot 2; everything between is unicast FILLER, which is what the
+			 * capture shows too. The pair repeats every 8 slots until the grant, in
+			 * place of the desk escalation, because a peer that never answers must
+			 * be re-asked and there is no other record it has ever been seen to
+			 * want. */
+			if (s->bm_burst > 0) {
+				len = (s->bm_burst == 3 || s->bm_burst == 2)
+					? reac_ctrl_build_coldconnect(frame, s->fsm.master_mac,
+					      s->src, counter, s->box_channels, planar,
+					      REAC_SAMPLES_PER_PKT)
+					: reac_ctrl_build_coldconnect_0013(frame, s->fsm.master_mac,
+					      s->src, counter, s->box_channels, planar,
+					      REAC_SAMPLES_PER_PKT);
+				s->bm_burst--;
+			} else if (d->with_join) {
+				if (s->bm_seq == 0)
+					len = reac_ctrl_build_config_announce(frame,
+					          s->fsm.master_mac, s->src, counter,
+					          s->box_channels);
+				else if (s->bm_seq == 2)
+					s->bm_burst = 3;   /* fires on this frame and the next two */
+				if (s->bm_burst == 3) {
+					len = reac_ctrl_build_coldconnect(frame, s->fsm.master_mac,
+					          s->src, counter, s->box_channels, planar,
+					          REAC_SAMPLES_PER_PKT);
+					s->bm_burst--;
+				}
+				if (++s->bm_seq >= 8)
+					s->bm_seq = 0;
+			}
+			if (len == 0)
+				len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
+				          s->src, counter, s->box_channels, planar,
+				          REAC_SAMPLES_PER_PKT);
+		} else if (d->with_join) {
 			/* Escalate through the FULL cold-connect sequence a real S-1608 sends —
 			 * 0014 -> 0013 -> 0016 -> 001a (byte-matched to m5000-s1608 establish,
 			 * 2026-07-11). The 0016/001a carry the fuller box inventory the master

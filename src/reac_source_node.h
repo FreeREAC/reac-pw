@@ -125,8 +125,18 @@ void reac_source_node_publish_link(struct reac_source_node *n,
  * pw_properties adapter publish_link uses, so reac.link-state / reac.box-model /
  * reac.box-width / reac.box.mac are written by exactly one function in this daemon.
  * Main-loop thread only. */
+/* `enrolled` IS THE PAIRING, NOT THE HEARING (0.5.6, operator ruling). It used to be the
+ * RX's own evidence — frames arriving and decoding — on 0.5.2's reasoning that a
+ * receive-only join IS the slave role performed. That reasoning went with the receive-only
+ * join: since 0.5.6 the daemon actually ENROLS with a box on M, and the console keys a
+ * stagebox off `reac.link-state` (openmixer's `stageboxConnected`: only `established` is a
+ * locked, streaming box). The rig said it plainly on 2026-09-09 — "S-0808 is not enrolled
+ * but omx sees it available", with the box's own lamp unlocked. A box we can merely HEAR is
+ * not a box we have joined, so this is now the slave engine's own ESTABLISHED flag:
+ * `probing` while listening, flooding and waiting for the grant echo; `established` only
+ * once the grant is accepted and the unicast stream and heartbeat are running. */
 void reac_source_node_publish_box_master(struct reac_source_node *n,
-                                         unsigned width, uint64_t mac48, int locked);
+                                         unsigned width, uint64_t mac48, int enrolled);
 
 /* Live-update the reac-capture node's presented Format rate — the RATE half of
  * #208/2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b ("a rate is ONE

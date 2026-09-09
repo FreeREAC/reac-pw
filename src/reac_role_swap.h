@@ -111,19 +111,15 @@ enum reac_role_engine reac_role_engine_of_master(int engine_up, enum reac_master
  * master, or still hunting for one. */
 enum reac_role_engine reac_role_engine_of_slave(int engine_up, int established);
 
-/* THE RECEIVE-ONLY JOIN'S contribution — a segment that joined a box mastering the wire
- * (DESIGN.md 0.5.1/0.5.2). It runs no reac_slave engine and never will: that engine exists
- * to answer a grant, and a box on M emits no control frame of any kind, so there is no
- * enrolment to wait for and `engine_of_slave` above answers DOWN for it forever — which is
- * what published role_reestablish_pending over a segment that was up and streaming
- * (rig, 2026-09-09). What performs the role here is the segment's own RX: following the
- * box's clock and delivering its channels IS the slave role, done.
- *
- * `engine_up` is that RX feeder running; `locked` is it accepting the box's frames — the
- * same evidence reac.master.state=foreign rests on (reac_segment_heard_step). A wire not
- * heard yet is the HUNT, exactly as a slave waiting for a desk is. */
-enum reac_role_engine reac_role_engine_of_receive_only(int engine_up, int locked);
-
+/* RETIRED 2026-09-09 (0.5.6). This answered the role for a RECEIVE-ONLY join — 0.5.2's
+ * rule that a segment which merely decodes a box master's broadcast IS the slave role
+ * performed. There is no receive-only join any more: a wire a box masters is joined by the
+ * same reac_slave engine a desk-mastered wire is, so its role is answered by
+ * reac_role_engine_of_slave like every other slave, and its link-state by that engine's own
+ * ESTABLISHED flag. Kept out of the header deliberately rather than left dead: the rule it
+ * encoded is the one the operator overturned ("S-0808 is not enrolled but omx sees it
+ * available"), and a predicate that still answers it is a second opinion waiting to be
+ * called. */
 /* THE ANSWER for REAC_PROP_ROLE_STATE, given the record and what the live
  * engine reports. Honest in every window:
  *
