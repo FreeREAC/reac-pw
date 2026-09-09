@@ -279,6 +279,20 @@ struct reac_pacer_cfg {
 	/* 1 when the opening rate was ASSERTED (--rate, a conf file) rather than picked
 	 * by the best-drivable convention — the source label starts truthful either way. */
 	int rate_asserted;
+	/* THE BOX'S OWN FRAME IS THE SLOT TICK (0.5.5). Set on a wire a stagebox on M
+	 * masters: the loop blocks on THIS socket's RX instead of on a deadline, and emits
+	 * exactly one downstream frame per REAC frame received from the peer. Everything
+	 * after the wake is the master role's own emission body, unchanged — the ruling is
+	 * that sending is always the same and only the pacing is a slave's.
+	 *
+	 * `fps`, `catchup_max_slots` and `clock_follow` are inert here BY CONSTRUCTION and
+	 * not by a branch: with no deadline to advance there is no phase to drift, no slot
+	 * debt to repay and nothing for a DLL to steer. The wire runs at the box's exact
+	 * rate because every frame we send is a reply to one of its own.
+	 *
+	 * Nothing is emitted before the first box frame arrives — no frame and no tick —
+	 * which is not a hold-off but the pacing itself. */
+	int tick_on_rx;
 };
 
 /* Default slot-debt budget, EXPRESSED IN TIME because the thing it bounds is a
@@ -376,7 +390,8 @@ struct reac_pacer {
 	struct reac_headamp_tx headamp;  /* MASTER head-amp DMX send (off unless set) */
 	int fd;                          /* AF_PACKET socket */
 	int ifindex;
-	long period_ns;                  /* 1e9 / fps */
+	int tick_on_rx;                  /* 0.5.5: the peer's frame is the slot tick */
+	long period_ns;                  /* 1e9 / fps; unused when tick_on_rx */
 	uint32_t catchup_max_slots;      /* slot-debt budget; 0 = re-base always */
 	int      catchup_max_slots_cfg;  /* the RAW reac_pacer_cfg value that produced
 	                                  * the line above (0 = rate-derived default,
