@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,25 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-2
+- WE ARE THE MIXER ON THAT WIRE. Operator: "mixer always sends 40ch, boxes send their width
+  only." Every audio frame on a box-master wire is the fixed 1492 B 40-slot downstream, the
+  box's outputs in their slots, in the presence flood and after the grant alike; the 340 B
+  the S-1608 sent that box is what a BOX sends. Only the ENROLMENT is the box's: flood,
+  unicast config-announce, cold-connect burst ~200 ms later, the grant echoed in the box's
+  broadcast, then the 1 s heartbeat.
+- The declaration is the one that was granted, byte for byte: the 34-byte block a real S-1608
+  unicast to the real S-0808 four milliseconds before it was echoed, carried as a golden.
+  0.5.6-1 derived it from the MASTER's width and announced selector 0x84 - the family of the
+  box it was talking TO - and the rig sent four correct bursts behind it, lamp blinking, and
+  was never granted. libreac's builder emits 0x82 at 16 channels, which is not it either.
+- The slave's source MAC on this one path is Roland's OUI over this NIC's host part, the one
+  documented exception to reac_mac.h's verbatim-address law, with the socket promiscuous
+  because a box unicasts to the address it was announced from.
+- Fixed on the way: a control frame stamped onto a downstream kept BROADCAST in its own dst
+  bytes and arrived labelled broadcast however it was sent; and the heartbeat rides two FSM
+  decisions, so handling one left a segment established and silent.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-1
 - A WIRE A STAGEBOX MASTERS IS NOW ENROLLED WITH, THE WAY A STAGEBOX ENROLS. Operator
   ruling: "It is only a matter of following the same protocol that we expect." A 75 s
