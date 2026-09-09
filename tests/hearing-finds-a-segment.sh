@@ -950,6 +950,16 @@ wait_for "\[trunk0.12\] segment up (slave, receive-only on a box master, chosen 
 wait_for "\[trunk1.13\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
 	echo "FAIL: the adopted trunk1.13 was not served like any other interface"
 	tail -30 "$LOG"; exit 1; }
+# AND NOTHING WAS STACKED ON A STACK. A sub-interface has no VLANs of its own: the frame
+# reaching it has already had its tag consumed, and a daemon that tapped one would read
+# that same VID again and mint `<parent>.<vid>.<vid>`. Measured here before 0.5.4 -- inside
+# this namespace /sys is the HOST's, so the daemon's `lower_*` test answers "not stacked"
+# for every netdev in the run, and it minted trunk1.13.13 while the real segment probed at
+# a wire nobody was on. The daemon no longer needs sysfs to refuse it.
+if ip -o link | awk '{print $2}' | tr -d ':' | grep -qE '\.[0-9]+\.[0-9]+'; then
+	echo "FAIL: a VLAN was created on a VLAN"; ip -o link | awk '{print $2}' | tr -d ':'
+	grep -E "created|adopted" "$LOG" | tail -10; exit 1
+fi
 sleep 1.5
 T11=$(daemon_node_props $PID reac-capture.trunk0.11)
 T12=$(daemon_node_props $PID reac-capture.trunk0.12)
