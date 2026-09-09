@@ -93,6 +93,7 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->bm_last_scene_ns = 0;
 	s->bm_burst_sent_ns = 0;
 	s->bm_listened = 0;
+	s->bm_announce_sent = 0;
 	(void)0;   /* the box-master declaration is a captured golden, not a width */
 	s->bm_seq = 0;
 	s->bm_burst = 0;
@@ -348,13 +349,28 @@ static int bm_scene_quiet(struct reac_slave *s)
  *
  * So the claim follows the FSM and nothing else, in either carrier: the descriptor is a
  * statement about the pairing, not about the geometry it rides in. */
-static void bm_mark_established(uint8_t *frame)
+static void bm_mark_descriptor(uint8_t *frame, uint8_t d)
 {
 	for (int i = 0; i < 16; i++) {
 		frame[18 + i * 2]     = 0x00;
-		frame[18 + i * 2 + 1] = 0x7a;
+		frame[18 + i * 2 + 1] = d;
 	}
 }
+
+/* THE THREE STATES A FILLER'S CONTROL AREA CARRIES (0.5.6-10), read off the wire and
+ * confirmed by replay:
+ *
+ *   zero    before the announce            (the S-0808 sent 48 such frames)
+ *   0x52    announce -> grant, "requesting" (8691 frames, exactly its announce-to-burst gap)
+ *   0x7a    after the grant, established
+ *
+ * We sent ZERO for the whole enrolment, and that is the ONLY field-level difference across
+ * the two streams: 39992 fillers at zero against their 0x52/0x7a. It is also the one the
+ * replay isolated — V9 with its pre-grant descriptor zeroed is REFUSED by the S-1608, where
+ * every other element of ours passes inside V9. The S-0808 as master tolerated zeros, which
+ * is why this survived the first rig round. */
+#define REAC_BM_DESC_REQUESTING 0x52
+#define REAC_BM_DESC_ESTABLISHED 0x7a
 
 /* ---- THE MIXER'S SIDE OF A BOX-MASTER WIRE (0.5.6, operator ruling) ---------------
  *
@@ -462,10 +478,14 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 				len = reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac,
 				          s->src, counter, s->box_channels, planar,
 				          REAC_SAMPLES_PER_PKT);
-			else
+			else {
 				len = reac_ctrl_build_flood_filler(frame, s->fsm.master_mac,
 				          s->src, counter, s->box_channels, planar,
 				          REAC_SAMPLES_PER_PKT);
+				/* zero until we have asked, then REQUESTING until granted */
+				if (len && s->bm_announce_sent)
+					bm_mark_descriptor(frame, REAC_BM_DESC_REQUESTING);
+			}
 			sll = flooding ? bcast_sll : uni_sll;
 		} else {
 			/* `reac_downstream_build` leaves the control area zero by contract, so
@@ -473,8 +493,10 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 			 * ADDED once the pairing is real. Same state, same field, either
 			 * geometry. */
 			len = bm_downstream(s, frame, planar, counter);
-			if (linked && len)
-				bm_mark_established(frame);
+			if (len && linked)
+				bm_mark_descriptor(frame, REAC_BM_DESC_ESTABLISHED);
+			else if (len && s->bm_announce_sent)
+				bm_mark_descriptor(frame, REAC_BM_DESC_REQUESTING);
 			sll = bcast_sll;    /* a desk's downstream is broadcast */
 		}
 
@@ -516,6 +538,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 						cl = reac_ctrl_build_config_announce_box_master(
 						         ctl, s->fsm.master_mac, s->src,
 						         counter, s->box_channels);
+						s->bm_announce_sent = 1;
 						s->bm_announced = 1;
 						s->bm_chanmap_hit = 0;
 					} else if (s->bm_chanmap_hit) {
@@ -548,6 +571,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					cl = reac_ctrl_build_config_announce_box_master(
 					         ctl, s->fsm.master_mac, s->src, counter,
 					         s->box_channels);
+					s->bm_announce_sent = 1;
 				}
 				else if (s->bm_seq == 2)
 					s->bm_burst = 3;
@@ -571,6 +595,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					      >= REAC_BM_RETRY_NS) {
 						s->bm_burst_sent_ns = 0;
 	s->bm_listened = 0;
+	s->bm_announce_sent = 0;
 						s->bm_seq = 0;
 					}
 				} else if (++s->bm_seq >= 8) {

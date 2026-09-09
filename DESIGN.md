@@ -1912,6 +1912,34 @@ left is not visible from this side of the wire, and it is not something more gue
 reac-pw will find: the next move is the operator's ruling to put the control plane where the
 captures are the tests (libreac 0.8).
 
+### The one field that differs across the whole stream (0.5.6-10)
+
+The replay matrix cleared every element of ours INSIDE V9 — our MAC, our silent slots, our
+three-record burst, our 200 ms timing and 2 s retries, our whole control frames — and ours as
+a whole still fails. A field-by-field parse of the two streams, 40001 frames each, finds
+exactly one difference that is not the MAC, the counter or the audio:
+
+| | filler descriptors |
+|---|---|
+| the granted S-0808 | **0x7a** ×31255, **0x52** ×8691, zero ×48 |
+| ours | zero ×39992 |
+
+Their 0x52 window is 8691 frames — 1.09 s at 8000 fps, exactly their announce-to-burst gap —
+and the wire reads: **zero before the announce, `0x52` from the announce until the grant,
+`0x7a` after it**. Sampled on the S-0808 at 15.024 (zero, its announce is 15.030), 16.024
+(0x52, grant at 16.118) and 17.024 (0x7a). The replay confirms it from the other side: V9
+with that window zeroed is **REFUSED**, and it is the only variant of V9 that is.
+
+**We sent zero for the whole enrolment.** 0.5.6-5 made the pre-grant fillers zero because the
+S-1608 joining the S-0808 sent zeros there — true, and the S-0808 as master TOLERATES zeros,
+which is why the first rig round enrolled. The S-1608 as master does not. The descriptor now
+follows the three states, and the emulator counts the requesting window so a build that skips
+it fails here rather than on the rig: measured 7996 fillers carrying 0x52 between our announce
+and the grant.
+
+It has no name in `spec/reac.ksy` yet; "requesting" is what the wire shows it to mean and what
+`reac_link` will call it.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
