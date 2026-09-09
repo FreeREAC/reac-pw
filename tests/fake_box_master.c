@@ -128,6 +128,8 @@ struct ear {
 	unsigned long rx_frames_seen;      /* peer frames, for a frame INDEX */
 	unsigned long desc_first_frame;    /* where 007a first appeared */
 	unsigned long desc_req_frames;     /* fillers carrying REQUESTING (0x52) */
+	int hb_after_burst;                /* a heartbeat arrived on the frame after the burst */
+	int last_was_burst;
 	unsigned long grant_frame;         /* where we granted */
 	int desc_before_grant;             /* the refusal */
 	unsigned long steady_bcast;   /* broadcast downstream after the announce */
@@ -217,9 +219,20 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 				e->grant_frame = e->rx_frames_seen;
 		}
 	} else if (k == REAC_CTRL_BOX_HB) {
-		if (!e->up_hb) e->up_t_hb_first = t;
+		/* THE PERIOD IS MEASURED FROM THE SECOND BEAT. The first is the one that
+		 * follows the burst, before the grant — a statement of presence, not part of
+		 * the cadence — and counting it stretches the measured period by the whole
+		 * pre-grant wait (4.386 s against a ~1 s cadence, measured). */
+		if (e->up_hb == 1) e->up_t_hb_first = t;
 		e->up_hb++; e->up_t_hb_last = t;
+		/* BOTH GRANTED BOXES HEARTBEAT ON THE FRAME AFTER THEIR BURST, before the
+		 * grant. A peer that only beats once established is asking to be granted
+		 * without having said it is there. */
+		if (e->last_was_burst)
+			e->hb_after_burst = 1;
 	}
+	if (k != REAC_CTRL_FILLER)
+		e->last_was_burst = (k == REAC_CTRL_GRANT);
 }
 
 static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t src[6],
@@ -364,6 +377,7 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	fprintf(f, "announce ok %d refused %lu in_scene %lu\n",
 	        e->announce_ok, e->announce_refused, e->announce_in_scene);
 	fprintf(f, "steady bcast %lu\n", e->steady_bcast);
+	fprintf(f, "hb_after_burst %d\n", e->hb_after_burst);
 	fprintf(f, "descriptor first %lu grant %lu before_grant %d requesting %lu\n",
 	        e->desc_first_frame, e->grant_frame, e->desc_before_grant, e->desc_req_frames);
 	fprintf(f, "distinct records %d\n", e->grant_n_total);
@@ -377,9 +391,9 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	        e->up_frames, e->up_len, e->up_nch, e->up_announce, e->up_join, e->up_hb);
 	if (e->up_announce && e->up_join)
 		fprintf(f, "up order announce_to_join %.3f\n", e->up_t_join - e->up_t_announce);
-	if (e->up_hb > 1)
+	if (e->up_hb > 2)
 		fprintf(f, "up hb_period %.3f\n",
-		        (e->up_t_hb_last - e->up_t_hb_first) / (double)(e->up_hb - 1));
+		        (e->up_t_hb_last - e->up_t_hb_first) / (double)(e->up_hb - 2));
 	for (int c = 0; c < e->up_nch && c < REAC_MAX_CHANNELS; c++) {
 		if (!e->up_ns) break;
 		double r = sqrt(e->up_sq[c] / (double)e->up_ns);

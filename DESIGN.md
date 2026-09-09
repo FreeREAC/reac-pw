@@ -1940,6 +1940,46 @@ and the grant.
 It has no name in `spec/reac.ksy` yet; "requesting" is what the wire shows it to mean and what
 `reac_link` will call it.
 
+### The master's state does not decide it, and V9l says what does (0.5.6-11)
+
+Tabulated from the result captures: the S-1608's own broadcast in the 3 s before each
+replayed burst — scene-transfer frames, how long since the last one, chanmap and `cfea`
+counts, and the announce's enrolled-count byte.
+
+| | burst @ | scene frames | since last scene | chanmap | cfea | byte 21 | echoes |
+|---|---|---|---|---|---|---|---|
+| V9 (granted) | 3.151 | 0 | none in 3 s | 1 | 3 | 1 | 3 |
+| V9l (granted) | 2.323 | 337 | −0.895 s | 0 | 2 | 1 | **14** |
+| V2p (granted) | 3.158 | 0 | none | 0 | 3 | 1 | 6 |
+| V9d (granted) | 8.126 | 343 | −0.789 s | 2 | 2 | 1 | 4 |
+| V1p (granted) | 3.129 | 343 | −0.793 s | 2 | 2 | 1 | 4 |
+| V0p (refused) | 2.328 | 0 | none | 2 | 3 | 1 | 0 |
+| V9e (refused) | 3.148 | 324 | −0.000 s | 0 | 2 | 1 | 0 |
+| V9f (refused) | 2.350 | 244 | −2.106 s | 1 | 2 | 1 | 0 |
+| V9k (refused) | 2.363 | 0 | none | 0 | 2 | 1 | 0 |
+| V8p (refused) | 2.320 | 343 | −1.386 s | 2 | 2 | 1 | 0 |
+
+**No column separates them.** Scene in progress, scene long over and no scene at all appear on
+both sides; `cfea[21]` is 1 everywhere; the chanmap cadence is mixed; burst times overlap. The
+master's state is not the discriminator, and neither is the source MAC (V1p is ours and
+granted, V8p is theirs and refused).
+
+**What V9l actually sent is the answer.** It was cut as "their blocks cycled through our
+sixteen positions", and their seven blocks are one announce, two records and four heartbeats,
+so its first four frames came out as:
+
+    ANNOUNCE -> JOIN -> BOX_READY -> HEARTBEAT
+
+which is the granted sequence exactly, and it drew fourteen echoes. Ours is
+`ANNOUNCE -> JOIN -> HEAD_MARK -> BOX_READY` with no heartbeat until established. Every FIELD
+of our frames is byte-identical to a granted one — V9s, V9t and V9u each took one from theirs
+and all three were refused — because what is wrong is not a field. It is a frame that is
+missing and one that should not be there.
+
+Both ground truths agree: `16.1162` JOIN, `16.1164` BOX_READY, `16.1165` **heartbeat**, and
+the grant 2 ms later. `V9v-heartbeat-after-burst.pcap` is cut and not yet replayed; it is the
+one variant that tests this directly.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does

@@ -94,6 +94,7 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->bm_burst_sent_ns = 0;
 	s->bm_listened = 0;
 	s->bm_announce_sent = 0;
+	s->bm_burst_just_ended = 0;
 	(void)0;   /* the box-master declaration is a captured golden, not a width */
 	s->bm_seq = 0;
 	s->bm_burst = 0;
@@ -500,7 +501,24 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 			sll = bcast_sll;    /* a desk's downstream is broadcast */
 		}
 
-		if (d->emit == REAC_SLAVE_EMIT_COLDCONNECT) {
+		if (d->emit == REAC_SLAVE_EMIT_COLDCONNECT && s->bm_burst_just_ended) {
+			/* THE FRAME AFTER THE BURST IS A HEARTBEAT, and both granted boxes send
+			 * it BEFORE the grant, not after establishment:
+			 *
+			 *   16.1162  cdea 0403 0014      the JOIN
+			 *   16.1164  cdea 0403 0013      BOX_READY
+			 *   16.1165  cdea 0103 0001 81   one frame later, 2 ms before the grant
+			 *
+			 * Ours heartbeat only once ESTABLISHED, so the master was being asked to
+			 * grant a peer that had not said it was there. Every FIELD of our control
+			 * frames is byte-identical to a granted one — this is a frame that is
+			 * MISSING, which is why nine rounds of byte diffs did not see it. It has
+			 * to be taken before the cold-connect grid below, which is still running
+			 * and would otherwise own every slot. */
+			s->bm_burst_just_ended = 0;
+			cl = reac_ctrl_build_box_hb(ctl, s->fsm.master_mac, s->src, counter,
+			                            s->box_channels);
+		} else if (d->emit == REAC_SLAVE_EMIT_COLDCONNECT) {
 			/* The two control frames the enrolment needs, in the order the wire
 			 * showed and unicast as the wire showed: the config-announce as the
 			 * frame we go unicast with, the three-record burst ~200 ms later. */
@@ -524,6 +542,8 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					cl = reac_ctrl_build_coldconnect_0013(ctl, s->fsm.master_mac,
 					         s->src, counter, s->box_channels, planar,
 					         REAC_SAMPLES_PER_PKT);
+					/* the heartbeat rides the very next slot (see above) */
+					s->bm_burst_just_ended = 1;
 				}
 				s->bm_burst--;
 			} else if (d->with_join) {
@@ -594,8 +614,6 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					if (slave_mono_ns() - s->bm_burst_sent_ns
 					      >= REAC_BM_RETRY_NS) {
 						s->bm_burst_sent_ns = 0;
-	s->bm_listened = 0;
-	s->bm_announce_sent = 0;
 						s->bm_seq = 0;
 					}
 				} else if (++s->bm_seq >= 8) {
