@@ -227,7 +227,12 @@ python3 -c "import sys; sys.exit(0 if $ORD > 0 else 1)" || {
 # MASTER's width and announced selector 0x84 — the family of the box it was talking TO — and
 # the real S-0808 echoed nothing behind four correct bursts. This is the block a real S-1608
 # unicast to that same chassis 4 ms before it was granted.
-S1608_ANN=cdea0103001080000000020202020101030303030303000000000000000000000050
+# OUR OWN INVENTORY, not the peer's. Both real boxes announce selector 0x80 with their own
+# port table — an 8-input box `01 01 01 01 02 02`, a 16-input one `02 02 02 02 01 01` — and
+# each was granted by the other. Announcing the S-1608's table to an S-1608 master told it
+# its own identity back and was refused twice. The emulator here is 8-out, so we fill eight
+# slots and declare the eight-input inventory.
+S1608_ANN=cdea0103001080000000010101010202030303030303000000000000000000000052
 ANNBLK=$(awk '$1 == "announceblk" { print $2 }' "$RT/box.rep")
 [ "$ANNBLK" = "$S1608_ANN" ] || {
 	echo "FAIL: our config-announce is not the one that was granted."
@@ -256,9 +261,9 @@ echo "          $ORD s after the announce; control frames $ULEN B, unicast; the 
 echo "          block is byte-identical to the S-1608's (selector 0x80 at offset 6)"
 
 # ---- 3. IT ESTABLISHED, AND IT HEARTBEATS. -----------------------------------------
-wait_for "reac_slave: STATE .*-> ESTABLISHED" 30 || {
+wait_for "reac_slave: .*STATE .*-> ESTABLISHED" 30 || {
 	echo "FAIL: the box master granted and the engine never reached ESTABLISHED"
-	grep "reac_slave: STATE" "$LOG" | tail -6; cat "$RT/box.rep"; exit 1; }
+	grep "reac_slave: .*STATE" "$LOG" | tail -6; cat "$RT/box.rep"; exit 1; }
 for i in $(seq 60); do
 	HB=$(rep_f up 13 "$RT/box.rep"); [ -n "$HB" ] && [ "$HB" -ge 3 ] && break
 	sleep 0.5
@@ -431,10 +436,50 @@ T3=$(date +%s.%N)
 echo "MEASURED: link-state probing while the recipe ran, on the segment's own live door"
 [ "$LS" = "established" ] || {
 	echo "FAIL: the wire came back and the segment never re-enrolled (link-state=$LS)"
-	grep "reac_slave: STATE" "$LOG" | tail -6; exit 1; }
+	grep "reac_slave: .*STATE" "$LOG" | tail -6; exit 1; }
 echo "MEASURED: re-enrolled, link-state established $(python3 -c "print('%.1f' % ($T3 - $T2))") s after the link returned"
 # THE ABSENCE CLAIM'S POSITIVE CONTROL: `probing` must be a state this probe can SEE, not
 # just one it failed to read. It was read above, on the drop edge, from the same node.
+
+# ---- 7. A 16-INPUT BOX HAS EIGHT OUTPUTS, AND BOTH DOORS SAY SO. -------------------
+# The rig, with the S-1608 in master mode: reac-playback.<segment> came up at SIXTEEN
+# channels, because the door was sized from the width the box BROADCASTS - which is its input
+# count - instead of the model row's output count. An S-0808 hid it (8 in, 8 out); an S-1608
+# does not. Both real captures agree the frames carry 8 slots to an 8-out master. And the
+# capture door read the generic "REAC 16ch capture" where the master path's names the box,
+# which is what a console shows the operator.
+ip link add bmx1 type veth peer name mbx1 || exit 90
+ip link set mbx1 netns $NSPID || exit 90
+$in_peer "$FAKE" mbx1 00:40:ab:c4:80:41 16 2000 "$RT/box16.rep" >"$RT/box16.log" 2>&1 &
+FAKE16=$!
+sleep 0.5
+ip link set bmx1 up; peer ip link set mbx1 up
+wait_for "\[bmx1\] SLAVE role on a BOX MASTER" 30 || {
+	echo "FAIL: a 16-ch box master was not joined"; tail -10 "$LOG"; exit 1; }
+sleep 3
+PLAY16=$(node_id reac-playback.bmx1)
+[ -n "$PLAY16" ] || { echo "FAIL: no reac-playback.bmx1"; exit 1; }
+NP16=$(pw-dump | python3 -c '
+import json,sys
+d = json.load(sys.stdin); want = int(sys.argv[1]); n = 0
+for o in d:
+    if o.get("type") == "PipeWire:Interface:Port":
+        p = o["info"]["props"]
+        if int(p.get("node.id", -1)) == want and p.get("port.direction") == "in":
+            n += 1
+print(n)' "$PLAY16")
+[ "$NP16" = "8" ] || {
+	echo "FAIL: the 16-input box's playback door has $NP16 channels; an S-1608 has EIGHT"
+	echo "      outputs, and what we send feeds its outputs"; exit 1; }
+CAPD=$(node_prop reac-capture.bmx1 node.description)
+case "$CAPD" in
+  *S-1608*) : ;;
+  *) echo "FAIL: the capture door is described '$CAPD' — it should name the box the way the"
+     echo "      master path's does, because that is the operator-facing label"; exit 1 ;;
+esac
+echo "MEASURED: 16-in box master — playback door $NP16 ch (its outputs), capture door '$CAPD'"
+kill -TERM $FAKE16 2>/dev/null; wait $FAKE16 2>/dev/null
+ip link set bmx1 down
 
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 kill -TERM $PID 2>/dev/null; wait $PID 2>/dev/null

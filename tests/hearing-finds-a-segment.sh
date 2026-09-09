@@ -748,7 +748,7 @@ done
 # ESTABLISHED and stays there through the desk's whole visit, so it has no reason to
 # cold-connect to anybody. What we owe it is a master that is DRIVING when it does, which
 # is what the frame count above measures; the master engine probes for exactly that.
-grep -q "reac_slave: STATE .* -> ESTABLISHED" "$RT/venue-box.log" || {
+grep -q "reac_slave: .*STATE .* -> ESTABLISHED" "$RT/venue-box.log" || {
 	echo "FAIL: this phase's box never established at all, so nothing above is about a"
 	echo "      granted box"; tail -20 "$RT/venue-box.log"; exit 1; }
 kill -TERM $SNIFFV 2>/dev/null; wait $SNIFFV 2>/dev/null
@@ -780,18 +780,22 @@ wait_for "\[boxm0\] segment up (slave" 20 || {
 # AND IT ENROLS WITH IT, WHICH TAKES A FLOOD AND A HANDSHAKE (0.5.6). The lamp follows the
 # engine now, not the RX, so the assertions below wait for the pairing rather than for the
 # first decoded frame.
-wait_for_since "$BOXM_FLOOR" "reac_slave: STATE .*-> ESTABLISHED" 60 || {
+wait_for_since "$BOXM_FLOOR" "reac_slave: .*STATE .*-> ESTABLISHED" 60 || {
 	echo "FAIL: the box master granted nothing, or we never enrolled with it"
-	grep "reac_slave: STATE" "$LOG" | tail -6; tail -5 "$RT/boxm.log"; exit 1; }
+	grep "reac_slave: .*STATE" "$LOG" | tail -6; tail -5 "$RT/boxm.log"; exit 1; }
 # THE JOB: the box's channels are on the graph, sized by what the box announced -- 8, not
 # a 40-slot fabric with 32 rows of silence -- and the node says whose clock they are on.
 sleep 1.5
 BP=$(daemon_node_props $PID reac-capture.boxm0)
 [ -n "$BP" ] || { echo "FAIL: no reac-capture.boxm0 on the graph after joining a box master"
 	daemon_nodes $PID; tail -20 "$LOG"; exit 1; }
-[ "$(fld "$BP" 6)" = "REAC 8ch capture (box mic inputs)" ] || {
-	echo "FAIL: the joined segment is not sized to the box's 8 ch, and does not say it is"
-	echo "      reading the box's own geometry: $BP"; exit 1; }
+# SIZED TO THE BOX AND NAMED AFTER IT (0.5.6-9): the identity keys were always published,
+# but the DESCRIPTION is what a console shows the operator, and a joined box read the generic
+# "REAC 8ch capture" where a served one names the model.
+case "$(fld "$BP" 6)" in
+  "S-0808 (8 in / 8 out)"*"8 ch"*) : ;;
+  *) echo "FAIL: the joined segment should name the box and its own geometry: $BP"; exit 1 ;;
+esac
 [ "$(fld "$BP" 1)" = "foreign" ] || { echo "FAIL: master.state is not foreign: $BP"; exit 1; }
 [ "$(fld "$BP" 2)" = "box" ] || { echo "FAIL: master.rival.kind is not box: $BP"; exit 1; }
 [ "$(fld "$BP" 3)" = "none" ] || {
@@ -939,6 +943,55 @@ BOXA=$(seen x "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
 	echo "FAIL: the wire was refused and a door published, and we put"
 	echo "      $((AFTER_P - BEFORE_P)) more frames on it in 3 s anyway"
 	cat "$RT/pinm0.cnt"; exit 1; }
+# ---- AND CHANGING THE PIN AT RUNTIME RE-CLASSIFIES THE WIRE (0.5.6-8). The rig's own
+# sequence: a wire pinned MASTER with a stagebox on M is a refusal door, the operator changes
+# the pin to `auto` through the console, and what must follow is the BOX-MASTER JOIN. What
+# followed instead was the DESK-slave engine -- "rx stream = master downstream (40 ch)",
+# role_reestablish_pending -- because the in-place role swap carries the listener's old
+# configuration across and `join_box_master` is the HUNT's verdict, which the swap never
+# re-ran. A service restart took the right path, which is the tell: the difference was the
+# classification and not the role.
+PINM_FLOOR=$(LINE0)
+sed -i 's/^REAC_ROLE_pinm0=master$/REAC_ROLE_pinm0=auto/' "$CONF/.config/reac-pw/reac-pw.env"
+# The role assertion reaches the daemon the way the console sends it: a write on the door's
+# own reac.cfg.role param. The conf above is what a re-open reads on the way back up.
+PINID=$(pw-dump | python3 -c "
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get('type')=='PipeWire:Interface:Node' and o['info']['props'].get('node.name')=='reac-capture.pinm0':
+        print(o['id'])" | head -1)
+[ -n "$PINID" ] || { echo "FAIL: no door node to assert a role on"; exit 1; }
+pw-cli set-param "$PINID" Props '{ params = [ "reac.cfg.role", 1 ] }' >/dev/null 2>&1
+wait_for_since "$PINM_FLOOR" "\[pinm0\] REAC role -> slave: dropping the segment so the wire is CLASSIFIED again" 20 || {
+	echo "FAIL: the role changed and the segment was re-opened on the OLD verdict instead"
+	echo "      of being classified again — the 2026-09-09 rig defect"
+	tail -n "+$PINM_FLOOR" "$LOG" | tail -20; exit 1; }
+wait_for_since "$PINM_FLOOR" "\[pinm0\] box masters this wire" 25 || {
+	echo "FAIL: re-heard, but the box master was not recognised the second time"
+	tail -n "+$PINM_FLOOR" "$LOG" | grep -E "pinm0" | tail -20; exit 1; }
+wait_for_since "$PINM_FLOOR" "\[pinm0\] SLAVE role on a BOX MASTER" 20 || {
+	echo "FAIL: classified as a box master and still not joined as one"
+	tail -n "+$PINM_FLOOR" "$LOG" | tail -20; exit 1; }
+if tail -n "+$PINM_FLOOR" "$LOG" | grep -q "\[pinm0\] .*rx stream = master downstream (40 ch)"; then
+	echo "FAIL: the segment re-opened into the DESK-slave engine — the wire carries a box's"
+	echo "      own geometry, not a desk's 40-channel downstream"; exit 1
+fi
+echo "OK: a runtime pin change re-classified the wire and joined the box master"
+# AND BACK, so the phase that follows starts where it expects to and the reverse direction is
+# proven at the same time: the pin returns to MASTER and the wire is refused again.
+PINM_FLOOR2=$(LINE0)
+sed -i 's/^REAC_ROLE_pinm0=auto$/REAC_ROLE_pinm0=master/' "$CONF/.config/reac-pw/reac-pw.env"
+PINID2=$(pw-dump | python3 -c "
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get('type')=='PipeWire:Interface:Node' and o['info']['props'].get('node.name')=='reac-capture.pinm0':
+        print(o['id'])" | head -1)
+[ -n "$PINID2" ] && pw-cli set-param "$PINID2" Props '{ params = [ "reac.cfg.role", 0 ] }' >/dev/null 2>&1
+wait_for_since "$PINM_FLOOR2" "\[pinm0\] REFUSED (rival-master-box)" 30 || {
+	echo "FAIL: the pin went back to master and the wire was not refused again"
+	tail -n "+$PINM_FLOOR2" "$LOG" | grep pinm0 | tail -12; exit 1; }
+echo "OK: and back — the pin returns to master and the wire is refused again"
+
 # ---- AND THE REFUSAL IS NOT A LATCH. The switch is moved to slave: the box stops
 # mastering, its sighting ages out, and the wire the operator pinned is driven after all --
 # without a restart, which is what a latched refusal would have cost.
@@ -1050,11 +1103,17 @@ T13=$(daemon_node_props $PID reac-capture.trunk1.13)
 [ "$(fld "$T12" 5)" = "trunk0.12" ] || { echo "FAIL: vid 12's node names segment '$(fld "$T12" 5)'"; exit 1; }
 [ "$(fld "$T11" 7)" = "$TBOX11" ] || { echo "FAIL: vid 11's node carries box.mac '$(fld "$T11" 7)', not $TBOX11"; exit 1; }
 [ "$(fld "$T12" 7)" = "$TBOX12" ] || { echo "FAIL: vid 12's node carries box.mac '$(fld "$T12" 7)', not $TBOX12"; exit 1; }
-[ "$(fld "$T11" 6)" = "REAC 8ch capture (box mic inputs)" ] || {
-	echo "FAIL: vid 11's box is 8 ch and its node reads '$(fld "$T11" 6)'"; exit 1; }
-[ "$(fld "$T12" 6)" = "REAC 16ch capture (box mic inputs)" ] || {
-	echo "FAIL: vid 12's box is 16 ch and its node reads '$(fld "$T12" 6)' -- two VLANs"
-	echo "      served through one listener would read the same width twice"; exit 1; }
+# Each VLAN's door is sized to ITS OWN box and named after it (0.5.6-9), which is also how
+# two segments on one cable are told apart at a glance.
+case "$(fld "$T11" 6)" in
+  "S-0808 (8 in / 8 out)"*"8 ch"*) : ;;
+  *) echo "FAIL: vid 11's box is 8 ch and its node reads '$(fld "$T11" 6)'"; exit 1 ;;
+esac
+case "$(fld "$T12" 6)" in
+  "S-1608 (16 in / 8 out)"*"16 ch"*) : ;;
+  *) echo "FAIL: vid 12's box is 16 ch and its node reads '$(fld "$T12" 6)' -- two VLANs"
+     echo "      served through one listener would read the same width twice"; exit 1 ;;
+esac
 [ "$(fld "$T13" 7)" = "$TBOX13" ] || { echo "FAIL: the adopted VLAN's node carries box.mac '$(fld "$T13" 7)'"; exit 1; }
 # AND THE AUDIO IS ARRIVING ON BOTH, decoded into the ring the ports read from -- the
 # feeder's own counter, per segment. A tag we could see and a stream we could not decode

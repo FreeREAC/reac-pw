@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        7%{?dist}
+Release:        8%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,21 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-8
+- A box-master segment's doors are sized from the model's OUTPUT count, not from the width
+  the box broadcasts. An S-1608 master's playback door came up at sixteen channels where that
+  box has eight outputs; an S-0808 hid it. Both real captures carry 8 slots to an 8-out
+  master. The capture door also names the box now, as the master path's does.
+- The config-announce declares OUR inventory, not a borrowed one (libreac >= 0.7.2 picks the
+  table from the width): we sent the S-1608's table to everyone, and on that box's own wire
+  it was its own identity announced back at it.
+- A role change on a HEARD segment drops it so the wire is CLASSIFIED again. A pin changed
+  from master to auto at runtime re-opened into the DESK-slave engine, because
+  join_box_master is the hunt's verdict and the in-place swap never re-ran it; a restart took
+  the right path. The stale sniffer is closed with it, or the re-hear answers with the old pin.
+- reac_slave's STATE transcript carries its segment tag; with two box-master segments the
+  lines were unattributable.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-7
 - Both doors of a box-master segment publish the same link state. After the engine enrolled,
   reac-playback was still at its create-time `probing` while the capture door said

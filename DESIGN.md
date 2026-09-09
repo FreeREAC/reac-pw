@@ -1816,6 +1816,45 @@ capture node uses (`reac_box_master_identity_publish`). A second spelling of tho
 exactly what produced the mismatch. The veth proof reads `reac.link-state` and
 `reac.box-width` off BOTH nodes and requires them equal; removing the second push takes it red.
 
+### The second ground truth: an S-0808 joining an S-1608 master (0.5.6-9)
+
+The bridge run with the roles swapped settles four things and leaves one open.
+
+**A JOINING BOX DOES NOT ALWAYS FLOOD.** The S-0808 broadcast NOTHING: 15 s of silence, then
+its config-announce as the first unicast frame, the burst 1.1 s later, granted 2 ms after.
+The S-1608 in the first capture flooded 0.68 s first. What differs is the MASTER: the S-1608
+sends `cfea` master announces (74 of them, ~1/s) and the S-0808 sends none — so a peer that
+announces itself is found without flooding, and a silent one has to be hunted. We flood at
+both.
+
+**AND THE JOIN LANDS AFTER THE MASTER'S SCENE TRANSFER ENDS, twice.** S-0808's scene ended
+5.526 → S-1608 flooded 5.937 (+0.411 s). S-1608's scene ended 14.807 → S-0808 announced
+15.024 (+0.217 s). The ksy already says the transfer is repeated until answered and that a box
+joining mid-transfer must not cancel it. We announce on our own clock, inside it.
+
+**EACH BOX DECLARES ITS OWN INVENTORY**, selector 0x80, board byte 0, six trailing `03`:
+
+| declarer | port table | granted by |
+|---|---|---|
+| S-0808, 8 in | `01 01 01 01 02 02` | the S-1608 |
+| S-1608, 16 in | `02 02 02 02 01 01` | the S-0808 |
+
+We sent the 16-input table to everyone, so on the S-1608's wire we announced that box's own
+identity back at it — refused twice. Fixed in libreac 0.7.2: `n_ch` picks the table.
+
+**THE GRANT IS NOT THREE ECHOES.** The S-0808 sent only TWO records (`0100`, `0302`) and the
+master answered THREE: echo(0100), **its own `0000` head_mark**, echo(0302). So the middle
+record is the MASTER's, a slave need not send it, and the "two byte-identical echoes" of the
+first capture were echo + head_mark all along. What we send is still valid — both real boxes'
+records are accepted — but "three distinct records" was never the requirement it looked like.
+
+**THE SLOT COUNT IS EIGHT IN BOTH CAPTURES, and it is the master's OUTPUT count.** Also the
+slave's own out count in both, since every box here is 8-out, so the two readings are NOT yet
+told apart. The daemon now uses the model row's `out_ch`: the playback door is sized to it —
+an S-1608 master's door came up at SIXTEEN because it was sized from the width the box
+BROADCASTS, which is its input count — and the upstream slots follow it. The capture door also
+names the box now, as the master path's does, because a console reads that description.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does

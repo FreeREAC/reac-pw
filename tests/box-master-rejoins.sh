@@ -159,8 +159,12 @@ check_joined() {   # check_joined <cycle-name> <log-line-floor>
 		echo "FAIL ($what): a locked join must publish cfg.role.state=applied: $P"; return 1; }
 	[ "$(fld "$P" 8)" = "foreign-master" ] || {
 		echo "FAIL ($what): pace.source must be foreign-master: $P"; return 1; }
-	[ "$(fld "$P" 5)" = "REAC 8ch capture (box mic inputs)" ] || {
-		echo "FAIL ($what): the segment is not sized to the box's own 8 ch: $P"; return 1; }
+	# The door is sized to the box's own 8 ch AND NAMES IT, the way the master path's
+	# capture node does — a console reads this description for the operator-facing name.
+	case "$(fld "$P" 5)" in
+	  "S-0808 (8 in / 8 out)"*"8 ch"*) : ;;
+	  *) echo "FAIL ($what): the door should name the box and its width: $P"; return 1 ;;
+	esac
 	# AND THE FRAMES ARE STILL ARRIVING, counted only from the log this cycle wrote.
 	ok1=$(rx_ok_since "$floor" rej0)
 	sleep 2.5
