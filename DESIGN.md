@@ -557,11 +557,10 @@ MASTER and probing until a box cold-connects`.
    (bus + physical address) is built and tested for the groundwork and is deliberately
    wired to nothing: swapping segment identity today would rename every per-segment key
    and every console patch in one step, which is a migration, not a refactor.
-2. **Trunk topology.** Hearing 802.1Q-tagged frames on a physical parent, and adopting
-   or creating the sub-interfaces that carry them, is designed (openmixer's trunk-VLAN
-   daemon note has the reference topology) and NOT implemented: nothing in `src/` reads
-   a VLAN tag. Today a segment is a whole interface, and a trunk has to be split by the
-   kernel before reac-pw sees it.
+2. **Trunk topology — DONE in 0.5.3**, below. Hearing 802.1Q-tagged frames on a
+   physical parent, and adopting or creating the sub-interfaces that carry them, is
+   built and proven on veth; what is still owed is the rig itself, which has never been
+   on a trunk port. A segment is still a whole interface — a VLAN sub-interface is one.
 3. **Re-resolution after a segment is up — PARTLY DONE, 2026-09-09.** The hunt normally
    lives in the sniffer and dies when the segment is served, so a desk that powers up
    AFTER we took a wire on EVIDENCE is published as a conflict by the listener's
@@ -764,12 +763,141 @@ its 8 outputs from a stream we are not driving, so this segment has no `reac-pla
 publishes no head-amp keys, and an operator cannot route to that box from here. The mode
 switch on the box's front panel is what changes any of that.
 
+## 0.5.3 — the TRUNK: a VLAN is a segment, and the daemon makes the netdev (2026-09-09)
+
+0.5.0's owed list called trunk topology designed and not implemented: *nothing in `src/`
+reads a VLAN tag*. This is that increment. The reference topology and every ruling behind it
+are openmixer's `docs/design/specs/2026-08-23-reac-trunk-vlan-daemon.md` (§3 the kernel
+measurements, §4 the detector and the create path, §5 a segment IS an interface, §12 the
+admin half); what follows is the contract as reac-pw implements it.
+
+**THE DESIGN IS A SUBTRACTION AND STAYS ONE.** Nothing in the audio path changed and no tag
+is parsed in it. A trunk is served by learning WHICH VLANs carry REAC and handing the kernel
+one `<parent>.<vid>` netdev per VLAN; from there each is an ordinary interface and every
+mechanism this daemon already has — the sniffer, the hunt, the pin, the silence licence, the
+seglock, the per-segment conf keys, the nodes — runs on it unchanged, because §5 rules that a
+segment IS an interface and a VLAN sub-interface is one.
+
+**WHAT THE KERNEL GIVES, MEASURED ON THIS KERNEL.** 7.2.4-200.fc44, 2026-09-09, openmixer's
+`tools/probe-vlan-8819.py` under `unshare -rn` (a veth pair in a private netns, no NIC), the
+same five scenarios the spec measured on 6.x, and the same five answers:
+
+| | observed |
+|---|---|
+| A | a socket on `vtrunkB.111` bound to `0x8819` receives a frame that arrived tagged on the parent, **untagged, with no 802.1Q header in the buffer** |
+| B | a socket ON THE PARENT bound to `0x8819` receives **the same frame as well**, `vlan_tci = none` — indistinguishable from an untagged frame |
+| C | an `ETH_P_ALL` tap on the parent sees it with `PACKET_AUXDATA vlan_tci = 111`. **The tag is kernel metadata, never bytes** |
+| D | TX on the sub-interface egresses tagged; the tag is inserted by the kernel and is absent from the buffer we wrote |
+| E | a frame on a VID with **no sub-interface** still reaches the parent, and only the `ETH_P_ALL` tap can name that VID (`222`); the protocol-bound socket reads `none` |
+
+B and E decide the whole shape. **E** is why an unconfigured VLAN is visible at all — a box
+on a VID nobody created can be heard, which is what makes creating it possible. **B** is the
+trap: the parent receives every sub-interface's frames with the tag gone, so a daemon that
+enumerated interfaces naively would run two listeners on one box's frames and the parent's
+listener, having no tag, would answer UNTAGGED onto the native VLAN. Two masters for one box,
+arrived at through a kernel behaviour rather than a second process.
+
+**THE DETECTOR (`src/reac_topo.{h,c}`).** One `ETH_P_ALL` socket per physical parent,
+`SO_ATTACH_FILTER`-ed to `0x8819` plain or behind up to two tags, `PACKET_AUXDATA` on,
+read-only, never transmitting. It must not be a protocol-bound socket: fact B is that such a
+socket cannot tell a tagged frame from an untagged one, so a detector built on the obvious
+socket **would report every trunk as an access port**. The BPF filter is not decoration — an
+unfiltered `ETH_P_ALL` socket on a trunk copies every frame on the link to userspace. The
+classifier is pure and takes both shapes a kernel can hand it, the accelerated tag (metadata,
+what this kernel does) and an in-buffer tag (0x8100/0x88a8 in the bytes), because which
+arrives is a driver's business; on QinQ the OUTER VID wins, since that is the one that names
+the netdev. VID 0 is a priority tag, names no VLAN, and mints nothing.
+
+**IT ONLY EVER UPGRADES, so it needs no dwell.** Untagged REAC with no sub-interfaces is an
+ordinary segment and is today's behaviour; any tagged REAC means a VLAN exists and needs one.
+There is no moment at which the daemon must conclude "this is not a trunk", so there is no
+window to tune and no timer to get wrong. A box that first speaks on VID 12 an hour into the
+show is served an hour into the show.
+
+**ADOPT OR CREATE, AND ONLY WHAT WE MINTED IS EVER REMOVED (`src/reac_vlan.{h,c}`).** Having
+heard VID N on parent P, the daemon needs `P.N`:
+
+| the netdev | what happens |
+|---|---|
+| absent | CREATED over rtnetlink (`IFLA_LINKINFO` kind `vlan`, `IFLA_VLAN_ID`), marked `reac-pw:minted` in its `IFLA_IFALIAS`, brought up — and it is OURS |
+| present, no alias of ours | ADOPTED untouched. It is the host's: brought up if it is down, never reconfigured, never removed |
+| present, carrying `reac-pw:minted` | a LEAKED MINT from a previous unclean exit: adopted for use AND re-owned, so the next clean exit removes it |
+
+The mark rides the object because it needs no second store — no state file to go stale, no
+PID file to reconcile after a crash — and it lives exactly as long as the netdev it
+describes. Without it the naive design silently converts a leak into an adoption: it exists
+at the next start, so it is adopted, so it is never removed, and the leak becomes permanent
+and invisible. The alias is written in the message right after the create, because the
+kernel honours `IFLA_IFALIAS` on its setlink path and not on its create path — a create that
+carried the alias would quietly produce an UNMARKED netdev, which is the leak this exists to
+prevent.
+
+A minted netdev is removed on a clean exit, and when its VID has carried nothing for
+`REAC_TOPO_SILENCE_HOLD_NS` (30 s — comfortably past the segment hold and any box
+power-cycle, because removing a netdev drops a segment). An adopted one is left exactly as
+it was found, in both cases.
+
+**A PARENT CARRYING TAGGED REAC IS NEVER ITSELF DRIVEN.** The moment tagged REAC is heard on
+a parent it stops being a candidate segment: a served listener on it is dropped and a fresh
+serve is refused, both by name in the journal. This is fact B enforced. And §4f's one
+refusal follows from the same place — untagged REAC on a parent that also carries tagged
+REAC is **refused, not served**: *REAC on a trunk's native VLAN is not served; give it a
+tag.* Driving it would put a master on the parent while masters run on its sub-interfaces.
+
+**THE PLAIN UNTAGGED NIC IS NOT A SPECIAL CASE AND DOES NOT GO AWAY.** A physical interface
+that hears untagged REAC and carries no tagged REAC is a segment exactly as it was in 0.5.2,
+through exactly the same code. The direct-cable rig this daemon runs on today is unchanged by
+this release, and the veth proof asserts that in the same run as the trunk phases.
+
+**THE ADMIN HALF — what happens with no `CAP_NET_ADMIN` (§4e, and the unit already grants
+it).** The RPM's `%caps` line is `cap_net_raw,cap_net_admin,cap_sys_nice=ep`, and the startup
+preflight has named CAP_NET_ADMIN since 0.5.0. Where it is absent — a hand-built binary that
+missed the setcap, a binary on a `nosuid` filesystem, which strips file capabilities with no
+error at all — the rule is **report, never fail deaf**:
+
+- the daemon starts, and every interface it can hear it goes on hearing;
+- each VID it cannot serve is named once, with the `ip link add link <parent> name
+  <parent>.<vid> type vlan id <vid>` that would fix it. A daemon that says *"I can see four
+  VLANs and cannot use them"* has done the hard part;
+- **adoption needs no capability**, so a host that pre-created its sub-interfaces is fully
+  served by an unprivileged daemon;
+- the ensure is retried on a window (`REAC_TOPO_RETRY_NS`, 10 s) rather than at wire speed,
+  so the refusal costs one line and not one line per frame.
+
+**WHAT THE JOURNAL SAYS**, and these are the lines an operator greps for:
+
+```
+[enp131s0] tagged REAC heard — vid 11 (1 frame): this parent is a TRUNK, its VLANs are the segments
+[enp131s0] vid 11: created enp131s0.11 (marked reac-pw:minted) — serving it as a segment
+[enp131s0] vid 12: adopted enp131s0.12 — the host made it, it survives us
+[enp131s0] vid 13: re-owned enp131s0.13 — it carries our mint alias, so a previous run leaked it
+[enp131s0] this parent carries tagged REAC, so it is not itself a segment — its VLANs are
+[enp131s0] untagged REAC on a trunk's native VLAN is not served; give it a tag
+[enp131s0] vid 14: enp131s0.14 cannot be created (Operation not permitted) — CAP_NET_ADMIN
+[enp131s0.11] removed — we created it, so we take it away
+```
+
+**WHAT IS PROVEN, AND WHERE.** `tests/test_reac_topo.c` holds the classifier (both kernel
+shapes, QinQ, VID 0, the untagged copy of fact B) and the netdev lifecycle table.
+`tests/hearing-finds-a-segment.sh`'s trunk phases are the job: a peer sends REAC tagged with
+two VIDs on ONE veth, the daemon creates two sub-interfaces, serves both as segments with a
+box on each and both nodes on the graph, refuses the parent by name, ADOPTS a sub-interface
+that was already there, and on exit deletes what it minted and leaves what it adopted.
+
+**WHAT THIS RELEASE DOES NOT DO.** The VIDs are learned per parent and the netdevs are made;
+nothing measures the link budget, so a trunk offered more VLANs than a gigabit can carry is
+served until it is not (§12a's bound is about twenty at 48 kHz, eight recommended at 96 kHz).
+And no rig has yet been on a trunk: this is proven on veth, and the rig proof of §16's
+increment 4 — two boxes on two VLANs of one NIC — is owed.
+
 ## Files
 
 | File | Role |
 |---|---|
 | `src/main.c` | CLI + lifecycle: parse `--role` (no `--box` — the master's box is learned from the wire), open feeder, create source node, then (master) the sink or (slave) the slave engine; run the loop |
 | `src/reac_role.h` | **role selection**: `--role master\|slave` parse + validation (slave requires `--tx`), header-only + unit-tested |
+| `src/reac_topo.{h,c}` | **the trunk detector**: the pure 802.1Q classifier (PACKET_AUXDATA or an in-buffer tag), the per-parent VLAN table with its ensure/release lifecycle, and the read-only `ETH_P_ALL`+BPF tap that feeds them |
+| `src/reac_vlan.{h,c}` | **the netdevs behind it**: `<parent>.<vid>` created over rtnetlink and marked `reac-pw:minted`, adopted where the host made it, removed only where we made it |
 | `src/reac_ring.{h,c}` | lock-free SPSC planar-float ring (RX hot-path → process(); also the slave's upstream-input carrier) |
 | `src/reac_rx.{h,c}` | non-RT feeder: wire source (live/pcap) → libreac validate → role-gated decode (downstream 40-ch / upstream box return) → f32 → ring; counter-slope ppm estimator |
 | `src/reac_source_node.{h,c}` | `reac:capture` pw_filter: 40 F32 ports, RT process(), follower/driver clock (RX for BOTH roles) |
