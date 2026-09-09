@@ -31,6 +31,34 @@ int reac_mac_compose(int hw_family, const uint8_t hwaddr[6], uint8_t out[6]);
  * filled with a usable MAC regardless of the return value. */
 int reac_mac_default_src(const char *ifname, uint8_t out[6]);
 
+/* THE ONE EXCEPTION, AND THE RIG THAT FORCED IT (0.5.6, 2026-09-09). The law above is a
+ * decision with rig evidence behind it and it still holds everywhere it was made for: a
+ * MASTER announces from this machine's real address and real boxes cold-connect to it.
+ *
+ * A stagebox on M is the case it was not made for. Joining one, the daemon is not a desk
+ * announcing itself — it is a BOX asking another box to enrol it, and every box that has
+ * ever been granted on this rig announced from a Roland OUI (`00:40:ab:…`). With the NIC's
+ * own `00:14:5c:…` in the source, the S-0808 was sent a correct cold-connect burst four
+ * times over and echoed nothing, its lamp blinking, for sixty seconds (`rig-0.5.6-enrol.pcap`).
+ * That is not proof the OUI is the reason — the announce's own selector was wrong in the
+ * same capture — but it is the one field we can make match a granted box at no cost, and
+ * the rig settles the pair together.
+ *
+ * IT CANNOT COLLIDE. The OUI is Roland's; the low three bytes are THIS NIC's, so two hosts
+ * on one wire stay distinct and a capture still says which machine spoke. `--src-mac`
+ * overrides it exactly as it overrides the default, and nothing else in the daemon uses it:
+ * the master role, the desk-slave role and every other emitter keep the address verbatim.
+ *
+ * AND IT COSTS A PROMISCUOUS SOCKET. A box unicasts to the address it was announced from,
+ * and the NIC's hardware filter drops a unicast to an address the card does not own — the
+ * same reason reac_pacer sets PACKET_MR_PROMISC for the master role. reac_slave sets it
+ * whenever its source is not the NIC's own, or this would trade a box that will not grant
+ * for a box whose grant we cannot hear.
+ *
+ * PURE, so the composition is unit-testable without a NIC. Returns 0 always; `out` is
+ * `00:40:ab` followed by hwaddr[3..5]. */
+int reac_mac_roland_standin(const uint8_t hwaddr[6], uint8_t out[6]);
+
 /* Pack six MAC bytes into the low 48 bits of a uint64_t, big-endian (byte 0
  * highest), and back out again.
  *

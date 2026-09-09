@@ -45,6 +45,19 @@ int main(void)
 	CHK(reac_mac_default_src("", out) == -1);               /* empty name too */
 	CHK(out[0] & 0x02);
 
+	/* 0.5.6: the box-master stand-in — Roland's OUI over this NIC's host part, so a
+	 * box that only enrols Roland-addressed peers can, and two hosts on one wire stay
+	 * distinct. The rest of the daemon keeps the address verbatim. */
+	{
+		const uint8_t hw[6] = { 0x00, 0x14, 0x5c, 0x9b, 0x28, 0x2d };
+		uint8_t out[6] = { 0 };
+		CHK(reac_mac_roland_standin(hw, out) == 0);
+		CHK(out[0] == 0x00 && out[1] == 0x40 && out[2] == 0xab);
+		CHK(out[3] == 0x9b && out[4] == 0x28 && out[5] == 0x2d);
+		/* It is NOT the NIC's address: a caller that wanted that has reac_mac_compose. */
+		CHK(memcmp(out, hw, 6) != 0);
+	}
+
 	printf("OK: reac_mac default src = the NIC's own address verbatim; "
 	       "fallback locally administered, never real gear\n");
 	return 0;

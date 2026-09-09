@@ -1186,6 +1186,17 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		uint8_t box_mac[6];
 		if (c->src_mac_set) {
 			memcpy(box_mac, c->src_mac, 6);
+		} else if (c->join_box_master &&
+		           reac_mac_default_src(c->tx_if, box_mac) == 0) {
+			/* THE ONE WIRE WHERE THE ADDRESS IS NOT VERBATIM (0.5.6, reac_mac.h).
+			 * Every box this rig has ever granted announced from a Roland OUI; the
+			 * S-0808 was sent four correct cold-connect bursts from this NIC's own
+			 * 00:14:5c:… and echoed nothing, lamp blinking. Roland's OUI over this
+			 * NIC's host part, so it cannot collide with a real box and a capture
+			 * still says which machine spoke. --src-mac overrides it. */
+			uint8_t nic[6];
+			memcpy(nic, box_mac, 6);
+			reac_mac_roland_standin(nic, box_mac);
 		} else if (reac_mac_default_src(c->tx_if, box_mac) != 0) {
 			/* NIC hwaddr unreadable — the locally-administered fallback is still
 			 * on-wire safe (no manufacturer carries it), but note it so an
@@ -1198,17 +1209,21 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		        "%02x:%02x:%02x:%02x:%02x:%02x%s\n", c->tag,
 		        box_mac[0], box_mac[1], box_mac[2], box_mac[3], box_mac[4], box_mac[5],
 		        c->src_mac_set ? " (--src-mac override)"
-		                       : " (this NIC's own address; --src-mac overrides)");
+		                       : c->join_box_master
+		                           ? " (Roland OUI + this NIC's host part, the one wire that"
+		                             " is not verbatim; --src-mac overrides)"
+		                           : " (this NIC's own address; --src-mac overrides)");
 		reac_ring_init(&L->tx_ring, REAC_MAX_CHANNELS, (uint32_t)(L->rx.sample_rate / 4));
 		L->tx_ring_init = 1;
-		/* WHOSE WIDTH THE UPSTREAM IS (0.5.6). To a DESK we send our own configured
-		 * box width: the desk's 40-slot fabric has room for it and the enrolment
-		 * negotiates where it lands. To a STAGEBOX ON M there is no negotiation and no
-		 * fabric — it broadcasts its own geometry and grants a slave that speaks it
-		 * back. Ground truth: a real 16-input S-1608 joining a real S-0808 on M sent
-		 * 340 B / 8 slots from its first flood frame, and its inputs 9-16 reached that
-		 * master nowhere. So the wire's declared width IS the width, and it is the same
-		 * number the capture node is sized from. */
+		/* WHAT WE SEND, AND WHAT WE DECLARE, ARE TWO NUMBERS ON A BOX-MASTER WIRE
+		 * (0.5.6, operator ruling: "mixer always sends 40ch, boxes send their width
+		 * only"). To a DESK we are the box: one width, our own, declared and sent.
+		 * To a STAGEBOX ON M we are the MIXER — every audio frame is the 1492 B
+		 * 40-slot downstream with the box's outputs in their slots, so the width
+		 * passed here is the BOX'S OUTPUT count and it names slots inside that frame,
+		 * never the frame's own geometry (reac_slave.c's bm_downstream). What we
+		 * DECLARE stays ours: the S-1608 sent 8 slots of audio to that same chassis
+		 * and announced its own 16-input self. */
 		int up_ch = c->join_box_master ? (int)c->wire_channels : c->box_channels;
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
 		                                .box_channels = up_ch,
