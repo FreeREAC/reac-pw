@@ -1261,7 +1261,15 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                                .box_master_burst_chanmap =
 		                                    (getenv("REACPW_BOX_MASTER_BURST") &&
 		                                     strcmp(getenv("REACPW_BOX_MASTER_BURST"),
-		                                            "chanmap") == 0) };
+		                                            "chanmap") == 0),
+		                                .box_master_fill_noise =
+		                                    (getenv("REACPW_BOX_MASTER_FILL") &&
+		                                     strcmp(getenv("REACPW_BOX_MASTER_FILL"),
+		                                            "noise") == 0),
+		                                .box_master_presilence_ms =
+		                                    getenv("REACPW_BOX_MASTER_PRESILENCE_MS")
+		                                      ? atoi(getenv("REACPW_BOX_MASTER_PRESILENCE_MS"))
+		                                      : 0 };
 		if (reac_slave_open(&L->slave, &slcfg, &L->tx_ring) == 0) {
 			L->slave_open = 1;
 			if (reac_slave_start(&L->slave) == 0) {

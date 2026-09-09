@@ -98,6 +98,19 @@ struct reac_slave_cfg {
 	 * coincidence until a rig says otherwise. `REACPW_BOX_MASTER_BURST=chanmap` sets it,
 	 * so the two can be tried in one session without a rebuild. */
 	int box_master_burst_chanmap;
+	/* WHAT THE SLOTS CARRY BEFORE THE GRANT (0.5.6-6). The granted S-1608's flood and
+	 * pre-grant unicast carried LIVE samples in every slot; ours carry digital silence,
+	 * because nothing is patched to the sink yet. This file's own flood comment says the
+	 * difference matters — "on a real box the flood's audio region varies every frame" —
+	 * and a box may reasonably treat a peer sending nothing at all as not really there.
+	 * 1 puts -60 dBFS of noise in the slots until the grant. A HYPOTHESIS with a knob,
+	 * `REACPW_BOX_MASTER_FILL=noise`; nothing measured says the box requires it. */
+	int box_master_fill_noise;
+	/* HOW LONG TO SAY NOTHING BEFORE THE FLOOD (0.5.6-6), milliseconds, 0 = start at
+	 * once. The S-1608 was silent for about four seconds between losing its old master
+	 * and beginning its flood; a box may key its enrolment window on a peer appearing
+	 * out of silence. `REACPW_BOX_MASTER_PRESILENCE_MS`. Also a hypothesis. */
+	int box_master_presilence_ms;
 };
 
 /* The slave engine. The FSM is the brain; everything else is the I/O the FSM's
@@ -136,6 +149,10 @@ struct reac_slave {
 	int      bm_burst_chanmap;    /* arm the burst on the box's chanmap (see the cfg) */
 	int      bm_chanmap_hit;      /* a chanmap arrived since the last burst */
 	int      bm_announced;        /* the config-announce has gone out at least once */
+	int      bm_fill_noise;       /* -60 dBFS in the slots until the grant (see the cfg) */
+	int      bm_presilence_ms;    /* say nothing for this long first (see the cfg) */
+	uint64_t bm_start_ns;         /* when the engine began, for that silence */
+	uint32_t bm_rng;              /* the noise generator's state, engine thread only */
 	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */
 	int      bm_burst;            /* frames left of the 3-frame cold-connect burst */
 

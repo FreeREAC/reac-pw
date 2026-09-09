@@ -82,6 +82,10 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->box_master = cfg && cfg->box_master;
 	s->bm_frame_box = cfg && cfg->box_master_frame_box;
 	s->bm_burst_chanmap = cfg && cfg->box_master_burst_chanmap;
+	s->bm_fill_noise = cfg && cfg->box_master_fill_noise;
+	s->bm_presilence_ms = cfg ? cfg->box_master_presilence_ms : 0;
+	s->bm_start_ns = 0;
+	s->bm_rng = 0x1234567u;
 	s->bm_chanmap_hit = 0;
 	s->bm_announced = 0;
 	(void)0;   /* the box-master declaration is a captured golden, not a width */
@@ -270,6 +274,38 @@ static const uint8_t BM_ANNOUNCE_BLK[34] = {
 	0x00, 0x50,
 };
 
+/* SAY NOTHING YET (0.5.6-6). The granted S-1608 was silent for about four seconds between
+ * losing its old master and beginning its flood, and a box may key its enrolment window on a
+ * peer appearing out of silence rather than one that was already talking. Zero by default, so
+ * the wire is byte-identical unless the knob is set. The clock starts at the first call, which
+ * is the engine's first decision. */
+static int bm_presilent(struct reac_slave *s)
+{
+	if (!s->box_master || s->bm_presilence_ms <= 0)
+		return 0;
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	uint64_t now = (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+	if (!s->bm_start_ns)
+		s->bm_start_ns = now;
+	return (now - s->bm_start_ns) < (uint64_t)s->bm_presilence_ms * 1000000ull;
+}
+
+/* -60 dBFS OF NOISE IN THE SLOTS, until the grant (0.5.6-6). A hypothesis with a knob: the
+ * granted box's flood and pre-grant unicast carried live samples in every slot and ours carry
+ * digital silence, because nothing is patched to the sink yet. RT-safe: one multiply-add LCG,
+ * no allocation, no syscall. -60 dBFS is far below anything an operator would hear if this
+ * ever reached a real output, and it is the pre-grant frames only. */
+static void bm_fill(struct reac_slave *s, float *const planar[REAC_MAX_CHANNELS], int nch)
+{
+	for (int c = 0; c < nch; c++)
+		for (int i = 0; i < REAC_SAMPLES_PER_PKT; i++) {
+			s->bm_rng = s->bm_rng * 1103515245u + 12345u;
+			planar[c][i] += ((float)((int32_t)(s->bm_rng >> 8) & 0xffff) - 32768.0f)
+			                / 32768.0f * 0.001f;   /* ~ -60 dBFS */
+		}
+}
+
 /* THE ESTABLISHED DESCRIPTOR, AND WHEN IT MAY BE CLAIMED (0.5.6-5).
  *
  * `00 7a` sixteen times, filling the control area [18:50] of a FILLER frame. This file
@@ -374,6 +410,10 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		/* NOT LINKED UNTIL THE GRANT IS ACCEPTED. The FSM is the only thing that
 		 * knows, and it is what the descriptor below follows. */
 		int linked = (s->fsm.state == FSM_ESTABLISHED);
+		if (bm_presilent(s))
+			return;                 /* the wire stays empty for the opening window */
+		if (!linked && s->bm_fill_noise)
+			bm_fill(s, planar, s->box_channels);
 		if (s->bm_frame_box) {
 			/* THE EXPERIMENT'S OTHER CORNER (0.5.6-3): an exact S-1608 imitation.
 			 * The frame is the box's own 340 B geometry at the master's width, in

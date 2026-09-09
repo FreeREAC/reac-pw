@@ -229,3 +229,19 @@ capture. That is striking, and it is one sample: with a chanmap about once a sec
 fixed 214 ms delay from the announce, the coincidence has a plausible innocent explanation.
 So it is a knob to try on the rig, not a claim about the protocol — flip it without a rebuild
 and read the box's lamp.
+
+## `REACPW_BOX_MASTER_FILL` — `silence` (default) | `noise`
+
+WHAT THE SLOTS CARRY BEFORE THE GRANT on a box-master wire. Measured, per frame: the granted
+S-1608's flood and pre-grant unicast carried LIVE samples in every slot, and ours carry digital
+silence because nothing is patched to the sink yet. This repository's own flood comment already
+says the difference is real — *"on a real box the flood's audio region varies every frame"* —
+and a box may treat a peer sending nothing at all as not really there. `noise` puts −60 dBFS in
+the slots until the grant. **A hypothesis.** Nothing measured says the box requires it.
+
+## `REACPW_BOX_MASTER_PRESILENCE_MS` — milliseconds, default `0`
+
+HOW LONG THE WIRE STAYS EMPTY BEFORE THE FLOOD. The S-1608 was silent for about four seconds
+between losing its old master and beginning its flood; a box may key its enrolment window on a
+peer appearing out of silence rather than one that was already talking. Try `5000`. **Also a
+hypothesis**, and zero by default, so the wire is byte-identical unless it is set.
