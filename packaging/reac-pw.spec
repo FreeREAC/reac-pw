@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.1}
+Version:        %{?version_override}%{!?version_override:0.5.2}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -92,6 +92,32 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.2-1
+- A JOINED BOX MASTER IS THE SAME BOX IT IS WHEN WE MASTER IT. 0.5.1 joined an S-0808 on
+  M and put its eight channels on the graph; the rig showed a segment with no stagebox on
+  it, because a console keys a box off reac.box.mac, reac.box-model, reac.box-width and
+  reac.link-state and the join published none of the four. Its inputs could not be
+  patched. All four are published now, on the segment's one door.
+- The identity comes from the WIDTH, because there is nothing else to read: a box on M
+  sends no config-announce at all, so what identifies a served box does not exist on that
+  wire. An 8-channel broadcast is the S-0808 row of the fixed matrix, exactly -- and a
+  width no row matches names NO model rather than defaulting to one, which is what
+  libreac's reac_box_model_by_channels would have done.
+- reac.link-state reads established once the segment's own feeder is decoding the box's
+  frames, probing before that, and never granting: nothing is granted in either direction
+  on a wire whose master runs no handshake.
+- reac.cfg.role.state no longer sits at role_reestablish_pending over a segment that is up
+  and streaming. A receive-only join runs no slave engine and is not waiting for one --
+  that engine exists to answer a grant -- so following the box's clock and delivering its
+  channels IS the slave role performed, and it publishes applied.
+- The audio itself is measured: the box master's own broadcast frames, carrying a distinct
+  constant per channel, decoded through the real feeder into the ring the capture node's
+  ports are filled from -- eight rows each with its own value, the 32 fabric slots past
+  the box's width silent.
+- The feeder's REAC_DEBUG counters are keyed by segment. A host running several segments
+  printed them unattributed, and a peer that broadcasts never locks the feeder's peer
+  address, so the line's src field could not stand in for a name.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.1-1
 - A BOX THAT MASTERS THE WIRE IS JOINED, not refused. Operator ruling after the rig
   proof of 0.5.0-3: an S-0808 rebooted with its REAC Mode switch on M, on an unpinned
