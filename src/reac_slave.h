@@ -91,6 +91,13 @@ struct reac_slave_cfg {
 	 * the rig can run both without a rebuild between them, and the box's lamp decides.
 	 * `REACPW_BOX_MASTER_FRAME=box` sets it; see DESIGN.md 0.5.6. */
 	int box_master_frame_box;
+	/* WHAT ARMS THE COLD-CONNECT BURST (0.5.6-5). 0 (the default) is the free-running
+	 * grid the granted box appeared to use: the announce, then the burst ~200 ms later,
+	 * retried. 1 arms it on the box's own chanmap instead — in the ground-truth capture
+	 * the S-1608's burst landed 1.0 ms after one, which is striking at n=1 and is a
+	 * coincidence until a rig says otherwise. `REACPW_BOX_MASTER_BURST=chanmap` sets it,
+	 * so the two can be tried in one session without a rebuild. */
+	int box_master_burst_chanmap;
 };
 
 /* The slave engine. The FSM is the brain; everything else is the I/O the FSM's
@@ -126,6 +133,9 @@ struct reac_slave {
 	int      coldconnect_phase;   /* cycles the cdea 04 03 escalation 0014->0013->0016->001a */
 	int      box_master;          /* 0.5.6: the peer is a stagebox on M (see the cfg) */
 	int      bm_frame_box;        /* imitate the box's 340 B geometry (see the cfg) */
+	int      bm_burst_chanmap;    /* arm the burst on the box's chanmap (see the cfg) */
+	int      bm_chanmap_hit;      /* a chanmap arrived since the last burst */
+	int      bm_announced;        /* the config-announce has gone out at least once */
 	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */
 	int      bm_burst;            /* frames left of the 3-frame cold-connect burst */
 

@@ -113,6 +113,15 @@ struct ear {
 	unsigned long flood_frames; double flood_t0, flood_t1; size_t flood_len;
 	uint8_t announce_seen[34]; int have_announce_seen;
 	int announce_ok; unsigned long announce_refused;
+	/* THE STATE CLAIM, AND WHEN IT WAS MADE (0.5.6-5). A peer that carries the
+	 * ESTABLISHED descriptor before we have granted it is telling us it is already
+	 * linked, and the real S-0808 grants nothing to one that does — measured. The
+	 * emulator was granting on the control bytes alone and would have passed every
+	 * build that made this mistake, which is three of them. */
+	unsigned long rx_frames_seen;      /* peer frames, for a frame INDEX */
+	unsigned long desc_first_frame;    /* where 007a first appeared */
+	unsigned long grant_frame;         /* where we granted */
+	int desc_before_grant;             /* the refusal */
 	unsigned long steady_bcast;   /* broadcast downstream after the announce */
 };
 
@@ -135,6 +144,20 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 {
 	struct reac_ctrl_parsed p;
 	enum reac_ctrl_kind k = reac_ctrl_parse(f, n, &p);
+	e->rx_frames_seen++;
+	/* THE CONTROL AREA OF EVERY FRAME, whatever kind it is: the descriptor rides the
+	 * carrier, so a burst or a filler claiming it counts the same. */
+	{
+		int desc = 0;
+		for (int i = 18; i < 50; i++)
+			if (f[i] != 0x00) { desc = 1; break; }
+		if (desc && k == REAC_CTRL_FILLER) {
+			if (!e->desc_first_frame)
+				e->desc_first_frame = e->rx_frames_seen;
+			if (!e->grant_frame)
+				e->desc_before_grant = 1;
+		}
+	}
 	if (k == REAC_CTRL_CONFIG_ANNOUNCE) {
 		if (!e->up_announce) e->up_t_announce = t;
 		e->up_announce++;
@@ -155,10 +178,13 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 	} else if (k == REAC_CTRL_GRANT) {
 		if (!e->up_join) e->up_t_join = t;
 		e->up_join++;
-		/* NOT GRANTED UNTIL WE WERE TOLD WHAT IS ASKING. */
-		if (e->announce_ok && e->grant_n < 4) {
+		/* NOT GRANTED UNTIL WE WERE TOLD WHAT IS ASKING, AND NOT TO A PEER THAT SAYS
+		 * IT IS ALREADY LINKED. */
+		if (e->announce_ok && !e->desc_before_grant && e->grant_n < 4) {
 			memcpy(e->grant_q[e->grant_n], f + 16, 34);
 			e->grant_n++;
+			if (!e->grant_frame)
+				e->grant_frame = e->rx_frames_seen;
 		}
 	} else if (k == REAC_CTRL_BOX_HB) {
 		if (!e->up_hb) e->up_t_hb_first = t;
@@ -307,6 +333,8 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	        e->flood_frames ? e->flood_t1 - e->flood_t0 : 0.0);
 	fprintf(f, "announce ok %d refused %lu\n", e->announce_ok, e->announce_refused);
 	fprintf(f, "steady bcast %lu\n", e->steady_bcast);
+	fprintf(f, "descriptor first %lu grant %lu before_grant %d\n",
+	        e->desc_first_frame, e->grant_frame, e->desc_before_grant);
 	if (e->have_announce_seen) {
 		fprintf(f, "announceblk ");
 		for (size_t i = 0; i < sizeof e->announce_seen; i++)
