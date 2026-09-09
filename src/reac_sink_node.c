@@ -243,6 +243,7 @@ struct reac_sink_node {
 	 * resampler). Written on the RT process() thread, read there too. */
 	struct spa_io_rate_match *rate_match;
 	int rate_match_off;              /* const after open; REACPW_RATE_MATCH=0 */
+	int joined_box_master;           /* 0.5.5: a box masters this wire; we drive it anyway */
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -742,6 +743,13 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
 		return;
+	/* NOT ON A WIRE A BOX MASTERS (0.5.5). reac.link-state and the box badge describe
+	 * a box WE enrolled, off a master FSM that is deliberately left probing here; the
+	 * segment's door already publishes both from the evidence that is real on this wire
+	 * — the width the box broadcasts and the frames its own feeder accepts (0.5.2). One
+	 * store, one writer. */
+	if (n->joined_box_master)
+		return;
 
 	uint64_t drops_total = 0;
 	for (int i = 0; i < 8; i++)
@@ -1058,6 +1066,13 @@ static void sink_publish_role_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
 		return;
+	/* NOT ON A WIRE A BOX MASTERS (0.5.5). This node would publish
+	 * `reac.cfg.role=master` off its own engine, and the segment's role there is
+	 * SLAVE — we send the downstream, we do not own the clock. The door publishes the
+	 * role and its state from the segment's record (main.c's listener_publish_segment);
+	 * the write door on this node still works and still moves that same record. */
+	if (n->joined_box_master)
+		return;
 
 	const char *state = n->role_state;
 	if (n->role_swap) {
@@ -1145,6 +1160,28 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		         arb.mac[0], arb.mac[1], arb.mac[2], arb.mac[3], arb.mac[4], arb.mac[5]);
 	else
 		snprintf(master_mac, sizeof master_mac, "none");
+
+	/* THE DISCOVERY TABLE IS OURS TO PUBLISH ON ANY WIRE; THE SEGMENT'S ANSWER IS NOT
+	 * (0.5.5). On a wire a stagebox on M masters we are driving audio onto somebody
+	 * else's clock, and the aggregate that says so is published by the segment's one
+	 * door — the capture node (0.5.2). Publishing it here too would be a second writer
+	 * onto one fact, and its refusal composer would read `rival-master-box` over a
+	 * segment we joined: the shared composer cannot tell a rival we refused from a rival
+	 * we joined, because that distinction is the LISTENER's and not the pacer's. */
+	if (n->joined_box_master) {
+		struct pw_properties *dprops = pw_properties_new(
+			REAC_PROP_DISCO_SCOPE,   n->disco_ifname ? n->disco_ifname : "",
+			REAC_PROP_DISCO_STATE,   REAC_DISCO_STATE_LISTENING,
+			REAC_PROP_DISCO_SEQ,     seq,
+			REAC_PROP_DISCO_DEVICES, devices,
+			NULL);
+		if (dprops) {
+			pw_stream_update_properties(n->stream, &dprops->dict);
+			pw_properties_free(dprops);
+			n->disco_seq_last = n->pacer.disco.seq;
+		}
+		return;
+	}
 
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_DISCO_SCOPE,   n->disco_ifname ? n->disco_ifname : "",
@@ -1601,6 +1638,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->loop = loop;
 	n->inst = cfg->inst;          /* stable for the process; used by every filter build */
 	n->disco_ifname = cfg->ifname;
+	n->joined_box_master = cfg->joined_box_master;
 	n->channels = 0;              /* no graph filter yet — DEFERRED to reac_sink_node_ensure */
 	n->sample_rate = cfg->sample_rate;
 	snprintf(n->label, sizeof n->label, "%s", cfg->label ? cfg->label : "");
@@ -1661,6 +1699,9 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
 	pcfg.rate_asserted = cfg->rate_asserted; /* the source label starts truthful */
 	pcfg.catchup_max_slots = cfg->catchup_max_slots;  /* 0 = the measured default */
+	/* 0.5.5: the box's frame is the slot on a wire it masters. Everything the pacer
+	 * does after the wake is the master role's, byte for byte. */
+	pcfg.tick_on_rx = cfg->joined_box_master;
 	n->rate_match_off = cfg->rate_match_off != 0;
 	if (cfg->clock_ref) {                    /* #77; "" = designate nothing */
 		strncpy(n->clock_ref, cfg->clock_ref, sizeof n->clock_ref - 1);

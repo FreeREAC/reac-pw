@@ -89,6 +89,18 @@ struct reac_sink_cfg {
 	 * the default is off is written where it is set, in main.c: the loop's sign
 	 * is verified on hardware and its measurement phase is not. */
 	int rate_match_off;
+	/* THIS WIRE IS MASTERED BY A STAGEBOX ON M, AND WE SEND ITS DOWNSTREAM ANYWAY
+	 * (0.5.5, DESIGN.md). Two effects, both narrow:
+	 *   - the pacer takes its slot tick from the box's frames instead of a deadline
+	 *     (reac_pacer_cfg.tick_on_rx), so this node's audio leaves at the box's exact
+	 *     cadence and nothing at all leaves before the box's first frame;
+	 *   - this node stops publishing the SEGMENT'S ANSWER. reac.master.*,
+	 *     reac.link-state and the reac.box-* badge belong to the segment's one door,
+	 *     which on a joined wire is the capture node (0.5.2) — a second copy here
+	 *     would publish `reac.master.refusal=rival-master-box` over a segment we
+	 *     joined and are driving audio into. Its own identity, the segment name, the
+	 *     head-amp control keys and the discovery table are unaffected. */
+	int joined_box_master;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX

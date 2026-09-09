@@ -72,6 +72,7 @@
 #include "reac_rate_cfg.h"
 #include "reac_mac.h"
 #include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
+#include "reac_link_state.h"  /* reac_box_master_model — the width-to-model row, 0.5.2 */
 #include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
 #include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
@@ -1064,7 +1065,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 *             drives the cdea/cfea grant + owns the clock (a box slaves to us).
 	 *   slave  -> reac_slave engine: an external master drives; we lock to its
 	 *             cadence + return our input channels upstream at the box's slots. */
-	if (c->tx_if && c->role == REAC_ROLE_MASTER) {
+	/* AND A BOX THAT MASTERS THE WIRE GETS THE SAME SENDING (0.5.5, DESIGN.md). The
+	 * operator's ruling — "sending is always the same, being clock slave is only part of
+	 * the enrollment" — splits what 0.5.1 had joined: the downstream is what a box
+	 * CONSUMES whoever owns the clock, and the enrolment is the only thing a box on M
+	 * cannot take part in. So this segment opens the master's TX side unchanged, with one
+	 * field different (`joined_box_master`): the pacer's slot tick becomes the box's own
+	 * frame instead of a deadline, and nothing at all leaves before its first frame. */
+	if (c->tx_if && (c->role == REAC_ROLE_MASTER || c->join_box_master)) {
 		/* Default master MAC = THIS NIC's own address (reac_mac.h); --src-mac
 		 * overrides it. The mixer profile sets only the console-model byte. */
 		uint8_t master_mac_buf[6];
@@ -1094,8 +1102,15 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * REACPW_CLOCK_FOLLOW=0 opts out and gets
 		                               * the free-run, which is then REPORTED rather than
 		                               * silent (reac_sink_node.h carries the ruling). */
-		                              .clock_follow = reac_envflag("REACPW_CLOCK_FOLLOW",
-		                                                  REAC_CLOCK_FOLLOW_DEFAULT),
+		                              /* AND NOTHING IS DISCIPLINED ON A WIRE WE DO NOT
+		                               * CLOCK (0.5.5). The pacer's period is what a
+		                               * discipline steers, and a box-master segment has
+		                               * no period — its slots are the box's frames. A DLL
+		                               * left running there would steer a number nothing
+		                               * reads and report a lock nobody is following. */
+		                              .clock_follow = c->join_box_master ? 0
+		                                  : reac_envflag("REACPW_CLOCK_FOLLOW",
+		                                                 REAC_CLOCK_FOLLOW_DEFAULT),
 		                              /* --rate / a conf-file rate is an ASSERTION; only the
 		                               * built-in best-drivable pick is the convention. */
 		                              .rate_asserted = c->rate_layer != REAC_CONF_BUILTIN
@@ -1113,7 +1128,12 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * cfg.rate_match_off for the full measurement —
 		                               * unchanged by this refactor. */
 		                              .rate_match_off =
-		                                  reac_envflag("REACPW_RATE_MATCH", 0) ? 0 : -1 };
+		                                  reac_envflag("REACPW_RATE_MATCH", 0) ? 0 : -1,
+		                              /* 0.5.5: whose clock this wire runs on. It changes
+		                               * the pacer's tick and stops this node publishing a
+		                               * second copy of the segment's answer; every byte it
+		                               * sends is the same. */
+		                              .joined_box_master = c->join_box_master };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
@@ -1150,10 +1170,18 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			reac_ring_free(&L->tx_ring);
 			return -1;
 		}
-		fprintf(stderr, "reac-pw: %sMASTER role (%s profile) on '%s' — "
-		        "event-driven establishment: probing until the box's "
-		        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
-		        "stderr\n", c->tag, c->mixer->display, c->tx_if);
+		if (c->join_box_master)
+			fprintf(stderr, "reac-pw: %sSLAVE role on a BOX MASTER, and SENDING (%s "
+			        "profile) on '%s' — the box's frames are the slot clock, one "
+			        "downstream broadcast per frame received, and nothing on the wire "
+			        "until its first one. No handshake is attempted: a box on M grants "
+			        "nothing and needs nothing granted\n",
+			        c->tag, c->mixer->display, c->tx_if);
+		else
+			fprintf(stderr, "reac-pw: %sMASTER role (%s profile) on '%s' — "
+			        "event-driven establishment: probing until the box's "
+			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
+			        "stderr\n", c->tag, c->mixer->display, c->tx_if);
 		if (c->n_headamps) {
 			/* Say which of the two policies is actually running. An operator
 			 * reading "armed" cannot otherwise tell whether the wire will refresh
@@ -1172,18 +1200,6 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			        "(RIG-GATED: verify 48V at the XLR pins)\n",
 			        c->tag, c->n_headamps, refresh);
 		}
-	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE && c->join_box_master) {
-		/* A BOX THAT MASTERS THE WIRE IS JOINED RECEIVE-ONLY (0.5.1, DESIGN.md). The
-		 * slave engine exists to answer a grant, and a stagebox on M runs no handshake
-		 * at all — zero control frames, no announce, no grant, no heartbeat
-		 * (reac-protocol/wire-format.md, measured) — so it will never send one. A
-		 * cold-connect flood aimed at a peer that cannot answer is noise with a state
-		 * machine behind it, so nothing is emitted here. What the operator gets is the
-		 * box's channels in the graph, on the box's own clock. */
-		fprintf(stderr, "reac-pw: %sSLAVE role, RECEIVE-ONLY (%u-ch box master) — "
-		        "following its clock and taking what it broadcasts; no upstream return, "
-		        "because a box on M runs no handshake to join\n",
-		        c->tag, c->wire_channels);
 	} else if (c->tx_if && c->role == REAC_ROLE_SLAVE) {
 		/* The slave returns its OWN input channels (a box width) upstream. The PCM
 		 * for them would come from a reac:return sink; for now the ring is the
@@ -1301,6 +1317,27 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		if (reac_source_node_ensure(&L->src, &L->src_cfg, width, NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
 			return -1;
+		}
+		/* AND ITS OUTPUTS ARE ROUTABLE FROM HERE (0.5.5). There is no autodetect on this
+		 * wire and there never will be — a box on M declares itself to nobody — so the
+		 * playback node is sized from the same evidence the capture node is: the width
+		 * the box broadcasts, read through the matrix row that matches it EXACTLY
+		 * (reac_box_master_model, 0.5.2 — never the S-1608 fallback, which would name a
+		 * box that was never identified). A width no row matches is taken at face value
+		 * as its own output count, which is what the ports would be for a splitter we
+		 * cannot name. */
+		if (c->join_box_master && L->sink) {
+			const struct reac_box_model *bm = reac_box_master_model(c->wire_channels);
+			int out_ch = bm ? bm->out_ch : (int)c->wire_channels;
+			if (reac_sink_node_ensure(L->sink, out_ch, bm ? bm->display : NULL) != 0) {
+				fprintf(stderr, "reac-pw: %sfailed to size reac:playback to the "
+				        "box master's %d outputs\n", c->tag, out_ch);
+				return -1;
+			}
+			fprintf(stderr, "reac-pw: %sreac-playback %d ch onto the %s outputs — "
+			        "sent as the ordinary downstream broadcast, paced by the box's own "
+			        "frames\n", c->tag, out_ch,
+			        bm ? bm->display : "box master's declared");
 		}
 	}
 
@@ -2594,6 +2631,15 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 			listener_publish_segment(L);
 			continue;
 		}
+		/* A JOINED BOX MASTER HAS BOTH NODES AND STILL ANSWERS FROM ITS DOOR (0.5.5).
+		 * The sink's own publishers stand down on this wire (reac_sink_node.c), so
+		 * without this line the segment would have a playback node and no answer at
+		 * all — the same silence 0.5.1's refusal left on the rig, one node further on.
+		 * Published BEFORE the sink's drains below, which still run: the reopen
+		 * requests are the operator's write door and belong to the node that carries
+		 * the params. */
+		if (L->cfg.join_box_master)
+			listener_publish_segment(L);
 		int role = reac_sink_node_take_reopen_role(L->sink);
 		if (role >= 0) {
 			listener_reopen_at_role(L, c->loop, (enum reac_role)role);
