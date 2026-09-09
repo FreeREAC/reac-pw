@@ -384,6 +384,19 @@ echo "          the announce (REACPW_BOX_MASTER_FRAME=${REACPW_BOX_MASTER_FRAME:
 LS=$(node_prop reac-capture.bmx0 reac.link-state)
 [ "$LS" = "established" ] || {
 	echo "FAIL: the segment is enrolled and streaming and publishes link-state=$LS"; exit 1; }
+# BOTH DOORS, THE SAME ANSWER. A console folds the two nodes of a segment into one row, so a
+# capture reading `established` beside a playback still at `probing` reads as a resync in
+# progress — which is what the rig showed the moment the engine enrolled, because on this
+# path the sink runs with no pacer and so no badge timer to move it.
+PLS=$(node_prop reac-playback.bmx0 reac.link-state)
+[ "$PLS" = "$LS" ] || {
+	echo "FAIL: the segment's two doors disagree — reac-capture says '$LS' and"
+	echo "      reac-playback says '$PLS'"; exit 1; }
+PBW=$(node_prop reac-playback.bmx0 reac.box-width)
+CBW=$(node_prop reac-capture.bmx0 reac.box-width)
+[ "$PBW" = "$CBW" ] || {
+	echo "FAIL: the two doors disagree about the box's width ('$CBW' / '$PBW')"; exit 1; }
+echo "MEASURED: both doors read link-state=$LS, box-width=$CBW"
 # The drop edge: the wire goes away past the hold, and the lamp must go back.
 ip link set bmx0 down
 T0=$(date +%s.%N)

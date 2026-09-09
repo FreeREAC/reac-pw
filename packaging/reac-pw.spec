@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        6%{?dist}
+Release:        7%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,14 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-7
+- Both doors of a box-master segment publish the same link state. After the engine enrolled,
+  reac-playback was still at its create-time `probing` while the capture door said
+  `established` - on that path the sink runs with no pacer and so no badge timer to move it -
+  and a console folds the two nodes into one row, so the pair read as a resync in progress.
+  Pushed through the same composer the capture node uses; a second spelling of those keys is
+  what produced the mismatch.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-6
 - The cold-connect burst sends THREE DISTINCT records - tags 0100, 0000, 0302, as spec/reac.ksy
   states and as a real S-1608 sends them. It sent the first record twice, and a real S-0808
