@@ -1534,6 +1534,68 @@ No first-seconds capture is needed: the steady state carries the announce and th
 full, repeatedly. What would settle it is the operator's lamp state plus one rebuild with
 (1)+(2), and (3) if that is not enough.
 
+### The correction: we are the MIXER on that wire, and only the enrolment is the box's
+
+**Operator ruling, verbatim:** *"mixer always sends 40ch, boxes send their width only."*
+And, clarifying: *"the declaration may imitate a box … use the S-1608's announce pattern
+verbatim, since that is the one the S-0808 granted"*, the enrolment is *"the same protocol
+from the other side"*, unicast to the box as measured, and *"the only thing that changes is
+the enrolment"*.
+
+0.5.6-1 read the ground truth too literally. The S-1608 sent that box 340 B / 8 slots because
+it IS a box; we are not one, and a stagebox on M consumes a desk's downstream whoever clocks
+it. So the geometry goes back to the mixer's: **every audio frame we put on a box-master wire
+is the fixed 1492 B, 40-slot downstream**, the box's outputs in slots 0..width−1 and the rest
+silent, in the presence flood as much as after the grant. What we keep from the capture is the
+CHOREOGRAPHY, which is where the 0.5.5 attempt failed:
+
+| | 0.5.5 | 0.5.6-1 | 0.5.6-2 |
+|---|---|---|---|
+| audio frame | 1492 B ✓ | 340 B ✗ | **1492 B ✓** |
+| enrolment | none — a desk's establishment aimed at a peer that runs one | the box's ✓ | **the box's ✓** |
+| declaration | — | selector `0x84`, derived from the MASTER's width ✗ | **the S-1608's block, verbatim ✓** |
+
+**THE DECLARATION IS A CAPTURED GOLDEN, and that is deliberate.** `reac_ctrl_build_config_announce`
+derives selector and port table from a width, and at 16 it emits `0x82` where the real S-1608
+announced `0x80` — measured on the veth the moment the path was tried. Whatever `0x82` belongs
+to, it is not what this chassis granted. So `BM_ANNOUNCE_BLK` in `reac_slave.c` is the 34 bytes
+that box unicast to the S-0808 four milliseconds before it was echoed, carried the way this
+repository carries every golden: captured bytes as the oracle, never regenerated to make a
+diff go away. **We therefore declare ourselves an S-1608**, which the operator permitted
+explicitly, and it is the only declaration on this rig with a grant behind it.
+
+**ADDRESSING.** The audio is broadcast — a desk's downstream is broadcast on every enrolled
+wire this daemon has ever driven, and the destination address IS the direction on this
+protocol. The two control frames are unicast to the box, because that is what was measured and
+what came back was a grant. Both live in the FRAME's own dst bytes and not only in the
+`sendto`: `reac_downstream_build` writes broadcast there by contract, and a control frame
+stamped onto one and merely sent to a unicast sockaddr arrives labelled broadcast — measured,
+three announces and nine cold-connect records with `ff:ff:…` in the frame and zero unicast at
+the far end.
+
+**THE SOURCE MAC IS THE ONE EXCEPTION TO `reac_mac.h`'S LAW**, amended there rather than
+flipped: every box this rig has granted announced from a Roland OUI, and the S-0808 was sent
+four byte-perfect bursts from the NIC's own `00:14:5c:…` and echoed nothing, lamp blinking.
+On this one path the source is Roland's OUI over this NIC's host part — it cannot collide, a
+capture still says which machine spoke, `--src-mac` overrides — and the slave socket goes
+promiscuous with it, because a box unicasts to the address it was announced from and the
+card's filter drops what it does not own.
+
+**What the veth measured after the correction** (`tests/box-master-slave-join.sh`): flood
+**5164 frames of 1492 B**, broadcast; **1 announce then a 3-record burst, 0.962 s later**,
+unicast, **1492 B**, the announce block **byte-identical to the S-1608's**; grant accepted →
+**established**, 3 heartbeats; a 0.5 FS tone into `reac-playback` read back off the downstream
+at **−17.04 / −17.04 dBFS RMS on slots 0 and 1**, **−999** on an unfed slot, **19.98 dB** of
+delta for 20 dB at the source; **0 frames before the box spoke**; 35005 broadcast downstream
+frames against 15 unicast control frames; link-state **probing** through the recipe and
+**established** after. The emulator is now STRICT the way the box is — it grants only an
+announce with selector `0x80`, a self-consistent table and a Roland OUI — and putting the
+master's `0x84` back takes the proof red at offsets 6 and 33.
+
+Two defects the correction surfaced, both silent: the frame's own destination (above), and the
+heartbeat, which the FSM carries BOTH as its own emit and as a flag on the established audio
+slot — handling only the first left a segment established and saying nothing.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
