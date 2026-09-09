@@ -258,21 +258,21 @@ for d in "$RPMROOT"/fedora/*/*/; do
 done
 
 place() { # place <file> <releasever> <archdir>
-  local f=$1 releasever=$2 archdir=$3 dest src_id dst_id
+  local f=$1 releasever=$2 archdir=$3 dest
   wanted "$releasever" "${RELEASEVERS[@]+"${RELEASEVERS[@]}"}" || return 1
   wanted "$archdir" "${ARCHES[@]+"${ARCHES[@]}"}" || return 1
   dest="$RPMROOT/fedora/$releasever/$archdir"
   mkdir -p "$dest"
   TARGET_DIRS["$dest"]=1
-  # Idempotent: the same package already there -> leave it alone, signature and all.
-  # The comparison is on SHA256HEADER (the immutable header digest), NOT on file
-  # bytes: signing rewrites the signature header, so a byte compare against the
-  # still-unsigned build output would re-copy and re-sign on every single run.
+  # A package the tree already carries under this name is KEPT, whatever the new build's
+  # bytes: a published NEVRA is immutable, and a rebuild that wants in bumps Release. The
+  # earlier rule compared SHA256HEADER and let a rebuild of the same NEVRA replace the tree's
+  # copy -- every rebuild differs (build time, host), so the metadata then described bytes the
+  # size-only push never uploaded, and dnf refused the tree with a checksum mismatch
+  # (2026-09-09, libreac 0.7.1-1).
   if [ -f "$dest/$(basename "$f")" ]; then
-    src_id=$(rpm -qp --qf '%{SHA256HEADER}' "$f" 2>/dev/null || true)
-    dst_id=$(rpm -qp --qf '%{SHA256HEADER}' "$dest/$(basename "$f")" 2>/dev/null || true)
-    if [ -n "$src_id" ] && [ "$src_id" = "$dst_id" ]; then return 0; fi
-    if [ -z "$src_id" ] && cmp -s "$f" "$dest/$(basename "$f")"; then return 0; fi
+    echo "  kept  $(basename "$f") (already published; a changed build needs a new Release)"
+    return 0
   fi
   install -m 0644 "$f" "$dest/"
 }
@@ -324,6 +324,10 @@ if [ "$SIGN" = 1 ]; then
 fi
 
 # ------------------------------------------------------------- repodata ----
+# Every directory holding packages gets metadata, not only the ones this run placed into: the
+# workflows pull the shared tree and discard its repodata before calling this script, so a
+# directory another project filled and this build did not touch would otherwise be left bare.
+while IFS= read -r d; do TARGET_DIRS["$d"]=1; done < <(find "$RPMROOT" -name '*.rpm' -printf '%h\n' | sort -u)
 for dest in "${!TARGET_DIRS[@]}"; do
   if [ -d "$dest/repodata" ]; then
     createrepo_c --update --quiet "$dest"
