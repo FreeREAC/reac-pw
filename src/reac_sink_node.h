@@ -89,29 +89,18 @@ struct reac_sink_cfg {
 	 * the default is off is written where it is set, in main.c: the loop's sign
 	 * is verified on hardware and its measurement phase is not. */
 	int rate_match_off;
-	/* THIS WIRE IS MASTERED BY A STAGEBOX ON M, AND WE SEND ITS DOWNSTREAM ANYWAY
-	 * (0.5.5, DESIGN.md). Two effects, both narrow:
-	 *   - the pacer takes its slot tick from the box's frames instead of a deadline
-	 *     (reac_pacer_cfg.tick_on_rx), so this node's audio leaves at the box's exact
-	 *     cadence and nothing at all leaves before the box's first frame;
-	 *   - this node stops publishing the SEGMENT'S ANSWER. reac.master.*,
-	 *     reac.link-state and the reac.box-* badge belong to the segment's one door,
-	 *     which on a joined wire is the capture node (0.5.2) — a second copy here
-	 *     would publish `reac.master.refusal=rival-master-box` over a segment we
-	 *     joined and are driving audio into. Its own identity, the segment name, the
-	 *     head-amp control keys and the discovery table are unaffected. */
-	int joined_box_master;
-	/* THE BOX THIS WIRE'S WIDTH IDENTIFIED, when `joined_box_master` is set — the
-	 * matrix row `reac_box_master_model` matched EXACTLY (0.5.2), never a fallback.
-	 * A box on M runs no handshake, so nothing about its preamps is ever announced
-	 * to us; this row is what the wire already said. Read for the head-amp
-	 * capability keys and nothing else. NULL where no row matched the width, and
-	 * then those keys stay absent — the console's own bar for "not answered". */
-	const struct reac_box_model *box_master_model;
-	/* The mastering peer's own L2 address, from the sighting that decided the verdict —
-	 * the only evidence there is on a wire whose peer grants nothing. Used once, to name
-	 * the box in the establishment the FSM is handed at open. NULL/zero skips it. */
-	const uint8_t *box_master_mac;
+	/* THE SLAVE'S UPSTREAM CARRIER (0.5.6). Set on a segment JOINED to a box master:
+	 * this node runs with NO pacer and NO socket of its own, and its process() writes
+	 * the graph's PCM into this planar ring for `reac_slave` to place in the box's
+	 * slots and unicast at the wire rate. It is the same node an operator patches in
+	 * the master role — same ports, same gain staging, same identity — because a
+	 * second playback node would be a second answer to "where do this segment's
+	 * outputs come from". NULL = the master role: the pacer owns the wire.
+	 *
+	 * 0.5.5 sent a DESK'S DOWNSTREAM here instead, which the ground-truth capture
+	 * retired: a box on M grants a SLAVE and never announces, so what reaches its
+	 * outputs is an upstream at ITS width, unicast to it (DESIGN.md 0.5.6). */
+	struct reac_ring *upstream_ring;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX

@@ -244,8 +244,9 @@ struct reac_sink_node {
 	 * resampler). Written on the RT process() thread, read there too. */
 	struct spa_io_rate_match *rate_match;
 	int rate_match_off;              /* const after open; REACPW_RATE_MATCH=0 */
-	int joined_box_master;           /* 0.5.5: a box masters this wire; we drive it anyway */
-	const struct reac_box_model *box_master_model;  /* the row its width matched; may be NULL */
+	/* 0.5.6: the slave's upstream carrier. Non-NULL = no pacer, no socket; process()
+	 * writes planar PCM here and reac_slave puts it on the wire. */
+	struct reac_ring *upstream_ring;
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -268,7 +269,13 @@ struct reac_sink_node {
 static void on_process(void *data)
 {
 	struct reac_sink_node *n = data;
-	if (!n->pacer_open)
+	/* WHO IS DOWNSTREAM OF THIS CALLBACK. In the master role it is the pacer, and a
+	 * node whose pacer never opened has nowhere to put a frame. On a segment JOINED to
+	 * a box master (0.5.6) there is no pacer at all — the slave engine owns the wire —
+	 * and the PCM goes into its upstream ring instead, so THAT is the thing to require
+	 * here. Requiring the pacer on both paths is what left the box master's outputs
+	 * silent with the tone linked and the ports patched. */
+	if (!n->pacer_open && !n->upstream_ring)
 		return;
 	/* Mid a rate reconnect (sink_reconnect_rate, increment 4): the stream is
 	 * disconnected right now, so dequeuing a buffer below would hand back
@@ -426,10 +433,25 @@ static void on_process(void *data)
 				                                      n->chan_cur[c], target,
 				                                      n->ramp_step);
 			}
-			/* Encode audio + L2 header; counter/control are stamped by the pacer.
-			 * Counter 0 is a placeholder (overwritten on egress). */
-			reac_downstream_build(frame, planar, n->channels, REAC_SAMPLES_PER_PKT, 0, n->src);
-			reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES);
+			if (n->upstream_ring) {
+				/* THE SLAVE'S UPSTREAM (0.5.6). No frame is built here: the
+				 * engine owns the wire, places these channels at the box's
+				 * slots and unicasts them at the master's cadence. The ring
+				 * wants ONE contiguous planar block, ch-major — the same
+				 * layout reac_rx.c fills the capture ring with. */
+				float blk[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT];
+				for (int c = 0; c < n->channels; c++)
+					memcpy(&blk[c * REAC_SAMPLES_PER_PKT], n->stage[c],
+					       REAC_SAMPLES_PER_PKT * sizeof(float));
+				reac_ring_write(n->upstream_ring, blk, REAC_SAMPLES_PER_PKT,
+				                (uint32_t)n->channels);
+			} else {
+				/* Encode audio + L2 header; counter/control are stamped by the
+				 * pacer. Counter 0 is a placeholder (overwritten on egress). */
+				reac_downstream_build(frame, planar, n->channels,
+				                      REAC_SAMPLES_PER_PKT, 0, n->src);
+				reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES);
+			}
 			n->staged = 0;
 		}
 	}
@@ -744,13 +766,6 @@ static void sink_prop_set(void *ctx, const char *key, const char *value)
 static void sink_publish_link_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
-		return;
-	/* NOT ON A WIRE A BOX MASTERS (0.5.5). reac.link-state and the box badge describe
-	 * a box WE enrolled, off a master FSM that is deliberately left probing here; the
-	 * segment's door already publishes both from the evidence that is real on this wire
-	 * — the width the box broadcasts and the frames its own feeder accepts (0.5.2). One
-	 * store, one writer. */
-	if (n->joined_box_master)
 		return;
 
 	uint64_t drops_total = 0;
@@ -1068,13 +1083,6 @@ static void sink_publish_role_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
 		return;
-	/* NOT ON A WIRE A BOX MASTERS (0.5.5). This node would publish
-	 * `reac.cfg.role=master` off its own engine, and the segment's role there is
-	 * SLAVE — we send the downstream, we do not own the clock. The door publishes the
-	 * role and its state from the segment's record (main.c's listener_publish_segment);
-	 * the write door on this node still works and still moves that same record. */
-	if (n->joined_box_master)
-		return;
 
 	const char *state = n->role_state;
 	if (n->role_swap) {
@@ -1162,28 +1170,6 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		         arb.mac[0], arb.mac[1], arb.mac[2], arb.mac[3], arb.mac[4], arb.mac[5]);
 	else
 		snprintf(master_mac, sizeof master_mac, "none");
-
-	/* THE DISCOVERY TABLE IS OURS TO PUBLISH ON ANY WIRE; THE SEGMENT'S ANSWER IS NOT
-	 * (0.5.5). On a wire a stagebox on M masters we are driving audio onto somebody
-	 * else's clock, and the aggregate that says so is published by the segment's one
-	 * door — the capture node (0.5.2). Publishing it here too would be a second writer
-	 * onto one fact, and its refusal composer would read `rival-master-box` over a
-	 * segment we joined: the shared composer cannot tell a rival we refused from a rival
-	 * we joined, because that distinction is the LISTENER's and not the pacer's. */
-	if (n->joined_box_master) {
-		struct pw_properties *dprops = pw_properties_new(
-			REAC_PROP_DISCO_SCOPE,   n->disco_ifname ? n->disco_ifname : "",
-			REAC_PROP_DISCO_STATE,   REAC_DISCO_STATE_LISTENING,
-			REAC_PROP_DISCO_SEQ,     seq,
-			REAC_PROP_DISCO_DEVICES, devices,
-			NULL);
-		if (dprops) {
-			pw_stream_update_properties(n->stream, &dprops->dict);
-			pw_properties_free(dprops);
-			n->disco_seq_last = n->pacer.disco.seq;
-		}
-		return;
-	}
 
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_DISCO_SCOPE,   n->disco_ifname ? n->disco_ifname : "",
@@ -1501,37 +1487,18 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	char desc[128];
 	sink_build_desc(desc, sizeof desc, n->label[0] ? n->label : NULL, n->channels);
 
-	/* THE HEAD-AMP CAPABILITIES A BOX MASTER NEVER DECLARES (0.5.5). In the master
-	 * role these two seed empty and are filled by sink_publish_link_props the moment
-	 * a box is recognized off its cold-connect. A stagebox on M sends no
-	 * cold-connect and no config-announce — there is nothing to recognize and there
-	 * never will be — so the console read `reac.headamp.channels=0` on a joined
-	 * segment, took it as "this box has no preamps", and every gain, pad and phantom
-	 * write for it was refused before it reached the wire (rig, 2026-09-09, against
-	 * the S-1608 on the neighbouring segment reading 16).
-	 *
-	 * Both come from what the wire ALREADY told us, and neither is a guess:
-	 *   - `channels` is the model row's own input width, and the row is the one whose
-	 *     `in_ch` EQUALS the geometry the box broadcasts (0.5.2's exact match — a
-	 *     fallback row would publish preamps for a chassis nobody identified);
-	 *   - `base` is that row's DECLARATION byte, `config_block[7] * 0x10` — the
-	 *     chassis strap this model announces when it does announce
-	 *     (reac_ports.h's REAC_HEADAMP_BASE_FROM_CONFIG_BYTE7). It is READ from the
-	 *     declaration, not computed from the width: the width and the strap are not
-	 *     collinear (an S-1608 is 16 in at base 32, an S-4000S 32 in at base 0), which
-	 *     is exactly why the master role stopped deriving it and carries it on its own
-	 *     atomic instead.
-	 * A width no row matches leaves both at the master role's seeds, because then
-	 * nothing on this wire has said which chassis it is. */
+	/* NO HEAD-AMP CAPABILITIES ON A BOX-MASTER SEGMENT (0.5.6, DESIGN.md). 0.5.5
+	 * published channels=8/base=0 for a joined box master from the model row. The
+	 * console's write then reached the node and the real S-0808's preamp did not move
+	 * — floor -91.4 dBFS at gain 32, 52 and 32 again, against +18.9 dB on an enrolled
+	 * S-1608 by the same path — and the ground-truth capture says why: on a wire a box
+	 * masters there is NO head-amp record in either direction, ever. Publishing a
+	 * capability the wire cannot carry is a control an operator can move and a box that
+	 * never hears it. So these stay at the master role's empties unless a box is
+	 * enrolled WITH US. */
 	char ha_seed_channels[16] = "0";
 	char ha_seed_base[16] = REAC_BOX_SOURCE_NONE;
-	if (n->joined_box_master && n->box_master_model) {
-		snprintf(ha_seed_channels, sizeof ha_seed_channels, "%d",
-		         n->box_master_model->in_ch);
-		snprintf(ha_seed_base, sizeof ha_seed_base, "%d",
-		         n->box_master_model->config_block[REAC_HEADAMP_BASE_OFF]
-		           * REAC_HEADAMP_BASE_MULTIPLIER);
-	}
+
 
 	n->stream = pw_stream_new_simple(
 		n->loop,
@@ -1672,8 +1639,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->loop = loop;
 	n->inst = cfg->inst;          /* stable for the process; used by every filter build */
 	n->disco_ifname = cfg->ifname;
-	n->joined_box_master = cfg->joined_box_master;
-	n->box_master_model = cfg->box_master_model;
+	n->upstream_ring = cfg->upstream_ring;
 	n->channels = 0;              /* no graph filter yet — DEFERRED to reac_sink_node_ensure */
 	n->sample_rate = cfg->sample_rate;
 	snprintf(n->label, sizeof n->label, "%s", cfg->label ? cfg->label : "");
@@ -1734,13 +1700,19 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */
 	pcfg.rate_asserted = cfg->rate_asserted; /* the source label starts truthful */
 	pcfg.catchup_max_slots = cfg->catchup_max_slots;  /* 0 = the measured default */
-	/* 0.5.5: the box's frame is the slot on a wire it masters. Everything the pacer
-	 * does after the wake is the master role's, byte for byte. */
-	pcfg.tick_on_rx = cfg->joined_box_master;
 	n->rate_match_off = cfg->rate_match_off != 0;
 	if (cfg->clock_ref) {                    /* #77; "" = designate nothing */
 		strncpy(n->clock_ref, cfg->clock_ref, sizeof n->clock_ref - 1);
 		n->clock_ref[sizeof n->clock_ref - 1] = '\0';
+	}
+	/* NO PACER ON THE SLAVE'S SIDE OF THE WIRE (0.5.6). reac_slave owns the socket,
+	 * the cadence and the establishment there; a pacer here would be a second sender
+	 * on one segment, which is the fault the seglock exists to make impossible. The
+	 * node is then purely a graph door: ports, gain staging, identity, and a ring. */
+	if (n->upstream_ring) {
+		fprintf(stderr, "reac-pw: reac-playback (upstream carrier) — no pacer, no "
+		        "socket: the slave engine puts these channels on the wire\n");
+		return n;
 	}
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
 		pw_log_warn("reac:playback — cannot open AF_PACKET TX on '%s' "
@@ -1751,20 +1723,6 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	}
 	n->pacer_open = 1;
 
-	/* THE ESTABLISHMENT A BOX ON M CANNOT HAND US (0.5.5). Between open and start is the
-	 * only window in which no thread owns the FSM, and it is where the master engine is
-	 * told which box this wire's geometry identified. Everything the downstream carries
-	 * after it — the announce's enrolled-box count, the chanmap cadence, the absence of
-	 * PROBING's scene pushes — is then generated by the SAME table an enrolled box's
-	 * downstream comes from, which is what "sending is always the same" asks for. It is
-	 * a hypothesis under rig test, not a claim about enrolment; see reac_pacer.h. */
-	if (cfg->joined_box_master && cfg->box_master_model && cfg->box_master_mac)
-		reac_pacer_declare_box_master(&n->pacer, cfg->box_master_mac,
-		                              cfg->box_master_model->in_ch,
-		                              cfg->box_master_model->out_ch,
-		                              cfg->box_master_model->config_block[REAC_HEADAMP_BASE_OFF]
-		                                * REAC_HEADAMP_BASE_MULTIPLIER,
-		                              cfg->box_master_model->config_block);
 
 	/* Badge-prop shadows for the (yet-to-exist) filter. Seeded to the baseline so the
 	 * first sink_open_filter re-stamps to the live pacer state. */

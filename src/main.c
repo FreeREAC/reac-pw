@@ -928,16 +928,12 @@ static void listener_publish_segment(struct listener *L)
 	reac_segment_answer_slave(&answer, heard, master_mac48,
 	                          L->rx.sample_rate, L->cfg.wire_channels);
 
-	/* WHICH ENGINE ANSWERS FOR THE ROLE. A receive-only join has no reac_slave engine
-	 * and is not waiting for one (DESIGN.md 0.5.2): what performs the role is the RX
-	 * that follows the box's clock and delivers its channels. Deriving its answer from
-	 * the slave engine's enrolment flag is what published role_reestablish_pending over
-	 * a segment that was up and streaming on the rig, 2026-09-09. */
-	const char *state = L->cfg.join_box_master
-		? reac_role_swap_state(&L->role_swap,
-		                       reac_role_engine_of_receive_only(L->rx_started, heard))
-		: reac_role_swap_state(&L->role_swap,
-		                       reac_role_engine_of_slave(L->slave_open, established));
+	/* WHICH ENGINE ANSWERS FOR THE ROLE — and since 0.5.6 there is only one answer,
+	 * because a box-master join runs the SAME slave engine a desk-master join does.
+	 * 0.5.2 derived it from the RX instead, on the reasoning that a receive-only join
+	 * IS the slave role performed; that reasoning went with the receive-only join. */
+	const char *state = reac_role_swap_state(
+		&L->role_swap, reac_role_engine_of_slave(L->slave_open, established));
 
 	reac_source_node_publish_segment(L->src, role_s, state,
 	                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
@@ -948,9 +944,18 @@ static void listener_publish_segment(struct listener *L)
 	 * rendering a segment with no device on it and eight inputs nobody could patch
 	 * (2026-09-09 05:45). The width is the wire's own declaration and the address is the
 	 * sighting's — the only two facts a peer that runs no handshake ever gives us. */
+	/* AND THE LAMP IS THE PAIRING (0.5.6, operator ruling). `heard` says frames are
+	 * arriving and decoding, which is a fact about the WIRE; `reac.link-state` is what a
+	 * console keys a stagebox off, and it must say whether we are JOINED. The rig,
+	 * 2026-09-09: "S-0808 is not enrolled but omx sees it available", with the box's own
+	 * lamp unlocked beside an S-1608's locked one. So the engine's ESTABLISHED flag
+	 * answers it — probing through the flood and the wait for the grant echo,
+	 * established once the unicast stream and the heartbeat are running. The rest of
+	 * the identity set is unchanged: the width, the address and the model are facts
+	 * about the wire and stay true while we are only listening to it. */
 	if (L->cfg.join_box_master)
 		reac_source_node_publish_box_master(L->src, L->cfg.wire_channels,
-		                                    master_mac48, heard);
+		                                    master_mac48, established);
 }
 
 /* Bring one segment online: resolve its rate, open the RX feeder, and (role
@@ -1065,14 +1070,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 *             drives the cdea/cfea grant + owns the clock (a box slaves to us).
 	 *   slave  -> reac_slave engine: an external master drives; we lock to its
 	 *             cadence + return our input channels upstream at the box's slots. */
-	/* AND A BOX THAT MASTERS THE WIRE GETS THE SAME SENDING (0.5.5, DESIGN.md). The
-	 * operator's ruling — "sending is always the same, being clock slave is only part of
-	 * the enrollment" — splits what 0.5.1 had joined: the downstream is what a box
-	 * CONSUMES whoever owns the clock, and the enrolment is the only thing a box on M
-	 * cannot take part in. So this segment opens the master's TX side unchanged, with one
-	 * field different (`joined_box_master`): the pacer's slot tick becomes the box's own
-	 * frame instead of a deadline, and nothing at all leaves before its first frame. */
-	if (c->tx_if && (c->role == REAC_ROLE_MASTER || c->join_box_master)) {
+	if (c->tx_if && c->role == REAC_ROLE_MASTER) {
 		/* Default master MAC = THIS NIC's own address (reac_mac.h); --src-mac
 		 * overrides it. The mixer profile sets only the console-model byte. */
 		uint8_t master_mac_buf[6];
@@ -1102,15 +1100,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * REACPW_CLOCK_FOLLOW=0 opts out and gets
 		                               * the free-run, which is then REPORTED rather than
 		                               * silent (reac_sink_node.h carries the ruling). */
-		                              /* AND NOTHING IS DISCIPLINED ON A WIRE WE DO NOT
-		                               * CLOCK (0.5.5). The pacer's period is what a
-		                               * discipline steers, and a box-master segment has
-		                               * no period — its slots are the box's frames. A DLL
-		                               * left running there would steer a number nothing
-		                               * reads and report a lock nobody is following. */
-		                              .clock_follow = c->join_box_master ? 0
-		                                  : reac_envflag("REACPW_CLOCK_FOLLOW",
-		                                                 REAC_CLOCK_FOLLOW_DEFAULT),
+		                              .clock_follow = reac_envflag("REACPW_CLOCK_FOLLOW",
+		                                                  REAC_CLOCK_FOLLOW_DEFAULT),
 		                              /* --rate / a conf-file rate is an ASSERTION; only the
 		                               * built-in best-drivable pick is the convention. */
 		                              .rate_asserted = c->rate_layer != REAC_CONF_BUILTIN
@@ -1128,22 +1119,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * cfg.rate_match_off for the full measurement —
 		                               * unchanged by this refactor. */
 		                              .rate_match_off =
-		                                  reac_envflag("REACPW_RATE_MATCH", 0) ? 0 : -1,
-		                              /* 0.5.5: whose clock this wire runs on. It changes
-		                               * the pacer's tick and stops this node publishing a
-		                               * second copy of the segment's answer; every byte it
-		                               * sends is the same. */
-		                              .joined_box_master = c->join_box_master,
-		                              /* And WHICH box, so the node can publish the
-		                               * head-amp capabilities a peer that runs no
-		                               * handshake will never declare. NULL where the
-		                               * width matched no row exactly. */
-		                              .box_master_model = c->join_box_master
-		                                  ? reac_box_master_model(c->wire_channels)
-		                                  : NULL,
-		                              .box_master_mac = (c->join_box_master
-		                                                 && c->rival_mac_set)
-		                                  ? c->rival_mac : NULL };
+		                                  reac_envflag("REACPW_RATE_MATCH", 0) ? 0 : -1 };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
@@ -1180,18 +1156,10 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			reac_ring_free(&L->tx_ring);
 			return -1;
 		}
-		if (c->join_box_master)
-			fprintf(stderr, "reac-pw: %sSLAVE role on a BOX MASTER, and SENDING (%s "
-			        "profile) on '%s' — the box's frames are the slot clock, one "
-			        "downstream broadcast per frame received, and nothing on the wire "
-			        "until its first one. No handshake is attempted: a box on M grants "
-			        "nothing and needs nothing granted\n",
-			        c->tag, c->mixer->display, c->tx_if);
-		else
-			fprintf(stderr, "reac-pw: %sMASTER role (%s profile) on '%s' — "
-			        "event-driven establishment: probing until the box's "
-			        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
-			        "stderr\n", c->tag, c->mixer->display, c->tx_if);
+		fprintf(stderr, "reac-pw: %sMASTER role (%s profile) on '%s' — "
+		        "event-driven establishment: probing until the box's "
+		        "cold-connect (cdea 04 03) arrives; FSM/RX transcript on "
+		        "stderr\n", c->tag, c->mixer->display, c->tx_if);
 		if (c->n_headamps) {
 			/* Say which of the two policies is actually running. An operator
 			 * reading "armed" cannot otherwise tell whether the wire will refresh
@@ -1233,17 +1201,66 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                       : " (this NIC's own address; --src-mac overrides)");
 		reac_ring_init(&L->tx_ring, REAC_MAX_CHANNELS, (uint32_t)(L->rx.sample_rate / 4));
 		L->tx_ring_init = 1;
+		/* WHOSE WIDTH THE UPSTREAM IS (0.5.6). To a DESK we send our own configured
+		 * box width: the desk's 40-slot fabric has room for it and the enrolment
+		 * negotiates where it lands. To a STAGEBOX ON M there is no negotiation and no
+		 * fabric — it broadcasts its own geometry and grants a slave that speaks it
+		 * back. Ground truth: a real 16-input S-1608 joining a real S-0808 on M sent
+		 * 340 B / 8 slots from its first flood frame, and its inputs 9-16 reached that
+		 * master nowhere. So the wire's declared width IS the width, and it is the same
+		 * number the capture node is sized from. */
+		int up_ch = c->join_box_master ? (int)c->wire_channels : c->box_channels;
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
-		                                .box_channels = c->box_channels,
+		                                .box_channels = up_ch,
 		                                .sample_rate = L->rx.sample_rate,
-		                                .src_mac = box_mac };
+		                                .src_mac = box_mac,
+		                                .box_master = c->join_box_master };
 		if (reac_slave_open(&L->slave, &slcfg, &L->tx_ring) == 0) {
 			L->slave_open = 1;
 			if (reac_slave_start(&L->slave) == 0) {
 				reac_slave_set_phy_up(&L->slave, 1);  /* PHY up: begin the establishment */
-				fprintf(stderr, "reac-pw: %sSLAVE role (%d-ch upstream return) — "
-				        "responding to an external master, locked to its cadence\n",
-				        c->tag, c->box_channels);
+				if (c->join_box_master)
+					fprintf(stderr, "reac-pw: %sSLAVE role on a BOX MASTER — "
+					        "enrolling with it the way a stagebox does: %d-ch "
+					        "broadcast flood at ITS width, then unicast "
+					        "config-announce, then the cold-connect burst, then "
+					        "its outputs from reac-playback at the wire rate\n",
+					        c->tag, up_ch);
+				else
+					fprintf(stderr, "reac-pw: %sSLAVE role (%d-ch upstream return) — "
+					        "responding to an external master, locked to its cadence\n",
+					        c->tag, up_ch);
+				/* THE BOX MASTER'S OUTPUTS ARE ROUTABLE FROM HERE (0.5.6). The
+				 * upstream we unicast to it IS what reaches those outputs, so the
+				 * segment gets the same reac-playback node an operator patches in
+				 * the master role — ports, gain staging, identity — with the slave
+				 * engine's ring as its carrier instead of a pacer. Sized to the
+				 * width the wire declared, and labelled with the model that width
+				 * identified where it identifies one (0.5.2). */
+				if (c->join_box_master) {
+					const struct reac_box_model *bm =
+						reac_box_master_model(c->wire_channels);
+					struct reac_sink_cfg ucfg = {
+						.ifname = c->tx_if,
+						.channels = up_ch,
+						.sample_rate = L->rx.sample_rate,
+						.src_mac = box_mac,
+						.console_field = c->mixer->console_field,
+						.inst = c->inst_name,
+						.label = bm ? bm->display : NULL,
+						.rate_match_off = -1,
+						.upstream_ring = &L->tx_ring };
+					L->sink = reac_sink_node_new(loop, &L->tx_ring, &ucfg);
+					if (!L->sink)
+						fprintf(stderr, "reac-pw: %sthe box master's outputs have "
+						        "no reac-playback node — its inputs still "
+						        "arrive, but nothing can be routed to it\n",
+						        c->tag);
+					else if (reac_sink_node_ensure(L->sink, up_ch,
+					                               bm ? bm->display : NULL) != 0)
+						fprintf(stderr, "reac-pw: %scould not size reac-playback "
+						        "to the box master's %d outputs\n", c->tag, up_ch);
+				}
 			} else {
 				fprintf(stderr, "reac-pw: %sslave engine thread failed to start\n", c->tag);
 				reac_slave_close(&L->slave); L->slave_open = 0;
@@ -1328,27 +1345,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
 			return -1;
 		}
-		/* AND ITS OUTPUTS ARE ROUTABLE FROM HERE (0.5.5). There is no autodetect on this
-		 * wire and there never will be — a box on M declares itself to nobody — so the
-		 * playback node is sized from the same evidence the capture node is: the width
-		 * the box broadcasts, read through the matrix row that matches it EXACTLY
-		 * (reac_box_master_model, 0.5.2 — never the S-1608 fallback, which would name a
-		 * box that was never identified). A width no row matches is taken at face value
-		 * as its own output count, which is what the ports would be for a splitter we
-		 * cannot name. */
-		if (c->join_box_master && L->sink) {
-			const struct reac_box_model *bm = reac_box_master_model(c->wire_channels);
-			int out_ch = bm ? bm->out_ch : (int)c->wire_channels;
-			if (reac_sink_node_ensure(L->sink, out_ch, bm ? bm->display : NULL) != 0) {
-				fprintf(stderr, "reac-pw: %sfailed to size reac:playback to the "
-				        "box master's %d outputs\n", c->tag, out_ch);
-				return -1;
-			}
-			fprintf(stderr, "reac-pw: %sreac-playback %d ch onto the %s outputs — "
-			        "sent as the ordinary downstream broadcast, paced by the box's own "
-			        "frames\n", c->tag, out_ch,
-			        bm ? bm->display : "box master's declared");
-		}
+
 	}
 
 	/* THIS ROLE'S ENGINE NOW OWNS THE SEGMENT. Recorded on the only success
@@ -1821,7 +1818,7 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	else
 		fprintf(stderr, "reac-pw: [%s] segment up (%s%s, %s) — %lu served so far\n", name,
 		        reac_role_name(L->cfg.role),
-		        L->cfg.join_box_master ? ", receive-only on a box master" : "",
+		        L->cfg.join_box_master ? ", enrolling with the box that masters it" : "",
 		        L->cfg.role_pinned ? "pinned by REAC_ROLE_<segment>"
 		                           : "chosen by hearing the wire",
 		        h->served);
@@ -2632,7 +2629,12 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		 * capture node (reac_source_node.h), so this drains that door and
 		 * re-publishes the answer — which MOVES while nothing is asserted, as
 		 * the hunt ends or a desk drops. */
-		if (!L->sink) {
+		/* A BOX-MASTER JOIN HAS A PLAYBACK NODE AND STILL ANSWERS FROM ITS DOOR
+		 * (0.5.6). That node is a graph door with no pacer behind it — it publishes
+		 * nothing about the segment and has no drains to take — so this segment is
+		 * polled exactly as any other slave: the capture node carries the write door
+		 * and the answer. */
+		if (!L->sink || L->cfg.join_box_master) {
 			int back = reac_source_node_take_reopen_role(L->src);
 			if (back >= 0) {
 				listener_reopen_at_role(L, c->loop, (enum reac_role)back);
@@ -2641,15 +2643,6 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 			listener_publish_segment(L);
 			continue;
 		}
-		/* A JOINED BOX MASTER HAS BOTH NODES AND STILL ANSWERS FROM ITS DOOR (0.5.5).
-		 * The sink's own publishers stand down on this wire (reac_sink_node.c), so
-		 * without this line the segment would have a playback node and no answer at
-		 * all — the same silence 0.5.1's refusal left on the rig, one node further on.
-		 * Published BEFORE the sink's drains below, which still run: the reopen
-		 * requests are the operator's write door and belong to the node that carries
-		 * the params. */
-		if (L->cfg.join_box_master)
-			listener_publish_segment(L);
 		int role = reac_sink_node_take_reopen_role(L->sink);
 		if (role >= 0) {
 			listener_reopen_at_role(L, c->loop, (enum reac_role)role);

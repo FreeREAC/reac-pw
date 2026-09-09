@@ -279,20 +279,6 @@ struct reac_pacer_cfg {
 	/* 1 when the opening rate was ASSERTED (--rate, a conf file) rather than picked
 	 * by the best-drivable convention — the source label starts truthful either way. */
 	int rate_asserted;
-	/* THE BOX'S OWN FRAME IS THE SLOT TICK (0.5.5). Set on a wire a stagebox on M
-	 * masters: the loop blocks on THIS socket's RX instead of on a deadline, and emits
-	 * exactly one downstream frame per REAC frame received from the peer. Everything
-	 * after the wake is the master role's own emission body, unchanged — the ruling is
-	 * that sending is always the same and only the pacing is a slave's.
-	 *
-	 * `fps`, `catchup_max_slots` and `clock_follow` are inert here BY CONSTRUCTION and
-	 * not by a branch: with no deadline to advance there is no phase to drift, no slot
-	 * debt to repay and nothing for a DLL to steer. The wire runs at the box's exact
-	 * rate because every frame we send is a reply to one of its own.
-	 *
-	 * Nothing is emitted before the first box frame arrives — no frame and no tick —
-	 * which is not a hold-off but the pacing itself. */
-	int tick_on_rx;
 };
 
 /* Default slot-debt budget, EXPRESSED IN TIME because the thing it bounds is a
@@ -390,8 +376,7 @@ struct reac_pacer {
 	struct reac_headamp_tx headamp;  /* MASTER head-amp DMX send (off unless set) */
 	int fd;                          /* AF_PACKET socket */
 	int ifindex;
-	int tick_on_rx;                  /* 0.5.5: the peer's frame is the slot tick */
-	long period_ns;                  /* 1e9 / fps; unused when tick_on_rx */
+	long period_ns;                  /* 1e9 / fps */
 	uint32_t catchup_max_slots;      /* slot-debt budget; 0 = re-base always */
 	int      catchup_max_slots_cfg;  /* the RAW reac_pacer_cfg value that produced
 	                                  * the line above (0 = rate-derived default,
@@ -637,44 +622,6 @@ int  reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg);
 
 /* Spawn the pacer thread; it locks memory, pins itself and enters the wire-clock
  * SCHED_FIFO band (reac_rt_thread_go) as its first act. Returns 0 / -1. */
-/* DECLARE THE BOX A WIRE'S GEOMETRY ALREADY IDENTIFIED, and run the master's own
- * establishment for it (0.5.5). For a stagebox on M and nothing else.
- *
- * WHY THIS EXISTS. A box on M sends no cold-connect and no config-announce, so the
- * master FSM stays in PROBING for ever — and PROBING is a DIFFERENT DOWNSTREAM from the
- * one an enrolled box receives. Measured on the rig over matched 3 s windows: PROBING
- * put 343 scene-transfer pushes on the wire that an established master sends none of,
- * one chanmap where an established master sends three, and an announce whose
- * enrolled-box count byte reads 0 where an established one reads 1 (`gen_cfea`'s
- * `box_count`). The operator's ruling is literal — sending is always the same — and
- * those three were the whole of what still differed.
- *
- * They are ONE fact and not three: the FSM's state. So this copies no announce, no
- * chanmap and no cadence. It hands the FSM the two things this wire cannot say and lets
- * the SAME table generate every frame — `reac_master_set_box` with the width and strap
- * the matrix row the broadcast geometry matched already carries (0.5.2), then one JOIN
- * event with that row's own declaration block, which starts the standard sequence
- * (ENROLL, dwell, grant sweep, self-complete) and reaches ESTABLISHED without the box
- * answering, exactly as a warm relink does.
- *
- * THE LINK CHECK IS THEN FED BY THE BOX'S OWN BROADCAST, which is why this cannot flap:
- * every box RX event while established reloads the budget, and a box on M floods at the
- * wire rate.
- *
- * WHAT IT IS NOT: a claim that the box is enrolled with us. Nothing is granted in either
- * direction here, and the segment still publishes `foreign` / `foreign-master` from its
- * own door, which derives from the RX's evidence and never from this FSM.
- *
- * IT IS A HYPOTHESIS UNDER TEST, not a fix: the rig decides whether an S-0808 on M acts
- * on a head-amp SET once the control area around it is byte-identical to the one an
- * enrolled box receives. See DESIGN.md 0.5.5.
- *
- * Call between reac_pacer_open and reac_pacer_start — the FSM is pacer-thread-owned once
- * that thread exists, and this is the one window in which no thread owns it. */
-void reac_pacer_declare_box_master(struct reac_pacer *p, const uint8_t mac[6],
-                                   int in_ch, int out_ch, int headamp_base,
-                                   const uint8_t declaration[32]);
-
 int  reac_pacer_start(struct reac_pacer *p);
 
 /* PRODUCER side (call from the graph thread): hand one encoded downstream frame
