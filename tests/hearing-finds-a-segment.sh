@@ -5,7 +5,9 @@
 # WHOLE-BINARY: a daemon started with NOTHING finds a segment by hearing it, takes the
 # end of the pairing the wire leaves open, PUTS BOTH OF THAT SEGMENT'S NODES ON THE GRAPH,
 # keeps the segment through a link flap, drops it when the link stays down, hears it again
-# afterwards, and obeys a per-segment pin without a hunt.
+# afterwards, obeys a per-segment pin without a hunt, and -- since 0.5.3 -- HEARS 802.1Q
+# TAGS ON A TRUNK, makes the sub-interface each VLAN needs, serves them as ordinary
+# segments, and takes away only the netdevs it made.
 #
 # test_reac_ifscan proves the table and test_reac_hunt the verdict. This proves the lines
 # that JOIN them to the sockets, the listeners and the GRAPH: the netlink fd on the main
@@ -174,6 +176,11 @@ mkpair boxm0 mbox0  || exit 90
 mkpair pinm0 mbox1  || exit 90
 mkpair cold0 kbox0  || exit 90
 mkpair cold1 kdesk1 || exit 90
+# THE TRUNK. trunk0 carries two VLANs and neither netdev exists on our side; trunk1
+# carries one whose sub-interface is pre-created below, so adoption and creation are told
+# apart in the same run.
+mkpair trunk0 tbox0 || exit 90
+mkpair trunk1 tbox1 || exit 90
 
 # ---- THE PEER'S OWN EAR. Everything below asserts what left THIS daemon and landed on
 # the other end of the wire, so the other end needs a capture of its own. AF_PACKET in the
@@ -723,6 +730,126 @@ wait_for "\[pinm0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
 kill -TERM $SNIFF5 2>/dev/null; wait $SNIFF5 2>/dev/null
 down_pair pinm0 mbox1
 
+# ---- A TRUNK: TWO VLANS ON ONE WIRE, TWO SEGMENTS, AND THE NETDEVS ARE OURS (0.5.3).
+# Nothing in src/ read a VLAN tag before this release, and the reason a trunk is hard is
+# measured rather than argued: the parent's own 0x8819 socket receives every tagged frame
+# with the tag GONE (openmixer's tools/probe-vlan-8819.py, fact B), so a daemon that
+# enumerated interfaces naively would run one listener on the parent for two boxes and
+# answer untagged onto the native VLAN. Only an ETH_P_ALL tap reading PACKET_AUXDATA can
+# tell which VLAN a frame came from.
+#
+# The peer is another host with two VLAN sub-interfaces of its own and a fake box master
+# broadcasting on each -- ONE veth, two VIDs -- which is the four-boxes-one-trunk rig in
+# miniature. What has to happen: the daemon hears vid 11 and vid 12 on trunk0, CREATES
+# trunk0.11 and trunk0.12 with nothing typed, serves each as an ordinary segment with a
+# box on it, and refuses to be a segment on the parent itself.
+peer ip link add link tbox0 name tbox0.11 type vlan id 11 || exit 90
+peer ip link add link tbox0 name tbox0.12 type vlan id 12 || exit 90
+# AND THE ADOPTION CASE, set up before the daemon can ever hear vid 13: a host that keeps
+# its own network configuration pre-creates the sub-interface, and the daemon must take it
+# as it finds it. It carries no mint alias of ours, so it is not ours to remove.
+ip link add link trunk1 name trunk1.13 type vlan id 13 || exit 90
+peer ip link add link tbox1 name tbox1.13 type vlan id 13 || exit 90
+
+TBOX11=00:40:ab:c4:11:11
+TBOX12=00:40:ab:c4:12:12
+TBOX13=00:40:ab:c4:13:13
+$in_peer "$FAKE" tbox0.11 "$TBOX11" 8 2000 >"$RT/tb11.log" 2>&1 & TFAKE1=$!
+$in_peer "$FAKE" tbox0.12 "$TBOX12" 16 2000 >"$RT/tb12.log" 2>&1 & TFAKE2=$!
+$in_peer "$FAKE" tbox1.13 "$TBOX13" 8 2000 >"$RT/tb13.log" 2>&1 & TFAKE3=$!
+sleep 0.5
+up_pair trunk0 tbox0
+up_pair trunk1 tbox1
+peer ip link set tbox0.11 up; peer ip link set tbox0.12 up; peer ip link set tbox1.13 up
+ip link set trunk1.13 up
+
+# THE TAG IS HEARD, AND IT IS HEARD PER VID. This is the assertion that could not have
+# been made at all before this release.
+wait_for "\[trunk0\] tagged REAC heard — vid 11" 20 || {
+	echo "FAIL: tagged REAC on vid 11 was never heard on the trunk parent"
+	tail -30 "$LOG"; tail -3 "$RT/tb11.log"; exit 1; }
+wait_for "\[trunk0\] tagged REAC heard — vid 12" 20 || {
+	echo "FAIL: vid 11 was heard and vid 12 was not, so the detector is not per-VLAN"
+	tail -30 "$LOG"; tail -3 "$RT/tb12.log"; exit 1; }
+# THE NETDEVS ARE MADE, with nothing typed, and the journal says which is which.
+wait_for "\[trunk0\] vid 11: created trunk0.11 (marked reac-pw:minted)" 20 || {
+	echo "FAIL: vid 11 was heard and trunk0.11 was never created"; tail -30 "$LOG"; exit 1; }
+wait_for "\[trunk0\] vid 12: created trunk0.12 (marked reac-pw:minted)" 20 || {
+	echo "FAIL: vid 12 was heard and trunk0.12 was never created"; tail -30 "$LOG"; exit 1; }
+wait_for "\[trunk1\] vid 13: adopted trunk1.13 — the host made it" 20 || {
+	echo "FAIL: a pre-created sub-interface must be ADOPTED, not re-created"
+	tail -30 "$LOG"; exit 1; }
+# AND ADOPTION IS NOT A RE-CREATION. The one line that would prove the opposite must be
+# absent, and its positive control is the two creates asserted above: the same daemon said
+# "created" twice in this run, so a grep that cannot match is not what is being read here.
+grep -q "\[trunk1\] vid 13: created" "$LOG" && {
+	echo "FAIL: trunk1.13 already existed and the daemon created it anyway"
+	tail -30 "$LOG"; exit 1; }
+# THE PARENT IS NOT A SEGMENT. Fact B in one line: the untagged copies of both boxes'
+# frames arrive on trunk0, and a daemon that served them would put a master over two
+# VLANs' boxes at once.
+wait_for "\[trunk0\] this parent carries tagged REAC, so it is not itself a segment" 20 || {
+	echo "FAIL: the trunk parent was never named as a trunk"; tail -30 "$LOG"; exit 1; }
+
+# THE JOB: BOTH VLANS ARE SERVED AS ORDINARY SEGMENTS, each following its own box's clock,
+# each with its own node on the graph at its own width. Two boxes, one cable.
+wait_for "\[trunk0.11\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
+	echo "FAIL: trunk0.11 was created and never served as a segment"; tail -30 "$LOG"; exit 1; }
+wait_for "\[trunk0.12\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
+	echo "FAIL: trunk0.12 was created and never served as a segment"; tail -30 "$LOG"; exit 1; }
+wait_for "\[trunk1.13\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
+	echo "FAIL: the adopted trunk1.13 was not served like any other interface"
+	tail -30 "$LOG"; exit 1; }
+sleep 1.5
+T11=$(daemon_node_props $PID reac-capture.trunk0.11)
+T12=$(daemon_node_props $PID reac-capture.trunk0.12)
+T13=$(daemon_node_props $PID reac-capture.trunk1.13)
+[ -n "$T11" ] && [ -n "$T12" ] && [ -n "$T13" ] || {
+	echo "FAIL: a trunk's VLANs must reach the graph as ordinary segments; got"
+	echo "      11='$T11' 12='$T12' 13='$T13'"; daemon_nodes $PID; tail -30 "$LOG"; exit 1; }
+# THE TWO VLANS ARE TWO DIFFERENT BOXES, and nothing has crossed between them: each node
+# names its own segment, its own box address and its own width. A single listener on the
+# parent -- the fault fact B invites -- would have produced one node, not two, and could
+# not have told 8 channels from 16.
+[ "$(fld "$T11" 5)" = "trunk0.11" ] || { echo "FAIL: vid 11's node names segment '$(fld "$T11" 5)'"; exit 1; }
+[ "$(fld "$T12" 5)" = "trunk0.12" ] || { echo "FAIL: vid 12's node names segment '$(fld "$T12" 5)'"; exit 1; }
+[ "$(fld "$T11" 7)" = "$TBOX11" ] || { echo "FAIL: vid 11's node carries box.mac '$(fld "$T11" 7)', not $TBOX11"; exit 1; }
+[ "$(fld "$T12" 7)" = "$TBOX12" ] || { echo "FAIL: vid 12's node carries box.mac '$(fld "$T12" 7)', not $TBOX12"; exit 1; }
+[ "$(fld "$T11" 6)" = "REAC 8ch capture (box mic inputs)" ] || {
+	echo "FAIL: vid 11's box is 8 ch and its node reads '$(fld "$T11" 6)'"; exit 1; }
+[ "$(fld "$T12" 6)" = "REAC 16ch capture (box mic inputs)" ] || {
+	echo "FAIL: vid 12's box is 16 ch and its node reads '$(fld "$T12" 6)' -- two VLANs"
+	echo "      served through one listener would read the same width twice"; exit 1; }
+[ "$(fld "$T13" 7)" = "$TBOX13" ] || { echo "FAIL: the adopted VLAN's node carries box.mac '$(fld "$T13" 7)'"; exit 1; }
+# AND THE AUDIO IS ARRIVING ON BOTH, decoded into the ring the ports read from -- the
+# feeder's own counter, per segment. A tag we could see and a stream we could not decode
+# would be a topology detector with no product behind it.
+for SEG in trunk0.11 trunk0.12; do
+	OK=0
+	for _i in $(seq 30); do
+		OK=$(sed -n "s/^reac_rx: \[$SEG\] ok=\([0-9]*\) .*/\1/p" "$LOG" | tail -1)
+		[ -n "$OK" ] && [ "$OK" -gt 100 ] && break
+		sleep 0.4
+	done
+	[ -n "$OK" ] && [ "$OK" -gt 100 ] || {
+		echo "FAIL: $SEG is up and decoded no audio (ok='$OK'), so its ports carry nothing"
+		grep "reac_rx: \[$SEG\]" "$LOG" | tail -3
+		grep -E "trunk" "$LOG" | tail -40; ip -o link show | cut -d: -f2
+		tail -3 "$RT/tb11.log" "$RT/tb12.log" "$RT/tb13.log"; exit 1; }
+done
+# AND THE PARENT WAS NEVER SERVED, not even for one poll. This is the fault fact B
+# invites and the reason the tap is the authority on a tapped parent: the sniffer cannot
+# tell a tagged frame from an untagged one, so a parent served on the sniffer's word alone
+# would carry a master over two VLANs' boxes until the tap caught up. The claim is an
+# ABSENCE, and its positive control is the three "segment up" lines asserted above for the
+# VLANs themselves: the same grep, over the same log, matches those.
+grep -qE "\[trunk0\] segment up|\[trunk1\] segment up" "$LOG" && {
+	echo "FAIL: a trunk parent was served as a segment -- it receives every VLAN's frames"
+	echo "      with the tag gone, so that is one master over two boxes"
+	grep -E "trunk" "$LOG" | tail -30; exit 1; }
+# AND THE PLAIN UNTAGGED NIC IS NOT A SPECIAL CASE: every phase above this one ran on an
+# untagged wire in this same run and was served by the same code.
+
 # ---- THE POSITIVE CONTROL FOR EVERY "IT NEVER SAID THAT" ABOVE. Two phases asserted the
 # ABSENCE of the masterless-licence line (hear0 with a desk on it, and the yield's frame
 # count). A grep that can never match reports absence exactly like a daemon that behaved,
@@ -733,6 +860,30 @@ down_pair pinm0 mbox1
 
 kill -TERM $PID; wait $PID; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: clean SIGTERM exited $rc"; tail -5 "$LOG"; exit 1; }
+
+# ---- WHAT WE MINTED, WE TOOK AWAY; WHAT WE ADOPTED IS STILL THERE. The netdev lifecycle
+# of the trunk spec's 4d, read off the kernel after the daemon is gone rather than off its
+# own journal. The two claims are asserted in ONE sweep of `ip link`, so the surviving
+# trunk1.13 is the positive control for the absence of the other two: a sweep that could
+# not see any of the three would report the same emptiness as a daemon that cleaned up.
+LINKS=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1)
+echo "$LINKS" | grep -qx "trunk1.13" || {
+	echo "FAIL: trunk1.13 was ADOPTED -- the host made it and the daemon must leave it"
+	echo "      behind. It is gone, and with it the control for the two claims below."
+	echo "$LINKS"; exit 1; }
+echo "$LINKS" | grep -qx "trunk0.11" && {
+	echo "FAIL: the daemon created trunk0.11 and left it behind on a clean exit"
+	echo "$LINKS"; tail -10 "$LOG"; exit 1; }
+echo "$LINKS" | grep -qx "trunk0.12" && {
+	echo "FAIL: the daemon created trunk0.12 and left it behind on a clean exit"
+	echo "$LINKS"; tail -10 "$LOG"; exit 1; }
+grep -q "\[trunk0.11\] removed — we created it" "$LOG" || {
+	echo "FAIL: trunk0.11 is gone and the daemon never said it removed it"; tail -10 "$LOG"; exit 1; }
+grep -q "\[trunk1.13\] left alone — the host made it" "$LOG" || {
+	echo "FAIL: the adopted netdev survived, and the journal does not say it was left"
+	echo "      alone deliberately -- a survival nobody claimed is a leak that got lucky"
+	tail -10 "$LOG"; exit 1; }
+kill -TERM $TFAKE1 $TFAKE2 $TFAKE3 2>/dev/null; wait $TFAKE1 $TFAKE2 $TFAKE3 2>/dev/null
 echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the hold,
     heard again, took a vacant wire as master, established with the box and put BOTH of
     its nodes on the graph, served a per-segment pin without a hunt, DROVE A PINNED WIRE
@@ -740,7 +891,11 @@ echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the h
     the cold box that answered its stream, YIELDED that wire to a desk that turned up
     on it, JOINED A BOX MASTER on an unpinned wire at its own 8 ch and sent nothing back,
     and REFUSED the same box on a wire pinned master while PUBLISHING the door that says
-    so -- then took that segment when the box stopped mastering it"
+    so -- then took that segment when the box stopped mastering it; HEARD TWO 802.1Q VIDS
+    ON ONE VETH, created a sub-interface for each with nothing typed, served both as
+    segments at their own widths with audio decoding on both, refused to be a segment on
+    the trunk parent, ADOPTED a pre-created sub-interface, and on exit removed what it
+    minted and left what it adopted"
 exit 0
 INNER
 )
