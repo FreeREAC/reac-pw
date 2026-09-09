@@ -180,3 +180,25 @@ So the settle is a small constant standing in for a confirmation we could read d
 form of §3c is to advance **on the rung the box confirms**, which needs that field parsed and a
 golden to pin it. Until then the constant is the approximation, and it is named here rather than
 left to look like a measurement.
+
+## `REACPW_BOX_MASTER_FRAME` — `mixer` (default) | `box`
+
+WHICH GEOMETRY THE DAEMON PUTS ON A WIRE A STAGEBOX ON M MASTERS, and it exists because two
+rig runs left one corner of the question untested. Both were refused by a real S-0808, and
+they differ in two places at once:
+
+| | frames | declaration | granted? |
+|---|---|---|---|
+| 0.5.6-1 | 340 B at the master's width | derived from the MASTER's width (selector 0x84) | no |
+| 0.5.6-2 | 1492 B, 40 slots | the S-1608's, byte-identical | no |
+| a real S-1608 | 340 B at the master's width | its own (selector 0x80) | **yes, in 4 ms** |
+
+`mixer` (the default) is the operator's ruling — *"mixer always sends 40ch, boxes send their
+width only"* — and is 0.5.6-2's geometry with the declaration that was granted. `box` is the
+fourth corner: an exact S-1608 imitation, 340 B at the master's width in the presence flood,
+as the carrier of the config-announce and the cold-connect burst, and in the steady state,
+unicast to the box after the flood as the granted box unicast.
+
+It changes nothing else — the enrolment, the declaration, the source MAC and the link-state
+are the same either way — so the two runs differ in exactly the field under test. Set it on
+the daemon and read the box's front lamp; nothing else can tell them apart from this side.

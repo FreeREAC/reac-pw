@@ -77,6 +77,20 @@ struct reac_slave_cfg {
 	 *     the box goes unicast with, and the cold-connect burst ~214 ms later as
 	 *     three CONSECUTIVE frames (0014, 0014, 0013). The desk path is untouched. */
 	int box_master;
+	/* THE ONE EXPERIMENT THE TWO RIG RUNS LEFT OPEN (0.5.6-3). Two builds have been
+	 * refused by the real S-0808 and they differ in two places at once:
+	 *
+	 *   build 1  340 B frames + a declaration derived from the MASTER's width (0x84)
+	 *   build 2  1492 B frames + the S-1608's declaration, byte-identical
+	 *   S-1608   340 B frames + its own declaration          -> granted in 4 ms
+	 *
+	 * Nobody has run the fourth corner. 0 (the default) is the operator's ruling — a
+	 * mixer sends 40 channels — and 1 is an exact S-1608 imitation: 340 B at the
+	 * master's width in the flood, as the carrier of the announce and the burst, and in
+	 * the steady state, unicast to the box as the granted box unicast. It is a SWITCH so
+	 * the rig can run both without a rebuild between them, and the box's lamp decides.
+	 * `REACPW_BOX_MASTER_FRAME=box` sets it; see DESIGN.md 0.5.6. */
+	int box_master_frame_box;
 };
 
 /* The slave engine. The FSM is the brain; everything else is the I/O the FSM's
@@ -111,6 +125,7 @@ struct reac_slave {
 	int      counter_locked;      /* 1 once the offset is latched (reset on PHY-up) */
 	int      coldconnect_phase;   /* cycles the cdea 04 03 escalation 0014->0013->0016->001a */
 	int      box_master;          /* 0.5.6: the peer is a stagebox on M (see the cfg) */
+	int      bm_frame_box;        /* imitate the box's 340 B geometry (see the cfg) */
 	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */
 	int      bm_burst;            /* frames left of the 3-frame cold-connect burst */
 

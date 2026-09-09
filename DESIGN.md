@@ -1596,6 +1596,41 @@ Two defects the correction surfaced, both silent: the frame's own destination (a
 heartbeat, which the FSM carries BOTH as its own emit and as a flag on the established audio
 slot — handling only the first left a segment established and saying nothing.
 
+### The fourth corner, and the switch that runs it (0.5.6-3)
+
+0.5.6-2 on the rig: still `probing` after 90 s, no `cdea 04 03` from the box.
+`rig-0.5.6-2-enrol.pcap` decoded — our config-announce block is
+`cdea0103001080000000020202020101030303030303000000000000000000000050`, **byte-identical to
+the S-1608's**, and both cold-connect records are byte-identical too. Source
+`00:40:ab:9b:28:2d`: Roland OUI, this NIC's host part. The unicast destination inside the
+frame is the box's. Retries every ~0.8 s, announce 200 ms before each burst. Everything the
+last two rounds set out to fix is on the wire exactly as intended.
+
+**What is left is the carrier, and the two runs bracket it without settling it:**
+
+| | frames | declaration | granted? |
+|---|---|---|---|
+| 0.5.6-1 | 340 B at the master's width | derived from the MASTER's width (0x84) | no |
+| 0.5.6-2 | 1492 B, 40 slots, broadcast | the S-1608's, byte-identical | no |
+| a real S-1608 | 340 B at the master's width, unicast after the flood | its own (0x80) | **yes, 4 ms** |
+
+Each refused build differed from the granted box in a DIFFERENT field, so neither refusal
+accuses its own field. Nobody has run 340 B frames WITH the right declaration.
+
+`REACPW_BOX_MASTER_FRAME` is that run, and it is a switch rather than a build so the rig can
+take both without a rebuild between them: `mixer` (the default, the operator's ruling) is
+0.5.6-2's geometry; `box` is an exact S-1608 imitation — 340 B at the master's width in the
+flood, as the carrier of the announce and the burst, and in the steady state, unicast to the
+box after the flood. The enrolment, the declaration, the source MAC and the link-state are
+identical either way, so the two runs differ in exactly the field under test. Documented in
+[docs/ENV-KNOBS.md](docs/ENV-KNOBS.md). **The box's front lamp decides**; nothing on this side
+can tell the two readings apart.
+
+Both are proven on the veth: `mixer` floods 5153 frames of 1492 B broadcast and settles to
+34606 broadcast frames; `box` floods 5177 of 340 B and settles to 34930 UNICAST and zero
+broadcast — the granted box's own shape. Both enrol, heartbeat, carry the tone at
+−17.0 dBFS on slots 0/1 with −999 on an unfed slot, and publish `probing` then `established`.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
