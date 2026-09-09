@@ -246,34 +246,6 @@ static int stage_inputs(struct reac_slave *s,
 	return REAC_SAMPLES_PER_PKT;
 }
 
-/* THE CONFIG-ANNOUNCE THAT WAS GRANTED, captured off the wire (0.5.6).
- *
- * These 34 bytes are the control marker and block a REAL S-1608 in slave mode unicast to
- * the REAL S-0808 in master mode, 4 ms before that box echoed its cold-connect back
- * (`box-to-box-enroll.pcap`, t=6.619 s). They are a GOLDEN, in this repository's usual
- * sense: captured bytes that are the oracle, never regenerated to make a diff go away.
- *
- * WHY NOT THE BUILDER. `reac_ctrl_build_config_announce` derives the selector and the
- * port-type table from a width, and at 16 it emits selector 0x82 where that physical box
- * announced 0x80 — measured on the veth the moment this path was tried. Whatever 0x82
- * belongs to, it is not what this chassis granted, and the operator's ruling is to use the
- * pattern that was: "the declaration may imitate a box … use the S-1608's announce pattern
- * verbatim, since that is the one the S-0808 granted."
- *
- * SO WE DECLARE OURSELVES AN S-1608, and say so plainly. It is an imitation, permitted
- * explicitly, and it is the only declaration on this rig with a grant behind it. What we
- * SEND is unaffected — that is the mixer's 40-slot downstream, by the same ruling.
- *
- * The block carries its own inner checksum (byte 33) and no addresses, so it is valid
- * wherever it is stamped; the frame's outer checksum is re-applied after. */
-static const uint8_t BM_ANNOUNCE_BLK[34] = {
-	0xcd, 0xea, 0x01, 0x03, 0x00, 0x10, 0x80, 0x00,
-	0x00, 0x00, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
-	0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x50,
-};
-
 /* SAY NOTHING YET (0.5.6-6). The granted S-1608 was silent for about four seconds between
  * losing its old master and beginning its flood, and a box may key its enrolment window on a
  * peer appearing out of silence rather than one that was already talking. Zero by default, so
@@ -454,13 +426,26 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 			 * showed and unicast as the wire showed: the config-announce as the
 			 * frame we go unicast with, the three-record burst ~200 ms later. */
 			if (s->bm_burst > 0) {
-				cl = (s->bm_burst == 3 || s->bm_burst == 2)
-					? reac_ctrl_build_coldconnect(ctl, s->fsm.master_mac,
-					      s->src, counter, s->box_channels, planar,
-					      REAC_SAMPLES_PER_PKT)
-					: reac_ctrl_build_coldconnect_0013(ctl, s->fsm.master_mac,
-					      s->src, counter, s->box_channels, planar,
-					      REAC_SAMPLES_PER_PKT);
+				/* THREE DISTINCT RECORDS — tags 0100, 0000, 0302, which is what
+				 * `spec/reac.ksy` states the burst is and what libreac builds
+				 * (`reac_ctrl_build_coldconnect{,_head,_0013}`). This
+				 * arm used to call the 0014 builder for both of the first two
+				 * frames, so our burst was one record twice — and the box
+				 * answers one echo per DISTINCT record, so it was being asked
+				 * for a two-record answer where a real box asks for three. */
+				if (s->bm_burst == 3)
+					cl = reac_ctrl_build_coldconnect(ctl, s->fsm.master_mac,
+					         s->src, counter, s->box_channels, planar,
+					         REAC_SAMPLES_PER_PKT);
+				else if (s->bm_burst == 2)
+					cl = reac_ctrl_build_coldconnect_head(ctl,
+					         s->fsm.master_mac, s->src, counter,
+					         s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+				else {
+					cl = reac_ctrl_build_coldconnect_0013(ctl, s->fsm.master_mac,
+					         s->src, counter, s->box_channels, planar,
+					         REAC_SAMPLES_PER_PKT);
+				}
 				s->bm_burst--;
 			} else if (d->with_join) {
 				if (s->bm_burst_chanmap) {
@@ -471,9 +456,9 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					 * within a full grid cycle, so a box that never chanmaps
 					 * cannot leave us silent for ever. */
 					if (!s->bm_announced) {
-						memcpy(ctl + 16, BM_ANNOUNCE_BLK,
-						       sizeof BM_ANNOUNCE_BLK);
-						cl = 34;
+						cl = reac_ctrl_build_config_announce_box_master(
+						         ctl, s->fsm.master_mac, s->src,
+						         counter, s->box_channels);
 						s->bm_announced = 1;
 						s->bm_chanmap_hit = 0;
 					} else if (s->bm_chanmap_hit) {
@@ -497,8 +482,9 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					 * the rig sent four correct bursts behind it and was echoed
 					 * nothing, lamp blinking. The captured block above is the
 					 * declaration that was granted. */
-					memcpy(ctl + 16, BM_ANNOUNCE_BLK, sizeof BM_ANNOUNCE_BLK);
-					cl = 34;
+					cl = reac_ctrl_build_config_announce_box_master(
+					         ctl, s->fsm.master_mac, s->src, counter,
+					         s->box_channels);
 				}
 				else if (s->bm_seq == 2)
 					s->bm_burst = 3;

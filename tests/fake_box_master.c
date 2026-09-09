@@ -105,6 +105,7 @@ struct ear {
 	 * after the burst. That echo IS the grant, so the records are kept here for the
 	 * TX side to hand back — without it nothing on this wire can ever establish. */
 	uint8_t grant_q[4][34]; int grant_n;
+	int grant_n_total;                 /* distinct records ever seen, for the proof */
 	unsigned long up_frames, up_announce, up_join, up_hb;
 	size_t up_len;
 	double up_t_announce, up_t_join, up_t_hb_first, up_t_hb_last;
@@ -180,9 +181,19 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 		e->up_join++;
 		/* NOT GRANTED UNTIL WE WERE TOLD WHAT IS ASKING, AND NOT TO A PEER THAT SAYS
 		 * IT IS ALREADY LINKED. */
-		if (e->announce_ok && !e->desc_before_grant && e->grant_n < 4) {
+		/* ONE ECHO PER DISTINCT RECORD, which is what the real S-0808 does: replaying
+		 * the S-1608's three distinct cold-connect records draws three echoes, and
+		 * replaying the same file with its second record replaced by a copy of the
+		 * first draws two. An emulator that echoed every record would have granted a
+		 * burst that repeats itself, which is what ours sent until 0.5.6-7. */
+		int already = 0;
+		for (int i = 0; i < e->grant_n; i++)
+			if (memcmp(e->grant_q[i], f + 16, 34) == 0)
+				already = 1;
+		if (e->announce_ok && !e->desc_before_grant && !already && e->grant_n < 4) {
 			memcpy(e->grant_q[e->grant_n], f + 16, 34);
 			e->grant_n++;
+			e->grant_n_total++;
 			if (!e->grant_frame)
 				e->grant_frame = e->rx_frames_seen;
 		}
@@ -335,6 +346,7 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	fprintf(f, "steady bcast %lu\n", e->steady_bcast);
 	fprintf(f, "descriptor first %lu grant %lu before_grant %d\n",
 	        e->desc_first_frame, e->grant_frame, e->desc_before_grant);
+	fprintf(f, "distinct records %d\n", e->grant_n_total);
 	if (e->have_announce_seen) {
 		fprintf(f, "announceblk ");
 		for (size_t i = 0; i < sizeof e->announce_seen; i++)

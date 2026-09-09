@@ -243,6 +243,14 @@ AOK=$(awk '$1 == "announce" && $2 == "ok" { print $3 }' "$RT/box.rep")
 [ "$AOK" = "1" ] || {
 	echo "FAIL: the box refused our declaration ($(awk '$1=="announce"&&$2=="ok"{print $5}' "$RT/box.rep") refusals)"
 	exit 1; }
+# THREE DISTINCT RECORDS. The box echoes one per distinct record — three for the S-1608's
+# three, two when its second is a copy of its first — so a burst that repeats a record asks
+# for a two-record answer where a real box asks for three.
+DIST=$(awk '$1 == "distinct" && $2 == "records" { print $3 }' "$RT/box.rep")
+[ "$DIST" = "3" ] || {
+	echo "FAIL: the box master saw $DIST DISTINCT cold-connect records; the granted S-1608"
+	echo "      sent three (0014, a different 0014, then 0013)"; cat "$RT/box.rep"; exit 1; }
+echo "MEASURED: $DIST distinct cold-connect records, as the granted box sent"
 echo "MEASURED: announce then burst, $AN announce / $JN cold-connect records, the burst"
 echo "          $ORD s after the announce; control frames $ULEN B, unicast; the announce"
 echo "          block is byte-identical to the S-1608's (selector 0x80 at offset 6)"

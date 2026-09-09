@@ -54,7 +54,7 @@ m_dep        = cc.find_library('m', required : false)
 # and the mismatch surfaced only when the installed binary hit `undefined
 # symbol` at exec. A floor that accepts both sides of an API break is not a
 # floor. Raising it to 0.7.0 makes the wrong library fail at CONFIGURE.
-libreac_dep = dependency('libreac', version : '>=0.7.1',
+libreac_dep = dependency('libreac', version : '>=0.7.2',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
