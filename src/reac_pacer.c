@@ -1370,8 +1370,30 @@ long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns)
 		pev_push(p, REAC_PEV_CLOCK, (uint8_t)p->clock.src, b, NULL, blk);
 	}
 
+	/* AND THE SEGMENT'S PUBLISHED PACE FOLLOWS THE DISCIPLINE, not a constant. Written
+	 * every evaluation rather than on the generation edge: the reader wants the current
+	 * state, not the last change, and one relaxed store per REAC_CLOCK_TICK_SLOTS costs
+	 * nothing on the RT thread. */
+	atomic_store_explicit(&p->clock_pace,
+	                      (uint32_t)p->clock.src | ((uint32_t)p->clock.state << 8),
+	                      memory_order_relaxed);
+
 	p->slot_period_ns = reac_clock_disc_period_ns(&p->clock);
 	return p->slot_period_ns;
+}
+
+enum reac_pace_source reac_pacer_pace_source(const struct reac_pacer *p)
+{
+	if (!p)
+		return REAC_PACE_FREE_RUN;
+	/* FOLLOWING OFF IS FREE-RUN AND MUST READ AS ONE. With the knob off the discipline
+	 * is never consulted, so the mirror never moves from its zero — which says exactly
+	 * that — but the branch is here rather than left to a coincidence of zeroes. */
+	if (!p->clock_follow)
+		return REAC_PACE_FREE_RUN;
+	uint32_t v = atomic_load_explicit(&p->clock_pace, memory_order_relaxed);
+	return reac_pace_from_clock((enum reac_clock_source)(v & 0xff),
+	                            (enum reac_clock_state)((v >> 8) & 0xff));
 }
 
 /* ---- the RT pacer thread ------------------------------------------------ */

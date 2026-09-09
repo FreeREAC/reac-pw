@@ -107,7 +107,7 @@ for o in d:
 # description is composed from the very argument that sizes the ports
 # (reac_source_node_new), and it is how the master phase above proves its width too.
 # Prints: state|rival.kind|refusal|master.mac|segment|node.description|box.mac|
-#         box-model|box-width|link-state|cfg.role.state
+#         box-model|box-width|link-state|cfg.role.state|pace.source
 daemon_node_props() {
 	pw-dump | python3 -c '
 import json,sys
@@ -130,7 +130,8 @@ for o in d:
                     p.get("reac.box-model","(none)"),
                     p.get("reac.box-width","(none)"),
                     p.get("reac.link-state","(none)"),
-                    p.get("reac.cfg.role.state","(none)")]))
+                    p.get("reac.cfg.role.state","(none)"),
+                    p.get("reac.pace.source","(none)")]))
 ' "$1" "$2"
 }
 fld() { echo "$1" | cut -d'|' -f"$2"; }
@@ -608,6 +609,36 @@ sleep 1
 daemon_nodes $PID | grep -q "^reac-playback.venue0 " || {
 	echo "FAIL: venue0 is master and has no playback door -- the graph probe would then"
 	echo "      report its absence below whatever the daemon did. Nodes:"; daemon_nodes $PID; exit 1; }
+# THE PACE THE DOOR PUBLISHES IS THE PACE THE DAEMON IS KEEPING (0.5.4). Two publications
+# of one fact, and the defect was that they disagreed: on the rig 2026-09-08/09 the journal
+# read `locked to graph clock (api.alsa.0)` and this row read `free-run`, because the door
+# built its arbitration with the constant. The row is asserted against the journal rather
+# than against a value this namespace happens to produce -- what a private PipeWire with no
+# hardware offers as a reference is not the rig's business, but AGREEING is.
+VPACE=$(fld "$(daemon_node_props $PID reac-playback.venue0)" 12)
+# The transcript is the daemon's other publication of the same fact, and the last line of
+# it is the state it is in. Only "locked to X" names a reference: "acquiring" is a claim
+# about the future and "holdover" is a frozen period nothing is steering, and both run on
+# CLOCK_MONOTONIC at that instant. Measured in this namespace, where a private PipeWire
+# with no hardware offers no reference at all: 8 reac-clock lines, none of them a lock, so
+# free-run is the true answer here -- and the ASSERTION is the agreement, not the value.
+CLKLINE=$(grep "reac-clock:" "$LOG" | tail -1)
+[ -n "$CLKLINE" ] || {
+	echo "FAIL: the daemon published no clock transcript at all, so there is nothing to"
+	echo "      check the door's pace against"; exit 1; }
+case "$CLKLINE" in
+	*"locked to graph clock"*)       WANT=graph-ref ;;
+	*"locked to NIC/external PHC"*)  WANT=phc ;;
+	*"locked to box counter slope"*) WANT=box-slope ;;
+	*"locked to master cadence"*)    WANT=foreign-master ;;
+	*)                               WANT=free-run ;;
+esac
+[ "$VPACE" = "$WANT" ] || {
+	echo "FAIL: the daemon publishes two answers about one pace -- the door says '$VPACE'"
+	echo "      and its own transcript says '$WANT':"
+	echo "      $CLKLINE"
+	echo "      (this is the 2026-09-08 rig defect: 'locked to graph clock (api.alsa.0)'"
+	echo "      in the journal beside 'free-run' in the row)"; exit 1; }
 # THE DESK IS SWITCHED ON, on the wire we are mastering with a box enrolled on it.
 $in_peer "$BIN" --live vbox0 --tx vbox0 --mixer m5000 --rate 96000 --name vdesk \
        --src-mac $VDESKMAC >"$RT/venue-desk.log" 2>&1 &
@@ -633,6 +664,12 @@ fi
 daemon_nodes $PID | grep -q "^reac-capture.venue0 " || {
 	echo "FAIL: the segment lost its capture node in the yield -- the absence above is"
 	echo "      then a missing segment, not a surrendered master role"; daemon_nodes $PID; exit 1; }
+# AND THE PACE IS THE DESK'S, PUBLISHED AS SUCH. Whatever we would have disciplined to is
+# not what this wire is running on any more, and the row says which.
+YPACE=$(fld "$(daemon_node_props $PID reac-capture.venue0)" 12)
+[ "$YPACE" = "foreign-master" ] || {
+	echo "FAIL: we joined a desk that times this wire and the segment publishes pace"
+	echo "      '$YPACE'"; daemon_node_props $PID reac-capture.venue0; exit 1; }
 # OUR ADDRESS IS READ, NOT GUESSED. cold1 takes the busiest source on the wire as ours,
 # which is true there because nothing else was driving; here a desk is, so the phase asks
 # the kernel for venue0's own MAC -- the address every emitting role of ours sources from
