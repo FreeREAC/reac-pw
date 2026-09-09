@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '0.5.3',
+  version: '0.5.4',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -96,6 +96,7 @@ reac_pw_src = [
   'src/reac_vlan.c',
   'src/reac_arbitration.c',
   'src/reac_hunt.c',
+  'src/reac_watch.c',
   'src/reac_knock.c',
   'src/reac_node_recover.c',
   'src/reac_conf.c',
@@ -402,6 +403,17 @@ headamp_test = executable('test_reac_headamp',
   dependencies : [libreac_dep, m_dep])
 test('reac_headamp', headamp_test)
 
+# --- unit test: re-deciding a segment that is already UP (0.5.4) --------------
+# The yield, the retake and the door's end, as one pure table. It lived inline in
+# main.c, where the only thing that could exercise it was the 70 s veth run -- which
+# cannot choose which route took the wire, so the case this release is about was
+# untestable by construction.
+watch_test = executable('test_reac_watch',
+  ['tests/test_reac_watch.c', 'src/reac_watch.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_watch', watch_test)
+
 # --- unit test: the multi-box registry (fabric slot allocation + names) -------
 boxreg_test = executable('test_reac_boxreg',
   ['tests/test_reac_boxreg.c', 'src/reac_boxreg.c'],
@@ -484,7 +496,7 @@ test('reac_lat', lat_test)
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
-  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
+  ['tests/test_reac_pacer.c', 'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -522,6 +534,7 @@ test('reac_clock', clock_test)
 # name, and a measurably jittery one flagged rather than ejected.
 pacer_clock_test = executable('test_reac_pacer_clock',
   ['tests/test_reac_pacer_clock.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_clock.c',
+   'src/reac_arbitration.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c'],
   include_directories : [include_directories('src')],
@@ -614,7 +627,7 @@ test('sink_buffer_pairing', python3,
 # the box leaves, and must follow a swap.
 box_badge_test = executable('test_reac_box_badge',
   ['tests/test_reac_box_badge.c', 'src/reac_link_state.c', 'src/reac_mac.c',
-   'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
+   'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c',
    'src/reac_ctrl.c', 'src/reac_scene_body.c', 'src/reac_grant.c',
    'src/reac_headamp_tx.c', 'src/reac_clock.c'],
@@ -776,7 +789,7 @@ test('reac_headamp_prop', headamp_prop_test)
 # directly (no socket/RT privilege): functional queue->drain->emit, ring-full
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
-  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c',
+  ['tests/test_reac_headamp_live.c', 'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c',
    'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src')],
@@ -797,7 +810,7 @@ test('reac_headamp_live', headamp_live_test)
 # drivability probe exists yet to supply that mask from the wire (see
 # reac_rate_cfg.h's honesty clause).
 rate_cfg_test = executable('test_reac_rate_cfg',
-  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
+  ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', 'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c',
    'src/reac_disco.c', 'src/reac_master.c', 'src/reac_master_fsm.c', 'src/reac_ctrl.c',
    'src/reac_scene_body.c', 'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c',
    'src/reac_clock.c'],
@@ -947,7 +960,7 @@ test('reac_conformance', conformance_test)
 # drift the moment either one changed.
 bench_hotpath = executable('bench_hotpath',
   ['tools/bench_hotpath.c', 'src/reac_ring.c', 'src/reac_pace_watch.c',
-   'src/reac_pacer.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
+   'src/reac_pacer.c', 'src/reac_arbitration.c', 'src/reac_rt.c', 'src/reac_conf.c', 'src/reac_link.c', 'src/reac_disco.c', 'src/reac_master.c',
    'src/reac_master_fsm.c', 'src/reac_ctrl.c', 'src/reac_scene_body.c',
    'src/reac_grant.c', 'src/reac_mac.c', 'src/reac_headamp_tx.c', 'src/reac_clock.c'],
   include_directories : [include_directories('src'), include_directories('tests')],

@@ -197,7 +197,7 @@ must have landed there first.
   node pair is `reac-capture.enp131s0` / `reac-playback.enp131s0` and the per-segment conf
   key is `REAC_ROLE_enp131s0`; `<iface>.env` files are no longer read at all. Node names
   that follow the BOX instead are owed — see DESIGN.md's "what it owes". Later increments
-  are 0.5.1, 0.5.2, 0.5.3, ...; the middle digit does not move again for them.
+  are 0.5.1, 0.5.2, 0.5.3, 0.5.4, ...; the middle digit does not move again for them.
 - **Autodetect + role election** (0.5.0, `reac_ifscan` + `reac_hunt`) — the daemon
   finds its own segments (rtnetlink link state, a passive `0x8819` sniff) and elects
   its own role per segment from what it hears. Proven on a veth pair inside an
@@ -215,6 +215,13 @@ must have landed there first.
   `tools/build.sh` re-applies them after every relink). Without `cap_net_admin` the daemon
   names every VLAN it cannot serve and goes on hearing — adoption needs no capability.
   Proven on veth, whole-binary: two VIDs on one wire, two segments, two boxes.
+- **Re-resolution after a segment is up** (0.5.4, `reac_watch`) — a wire we took and
+  nobody pinned keeps its passive sniffer, so a desk that is powered up AFTER the console
+  is yielded to (master down, slave up, following its pace) and, when it goes home again,
+  the wire is taken back. A pinned segment keeps its role. The segment's `reac.pace.source`
+  says what the pacer is actually disciplined to — `phc`, `graph-ref` or `box-slope` while
+  the DLL is locked, `free-run` while acquiring or in holdover, `foreign-master` where
+  somebody else times the wire — instead of the constant it published until now.
 - **Clock discipline** (0.5.0, `reac_clock`) — ON by default: the TX cadence follows
   the best available reference (NIC/external PHC > a hardware-driven graph clock >
   the box's counter slope), the period is slewed and never phase-stepped, and with no

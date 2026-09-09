@@ -561,13 +561,11 @@ MASTER and probing until a box cold-connects`.
    physical parent, and adopting or creating the sub-interfaces that carry them, is
    built and proven on veth; what is still owed is the rig itself, which has never been
    on a trunk port. A segment is still a whole interface — a VLAN sub-interface is one.
-3. **Re-resolution after a segment is up — PARTLY DONE, 2026-09-09.** The hunt normally
-   lives in the sniffer and dies when the segment is served, so a desk that powers up
-   AFTER we took a wire on EVIDENCE is published as a conflict by the listener's
-   arbitration and is not yielded to. A wire taken on PROVEN SILENCE is now the
-   exception: it keeps its sniffer and is yielded (`hearing_yield`), because driving it
-   was a bet rather than a reading. The general case — a pinned master, or a wire taken
-   because a box was heard on it — still owes the yield.
+3. **Re-resolution after a segment is up — DONE in 0.5.4**, below. Every wire WE took
+   and nobody pinned keeps its sniffer now, whether it was won on proven silence or on
+   a box heard, and a desk that turns up second is yielded to on either. A pinned
+   segment still keeps its role: a pin is the operator's answer about that wire, and the
+   only thing a rival can do to one is the 0.5.1 refusal.
 
 **Versioning.** 0.5.0 is this release. The increments above go 0.5.1, 0.5.2, ... — the
 middle digit does not move again for them.
@@ -890,6 +888,113 @@ served until it is not (§12a's bound is about twenty at 48 kHz, eight recommend
 And no rig has yet been on a trunk: this is proven on veth, and the rig proof of §16's
 increment 4 — two boxes on two VLANs of one NIC — is owed.
 
+## 0.5.4 — a desk that turns up second takes the wire, and the pace tells the truth (2026-09-09)
+
+**Operator ruling: the yield is not about how we won the wire, it is about whether the
+wire was ours to lose.** 0.5.0 yielded only a segment taken on PROVEN SILENCE, because
+driving that one was a bet. The venue case says the distinction does not survive contact:
+a house console is powered, hears the stageboxes on a wire nobody pinned, grants them and
+drives — and then the Roland desk is switched on. That wire was won on EVIDENCE, so 0.5.0
+kept mastering it and published a conflict nobody could act on. Two masters on one segment
+is the fault the seglock exists to make impossible between our own processes, and it is no
+better against a desk.
+
+So the rule is one line, and it names the wire rather than the reason:
+
+| the wire | what a foreign master arriving does |
+|---|---|
+| unpinned, taken on proven SILENCE | yielded to — unchanged since 0.5.0 |
+| unpinned, taken because a BOX was heard on it | **yielded to** — new here |
+| unpinned, JOINED to somebody from the start | nothing to yield; we never had it |
+| pinned MASTER | the pin stands; a box mastering it is the 0.5.1 refusal, and a desk is the conflict the props already carry |
+
+**This answers the arbitration spec's Q1 for unpinned segments, and it costs something.**
+Yielding drops a box mid-audio: the master engine goes down, the slave engine comes up,
+and the box's stream stops for the length of the swap. Holding costs the whole segment
+instead — a desk that will not be argued with drives the boxes anyway, and what we would
+be defending is a second master on its wire. The operator ruled for the yield, on a wire
+nobody answered for; a wire the operator DID answer for still keeps its answer.
+
+**And a yield is not a one-way door.** The desk goes away — powered off at the end of the
+night, a cable pulled — and the segment must come back rather than sit slaved to a wire
+nobody is driving. The sniffer is therefore kept ACROSS the yield, not just up to it: when
+the rival's sighting ages out of the discovery table (`REAC_DISCO_STALE_NS`, 5 s, the same
+bar "a device is really gone" means everywhere else in this daemon) the verdict returns to
+MASTER and the wire is taken again, through the same drop-then-serve seam a cold start
+uses. The masterless licence granted on that wire at t0 is not revoked by a rival that came
+and went, and nothing latches in either direction: the desk coming back yields again.
+
+The journal says which way it moved, one line per transition: `a desk masters this segment
+… yielding the master role and joining as SLAVE`, and `the desk stopped mastering this wire
+… taking the segment back as MASTER`.
+
+**`reac.pace.source` publishes the pacer's own reference, and it used to publish a
+constant.** The playback door built its arbitration with `REAC_PACE_FREE_RUN` written in,
+from a 2026-08-21 config of record in which clock-follow was off. Following has been the
+DEFAULT since 0.5.0, and on the rig 2026-09-08/09 the journal read `locked to graph clock
+(api.alsa.0)` while the console's segment row read `free-run` — a published fact
+contradicting the daemon that published it. The pacer thread now mirrors its discipline
+(source + state) into one atomic beside the event it already pushes on every change, and
+the door maps that to the vocabulary `reac_arbitration.h` already owns:
+
+| the pacer's discipline | `reac.pace.source` |
+|---|---|
+| LOCKED to a NIC/external PHC | `phc` |
+| LOCKED to the hardware-driven graph clock | `graph-ref` |
+| LOCKED to the box's counter slope | `box-slope` |
+| UNLOCKED, LOCKING or HOLDOVER, or follow disabled | `free-run` |
+
+Only LOCKED names a reference. LOCKING is a claim about the future and HOLDOVER is a frozen
+period nothing is currently steering — both run on `CLOCK_MONOTONIC` at this instant, which
+is what `free-run` means. A foreign master still overrides all of it (`foreign-master`): what
+we would have disciplined to is not what the wire is running on.
+
+**WHAT THE RETAKE DOES NOT DO, measured rather than assumed.** It does not re-enrol the
+boxes by itself. A REAC stagebox leaves BOOT for ANNOUNCE on ITS OWN PHY-up edge and on
+nothing else (`reac_linkmon.h`, #95), so a box that was enrolled with us, sat through the
+desk's visit and never dropped has no reason to cold-connect when we come back: the veth
+peer's transcript ends at ESTABLISHED and stays there, and our master engine probes. What
+the retake owes it is a master that is DRIVING when it does re-announce, and that is what
+the proof measures on the peer's own capture. The segment's nodes come back with the BOX
+too, not with the role — a master in autodetect sizes `reac-capture`/`reac-playback` from
+the box it recognizes — so a retaken segment publishes no node until one enrols. Both are
+the standing rules of every master take; neither is new here, and neither is hidden.
+
+**TWO LEAKS THE PROOF FOUND, both bounded at 8 and both silent.** A SERVED interface goes
+LISTEN → SERVE → DROP and never through UNLISTEN, which was the only path that gave back a
+topology tap — so every segment that ever dropped kept its tap AND its row in the topology
+table for the life of the process. Past the eighth, `no room for a topology tap` and every
+trunk after it is served as one flat segment; the table's own refusal said nothing at all.
+The DROP path now returns both, and a full table is reported like a full tap array. Found
+because the venue phase was the ninth interface of the veth run and the trunk phase stopped
+seeing vid 13.
+
+**AND A SUB-INTERFACE IS NEVER TAPPED, WITHOUT ASKING SYSFS.** `reac_topo_is_stacked` reads
+`/sys/class/net/<if>/lower_*` and answers NOT STACKED when the path cannot be read, which is
+the same answer an ordinary NIC gives — a fail-open on a topology action. In the proof's
+namespace `/sys` is the host's, so once tap slots were free again the daemon tapped its own
+`trunk1.13`, read vid 13 out of the tag the kernel had just stripped for it, and minted
+`trunk1.13.13`. It does not need sysfs: `<parent>.<vid>` is the name the daemon uses itself,
+so a netdev whose prefix up to the last dot is a parent in the topology table IS that
+parent's sub-interface, and a physical NIC can never match.
+
+**WHAT IS PROVEN, AND WHERE.** `tests/test_reac_watch.c` holds the re-decision table —
+which served segments keep being classified, and which of yield, retake, unrefuse or stand
+a fresh verdict means. `tests/test_reac_arbitration.c` holds the pure map from
+(source, state) to the published word, including that every non-LOCKED state reads
+`free-run`. `tests/test_reac_pacer_clock.c` drives the real discipline to lock and asserts
+the pacer reports it — the accessor over the thread boundary, which is where the constant
+was. `tests/hearing-finds-a-segment.sh`'s venue phase is the job, end to end: the daemon
+takes a masterless wire and a cold box answers it and is enrolled; a fake desk starts
+announcing on the SAME wire, and within one announce cadence the daemon is that desk's
+slave — the master door is off the graph and our broadcasts stop, measured on the peer's
+own capture against a live control; the desk is then switched off, and after the hold the
+daemon takes the wire back and is measured DRIVING it again. The same phase reads
+`reac.pace.source` off the two nodes a console reads it from and requires it to say what
+the daemon's own clock transcript says — under a private PipeWire with no hardware to
+offer, which never locks, so the agreement is what is proven there and the LOCKED mapping
+is proven above it.
+
 ## Files
 
 | File | Role |
@@ -921,6 +1026,7 @@ increment 4 — two boxes on two VLANs of one NIC — is owed.
 | `src/reac_ifscan.{h,c}` | **WHICH interfaces to listen on, and which are segments** — the host's netdev table over rtnetlink, one decision per Ethernet interface. Link is the gate to LISTEN (a passive 0x8819 sniffer, `main.c`'s hearing supervisor), the first REAC frame heard is the gate to SERVE, and link loss drops the segment after a 3 s hold a box power-cycle cannot outlast; `RTM_DELLINK` and a re-enumerated ifindex drop at once. A segment is named after its interface; nothing names one in advance (openmixer's trunk-VLAN spec, amendment 2026-09-02). Pure table + event queue, netlink as a byte source, same shape as `reac_linkmon` |
 | `src/reac_ifname.{h,c}` | a segment's STABLE, bus+physical-address-derived name (`pci1`, `usb2`) — built, tested against real captured `/sys` paths, and DELIBERATELY NOT WIRED into segment identity. A segment IS its interface here and is NAMED after it, and a console generates its per-segment keys and its patch addresses from that published name — so swapping the identity renames every key and every patch on a live rig in one step. The answer to name instability is node names that follow the BOX (owed, see "What 0.5.0 does not do"), not a second name derived from the interface. Kept for that work; wired to nothing today |
 | `src/reac_hunt.{h,c}` | **WHICH END OF THE PAIRING A HEARD SEGMENT TAKES**, when nothing was configured — the ACT half over `reac_arbitration`'s passive observation. Sightings accumulate in the discovery table for a 3 s window = three master announce cadences; a desk mastering the wire is joined as a SLAVE at once, a wire with a box on it and no master is taken as MASTER when the window closes, and a stagebox strapped to master is joined as a SLAVE too — at the width its frame geometry declares — unless the operator pinned that segment MASTER, which is the one contradiction the daemon refuses (`rival-master-box`) instead of out-shouting (0.5.1). A `REAC_ROLE_<segment>` pin skips all of it and is served ON LINK, with no frame required — a cold slave box is silent until a master announces to it, so waiting for a classifying frame on a pinned wire waits forever (2026-09-08, both rig boxes mute). Nothing latches: the table ages, and the verdict is recomputed. Pure |
+| `src/reac_watch.{h,c}` | **RE-DECIDING A SEGMENT THAT IS ALREADY UP** (0.5.4): which served segments keep their sniffer — every unpinned wire WE took, and every refused one — and what a fresh verdict off it means: YIELD to a master that turns up on a wire we are driving, RETAKE one whose rival has aged out of the discovery table, UNREFUSE a door whose rival stopped mastering it (after the table's own withdrawal window, or it flaps), STAND otherwise. It is the PIN that decides whether a wire is ours to lose, never the evidence we won it with. Pure, because inline in main.c the only thing that could exercise it was a 70 s veth run that cannot choose which route took the wire |
 | `src/reac_knock.{h,c}` | **THE PROOF THAT A WIRE HAS NO MASTER ON IT**, which is the licence to drive. A stagebox in slave mode spends a bounded broadcast flood on PHY-up and then goes silent forever if no master answered it, so hearing alone can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes cabled and carrier-up, zero frames in eight seconds). An unpinned linked WIRED interface is listened to for REAC_KNOCK_LISTEN_NS (500 ms = 1837 slots at the slowest cadence; a master fills every slot, so silence there is PROOF of no master) and then TAKEN as master through the ordinary master role — not knocked on: a lone announce every 2 s was measured on the rig and the box never answered. Any frame inside the window cancels the licence. Pure: one clock, one verdict, no socket and no frame |
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
