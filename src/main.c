@@ -1140,7 +1140,10 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * width matched no row exactly. */
 		                              .box_master_model = c->join_box_master
 		                                  ? reac_box_master_model(c->wire_channels)
-		                                  : NULL };
+		                                  : NULL,
+		                              .box_master_mac = (c->join_box_master
+		                                                 && c->rival_mac_set)
+		                                  ? c->rival_mac : NULL };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */

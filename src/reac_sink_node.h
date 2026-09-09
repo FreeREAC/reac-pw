@@ -108,6 +108,10 @@ struct reac_sink_cfg {
 	 * capability keys and nothing else. NULL where no row matched the width, and
 	 * then those keys stay absent — the console's own bar for "not answered". */
 	const struct reac_box_model *box_master_model;
+	/* The mastering peer's own L2 address, from the sighting that decided the verdict —
+	 * the only evidence there is on a wire whose peer grants nothing. Used once, to name
+	 * the box in the establishment the FSM is handed at open. NULL/zero skips it. */
+	const uint8_t *box_master_mac;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX

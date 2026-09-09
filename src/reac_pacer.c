@@ -1907,6 +1907,25 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	return 0;
 }
 
+void reac_pacer_declare_box_master(struct reac_pacer *p, const uint8_t mac[6],
+                                   int in_ch, int out_ch, int headamp_base,
+                                   const uint8_t declaration[32])
+{
+	if (!p || !mac || in_ch <= 0)
+		return;
+	/* The width and strap the wire's own geometry identified: rebuilds the grant sweep
+	 * over this chassis's real cells, so what the sequence emits addresses the box in
+	 * front of us and not a template. */
+	reac_master_set_box(&p->master, in_ch, out_ch, headamp_base);
+	/* And the event the wire will never deliver. The declaration is the matrix row's own
+	 * config block — the bytes this model sends when it announces at all — so the FSM
+	 * classifies a JOIN carrying a real declaration rather than a bare one. */
+	reac_master_rx(&p->master, REAC_M_RX_BOX_JOIN, mac, declaration);
+	sync_published_box(p);
+	atomic_store_explicit(&p->fsm_state, p->master.state, memory_order_release);
+	p->prev_state = p->master.state;
+}
+
 int reac_pacer_start(struct reac_pacer *p)
 {
 	atomic_store_explicit(&p->running, 1, memory_order_release);
