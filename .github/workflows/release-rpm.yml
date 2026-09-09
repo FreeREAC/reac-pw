@@ -98,36 +98,54 @@ jobs:
           fetch-tags: true
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Configure the shared read repo (for pkgconfig(libreac) etc.)
+      - name: Configure the shared repo (for pkgconfig(libreac) etc.)
         # `dnf builddep` resolves reac-pw.spec's BuildRequires against whatever
         # repos are configured -- Fedora's own for meson/ninja/pipewire-devel,
         # and THIS one for pkgconfig(libreac), which only this tree carries.
-        # Read access needs the same Basic Auth pair openmixer's own build
-        # bakes into its emitted .repo (packaging/publish-repo.sh
-        # --repo-username/--repo-password); an empty pair is a public tree and
-        # the two auth lines below are simply omitted.
+        # libreac's own equivalent workflow must have published >= 0.7.1 into
+        # this same bucket/repo-id BEFORE this one runs; if it has not,
+        # `dnf builddep` below fails loud and by name ("nothing provides
+        # pkgconfig(libreac) >= 0.7.1") -- that is a correct failure of a
+        # missing publish, not a bug in this file.
+        # $releasever/$basearch, not a hardcoded fedora/44/x86_64, so the repo
+        # keeps resolving if the matrix ever grows (design §1 note above).
+        # Signed metadata: gpgcheck=1/repo_gpgcheck=1 against the SAME key
+        # this workflow's own publish step signs with, and the key itself is
+        # fetched over plain HTTP -- RPM-GPG-KEY-openmixer is one of the two
+        # paths publish-repo.sh's WHY note says the Worker serves
+        # unauthenticated, precisely so a bootstrapping client can fetch it
+        # before it has read credentials. metadata_expire=0 -- a build must
+        # never resolve against a cached "libreac not published yet" answer.
         env:
           OPENMIXER_REPO_READ_USERNAME: ${{ secrets.OPENMIXER_REPO_READ_USERNAME }}
           OPENMIXER_REPO_READ_PASSWORD: ${{ secrets.OPENMIXER_REPO_READ_PASSWORD }}
         run: |
           set -eu
           {
-            echo "[openmixer-read]"
-            echo "name=openmixer / FreeREAC (read, for builddep)"
-            echo "baseurl=${OPENMIXER_REPO_BASEURL}/fedora/44/x86_64/"
+            echo "[openmixer]"
+            echo "name=$OPENMIXER_REPO_NAME"
+            echo "baseurl=${OPENMIXER_REPO_BASEURL}/fedora/\$releasever/\$basearch/"
             echo "enabled=1"
-            echo "gpgcheck=0"
+            echo "gpgcheck=1"
+            echo "repo_gpgcheck=1"
+            echo "gpgkey=${OPENMIXER_REPO_BASEURL}/RPM-GPG-KEY-openmixer"
+            echo "metadata_expire=0"
             if [ -n "${OPENMIXER_REPO_READ_USERNAME}" ]; then
               echo "username=${OPENMIXER_REPO_READ_USERNAME}"
               echo "password=${OPENMIXER_REPO_READ_PASSWORD}"
             fi
-          } > /etc/yum.repos.d/openmixer-read.repo
+          } > /etc/yum.repos.d/openmixer.repo
 
       - name: Install build dependencies (dnf builddep against the spec)
         run: |
           set -o pipefail
           dnf install -y --setopt=install_weak_deps=False git rpm-build rpmdevtools
           dnf builddep -y packaging/reac-pw.spec
+          # Nothing in this job installs the BUILT reac-pw package itself (the
+          # RPM is only assembled and uploaded as an artifact), so the spec's
+          # runtime Requires (pipewire, from Fedora's own repos) never need
+          # this repo file again after builddep -- there is no second
+          # `dnf install` of runtime deps in this workflow to place it before.
 
       - name: Verify the tag resolves to the version this build will publish
         run: |
