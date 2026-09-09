@@ -446,6 +446,7 @@ static void usage(const char *p)
 	  "    REAC_HEADAMP=\"CH:PARAM:VALUE ...\"  the head-amp re-assertion table, space or\n"
 	  "                               comma separated (replaces N --headamp flags)\n"
 	  "    REAC_BOX_CHANNELS=N        slave role: our own input width; default 16\n"
+	  "    REAC_SRC_MAC=aa:bb:..      the source address on this wire (per-segment too)\n"
 	  "  and REAC_RATE per segment exactly as a single-segment run already resolves it.\n"
 	  "environment (see docs/ENV-KNOBS.md; unset = the default behaviour named below):\n"
 	  "  REACPW_GRANT_ON_DECLARE=0  master role: opt OUT of ending the grant dwell on the\n"
@@ -814,6 +815,24 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			fprintf(stderr, "reac-pw: [%s] ignoring malformed REAC_HEADAMP\n", iface);
 		else
 			c->n_headamps = n;
+	}
+
+	/* THE SOURCE ADDRESS, PER SEGMENT, WITHOUT A COMMAND LINE (0.5.6-4). `--src-mac`
+	 * has always existed and the packaged daemon takes no arguments, so on a real rig
+	 * there was no way to try a different source on one wire — and the box-master
+	 * enrolment is exactly the experiment that needs one (docs/ENV-KNOBS.md). Same
+	 * layered lookup as every other key, so `REAC_SRC_MAC_<segment>` answers for one
+	 * wire and a bare `REAC_SRC_MAC` is the floor. */
+	if (reac_conf_lookup("REAC_SRC_MAC", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
+		unsigned b[6];
+		if (sscanf(v, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
+			for (int i = 0; i < 6; i++)
+				c->src_mac[i] = (uint8_t)b[i];
+			c->src_mac_set = 1;
+		} else {
+			fprintf(stderr, "reac-pw: [%s] ignoring malformed REAC_SRC_MAC='%s' "
+			        "(aa:bb:cc:dd:ee:ff)\n", iface, v);
+		}
 	}
 
 	if (reac_conf_lookup("REAC_BOX_CHANNELS", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
