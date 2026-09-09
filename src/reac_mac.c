@@ -25,6 +25,14 @@ int reac_mac_compose(int hw_family, const uint8_t hwaddr[6], uint8_t out[6])
 	return -1;
 }
 
+int reac_mac_roland_standin(const uint8_t hwaddr[6], uint8_t out[6])
+{
+	/* Roland's OUI, and this NIC's own host part behind it (see the header). */
+	out[0] = 0x00; out[1] = 0x40; out[2] = 0xab;
+	out[3] = hwaddr[3]; out[4] = hwaddr[4]; out[5] = hwaddr[5];
+	return 0;
+}
+
 int reac_mac_default_src(const char *ifname, uint8_t out[6])
 {
 	/* Fill the fallback first so `out` is valid on every early return. */

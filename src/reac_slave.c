@@ -10,6 +10,7 @@
 #include "reac_mac.h"
 
 #include <reac/reac.h>
+#include <reac/reac_encode.h>  /* reac_downstream_build — the MIXER frame (0.5.6) */
 
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,7 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	 * every other width (S-0808/S-4000S) at 0x00 (m200-headamp-re/DECODE.md). */
 	s->ch_base = (s->box_channels == 16) ? 0x20 : 0x00;
 	s->box_master = cfg && cfg->box_master;
+	(void)0;   /* the box-master declaration is a captured golden, not a width */
 	s->bm_seq = 0;
 	s->bm_burst = 0;
 	for (int c = 0; c < REAC_MAX_CHANNELS; c++)
@@ -236,6 +238,87 @@ static int stage_inputs(struct reac_slave *s,
 	return REAC_SAMPLES_PER_PKT;
 }
 
+/* THE CONFIG-ANNOUNCE THAT WAS GRANTED, captured off the wire (0.5.6).
+ *
+ * These 34 bytes are the control marker and block a REAL S-1608 in slave mode unicast to
+ * the REAL S-0808 in master mode, 4 ms before that box echoed its cold-connect back
+ * (`box-to-box-enroll.pcap`, t=6.619 s). They are a GOLDEN, in this repository's usual
+ * sense: captured bytes that are the oracle, never regenerated to make a diff go away.
+ *
+ * WHY NOT THE BUILDER. `reac_ctrl_build_config_announce` derives the selector and the
+ * port-type table from a width, and at 16 it emits selector 0x82 where that physical box
+ * announced 0x80 — measured on the veth the moment this path was tried. Whatever 0x82
+ * belongs to, it is not what this chassis granted, and the operator's ruling is to use the
+ * pattern that was: "the declaration may imitate a box … use the S-1608's announce pattern
+ * verbatim, since that is the one the S-0808 granted."
+ *
+ * SO WE DECLARE OURSELVES AN S-1608, and say so plainly. It is an imitation, permitted
+ * explicitly, and it is the only declaration on this rig with a grant behind it. What we
+ * SEND is unaffected — that is the mixer's 40-slot downstream, by the same ruling.
+ *
+ * The block carries its own inner checksum (byte 33) and no addresses, so it is valid
+ * wherever it is stamped; the frame's outer checksum is re-applied after. */
+static const uint8_t BM_ANNOUNCE_BLK[34] = {
+	0xcd, 0xea, 0x01, 0x03, 0x00, 0x10, 0x80, 0x00,
+	0x00, 0x00, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01,
+	0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x50,
+};
+
+/* ---- THE MIXER'S SIDE OF A BOX-MASTER WIRE (0.5.6, operator ruling) ---------------
+ *
+ * "mixer always sends 40ch, boxes send their width only."
+ *
+ * On a wire a stagebox on M masters we are still the MIXER, so every audio frame we put on
+ * it is the ordinary 1492 B, 40-slot downstream — the box's outputs in their slots, the
+ * rest silent — in the presence flood and after the grant alike. The 340 B, 8-slot upstream
+ * the S-1608 sent that same box is what a BOX sends, and the S-1608 sent it because it IS
+ * one. What we take from its capture is the ENROLMENT, not the geometry.
+ *
+ * So this composes the two: `reac_downstream_build` lays down the mixer's frame (broadcast
+ * dst, counter, 40-slot braid, control block left zero — its own contract), and where the
+ * enrolment calls for a control frame the 34 bytes at [16:50] are stamped over from the
+ * builder that owns those bytes, then re-checksummed. One frame per slot either way, exactly
+ * as the box does.
+ *
+ * ADDRESSING. The audio is broadcast, because a desk's downstream is broadcast on every
+ * enrolled wire this daemon has ever driven and the destination address IS the direction on
+ * this protocol. The two control frames the enrolment needs — the config-announce and the
+ * cold-connect burst — are UNICAST to the box, because that is how the S-1608 sent them to
+ * this very chassis and what came back was a grant. */
+static size_t bm_downstream(struct reac_slave *s, uint8_t *frame,
+                            float *const planar[REAC_MAX_CHANNELS], uint16_t counter)
+{
+	/* Channels beyond box_channels are silent by the builder's contract, so the box's
+	 * outputs land in slots 0..width-1 of the fabric and nothing else is claimed. */
+	return (size_t)reac_downstream_build(frame, (float *const *)planar,
+	                                     s->box_channels, REAC_SAMPLES_PER_PKT,
+	                                     counter, s->src);
+}
+
+/* Stamp a control block built by its own builder onto the mixer's frame. `ctl` is a whole
+ * frame from one of the reac_ctrl builders; only its 34 bytes at [16:50] — the control
+ * marker and the 32-byte block — are taken, and the frame's own checksum is re-applied.
+ * Returns 1 when a block was stamped. */
+static int bm_stamp(uint8_t *frame, const uint8_t *ctl, size_t ctl_len,
+                    const uint8_t dst[6])
+{
+	if (!ctl_len)
+		return 0;
+	/* THE DESTINATION IS IN THE FRAME, NOT ONLY IN THE sendto (0.5.6). The protocol's
+	 * direction discriminator is the frame's own dst bytes, and that is what a receiver
+	 * reads — `reac_downstream_build` writes BROADCAST there by contract, so a control
+	 * frame stamped onto one and merely sent to a unicast sockaddr arrives labelled
+	 * broadcast. Measured on the veth: three announces and nine cold-connect records
+	 * went out with ff:ff:ff:ff:ff:ff in the frame and the emulator counted zero
+	 * unicast. The address goes where the reader looks. */
+	memcpy(frame, dst, 6);
+	memcpy(frame + 16, ctl + 16, 34);
+	reac_ctrl_checksum_apply(frame);
+	return 1;
+}
+
 /* Emit one frame for the decision `d` on the wire. `bcast` = the broadcast dst
  * (presence-flood), else the learned master MAC (unicast linked traffic). */
 static void emit_decision(struct reac_slave *s, const struct reac_slave_decision *d,
@@ -254,6 +337,79 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 	/* EXACTLY ONE frame per call — one wire frame per monotonic counter value, as a
 	 * real S-1608 (#130, byte-verified 2026-07-11). Control frames REPLACE the
 	 * audio/flood frame at this slot; they never add a second frame. */
+	/* THE MIXER'S GEOMETRY, THE BOX'S CHOREOGRAPHY (0.5.6, operator ruling). Taken
+	 * before the switch because every arm of it would otherwise have to remember. The
+	 * FSM, its bounds and its transitions are untouched: only what a slot puts on the
+	 * wire changes, and only on a wire a stagebox masters. */
+	if (s->box_master && d->emit != REAC_SLAVE_EMIT_NONE) {
+		uint8_t ctl[2048] = { 0 };
+		size_t cl = 0;
+		stage_inputs(s, buf, planar);
+		len = bm_downstream(s, frame, planar, counter);
+		sll = bcast_sll;            /* a desk's downstream is broadcast */
+
+		if (d->emit == REAC_SLAVE_EMIT_COLDCONNECT) {
+			/* The two control frames the enrolment needs, in the order the wire
+			 * showed and unicast as the wire showed: the config-announce as the
+			 * frame we go unicast with, the three-record burst ~200 ms later. */
+			if (s->bm_burst > 0) {
+				cl = (s->bm_burst == 3 || s->bm_burst == 2)
+					? reac_ctrl_build_coldconnect(ctl, s->fsm.master_mac,
+					      s->src, counter, s->box_channels, planar,
+					      REAC_SAMPLES_PER_PKT)
+					: reac_ctrl_build_coldconnect_0013(ctl, s->fsm.master_mac,
+					      s->src, counter, s->box_channels, planar,
+					      REAC_SAMPLES_PER_PKT);
+				s->bm_burst--;
+			} else if (d->with_join) {
+				if (s->bm_seq == 0) {
+					/* WE DECLARE OURSELVES, NOT THE PEER — and we declare the
+					 * one thing this chassis has ever granted. 0.5.6-1 derived
+					 * the declaration from the MASTER's width and announced
+					 * selector 0x84, the family of the box it was talking TO;
+					 * the rig sent four correct bursts behind it and was echoed
+					 * nothing, lamp blinking. The captured block above is the
+					 * declaration that was granted. */
+					memcpy(ctl + 16, BM_ANNOUNCE_BLK, sizeof BM_ANNOUNCE_BLK);
+					cl = 34;
+				}
+				else if (s->bm_seq == 2)
+					s->bm_burst = 3;
+				if (s->bm_burst == 3) {
+					cl = reac_ctrl_build_coldconnect(ctl, s->fsm.master_mac,
+					         s->src, counter, s->box_channels, planar,
+					         REAC_SAMPLES_PER_PKT);
+					s->bm_burst--;
+				}
+				if (++s->bm_seq >= 8)
+					s->bm_seq = 0;
+			}
+		} else if (d->emit == REAC_SLAVE_EMIT_HEARTBEAT || d->with_heartbeat) {
+			/* THE HEARTBEAT RIDES TWO DECISIONS, and missing the second one is a
+			 * segment that establishes and then says nothing: the FSM carries it
+			 * as its own emit AND as a flag on the established audio slot
+			 * (reac_slave.h), and the desk path handles both. Measured on the
+			 * veth: established, and not one keep-alive reached the box. */
+			cl = reac_ctrl_build_box_hb(ctl, s->fsm.master_mac, s->src, counter,
+			                            s->box_channels);
+		}
+		/* A MIXER DOES NOT GO SILENT MID-DWELL. The FSM's TX-mute window is a box
+		 * holding ITS upstream back while the master settles; holding a desk's
+		 * downstream back would take the box's outputs away for the length of it.
+		 * The slot still carries the ordinary broadcast frame. */
+		if (cl && bm_stamp(frame, ctl, cl, s->fsm.master_mac))
+			sll = uni_sll;      /* the control frames are the box's to answer */
+		if (len) {
+			ssize_t r = sendto(s->fd, frame, len, 0,
+			                   (struct sockaddr *)sll, sizeof *sll);
+			if (r < 0)
+				atomic_fetch_add_explicit(&s->tx_errors, 1, memory_order_relaxed);
+			else
+				atomic_fetch_add_explicit(&s->tx_frames, 1, memory_order_relaxed);
+		}
+		return;
+	}
+
 	switch (d->emit) {
 	case REAC_SLAVE_EMIT_NONE:
 		return;
@@ -616,6 +772,22 @@ int reac_slave_open(struct reac_slave *s, const struct reac_slave_cfg *cfg,
 	 * budget at every rate, and the master frame, when present, clocks us instead). */
 	struct timeval tv = { 0, 5000 };
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+	/* PROMISCUOUS WHEN OUR SOURCE IS NOT THIS NIC'S OWN (0.5.6). A box unicasts to the
+	 * address it was announced from, and the card's hardware filter drops a unicast to an
+	 * address it does not own — the same reason reac_pacer takes PACKET_MR_PROMISC for the
+	 * master role, which spoofs nothing but receives a box's unicast to a learned MAC.
+	 * Without this, a Roland-OUI stand-in would trade a box that will not grant for a box
+	 * whose grant we cannot hear. Best-effort: reported, never fatal. */
+	if (s->box_master) {
+		struct packet_mreq mr;
+		memset(&mr, 0, sizeof mr);
+		mr.mr_ifindex = ifr.ifr_ifindex;
+		mr.mr_type    = PACKET_MR_PROMISC;
+		if (setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof mr) < 0)
+			fprintf(stderr, "reac_slave: PACKET_MR_PROMISC failed — a box's unicast to "
+			                "our announced address may not reach us\n");
+	}
 
 	s->fd = fd;
 	return 0;
