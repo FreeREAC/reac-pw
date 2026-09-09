@@ -1708,6 +1708,42 @@ later. `chanmap` arms the burst on the box's own chanmap instead, because the S-
 landed **1.0 ms** after one; that is striking at n=1 and a coincidence until a rig says
 otherwise, so it is a knob and not a change.
 
+### Per frame, against the box that was granted (0.5.6-6)
+
+Four rig runs — `box+free`, `box+chanmap`, `mixer+chanmap`, and `box+free` from the S-1608's own
+address `00:40:ab:c4:80:41` — all reach `FLOOD_ANNOUNCE -> COLDCONNECT` and stay. Declaration,
+burst, carrier shape, descriptor, source MAC and burst timing are the granted box's. Frame by
+frame against `box-to-box-enroll.pcap`:
+
+1. **The counter is NOT locked to the master's, in either capture.** The S-1608's offset to the
+   S-0808's counter is constant within a window (39220 across the flood) and drifts slowly
+   (39220 → 40835 over 24 s). Ours is equally constant within a window (36739) and drifts
+   FASTER: 36739 → −40608 over 20 s, which is **11811 frames short of the box's 160000** —
+   a **7.4 % emission deficit** where the S-1608 ran 0.8 % over. We are not emitting one frame
+   per box frame as closely as it did. Nothing says the box checks this; it is the largest
+   numeric difference left.
+2. **Every other header field matches.** dst, src, ethertype, the announce block, both
+   cold-connect records — byte-identical; the counter differs only in value, as two free-running
+   counters must.
+3. **The slots are the difference that is VISIBLE in every frame.** The S-1608's flood tail reads
+   `80feffffff5974fd0100006bfe00c2ea` and its pre-grant unicast varies frame to frame; ours reads
+   `0000000000000000000000000000c2ea` in every frame of both. It sent live microphone samples
+   throughout its enrolment; we send digital silence, because nothing is patched to the sink yet.
+   → `REACPW_BOX_MASTER_FILL=silence|noise`.
+4. **The silence before the flood.** The S-1608 said nothing for ~4 s between losing its old
+   master and flooding. Our rig run has NO such gap: our first frame is at t=1.810 and the
+   capture shows broadcast from 1.810 to 49.896 — **13421 broadcast frames over 48 s**, far past
+   the 5460-frame bound, so the engine is re-flooding repeatedly rather than sitting in
+   COLDCONNECT. That is worth its own look: `have_master` is cleared only on PHY-down and from
+   DROP, so the re-floods mean the listener is being torn down and re-served, not that the FSM
+   is cycling. → `REACPW_BOX_MASTER_PRESILENCE_MS`, default 0.
+5. **The box's own frames across its grant** (t=6.6–6.9 in the bridge capture): four control
+   frames, and apart from the three `cdea 04 03` grant records the only one is its ordinary ~1/s
+   chanmap. No header field of its broadcast changes across the grant.
+
+Both knobs are hypotheses and are labelled so in [docs/ENV-KNOBS.md](docs/ENV-KNOBS.md); neither
+changes a byte unless set.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
