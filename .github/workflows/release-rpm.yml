@@ -181,6 +181,30 @@ jobs:
           test -s /tmp/built.txt || { echo "::error::no RPM was produced"; exit 1; }
           echo "RPM_TOPDIR=$TOP" >> "$GITHUB_ENV"
 
+      # THE PACKAGES ARE PUBLIC, OR THEY ARE NOT PUBLISHED. A run artefact expires in
+      # thirty days and needs a GitHub login to fetch; a Release asset does not. The dnf
+      # tree above is the supported way to install, and this is the way that works with
+      # nothing configured — `gh release download`, or a browser. Tag builds only, and it
+      # is idempotent: --clobber replaces an asset the same tag already carries rather
+      # than failing a re-run.
+      - name: attach the packages to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_reac-pw}"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          # Count before uploading: an empty glob would upload nothing and say nothing.
+          find "$RPM_TOPDIR" -name '*.rpm' | tee /tmp/assets.txt
+          test -s /tmp/assets.txt || { echo "::error::no RPM to attach"; exit 1; }
+          gh release upload "$TAG" --clobber $(cat /tmp/assets.txt | tr '\n' ' ')
+          # and the source tarball the RPM was built from
+          T=$(find "$RPM_TOPDIR/SOURCES" -name 'reac-pw-*.tar.gz' | head -1)
+          [ -n "$T" ] && gh release upload "$TAG" --clobber "$T"
+          echo "attached to $TAG:"; cat /tmp/assets.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: reac-pw-rpm-fc44-x86_64
