@@ -115,6 +115,19 @@ void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *box_width,
                                    uint64_t box_mac48);
 
+/* THE JOINED BOX MASTER'S IDENTITY on this node (DESIGN.md 0.5.2). The publish_link door
+ * above is the MASTER's: the sink computes those strings from its pacer's recognition and
+ * pushes them here. A receive-only join has no sink and no pacer — nothing recognises
+ * anything, because the peer never declares itself — so its identity is composed from the
+ * two facts the wire did give: the width it broadcasts and the address it broadcasts from.
+ *
+ * ONE COMPOSER, not a second spelling: this hands reac_box_master_identity_publish the same
+ * pw_properties adapter publish_link uses, so reac.link-state / reac.box-model /
+ * reac.box-width / reac.box.mac are written by exactly one function in this daemon.
+ * Main-loop thread only. */
+void reac_source_node_publish_box_master(struct reac_source_node *n,
+                                         unsigned width, uint64_t mac48, int locked);
+
 /* Live-update the reac-capture node's presented Format rate — the RATE half of
  * #208/2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b ("a rate is ONE
  * wire rate — capture AND playback follow it together"). Mirrors reac_sink_

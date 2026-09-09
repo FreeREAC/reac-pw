@@ -33,6 +33,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <reac/reac_ctrlblk.h>   /* struct reac_box_model, the fixed matrix */
+
 #include "reac_master.h"
 
 /* PipeWire node property keys the badge consumer reads. reac.link-state is
@@ -219,5 +221,41 @@ typedef void (*reac_prop_set_fn)(void *ctx, const char *key, const char *value);
  * unwritten keeps the DEPARTED box's address and a consumer goes on naming a
  * chassis that has left the wire. `set` NULL is a no-op. */
 void reac_box_mac_publish(uint64_t mac48, reac_prop_set_fn set, void *ctx);
+
+/* THE MODEL A BOX-MASTER'S BROADCAST WIDTH NAMES, or NULL (DESIGN.md 0.5.2).
+ *
+ * A served box names itself: its cold-connect config-announce carries the 32-byte
+ * descriptor reac_ctrl_identify_box matches against the fixed matrix. A box with its
+ * REAC Mode switch on M sends no such frame at all — what it broadcasts is its own
+ * upstream geometry, 52 + n*36 bytes — so the only thing that can name it is the WIDTH,
+ * and only where the matrix answers exactly.
+ *
+ * EXACT `in_ch` MATCH, NEVER libreac's reac_box_model_by_channels: that one falls back to
+ * the S-1608 row for a width no model has (reac_ctrlblk.c), which would put a model name
+ * on a chassis nobody identified — the same default reac_disco.c's classifier already
+ * refuses for the same reason. A width no row matches returns NULL, and NULL publishes
+ * nothing: absence is a fact a consumer reads as one. */
+const struct reac_box_model *reac_box_master_model(unsigned width);
+
+/* THE WHOLE IDENTITY OF A JOINED BOX MASTER, composed and STAMPED in one act — the same
+ * reasoning reac_box_mac_publish above documents: the composition and the write are what a
+ * consumer reads, so they are one testable function and there is no second spelling of the
+ * keys anywhere.
+ *
+ * `width`  the geometry the box broadcast, which is what names the model (above).
+ * `mac48`  the mastering peer's own address, packed (reac_mac48_pack) — the sighting that
+ *          decided the verdict is the only evidence there is, since a box on M grants
+ *          nothing. Always stamped, 0 included: 0 means NO BOX, not "leave it alone".
+ * `locked` non-zero once the segment's RX is accepting the box's frames. That is the whole
+ *          of "linked" here — nothing is granted in either direction on this wire, so the
+ *          badge only ever reads probing or established.
+ *
+ * REAC_PROP_BOX_MODEL / REAC_PROP_BOX_WIDTH are stamped only when the width names a model.
+ * They are NOT stamped as "none"/"0x0" the way the master's create-time seed is: that seed
+ * belongs to a master that is about to probe and will learn the answer, whereas here the
+ * answer has arrived and says nothing — and pw_properties merge, so a key never written is
+ * a key a consumer does not find. `set` NULL is a no-op. */
+void reac_box_master_identity_publish(unsigned width, uint64_t mac48, int locked,
+                                      reac_prop_set_fn set, void *ctx);
 
 #endif /* REAC_LINK_STATE_H */

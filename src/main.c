@@ -879,8 +879,6 @@ static void listener_publish_segment(struct listener *L)
 		return;
 	int established = L->slave_open
 		? atomic_load_explicit(&L->slave.established, memory_order_relaxed) : 0;
-	const char *state = reac_role_swap_state(
-		&L->role_swap, reac_role_engine_of_slave(L->slave_open, established));
 	char role_s[4];
 	snprintf(role_s, sizeof role_s, "%d", REAC_CFG_ROLE_VALUE_SLAVE);
 
@@ -893,6 +891,11 @@ static void listener_publish_segment(struct listener *L)
 	 * classifier rather than a second one. */
 	struct reac_segment_answer answer;
 	if (L->cfg.door_only) {
+		/* A door runs no engine at all, so the slave predicate's DOWN is the truth
+		 * about it — the state is derived here rather than shared with the joined
+		 * path below, which derives its own from the engine it actually has. */
+		const char *state = reac_role_swap_state(
+			&L->role_swap, reac_role_engine_of_slave(L->slave_open, established));
 		/* A REFUSED SEGMENT PUBLISHES THE REFUSAL AND NOTHING ELSE (0.5.1). No engine
 		 * runs here, so there is no frame count to latch on and no MAC we learned from
 		 * a handshake — the rival's address comes from the sighting that caused the
@@ -921,9 +924,29 @@ static void listener_publish_segment(struct listener *L)
 	reac_segment_answer_slave(&answer, heard, master_mac48,
 	                          L->rx.sample_rate, L->cfg.wire_channels);
 
+	/* WHICH ENGINE ANSWERS FOR THE ROLE. A receive-only join has no reac_slave engine
+	 * and is not waiting for one (DESIGN.md 0.5.2): what performs the role is the RX
+	 * that follows the box's clock and delivers its channels. Deriving its answer from
+	 * the slave engine's enrolment flag is what published role_reestablish_pending over
+	 * a segment that was up and streaming on the rig, 2026-09-09. */
+	const char *state = L->cfg.join_box_master
+		? reac_role_swap_state(&L->role_swap,
+		                       reac_role_engine_of_receive_only(L->rx_started, heard))
+		: reac_role_swap_state(&L->role_swap,
+		                       reac_role_engine_of_slave(L->slave_open, established));
+
 	reac_source_node_publish_segment(L->src, role_s, state,
 	                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
 	                                 &answer);
+
+	/* AND THE BOX IS THE SAME BOX WHICHEVER END SENDS THE CLOCK. A console keys a
+	 * stagebox off this identity set; a join that published none of it left the rig
+	 * rendering a segment with no device on it and eight inputs nobody could patch
+	 * (2026-09-09 05:45). The width is the wire's own declaration and the address is the
+	 * sighting's — the only two facts a peer that runs no handshake ever gives us. */
+	if (L->cfg.join_box_master)
+		reac_source_node_publish_box_master(L->src, L->cfg.wire_channels,
+		                                    master_mac48, heard);
 }
 
 /* Bring one segment online: resolve its rate, open the RX feeder, and (role

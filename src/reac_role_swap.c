@@ -56,6 +56,15 @@ enum reac_role_engine reac_role_engine_of_slave(int engine_up, int established)
 	return established ? REAC_ROLE_ENGINE_PERFORMING : REAC_ROLE_ENGINE_HUNTING;
 }
 
+enum reac_role_engine reac_role_engine_of_receive_only(int engine_up, int locked)
+{
+	if (!engine_up)
+		return REAC_ROLE_ENGINE_DOWN;
+	/* No grant is coming and none is owed: the wire being heard is the whole of
+	 * "performing" here (see the header). */
+	return locked ? REAC_ROLE_ENGINE_PERFORMING : REAC_ROLE_ENGINE_HUNTING;
+}
+
 const char *reac_role_swap_state(const struct reac_role_swap *s,
                                  enum reac_role_engine engine)
 {
