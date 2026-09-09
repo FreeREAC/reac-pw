@@ -195,6 +195,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # the build container is bare fedora: the GitHub CLI is a package there
+          command -v gh >/dev/null || dnf install -y -q gh
           TAG="${RELEASE_TAG:-${{ inputs.tag }}}"
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --generate-notes
