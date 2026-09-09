@@ -202,3 +202,138 @@ Run V5 EARLY if anything surprises you: it is the only file here whose expected 
 
 if __name__ == "__main__":
     main(sys.argv[1] if len(sys.argv) > 1 else ".")
+
+
+# ---- V6 follow-ups (0.5.6, after the bisect scored V6 at zero) ----------------------
+#
+# V6 substituted our control carriers CYCLICALLY into their control positions, and our
+# capture's first carriers are three BURST records with the announce 0.6 s later — so V6
+# put a cold-connect where the announce belongs and the box was asked to grant before it
+# had been told what was asking. That is a defect in the variant, not a finding about the
+# frames, and it is why these are kind-matched.
+#
+# The full-frame diff, like against like, leaves exactly one real difference in those
+# frames: our slots are silent and theirs carry live samples — which V2 already cleared.
+
+KIND_ANNOUNCE = b"\xcd\xea\x01\x03\x00\x10"
+KIND_0014     = b"\xcd\xea\x04\x03\x00\x14"
+KIND_0013     = b"\xcd\xea\x04\x03\x00\x13"
+
+
+def kind_of(d):
+    for k in (KIND_ANNOUNCE, KIND_0014, KIND_0013):
+        if d[16:22] == k:
+            return k
+    return None
+
+
+def followups(tmp):
+    dst = os.path.join(tmp, "variants")
+    base = read(os.path.join(tmp, GRANTED))
+    ours = read(os.path.join(tmp, OURS), only_src=OURMAC)
+    ourc = [r for r in ours if not is_bcast(r[2]) and kind_of(r[2])]
+    made = []
+
+    def clone():
+        return [[ts, tu, bytearray(d)] for ts, tu, d in base]
+
+    def emit(name, recs, what):
+        write(os.path.join(dst, name), recs)
+        made.append((name, what, sum(1 for a, b in zip(base, recs) if a[2] != b[2])))
+
+    def pick(kind):
+        for r in ourc:
+            if kind_of(r[2]) == kind:
+                return r
+        return None
+
+    def sub(v, kinds, patch=None):
+        n = 0
+        for r in v:
+            k = kind_of(r[2]) if not is_bcast(r[2]) else None
+            if k in kinds:
+                mine = pick(k)
+                if not mine:
+                    continue
+                theirs = bytearray(r[2])
+                r[2] = bytearray(mine[2])
+                if patch:
+                    patch(r[2], theirs)
+                n += 1
+        return n
+
+    v = clone(); sub(v, {KIND_ANNOUNCE})
+    emit("V6a-our-announce-only.pcap", v, "ONLY our config-announce carrier, kind-matched")
+
+    v = clone(); sub(v, {KIND_0014, KIND_0013})
+    emit("V6b-our-burst-only.pcap", v, "ONLY our cold-connect carriers, kind-matched")
+
+    v = clone()
+    sub(v, {KIND_ANNOUNCE, KIND_0014, KIND_0013},
+        lambda mine, theirs: mine.__setitem__(slice(0, 16), theirs[0:16]))
+    emit("V6c-ours-their-header.pcap", v, "our carriers, their header bytes 0-15")
+
+    v = clone()
+    sub(v, {KIND_ANNOUNCE, KIND_0014, KIND_0013},
+        lambda mine, theirs: mine.__setitem__(slice(52, len(theirs)), theirs[52:]))
+    emit("V6d-ours-their-slots.pcap", v, "our carriers, their slots and trailer 52..339")
+
+    # V6f — the corrected V6: all our carriers, kind-matched, nothing else patched.
+    v = clone(); sub(v, {KIND_ANNOUNCE, KIND_0014, KIND_0013})
+    emit("V6f-our-carriers-kindmatched.pcap", v,
+         "V6 done properly: all our carriers, kind for kind")
+
+    # V6e — their bytes, OUR spacing. V6 already gave our bytes their spacing, so the
+    # question left is whether the 0.6 s gap and the burst-before-announce ORDER our
+    # capture shows is itself refused. Their frames, re-timed onto our intervals.
+    v = clone()
+    ctrl_idx = [i for i, r in enumerate(v) if not is_bcast(r[2]) and kind_of(r[2])]
+    gaps = [ourc[i + 1][0] * 1000000 + ourc[i + 1][1] - (ourc[i][0] * 1000000 + ourc[i][1])
+            for i in range(len(ourc) - 1)][:len(ctrl_idx)]
+    if gaps and ctrl_idx:
+        t = v[ctrl_idx[0]][0] * 1000000 + v[ctrl_idx[0]][1]
+        for j, i in enumerate(ctrl_idx[1:]):
+            t += gaps[min(j, len(gaps) - 1)]
+            v[i][0], v[i][1] = int(t // 1000000), int(t % 1000000)
+        v.sort(key=lambda r: r[0] * 1000000 + r[1])
+    emit("V6e-their-bytes-our-spacing.pcap", v, "their carriers, OUR spacing between them")
+
+    for name, what, n in made:
+        print("%-38s %3d frames changed  %s" % (name, n, what))
+
+
+# ---- V6g/V6h: the second cold-connect record (0.5.6, the diff's own finding) ----------
+#
+# THEIR BURST IS THREE DISTINCT RECORDS AND OURS IS NOT. The S-1608 sent
+#   0014  ... 1212 01 00 06 00 01 00 78 f7      (block offsets 18,20,22,24 = 01 06 01 78)
+#   0014  ... 1212 00 00 03 00 00 00 7d f7      (the same four = 00 03 00 7d)
+#   0013  ... 1212 03 02 00 01 00 7a f7
+# and we send the FIRST 0014 twice, because reac_slave's burst calls
+# reac_ctrl_build_coldconnect for both of its first two frames. Every earlier comparison
+# read "the burst records are byte-identical" from the FIRST record of each and stopped.
+#
+# V6g makes THEIR stream do what OURS does, changing nothing else: the second 0014 becomes
+# a copy of the first. A refusal there is the answer to the whole bisect.
+# V6h is the mirror: our carriers, kind-matched, with their second 0014 restored.
+
+def second_record(tmp):
+    dst = os.path.join(tmp, "variants")
+    base = read(os.path.join(tmp, GRANTED))
+
+    def clone():
+        return [[ts, tu, bytearray(d)] for ts, tu, d in base]
+
+    v = clone()
+    seen = None
+    n = 0
+    for r in v:
+        if is_bcast(r[2]) or r[2][16:22] != KIND_0014:
+            continue
+        if seen is None:
+            seen = bytes(r[2][16:50])          # their FIRST 0014's block
+        else:
+            r[2][16:50] = seen                 # the second becomes a copy of it, as ours is
+            n += 1
+    write(os.path.join(dst, "V6g-their-burst-repeated.pcap"), v)
+    print("V6g-their-burst-repeated.pcap           %3d frames changed  "
+          "their 2nd cold-connect record replaced by a copy of the 1st, as ours does" % n)
