@@ -95,7 +95,7 @@ jobs:
       # actions/checkout needs git INSIDE the container or it falls back to a tarball with no .git —
       # then `git describe` finds no repository. Install git before the checkout, as openmixer does.
       - name: git for the checkout
-        run: dnf install -y -q git
+        run: dnf install -y -q git rsync # rsync: packaging/make-tarball.sh copies the source tree with it
 
       - uses: actions/checkout@v4
         with:
