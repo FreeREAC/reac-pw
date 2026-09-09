@@ -80,6 +80,7 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	 * every other width (S-0808/S-4000S) at 0x00 (m200-headamp-re/DECODE.md). */
 	s->ch_base = (s->box_channels == 16) ? 0x20 : 0x00;
 	s->box_master = cfg && cfg->box_master;
+	s->bm_frame_box = cfg && cfg->box_master_frame_box;
 	(void)0;   /* the box-master declaration is a captured golden, not a width */
 	s->bm_seq = 0;
 	s->bm_burst = 0;
@@ -344,9 +345,24 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 	if (s->box_master && d->emit != REAC_SLAVE_EMIT_NONE) {
 		uint8_t ctl[2048] = { 0 };
 		size_t cl = 0;
+		int flooding = (d->emit == REAC_SLAVE_EMIT_FLOOD_FILLER);
 		stage_inputs(s, buf, planar);
-		len = bm_downstream(s, frame, planar, counter);
-		sll = bcast_sll;            /* a desk's downstream is broadcast */
+		if (s->bm_frame_box) {
+			/* THE EXPERIMENT'S OTHER CORNER (0.5.6-3): an exact S-1608 imitation.
+			 * The frame is the box's own 340 B geometry at the master's width, in
+			 * the flood, as the carrier of the announce and the burst, and in the
+			 * steady state — and everything after the flood is unicast to the box,
+			 * which is how the box that WAS granted sent it. */
+			len = flooding
+				? reac_ctrl_build_flood_filler(frame, BCAST, s->src, counter,
+				      s->box_channels, planar, REAC_SAMPLES_PER_PKT)
+				: reac_ctrl_build_upstream_filler(frame, s->fsm.master_mac, s->src,
+				      counter, s->box_channels, planar, REAC_SAMPLES_PER_PKT);
+			sll = flooding ? bcast_sll : uni_sll;
+		} else {
+			len = bm_downstream(s, frame, planar, counter);
+			sll = bcast_sll;    /* a desk's downstream is broadcast */
+		}
 
 		if (d->emit == REAC_SLAVE_EMIT_COLDCONNECT) {
 			/* The two control frames the enrolment needs, in the order the wire

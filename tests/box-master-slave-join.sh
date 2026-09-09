@@ -45,6 +45,7 @@ command -v wireplumber >/dev/null 2>&1 || { echo "SKIP: no wireplumber"; exit $S
 unshare -r -n -p -f --mount-proc --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net+pid namespaces unavailable"; exit $SKIP; }
 
+export REACPW_BOX_MASTER_FRAME="${REACPW_BOX_MASTER_FRAME:-mixer}"
 OUT=$(unshare -r -n -p -f --mount-proc --map-root-user bash -s -- "$BIN" "$FAKE" <<'INNER'
 set -u
 BIN="$1"
@@ -162,7 +163,8 @@ FAKEPID=$!
 sleep 0.5
 ip link set bmx0 up; peer ip link set mbx0 up
 
-HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$LOG" 2>&1 &
+HOME="$CONF" REAC_DEBUG=1 REACPW_BOX_MASTER_FRAME="${REACPW_BOX_MASTER_FRAME:-mixer}" \
+	"$BIN" >"$LOG" 2>&1 &
 PID=$!
 
 wait_for "\[bmx0\] box masters this wire" 20 || {
@@ -183,13 +185,17 @@ FL=$(rep_f flood 3 "$RT/box.rep"); FLEN=$(rep_f flood 5 "$RT/box.rep")
 [ -n "$FL" ] && [ "$FL" -gt 5000 ] || {
 	echo "FAIL: the daemon broadcast only ${FL:-0} flood frames; a box announces itself"
 	echo "      with a bounded flood before it may go unicast"; cat "$RT/box.rep"; exit 1; }
-# "mixer always sends 40ch, boxes send their width only" — so every audio frame we put on
-# this wire is the fixed 1492 B downstream, in the presence flood as much as after the grant.
-# The 340 B the S-1608 sent this same box is what a BOX sends; we are not one.
-[ "$FLEN" = "1492" ] || {
-	echo "FAIL: the flood frames are $FLEN B. A mixer floods with its own 40-slot"
-	echo "      downstream; 340 B is what a box sends"; exit 1; }
-echo "MEASURED: flood $FL frames of $FLEN B (the mixer's 40 slots), broadcast"
+# THE GEOMETRY IS THE EXPERIMENT (0.5.6-3). Default is the operator's ruling — a mixer sends
+# 40 channels, so every audio frame is the fixed 1492 B downstream, in the flood as much as
+# after the grant. REACPW_BOX_MASTER_FRAME=box is the other corner the two rig runs left
+# open: an exact S-1608 imitation at 340 B. The proof measures whichever it was told to run,
+# and asserts the geometry it asked for rather than a constant.
+WANT_LEN=1492; WANT_WHAT="the mixer's 40 slots"
+[ "${REACPW_BOX_MASTER_FRAME:-mixer}" = "box" ] && { WANT_LEN=340; WANT_WHAT="the box's own 8 slots"; }
+[ "$FLEN" = "$WANT_LEN" ] || {
+	echo "FAIL: the flood frames are $FLEN B; REACPW_BOX_MASTER_FRAME=${REACPW_BOX_MASTER_FRAME:-mixer}"
+	echo "      asks for $WANT_LEN B ($WANT_WHAT)"; exit 1; }
+echo "MEASURED: flood $FL frames of $FLEN B ($WANT_WHAT), broadcast"
 
 # ---- 2. THE ORDER: ANNOUNCE FIRST, THEN THE BURST. ---------------------------------
 # This is the assertion the ground-truth capture is FOR. The S-1608 went unicast WITH its
@@ -214,8 +220,9 @@ python3 -c "import sys; sys.exit(0 if $ORD > 0 else 1)" || {
 	echo "FAIL: the cold-connect burst arrived $ORD s BEFORE the config-announce. A box"
 	echo "      announces itself first and cold-connects after — the master enrols it from"
 	echo "      that announce"; exit 1; }
-[ "$ULEN" = "1492" ] || {
-	echo "FAIL: the unicast control frames are $ULEN B; they ride the mixer's own frame"; exit 1; }
+[ "$ULEN" = "$WANT_LEN" ] || {
+	echo "FAIL: the unicast control frames are $ULEN B; they ride the same carrier as the"
+	echo "      audio, which this run asked to be $WANT_LEN B"; exit 1; }
 # THE DECLARATION IS THE ONE THAT WAS GRANTED, byte for byte. 0.5.6-1 derived it from the
 # MASTER's width and announced selector 0x84 — the family of the box it was talking TO — and
 # the real S-0808 echoed nothing behind four correct bursts. This is the block a real S-1608
@@ -300,7 +307,11 @@ PYEOF
 		echo "UNLINKED"; kill -TERM $CATPID 2>/dev/null; return
 	fi
 	sleep 1
-	echo "$(rep_ch 0 rms) $(rep_ch 1 rms) $(rep_ch 0 peak) $(rep_ch 5 rms)"
+	if [ "$WANT_LEN" = "340" ]; then
+		echo "$(up_ch 0 rms) $(up_ch 1 rms) $(up_ch 0 peak) $(up_ch 5 rms)"
+	else
+		echo "$(rep_ch 0 rms) $(rep_ch 1 rms) $(rep_ch 0 peak) $(rep_ch 5 rms)"
+	fi
 	kill -TERM $CATPID 2>/dev/null; wait $CATPID 2>/dev/null; sleep 0.5
 }
 LOUD=$(play_tone 0.5)
@@ -324,7 +335,7 @@ python3 -c "import sys; sys.exit(0 if $LQ < -60.0 else 1)" || {
 DELTA=$(python3 -c "print('%.2f' % ($L0 - $S0))")
 python3 -c "import sys; sys.exit(0 if abs(($L0) - ($S0) - 20.0) < 1.5 else 1)" || {
 	echo "FAIL: a 20 dB change at the sink moved the wire by $DELTA dB"; exit 1; }
-echo "MEASURED: tone in the 40-slot DOWNSTREAM at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed"
+echo "MEASURED: tone in the $WANT_WHAT at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed"
 echo "          slot 5 = $LQ dBFS; -20 dB at the source reads $S0, a delta of $DELTA dB"
 
 # ---- 5. AND NOTHING WAS SENT BEFORE THE BOX SPOKE. ---------------------------------
@@ -333,10 +344,13 @@ BEFORE=$(rep rx_before_tx)
 	echo "FAIL: $BEFORE frames reached the box before it had sent one"; exit 1; }
 # THE ABSENCE CLAIM'S POSITIVE CONTROL: the same counter, for frames that DID arrive.
 SB=$(awk '$1 == "steady" && $2 == "bcast" { print $3 }' "$RT/box.rep")
-[ -n "$SB" ] && [ "$SB" -gt 1000 ] || {
+UF=$(rep_f up 3 "$RT/box.rep")
+# In box geometry the steady state is UNICAST, as the granted box sent it, so the control
+# that makes the absence above mean something is whichever counter this run fills.
+[ "$(( ${SB:-0} + ${UF:-0} ))" -gt 1000 ] || {
 	echo "FAIL: too few steady-state frames for that absence to mean anything"; exit 1; }
-echo "MEASURED: 0 frames before the box's first; $SB broadcast downstream frames after the"
-echo "          announce, and $(rep_f up 3 "$RT/box.rep") unicast control frames"
+echo "MEASURED: 0 frames before the box's first; $SB broadcast and $UF unicast frames after"
+echo "          the announce (REACPW_BOX_MASTER_FRAME=${REACPW_BOX_MASTER_FRAME:-mixer})"
 
 # ---- 6. THE LAMP IS THE PAIRING, NOT THE HEARING. ---------------------------------
 # The rig, 2026-09-09: "S-0808 is not enrolled but omx sees it available" — the segment

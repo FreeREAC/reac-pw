@@ -1229,7 +1229,16 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                                .box_channels = up_ch,
 		                                .sample_rate = L->rx.sample_rate,
 		                                .src_mac = box_mac,
-		                                .box_master = c->join_box_master };
+		                                .box_master = c->join_box_master,
+		                                /* The rig experiment, no rebuild between runs:
+		                                 * REACPW_BOX_MASTER_FRAME=box imitates the S-1608
+		                                 * exactly (340 B at the master's width, unicast);
+		                                 * anything else is the ruling's 40-ch mixer frame.
+		                                 * Read here because main owns the environment. */
+		                                .box_master_frame_box =
+		                                    (getenv("REACPW_BOX_MASTER_FRAME") &&
+		                                     strcmp(getenv("REACPW_BOX_MASTER_FRAME"),
+		                                            "box") == 0) };
 		if (reac_slave_open(&L->slave, &slcfg, &L->tx_ring) == 0) {
 			L->slave_open = 1;
 			if (reac_slave_start(&L->slave) == 0) {

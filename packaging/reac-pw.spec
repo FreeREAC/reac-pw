@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,20 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-3
+- REACPW_BOX_MASTER_FRAME=mixer|box, the run that separates two readings the rig has not
+  been able to tell apart. Two builds were refused by the real S-0808 and each differed from
+  the box that WAS granted in a different field: 0.5.6-1 sent 340 B frames with a declaration
+  derived from the master's width, 0.5.6-2 sent 1492 B frames with the S-1608's declaration
+  byte-identical. Nobody has run 340 B frames with the right declaration. `box` is that
+  fourth corner - an exact S-1608 imitation, unicast after the flood - and `mixer` (the
+  default) is the operator's ruling unchanged. Everything else is identical between them, so
+  the two runs differ in exactly the field under test, and no rebuild is needed between.
+- The 0.5.6-2 capture is decoded in DESIGN.md: our announce and both cold-connect records are
+  byte-identical to the S-1608's, from a Roland-OUI source, unicast to the box, retried every
+  0.8 s with the announce 200 ms ahead of each burst. What the last two rounds set out to put
+  on the wire is on the wire.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-2
 - WE ARE THE MIXER ON THAT WIRE. Operator: "mixer always sends 40ch, boxes send their width
   only." Every audio frame on a box-master wire is the fixed 1492 B 40-slot downstream, the
