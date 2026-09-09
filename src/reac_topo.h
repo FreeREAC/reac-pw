@@ -195,6 +195,15 @@ int reac_topo_untagged_on_trunk(struct reac_topo *t, const char *parent);
 /* VIDs on this parent in `state` (REAC_TOPO_VLAN_FREE counts nothing). */
 int reac_topo_count(const struct reac_topo *t, const char *parent, enum reac_topo_vstate st);
 
+/* Is `ifname` STACKED on another netdev — a VLAN sub-interface, a bridge, a bond master —
+ * rather than a physical parent? Reads `<root ?: "/sys/class/net">/<ifname>/` for a
+ * `lower_*` entry, which the kernel creates for every device built on another one; a
+ * physical NIC has none. A stacked device is never tapped: a VLAN sub-interface has no
+ * VLANs of its own, and tapping it would find the very tag the kernel just stripped.
+ * `root` overrides /sys/class/net for a test fixture. Never fails loud — an unreadable or
+ * absent path reads as not stacked (0), the same answer as any ordinary NIC. */
+int reac_topo_is_stacked(const char *root, const char *ifname);
+
 /* ---- the socket shell ------------------------------------------------------------- */
 
 /* An ETH_P_ALL tap on `parent`, BPF-filtered to 0x8819 (tagged or not) and asking the

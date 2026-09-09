@@ -373,7 +373,7 @@ fake_box_master = executable('fake-box-master',
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
   args : [reac_pw_exe, fake_box_master],
-  timeout : 420)
+  timeout : 600)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #

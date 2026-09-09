@@ -77,6 +77,8 @@
 #include "reac_envflag.h"  /* one reading of a boolean knob, for every boolean knob */
 #include "reac_seglock.h"    /* one master per segment, across processes */
 #include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
+#include "reac_topo.h"       /* is this NIC a trunk, and which VLANs carry REAC */
+#include "reac_vlan.h"       /* the <parent>.<vid> netdevs the answer needs */
 #include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
 #include "reac_hunt.h"       /* which end of the pairing a heard segment takes */
 #include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */
@@ -1445,6 +1447,8 @@ static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, en
  * callbacks; the table's events are applied from the 200 ms poll, so no
  * source is ever destroyed from inside its own callback. */
 
+struct hearing;
+
 struct sniffer {
 	char name[IFNAMSIZ];        /* "" = free slot */
 	struct reac_capture cap;
@@ -1470,9 +1474,24 @@ struct sniffer {
 	int driven_on_silence;
 };
 
+/* THE TOPOLOGY TAP, one per physical parent with carrier. ETH_P_ALL, BPF-filtered to
+ * 0x8819, PACKET_AUXDATA on, never transmitting — the only socket that can tell a tagged
+ * frame from an untagged one (reac_topo.h has the measurement). It FEEDS the table and
+ * nothing else: every netdev the table asks for is made or removed from the 200 ms poll,
+ * so no source is ever destroyed from inside its own callback. */
+struct topo_tap {
+	char parent[IFNAMSIZ];     /* "" = free slot */
+	int fd;
+	struct spa_source *io;
+	struct hearing *h;
+	int said_trunk;            /* "this parent is a trunk, not a segment", said once */
+};
+
 struct hearing {
 	int enabled;
 	struct reac_ifscan scan;
+	struct reac_topo topo;
+	struct topo_tap tap[REAC_TOPO_MAX_PARENTS];
 	struct spa_source *nl_io;
 	struct sniffer sniff[REAC_IFSCAN_MAX];
 	struct listener *listeners;
@@ -1768,6 +1787,202 @@ static void hearing_drop(struct hearing *h, const char *name, const char *why)
 	fprintf(stderr, "reac-pw: [%s] segment dropped — %s\n", name, why);
 }
 
+/* ---- TRUNK TOPOLOGY: the VLANs on a parent, and the netdevs they need ---------
+ *
+ * DESIGN.md's 0.5.3 contract, from openmixer's 2026-08-23-reac-trunk-vlan-daemon.md
+ * §3-§5. Nothing here touches the audio path: the tap learns WHICH VLAN ids carry REAC
+ * on a parent, the kernel is asked for one `<parent>.<vid>` netdev per id, and from
+ * there each is an ordinary interface that the hearing above serves unchanged. */
+
+static struct topo_tap *tap_find(struct hearing *h, const char *parent)
+{
+	for (int i = 0; i < REAC_TOPO_MAX_PARENTS; i++)
+		if (h->tap[i].parent[0] && strcmp(h->tap[i].parent, parent) == 0)
+			return &h->tap[i];
+	return NULL;
+}
+
+static void on_topo_io(void *data, int fd, uint32_t mask)
+{
+	struct topo_tap *tp = data;
+	if (!(mask & SPA_IO_IN))
+		return;
+	uint64_t now = monotonic_ns();
+	for (int i = 0; i < 256; i++) {
+		enum reac_topo_kind k = REAC_TOPO_NOT_REAC;
+		uint16_t vid = 0;
+		if (reac_topo_tap_next(fd, &k, &vid) <= 0)
+			break;
+		reac_topo_saw(&tp->h->topo, tp->parent, k, vid, now);
+	}
+}
+
+/* Watch a parent for tags. A STACKED netdev is never watched: a VLAN sub-interface has no
+ * VLANs of its own, and the frames on it arrive with the tag already stripped. */
+static void topo_watch_iface(struct hearing *h, const char *name)
+{
+	if (tap_find(h, name) || reac_topo_is_stacked(NULL, name))
+		return;
+	struct topo_tap *tp = NULL;
+	for (int i = 0; i < REAC_TOPO_MAX_PARENTS; i++)
+		if (!h->tap[i].parent[0]) { tp = &h->tap[i]; break; }
+	if (!tp) {
+		fprintf(stderr, "reac-pw: [%s] no room for a topology tap (%d parents watched) "
+		        "— a trunk on this parent would be invisible\n", name,
+		        REAC_TOPO_MAX_PARENTS);
+		return;
+	}
+	int fd = reac_topo_tap_open(name);
+	if (fd < 0) {
+		/* NOT FATAL, AND NOT SILENT. Without the tap this interface is still sniffed
+		 * and still served untagged; what is lost is the ability to SEE a trunk on
+		 * it, and that has to be said or a trunk looks like an access port. */
+		fprintf(stderr, "reac-pw: [%s] the topology tap could not open: %s — tagged "
+		        "REAC on this parent cannot be seen (needs CAP_NET_RAW)\n",
+		        name, strerror(errno));
+		return;
+	}
+	if (reac_topo_watch(&h->topo, name) != 0) {
+		reac_topo_tap_close(fd);
+		return;
+	}
+	memset(tp, 0, sizeof *tp);
+	snprintf(tp->parent, IFNAMSIZ, "%s", name);
+	tp->fd = fd;
+	tp->h = h;
+	tp->io = pw_loop_add_io(h->loop, fd, SPA_IO_IN, false, on_topo_io, tp);
+	if (!tp->io) {
+		reac_topo_tap_close(fd);
+		reac_topo_unwatch(&h->topo, name, monotonic_ns());
+		memset(tp, 0, sizeof *tp);
+	}
+}
+
+/* Carrier went, or the netdev did: stop listening for tags. THE TABLE IS KEPT. A netdev we
+ * minted is not deleted on a link bounce — the VID simply stops arriving, and the silence
+ * hold (30 s, far longer than a box power-cycle or a PHY renegotiation) is what decides
+ * whether the VLAN is really gone. Deleting on carrier loss would destroy a segment that
+ * the ifscan hold exists to preserve. */
+static void topo_unwatch_iface(struct hearing *h, const char *name)
+{
+	struct topo_tap *tp = tap_find(h, name);
+	if (!tp)
+		return;
+	if (tp->io)
+		pw_loop_destroy_source(h->loop, tp->io);
+	reac_topo_tap_close(tp->fd);
+	memset(tp, 0, sizeof *tp);
+}
+
+/* One ENSURE: adopt what is there, create what is not, and say which. */
+static void topo_ensure(struct hearing *h, const char *parent, uint16_t vid, uint64_t now)
+{
+	const struct reac_topo_vlan *v = reac_topo_vlan_find(&h->topo, parent, vid);
+	fprintf(stderr, "reac-pw: [%s] tagged REAC heard — vid %u (%lu frame(s)): this parent "
+	        "is a TRUNK, its VLANs are the segments\n", parent, (unsigned)vid,
+	        v ? v->frames : 0UL);
+
+	char name[IFNAMSIZ];
+	if (reac_vlan_name(parent, vid, name, sizeof name) != 0) {
+		fprintf(stderr, "reac-pw: [%s] vid %u: `%s.%u` does not fit in an interface "
+		        "name — this VLAN is heard and cannot be served\n",
+		        parent, (unsigned)vid, parent, (unsigned)vid);
+		reac_topo_ensure_failed(&h->topo, parent, vid, now);
+		return;
+	}
+	int ours = 0;
+	int present = reac_vlan_query(name, &ours);
+	if (present == 1) {
+		if (reac_vlan_up(name) != 0)
+			fprintf(stderr, "reac-pw: [%s] %s exists and could not be brought up: %s\n",
+			        parent, name, strerror(errno));
+		reac_topo_ensured(&h->topo, parent, vid, ours);
+		if (ours)
+			fprintf(stderr, "reac-pw: [%s] vid %u: re-owned %s — it carries our mint "
+			        "alias, so a previous run leaked it; it is ours again and goes "
+			        "when we do\n", parent, (unsigned)vid, name);
+		else
+			fprintf(stderr, "reac-pw: [%s] vid %u: adopted %s — the host made it, it "
+			        "survives us untouched\n", parent, (unsigned)vid, name);
+		return;
+	}
+	if (present == 0 && reac_vlan_create(parent, vid) == 0) {
+		reac_topo_ensured(&h->topo, parent, vid, 1);
+		fprintf(stderr, "reac-pw: [%s] vid %u: created %s (marked %s) — serving it as a "
+		        "segment\n", parent, (unsigned)vid, name, REAC_VLAN_ALIAS);
+		return;
+	}
+	/* REPORT, NEVER FAIL DEAF (§4e). The VID goes on being heard and the ensure is
+	 * retried on a window; an operator who reads this line knows exactly which VLAN is
+	 * unserved and the one command that fixes it. */
+	int e = errno;
+	reac_topo_ensure_failed(&h->topo, parent, vid, now);
+	fprintf(stderr, "reac-pw: [%s] vid %u: %s cannot be created (%s)%s — the VLAN is "
+	        "HEARD and NOT SERVED. Either grant the capability, or:\n"
+	        "         ip link add link %s name %s type vlan id %u && ip link set %s up\n",
+	        parent, (unsigned)vid, name, strerror(e),
+	        e == EPERM ? " — CAP_NET_ADMIN is missing" : "",
+	        parent, name, (unsigned)vid, name);
+}
+
+/* One RELEASE. §4d in one branch: what we minted, we remove; what we adopted was never
+ * ours and is left exactly as it was found. */
+static void topo_release(struct hearing *h, const char *parent, uint16_t vid, int minted)
+{
+	(void)h;
+	char name[IFNAMSIZ];
+	if (reac_vlan_name(parent, vid, name, sizeof name) != 0)
+		return;
+	if (!minted) {
+		fprintf(stderr, "reac-pw: [%s] left alone — the host made it, so it is not "
+		        "ours to remove\n", name);
+		return;
+	}
+	if (reac_vlan_delete(name) == 0)
+		fprintf(stderr, "reac-pw: [%s] removed — we created it, so we take it away\n", name);
+	else
+		fprintf(stderr, "reac-pw: [%s] was ours and could not be removed: %s — it is "
+		        "left behind, and the next start will re-own it by its alias\n",
+		        name, strerror(errno));
+}
+
+/* Do what the topology table says. Main loop only, like hearing_apply. */
+static void topo_apply(struct hearing *h, uint64_t now)
+{
+	/* THE PARENT OF A TRUNK IS NOT A SEGMENT (§3, fact B). Said once, and acted on: a
+	 * listener that got in before the verdict is dropped, and hearing_hunt will not
+	 * elect a role on it again. */
+	for (int i = 0; i < REAC_TOPO_MAX_PARENTS; i++) {
+		struct topo_tap *tp = &h->tap[i];
+		if (!tp->parent[0] || !reac_topo_is_trunk(&h->topo, tp->parent))
+			continue;
+		if (!tp->said_trunk) {
+			tp->said_trunk = 1;
+			fprintf(stderr, "reac-pw: [%s] this parent carries tagged REAC, so it is "
+			        "not itself a segment — the kernel hands us its VLANs untagged "
+			        "and each of those is one\n", tp->parent);
+		}
+		if (hearing_listener(h, tp->parent))
+			hearing_drop(h, tp->parent, "it is a trunk parent, and its VLANs are the "
+			             "segments");
+		/* §4f's one refusal: untagged REAC on a parent that also carries tagged REAC
+		 * is not served. Driving it would put a master on the parent while masters run
+		 * on its sub-interfaces, which is the fact-B double-delivery fault. */
+		if (reac_topo_untagged_on_trunk(&h->topo, tp->parent))
+			fprintf(stderr, "reac-pw: [%s] untagged REAC on a trunk's native VLAN is "
+			        "not served; give it a tag\n", tp->parent);
+	}
+
+	reac_topo_tick(&h->topo, now);
+	struct reac_topo_event ev;
+	while (reac_topo_next(&h->topo, &ev)) {
+		if (ev.verb == REAC_TOPO_ENSURE)
+			topo_ensure(h, ev.parent, ev.vid, now);
+		else if (ev.verb == REAC_TOPO_RELEASE)
+			topo_release(h, ev.parent, ev.vid, ev.minted);
+	}
+}
+
 /* Do what the table says. Main loop only. */
 static void hearing_apply(struct hearing *h)
 {
@@ -1777,9 +1992,15 @@ static void hearing_apply(struct hearing *h)
 		switch (ev.verb) {
 		case REAC_IFSCAN_LISTEN:
 			sniffer_open(h, ev.name);
+			/* AND THE TAG DETECTOR, on a physical parent. The sniffer answers
+			 * "is there REAC here"; only this answers "is it tagged, and on
+			 * which VLAN", because the parent's protocol-bound socket cannot
+			 * tell the two apart (reac_topo.h's measurement). */
+			topo_watch_iface(h, ev.name);
 			break;
 		case REAC_IFSCAN_UNLISTEN:
 			sniffer_close(h, ev.name);
+			topo_unwatch_iface(h, ev.name);
 			fprintf(stderr, "reac-pw: [%s] link down — no longer listening\n", ev.name);
 			break;
 		case REAC_IFSCAN_SERVE: {
@@ -1869,6 +2090,27 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		const struct reac_ifscan_entry *e = reac_ifscan_find(&h->scan, sn->name);
 		if (!e || e->state != REAC_IFSCAN_LINKED)
 			continue;   /* already a segment, or on the serve-failed retry hold */
+		/* A TRUNK PARENT IS NOT A SEGMENT. It receives every sub-interface's frames
+		 * with the tag gone (reac_topo.h, fact B), so a role elected here would be
+		 * elected over another VLAN's box and answered UNTAGGED onto the native
+		 * VLAN — two masters for one box. Its VLANs are the segments, and they are
+		 * hunted on their own sniffers like any other interface.
+		 *
+		 * ON A TAPPED PARENT THE TAP IS THE AUTHORITY, and this is a RACE CLOSED
+		 * RATHER THAN NARROWED. The sniffer and the tap are two sockets on one
+		 * netdev fed the SAME frames; the sniffer simply cannot tell a tagged frame
+		 * from an untagged one. So a sighting the tap has not classified YET is a
+		 * sighting whose VLAN is still unknown, and electing a role on it would serve
+		 * a trunk parent for as long as it took the tap to catch up — measured once
+		 * as a segment on a trunk parent that was then dropped under it. Waiting for
+		 * the tap costs one poll on an access port, where the very same frame is
+		 * already queued on both sockets, and nothing at all where no tap exists (a
+		 * sub-interface, or a tap that could not open — both said in the journal). */
+		const struct reac_topo_parent *tp = reac_topo_find(&h->topo, sn->name);
+		if (tp && tp->tagged > 0)
+			continue;
+		if (tp && tp->untagged == 0 && reac_hunt_heard_anything(&sn->hunt))
+			continue;
 		if (e->retry_after_ns != 0 && now < e->retry_after_ns)
 			continue;
 
@@ -2148,6 +2390,7 @@ static void hearing_poll(struct hearing *h)
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	hearing_apply(h);
+	topo_apply(h, now);
 }
 
 static int hearing_start(struct hearing *h, struct pw_loop *loop, struct listener *slots,
@@ -2158,6 +2401,7 @@ static int hearing_start(struct hearing *h, struct pw_loop *loop, struct listene
 	h->listeners = slots;
 	h->n_slots = n_slots;
 	h->forced_rate = forced_rate;
+	reac_topo_init(&h->topo);
 	uint64_t now = monotonic_ns();
 	if (reac_ifscan_open(&h->scan, now) != 0) {
 		fprintf(stderr, "reac-pw: cannot watch the interface table over netlink: %s\n",
@@ -2187,6 +2431,19 @@ static void hearing_stop(struct hearing *h)
 {
 	if (!h->enabled)
 		return;
+	/* THE CLEAN EXIT OF §4d, and it runs BEFORE the taps close so the releases it
+	 * queues are still applied: every netdev we minted is removed, every netdev we
+	 * adopted is left exactly as we found it. An unclean exit leaves ours behind, and
+	 * the mint alias is what lets the next start re-own them instead of inheriting
+	 * them as somebody else's for ever. */
+	reac_topo_release_all(&h->topo);
+	struct reac_topo_event ev;
+	while (reac_topo_next(&h->topo, &ev))
+		if (ev.verb == REAC_TOPO_RELEASE)
+			topo_release(h, ev.parent, ev.vid, ev.minted);
+	for (int i = 0; i < REAC_TOPO_MAX_PARENTS; i++)
+		if (h->tap[i].parent[0])
+			topo_unwatch_iface(h, h->tap[i].parent);
 	for (int i = 0; i < REAC_IFSCAN_MAX; i++)
 		if (h->sniff[i].name[0])
 			sniffer_close(h, h->sniff[i].name);
