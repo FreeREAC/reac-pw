@@ -301,6 +301,12 @@ REQ=$(awk '$1 == "descriptor" { print $9 }' "$RT/box.rep")
 [ -n "$REQ" ] && [ "$REQ" -gt 100 ] || {
 	echo "FAIL: only ${REQ:-0} fillers carried the REQUESTING descriptor between our announce"
 	echo "      and the grant; a real slave fills that whole window with it"; exit 1; }
+HBB=$(awk '$1 == "hb_after_burst" { print $2 }' "$RT/box.rep")
+[ "$HBB" = "1" ] || {
+	echo "FAIL: no heartbeat arrived on the frame after our burst. Both granted boxes send"
+	echo "      one there, BEFORE the grant — a peer that beats only once established is"
+	echo "      asking to be granted without having said it is there"; exit 1; }
+echo "MEASURED: the heartbeat follows the burst, as both granted boxes send it"
 echo "MEASURED: $REQ fillers carried REQUESTING (0x52) between the announce and the grant"
 echo "MEASURED: ESTABLISHED descriptor first at peer frame $DESC, grant at $GRF — after, as"
 echo "          the granted box sent it"

@@ -166,6 +166,7 @@ struct reac_slave {
 	uint64_t bm_burst_sent_ns;    /* when the last cold-connect burst went out */
 	int      bm_listened;         /* the opening listen window is over */
 	int      bm_announce_sent;    /* our declaration has gone out: fillers say REQUESTING */
+	int      bm_burst_just_ended; /* the next frame is the heartbeat both granted boxes send */
 	uint64_t bm_start_ns;         /* when the engine began, for that silence */
 	uint32_t bm_rng;              /* the noise generator's state, engine thread only */
 	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */
