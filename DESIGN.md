@@ -561,13 +561,11 @@ MASTER and probing until a box cold-connects`.
    physical parent, and adopting or creating the sub-interfaces that carry them, is
    built and proven on veth; what is still owed is the rig itself, which has never been
    on a trunk port. A segment is still a whole interface — a VLAN sub-interface is one.
-3. **Re-resolution after a segment is up — PARTLY DONE, 2026-09-09.** The hunt normally
-   lives in the sniffer and dies when the segment is served, so a desk that powers up
-   AFTER we took a wire on EVIDENCE is published as a conflict by the listener's
-   arbitration and is not yielded to. A wire taken on PROVEN SILENCE is now the
-   exception: it keeps its sniffer and is yielded (`hearing_yield`), because driving it
-   was a bet rather than a reading. The general case — a pinned master, or a wire taken
-   because a box was heard on it — still owes the yield.
+3. **Re-resolution after a segment is up — DONE in 0.5.4**, below. Every wire WE took
+   and nobody pinned keeps its sniffer now, whether it was won on proven silence or on
+   a box heard, and a desk that turns up second is yielded to on either. A pinned
+   segment still keeps its role: a pin is the operator's answer about that wire, and the
+   only thing a rival can do to one is the 0.5.1 refusal.
 
 **Versioning.** 0.5.0 is this release. The increments above go 0.5.1, 0.5.2, ... — the
 middle digit does not move again for them.
@@ -889,6 +887,77 @@ nothing measures the link budget, so a trunk offered more VLANs than a gigabit c
 served until it is not (§12a's bound is about twenty at 48 kHz, eight recommended at 96 kHz).
 And no rig has yet been on a trunk: this is proven on veth, and the rig proof of §16's
 increment 4 — two boxes on two VLANs of one NIC — is owed.
+
+## 0.5.4 — a desk that turns up second takes the wire, and the pace tells the truth (2026-09-09)
+
+**Operator ruling: the yield is not about how we won the wire, it is about whether the
+wire was ours to lose.** 0.5.0 yielded only a segment taken on PROVEN SILENCE, because
+driving that one was a bet. The venue case says the distinction does not survive contact:
+a house console is powered, hears the stageboxes on a wire nobody pinned, grants them and
+drives — and then the Roland desk is switched on. That wire was won on EVIDENCE, so 0.5.0
+kept mastering it and published a conflict nobody could act on. Two masters on one segment
+is the fault the seglock exists to make impossible between our own processes, and it is no
+better against a desk.
+
+So the rule is one line, and it names the wire rather than the reason:
+
+| the wire | what a foreign master arriving does |
+|---|---|
+| unpinned, taken on proven SILENCE | yielded to — unchanged since 0.5.0 |
+| unpinned, taken because a BOX was heard on it | **yielded to** — new here |
+| unpinned, JOINED to somebody from the start | nothing to yield; we never had it |
+| pinned MASTER | the pin stands; a box mastering it is the 0.5.1 refusal, and a desk is the conflict the props already carry |
+
+**This answers the arbitration spec's Q1 for unpinned segments, and it costs something.**
+Yielding drops a box mid-audio: the master engine goes down, the slave engine comes up,
+and the box's stream stops for the length of the swap. Holding costs the whole segment
+instead — a desk that will not be argued with drives the boxes anyway, and what we would
+be defending is a second master on its wire. The operator ruled for the yield, on a wire
+nobody answered for; a wire the operator DID answer for still keeps its answer.
+
+**And a yield is not a one-way door.** The desk goes away — powered off at the end of the
+night, a cable pulled — and the segment must come back rather than sit slaved to a wire
+nobody is driving. The sniffer is therefore kept ACROSS the yield, not just up to it: when
+the rival's sighting ages out of the discovery table (`REAC_DISCO_STALE_NS`, 5 s, the same
+bar "a device is really gone" means everywhere else in this daemon) the verdict returns to
+MASTER and the wire is taken again, through the same drop-then-serve seam a cold start
+uses. The masterless licence granted on that wire at t0 is not revoked by a rival that came
+and went, and nothing latches in either direction: the desk coming back yields again.
+
+The journal says which way it moved, one line per transition: `a desk masters this segment
+… yielding the master role and joining as SLAVE`, and `the desk stopped mastering this wire
+… taking the segment back as MASTER`.
+
+**`reac.pace.source` publishes the pacer's own reference, and it used to publish a
+constant.** The playback door built its arbitration with `REAC_PACE_FREE_RUN` written in,
+from a 2026-08-21 config of record in which clock-follow was off. Following has been the
+DEFAULT since 0.5.0, and on the rig 2026-09-08/09 the journal read `locked to graph clock
+(api.alsa.0)` while the console's segment row read `free-run` — a published fact
+contradicting the daemon that published it. The pacer thread now mirrors its discipline
+(source + state) into one atomic beside the event it already pushes on every change, and
+the door maps that to the vocabulary `reac_arbitration.h` already owns:
+
+| the pacer's discipline | `reac.pace.source` |
+|---|---|
+| LOCKED to a NIC/external PHC | `phc` |
+| LOCKED to the hardware-driven graph clock | `graph-ref` |
+| LOCKED to the box's counter slope | `box-slope` |
+| UNLOCKED, LOCKING or HOLDOVER, or follow disabled | `free-run` |
+
+Only LOCKED names a reference. LOCKING is a claim about the future and HOLDOVER is a frozen
+period nothing is currently steering — both run on `CLOCK_MONOTONIC` at this instant, which
+is what `free-run` means. A foreign master still overrides all of it (`foreign-master`): what
+we would have disciplined to is not what the wire is running on.
+
+**WHAT IS PROVEN, AND WHERE.** `tests/test_reac_arbitration.c` holds the pure map from
+(source, state) to the published word, including that every non-LOCKED state reads
+`free-run`. `tests/test_reac_pacer_clock.c` drives the real discipline to lock and asserts
+the pacer reports it — the accessor over the thread boundary, which is where the constant
+was. `tests/hearing-finds-a-segment.sh` is the job: a wire taken on silence wakes a cold
+box, a fake desk starts announcing on the SAME wire, and within one announce cadence the
+daemon is that desk's slave and the box it had granted is no longer granted by us; the desk
+then stops, and after the hold the daemon takes the wire back and re-grants the box. Every
+phase reads `reac.pace.source` off the node the console reads it from.
 
 ## Files
 
