@@ -339,6 +339,20 @@ jobs:
           set -o pipefail
           AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
             aws s3 sync tree/rpm/ "s3://$R2_BUCKET/rpm/" --size-only \
+              --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+            # --size-only cannot see a re-signed repomd.xml.asc (same byte count, new bytes) or a
+            # same-size repomd.xml, and a stale signature over new metadata is "Bad PGP signature"
+            # for every consumer (measured 2026-09-09). Metadata and the tree's top-level files are
+            # therefore always overwritten, package files never re-uploaded.
+            find tree/rpm -type d -name repodata | while read -r d; do
+              aws s3 cp --recursive "$d" "s3://$R2_BUCKET/${d#tree/}" \
+                --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+            done
+            find tree/rpm -maxdepth 1 -type f \( -name '*.repo' -o -name 'RPM-GPG-KEY-*' \) | while read -r f; do
+              aws s3 cp "$f" "s3://$R2_BUCKET/${f#tree/}" \
+                --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+            done
+            true \
             --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           echo "pushed tree/rpm/ to s3://$R2_BUCKET/rpm/ (size-only, no --delete)"
 
