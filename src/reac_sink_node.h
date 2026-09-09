@@ -116,6 +116,25 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
                                           struct reac_ring *tx_ring,
                                           const struct reac_sink_cfg *cfg);
 
+/* THE OTHER DOOR OF A BOX-MASTER SEGMENT SAYS THE SAME THING (0.5.6-8).
+ *
+ * A segment joined to a stagebox on M has two nodes and a console folds them into one row,
+ * so a pair that disagrees reads as a resync in progress. Measured on the rig: after the
+ * engine reached ESTABLISHED the capture door published `reac.link-state=established` and
+ * this node was still at its create-time `probing`, because on that path the sink runs with
+ * no pacer and therefore no badge timer to move it.
+ *
+ * So main pushes the same answer here that it publishes on the door, through the SAME
+ * composer (`reac_box_master_identity_publish`) the capture node uses — one function writes
+ * `reac.link-state` / `reac.box-model` / `reac.box-width` / `reac.box.mac` in this daemon,
+ * and a second spelling of them is exactly what produced the mismatch. Idempotent: PipeWire
+ * merges, and the values only move when the engine's state does.
+ *
+ * MASTER-ROLE NODES NEVER REACH THIS. There the badge timer owns those keys off the pacer's
+ * own FSM, and two writers on one fact is the thing being fixed. */
+void reac_sink_node_publish_box_master(struct reac_sink_node *n,
+                                       unsigned width, uint64_t mac48, int enrolled);
+
 /* Bring the reac-playback GRAPH NODE to `channels` INPUT ports labelled `label`,
  * WITHOUT disturbing the running pacer/master (the sink owns the recognizer, so it
  * must never be torn down to resize). ONE entry point, callable from the

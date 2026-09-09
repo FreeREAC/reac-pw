@@ -1780,6 +1780,42 @@ master-kind frame arrives and this box sends one about once a second; and the 45
 carries **two** broadcast runs, so the listener is being re-served mid-enrolment. An enrolment
 that restarts cannot finish, and no protocol field will fix that.
 
+### It enrolled — and WHICH BINARY did it (0.5.6-8)
+
+The rig went `COLDCONNECT -> TX_MUTE -> ESTABLISHED`, the capture door published
+`established`, and the S-1608 on the neighbouring wire stayed served. Two facts to keep
+straight about it.
+
+**THE BINARY THAT ENROLLED WAS NOT THE COMMIT THAT NAMES THIS FIX.** `build/reac-pw` was
+19:59:57 and `src/reac_slave.c` was 20:07:43: a stale binary, linked before the libreac
+rewiring, carrying the three distinct records as the in-repo goldens rather than as libreac
+calls. `nm` on it shows neither new symbol, defined or undefined. What was proven on the rig
+is therefore the CONTENT — three distinct cold-connect records, the box-master declaration,
+the descriptor after the grant, the Roland source — and the libreac refactor is byte-equivalent
+to it by construction: libreac's unit test asserts the generated record equals the same
+captured bytes the golden was. Nothing about the rig result is weakened by that, and nothing
+about it tests the new symbols.
+
+**SO WHAT IS THE `>=0.7.2` FLOOR ACTUALLY FOR.** Two of the fix's pieces are libreac SYMBOLS —
+`reac_ctrl_build_coldconnect_head` and `reac_ctrl_build_config_announce_box_master` — and
+where reac-pw links the shared `libreac.so.1`, they must exist in the library that is loaded
+at runtime or the process will not resolve them. That is a genuine runtime requirement and the
+floor is honest. Where reac-pw links the STATIC `libreac.a` — the meson subproject fallback,
+and how this lane verified — both are compiled into the binary and no installed library is
+consulted at all. Everything else in the fix is reac-pw's own static code: the burst's
+ordering and its three-record shape, the ESTABLISHED descriptor waiting for the grant, the
+declaration and audio widths, the Roland-OUI source and its promiscuous socket, and both
+doors' link-state. None of that depends on the library version.
+
+**AND BOTH DOORS OF THE SEGMENT NOW SAY THE SAME THING.** After the engine enrolled,
+`reac-playback.<segment>` was still publishing its create-time `reac.link-state=probing` while
+the capture door said `established` — a console folds the two nodes into one row and a mixed
+pair reads as a resync in progress. On this path the sink runs with no pacer and therefore no
+badge timer to move it, so main pushes the same answer to both, through the SAME composer the
+capture node uses (`reac_box_master_identity_publish`). A second spelling of those keys is
+exactly what produced the mismatch. The veth proof reads `reac.link-state` and
+`reac.box-width` off BOTH nodes and requires them equal; removing the second push takes it red.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
