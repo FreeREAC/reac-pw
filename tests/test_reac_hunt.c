@@ -15,7 +15,7 @@
  * all — never hand-rolled, because the classifier's own false positives are what this
  * decision now rests on. The four outcomes are driven by real geometry.
  */
-#include "reac_hunt.h"
+#include <reac/reac_hunt.h>
 
 #include <reac/reac.h>
 #include <reac/reac_ctrlblk.h>

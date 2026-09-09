@@ -20,8 +20,8 @@
  *
  * The generator is parameterized on { out_channels, mac, console_field }; the
  * generic path and this byte-exact test are the SAME code. */
-#include "reac_master.h"
-#include "reac_ctrl.h"
+#include <reac/reac_master.h>
+#include <reac/reac_ctrl.h>
 #include "reac_tx.h"
 #include <reac/reac.h>
 #include <reac/reac_encode.h>

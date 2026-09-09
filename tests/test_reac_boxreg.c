@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-#include "reac_boxreg.h"
+#include <reac/reac_boxreg.h>
 #include <stdio.h>
 #include <string.h>
 

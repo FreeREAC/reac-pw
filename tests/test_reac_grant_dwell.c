@@ -27,7 +27,7 @@
  * meson declaration runs this binary twice with different env and it asserts the arm it
  * was given. Both arms matter: the fast one must be fast, and the default must not move.
  */
-#include "reac_master.h"
+#include <reac/reac_master.h>
 #include <reac/reac_ports.h>
 #include <stdio.h>
 #include <stdlib.h>

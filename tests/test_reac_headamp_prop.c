@@ -8,7 +8,7 @@
  * junk/out-of-range entries are skipped without desyncing the (key,value)
  * pairing, and that the three value encodings (Bool/Int/Float) all land. */
 #include "reac_headamp_prop.h"
-#include "reac_ctrl.h"     /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
+#include <reac/reac_ctrl.h>     /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 
 #include <reac/reac.h>
 #include <spa/param/props.h>

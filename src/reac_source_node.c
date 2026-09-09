@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_source_node.h"
-#include "reac_link_state.h"
+#include <reac/reac_link_state.h>
 #include "reac_node_ensure.h"  /* the shared same-box-or-rebuild decision */
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
                                  * (task #4.3 extension: "one wire, one rate" — see
@@ -18,7 +18,7 @@
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_pacer.h"   /* the segment's clock discipline: the graph-clock door */
-#include "reac_clock.h"   /* reac_clock_name_is_hardware, for the REAC_DEBUG line */
+#include <reac/reac_clock.h>   /* reac_clock_name_is_hardware, for the REAC_DEBUG line */
 
 #include <pipewire/pipewire.h>
 #include <pipewire/stream.h>

@@ -12,8 +12,8 @@
  * no period. No socket, no FSM — the guard that keeps the head-amp overlay from
  * touching establishment is the pacer's FILLER-only stamp, tested separately;
  * here we only prove the scheduler's emission logic. */
-#include "reac_headamp_tx.h"
-#include "reac_ctrl.h"     /* enum reac_headamp_param */
+#include <reac/reac_headamp_tx.h>
+#include <reac/reac_ctrl.h>     /* enum reac_headamp_param */
 
 #include <stdio.h>
 #include <string.h>

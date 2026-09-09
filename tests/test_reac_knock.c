@@ -20,7 +20,7 @@
  * masterless observation closes, and one frame from anybody cancels it.
  */
 #include "reac_knock.h"
-#include "reac_fsm.h"   /* REAC_FSM_FLOOD_BURST — the cold box's own bounded flood */
+#include <reac/reac_fsm.h>   /* REAC_FSM_FLOOD_BURST — the cold box's own bounded flood */
 
 #include <stdio.h>
 

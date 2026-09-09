@@ -68,21 +68,21 @@
 #include "reac_role_swap.h"  /* the role swap's lifecycle answer (arbitration §8) */
 #include "reac_segment_ident.h"  /* the segment identity + a slave's own answer set */
 #include "reac_watch.h"          /* what a fresh verdict means on a segment already up */
-#include "reac_role.h"
+#include <reac/reac_role.h>
 #include "reac_rate_cfg.h"
 #include "reac_mac.h"
-#include "reac_ctrl.h"        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
-#include "reac_link_state.h"  /* reac_box_master_model — the width-to-model row, 0.5.2 */
-#include "reac_headamp_tx.h"  /* struct reac_headamp_setting */
+#include <reac/reac_ctrl.h>        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
+#include <reac/reac_link_state.h>  /* reac_box_master_model — the width-to-model row, 0.5.2 */
+#include <reac/reac_headamp_tx.h>  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
 #include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
-#include "reac_envflag.h"  /* one reading of a boolean knob, for every boolean knob */
+#include <reac/reac_envflag.h>  /* one reading of a boolean knob, for every boolean knob */
 #include "reac_seglock.h"    /* one master per segment, across processes */
 #include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
 #include "reac_topo.h"       /* is this NIC a trunk, and which VLANs carry REAC */
 #include "reac_vlan.h"       /* the <parent>.<vid> netdevs the answer needs */
-#include "reac_disco.h"      /* the sniffer's bar: a frame that IS REAC gear */
-#include "reac_hunt.h"       /* which end of the pairing a heard segment takes */
+#include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
+#include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */
 #include "reac_node_recover.h" /* what to do about a node we built that is not there */
 

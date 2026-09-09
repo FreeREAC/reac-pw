@@ -42,7 +42,7 @@
 
 #include <reac/reac.h>   /* REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT */
 
-#include "reac_fsm.h"
+#include <reac/reac_fsm.h>
 #include "reac_ring.h"
 #include "reac_rt.h"
 

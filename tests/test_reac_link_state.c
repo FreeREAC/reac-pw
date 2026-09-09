@@ -11,7 +11,7 @@
  *   (c) the exact wire strings a consumer (openmixer's stagebox card) matches
  *       on are stable ("probing" / "granting" / "established" / "dropped").
  */
-#include "reac_link_state.h"
+#include <reac/reac_link_state.h>
 
 #include <stdio.h>
 #include <string.h>

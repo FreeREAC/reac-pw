@@ -14,7 +14,7 @@
  *   4. a replay of a captured-shape counter series (a real reference has noise;
  *      the loop must not chase it).
  */
-#include "reac_clock.h"
+#include <reac/reac_clock.h>
 
 #include <math.h>
 #include <stdio.h>

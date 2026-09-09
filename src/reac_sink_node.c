@@ -33,15 +33,15 @@
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
 #include "reac_sink_format.h"    /* the Format pod + renegotiate decision (#4.3) */
-#include "reac_role.h"           /* enum reac_role — this node is MASTER-only */
+#include <reac/reac_role.h>           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
 #include "reac_role_swap.h"      /* the swap's LIFECYCLE answer (arbitration §8) */
-#include "reac_link_state.h"
+#include <reac/reac_link_state.h>
 #include "reac_linkmon.h"   /* the RTM_NEWLINK carrier watch (#95) */
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
-#include "reac_arbitration.h"
+#include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
-#include "reac_ctrl.h"       /* struct reac_box_model (recognized-box props) */
+#include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
 #include "reac_mac.h"
 #include "reac_rx.h"      /* the BOX clock reference measurement source (#75) */
 

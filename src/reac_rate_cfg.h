@@ -34,7 +34,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "reac_role.h"
+#include <reac/reac_role.h>
 
 struct spa_pod;
 

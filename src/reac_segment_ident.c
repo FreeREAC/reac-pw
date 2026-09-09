@@ -5,7 +5,7 @@
 // and why a slave's answer set is derived rather than asserted.
 
 #include "reac_segment_ident.h"
-#include "reac_arbitration.h"   /* the ONE vocabulary these strings come from */
+#include <reac/reac_arbitration.h>   /* the ONE vocabulary these strings come from */
 #include <reac/reac.h>          /* the geometry vocabulary these widths are read in */
 
 #include <stdio.h>

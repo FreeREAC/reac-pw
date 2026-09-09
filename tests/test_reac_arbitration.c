@@ -8,8 +8,8 @@
  * frames classify through a catch-all, and nothing added the evidence up into a statement about
  * the segment. So the tests below are mostly about what must NOT become a master.
  */
-#include "reac_arbitration.h"
-#include "reac_clock.h"
+#include <reac/reac_arbitration.h>
+#include <reac/reac_clock.h>
 #include <reac/reac.h>   /* the geometry that outranks the control plane */
 
 #include <stdio.h>

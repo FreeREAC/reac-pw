@@ -6,7 +6,7 @@
  * its checksum byte (0x7a, observed on wire in reac-captures) is a fixed
  * cross-check of the checksum algorithm. Geometry (628 B box width, 00 7a
  * descriptor, C2 EA trailer) is ground-truthed in REAC-CONNECTION-FSM.md. */
-#include "reac_ctrl.h"
+#include <reac/reac_ctrl.h>
 #include <reac/reac_upstream.h>
 #include <reac/reac.h>
 #include <stdio.h>

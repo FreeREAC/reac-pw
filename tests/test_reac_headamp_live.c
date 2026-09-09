@@ -16,8 +16,8 @@
  *      atomic word. The writer sends value == ch (SENS), so a spliced triple would
  *      surface as value != ch. */
 #include "reac_pacer.h"
-#include "reac_headamp_tx.h"
-#include "reac_ctrl.h"
+#include <reac/reac_headamp_tx.h>
+#include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 
 #include <stdio.h>

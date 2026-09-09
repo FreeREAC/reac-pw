@@ -8,7 +8,7 @@
 // was untestable by construction. Here it is one call with its inputs written down.
 
 #include "reac_watch.h"
-#include "reac_disco.h"
+#include <reac/reac_disco.h>
 
 #include <stdio.h>
 #include <string.h>

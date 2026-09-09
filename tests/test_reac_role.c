@@ -10,7 +10,7 @@
  *   - the slave role REQUIRES --tx (the upstream return + handshake NIC);
  *   - the master role is valid with or without --tx (RX-only monitor, or the
  *     downstream sink). */
-#include "reac_role.h"
+#include <reac/reac_role.h>
 #include <stdio.h>
 #include <string.h>
 

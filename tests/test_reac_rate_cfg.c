@@ -31,8 +31,8 @@
  * fully covered here without that dependency. */
 #include "reac_pacer.h"
 #include "reac_rate_cfg.h"
-#include "reac_role.h"
-#include "reac_ctrl.h"
+#include <reac/reac_role.h>
+#include <reac/reac_ctrl.h>
 
 #include <reac/reac.h>
 #include <spa/param/props.h>

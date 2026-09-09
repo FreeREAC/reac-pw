@@ -8,7 +8,7 @@
  * back from the table, so a table edit that silently flips an edge fails
  * here even though the byte goldens (which only exercise the golden path)
  * might not reach it. */
-#include "reac_master_fsm.h"
+#include <reac/reac_master_fsm.h>
 
 #include <stdio.h>
 

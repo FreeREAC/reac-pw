@@ -25,10 +25,10 @@
  * This also pins the master's JOIN matcher and the slave's cold-connect
  * builder to stay mutually compatible. */
 #include <reac/reac_ports.h>
-#include "reac_master.h"
+#include <reac/reac_master.h>
 #include "reac_slave.h"
-#include "reac_ctrl.h"
-#include "reac_fsm.h"
+#include <reac/reac_ctrl.h>
+#include <reac/reac_fsm.h>
 #include "reac_role_swap.h"   /* the role lifecycle answers off THESE FSMs */
 #include "reac_segment_ident.h" /* W1: the SEGMENT's answer, off the same FSMs */
 #include "reac_tx.h"

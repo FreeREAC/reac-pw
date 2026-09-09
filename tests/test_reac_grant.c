@@ -15,11 +15,11 @@
  * the allocator that decides the slots, and the sweep generated over them.
  *
  * Pure: no socket, no FSM, no hardware. */
-#include "reac_grant.h"
-#include "reac_ctrl.h"
-#include "reac_headamp_tx.h"
-#include "reac_boxreg.h"   /* the AUDIO-fabric allocator — the other slot space */
-#include "reac_slots.h"
+#include <reac/reac_grant.h>
+#include <reac/reac_ctrl.h>
+#include <reac/reac_headamp_tx.h>
+#include <reac/reac_boxreg.h>   /* the AUDIO-fabric allocator — the other slot space */
+#include <reac/reac_slots.h>
 
 #include <reac/reac.h>
 #include <stdio.h>
