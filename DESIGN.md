@@ -1136,15 +1136,54 @@ line that carries no `[segment]` tag, so a journal filtered by segment drops it)
 `hearing_serve` for the same interface landing in a second slot. The next rig occurrence should
 be caught with the journal UNFILTERED and `ss -f link` on the daemon's pid.
 
-### What the veth measures
+### What the veth measured
 
-`tests/box-master-sends-downstream.sh` is the job: `fake-box-master` broadcasts 8-channel box
-geometry on a veth, the daemon joins it, and the emulator's own capture in its own namespace
-counts what came back. It measures the emission ratio (downstream frames out per box frame in),
-the frame length, that nothing at all was sent before the first box frame, and the head-amp
-value decoded out of the control block of a frame the daemon sent. `tests/box-master-rejoins.sh`
-is the drop/rejoin measurement above. Both run in an unprivileged user+net+pid namespace with a
-private PipeWire, like every veth proof in this repository.
+`tests/box-master-sends-downstream.sh` is the job, end to end: `fake-box-master` broadcasts
+8-channel box geometry on a veth, the daemon joins it, and the emulator — which now LISTENS as
+well, decoding what comes back through libreac's own `reac_decode` and `reac_ctrl_parse` rather
+than a second implementation of the frame layout — reports what arrived. Measured, 2026-09-09:
+
+| what | measured |
+|---|---|
+| emission ratio | **1.0000** downstream frames per box frame (3157/3157 over a 2 s window) |
+| frame length | **1492 B**, the fixed downstream, at a box width of 8 |
+| before the box's first frame | **0** frames |
+| frames that would not decode | **0** |
+| a 0.5 FS 1 kHz sine into `reac-playback.<segment>` | **−17.02 dBFS RMS on slots 0 and 1**, peak −14.00 (a sine's own 3.01 dB crest, so the wire carries the waveform and not an interleave of it with silence) |
+| the same tone 20 dB down | **−37.02 dBFS**, a delta of **20.01 dB** |
+| a slot nobody fed | **−999 dBFS** — digital silence |
+| a head-amp write on the segment | decoded off the wire as **ch 2, param 0 (phantom), value 1** |
+| the box goes quiet for 1.5 s | **0** frames sent |
+| the box comes back, same window | **2658** frames sent |
+
+**THE ABSOLUTE LEVEL IS NOT THE DAEMON'S TO PROMISE, AND THE PROOF SAYS SO IN ITS SHAPE.** A
+0.5 FS sine is −9.03 dBFS RMS and the wire reads −17.0: a constant 8 dB sits between the
+player and the node, put there by the session manager, which gives a sink it has never seen
+its own default volume (0.4 linear, measured) — and `reac-playback` applies
+`SPA_PROP channelVolumes` to the graph PCM before encoding, exactly as an adapter-backed sink
+does (`reac_gain.h`), so that default is real attenuation on the box's outputs rather than a
+display taper. **An operator will meet this on the rig**: the first time WirePlumber sees a
+`reac-playback.<segment>` node it will hand it that volume, and the box's outputs will be 8 dB
+down until somebody sets it. So the tone is played TWICE, 20 dB apart, and it is the DELTA that
+is asserted — a ratio survives a constant nobody declared, an absolute does not — with the loud
+reading additionally required to be a SIGNAL rather than a number near the floor, which is what
+stops two silences from agreeing with each other.
+
+`tests/box-master-rejoins.sh` is the drop/rejoin measurement: two full cycles, each asserting
+the four published properties, the feeder's accepted-frame count (~3 500 per 2.5 s) and — since
+this version — the downstream still going out (~2 650 frames per 1.5 s), because a rejoin that
+receives and no longer drives is a live segment on the console and a dead one at the box. Both
+proofs run in an unprivileged user+net+pid namespace with a private PipeWire, like every veth
+proof here; the downstream one additionally needs a session manager, because without one no node
+in this graph materialises a port and no tone can be linked to anything. It runs with every
+hardware monitor disabled: the namespace owns no devices and the ones it can reach through
+`/dev` are the operator's live rig.
+
+**Both are sabotage-verified.** Making a recv timeout count as a slot took the emission ratio
+from 1.0000 to 32.0000 and the downstream proof went red on it; making a re-opened segment
+decode the wrong direction reproduced the rig's symptom exactly — `none | probing |
+role_hunting | free-run` over a streaming wire — and the rejoin proof caught it on the first
+cycle with the first join still passing.
 
 ## Files
 
@@ -1159,7 +1198,7 @@ private PipeWire, like every veth proof in this repository.
 | `src/reac_source_node.{h,c}` | `reac:capture` pw_filter: 40 F32 ports, RT process(), follower/driver clock (RX for BOTH roles) |
 | `src/reac_tx.{h,c}` | raw-socket AF_PACKET emitter + `reac_eth_crc32` (the OHRCA-trailer RE verifier). The frame encoder moved to libreac 2026-07-29 (`reac_downstream_build`, `<reac/reac_encode.h>`) |
 | `src/reac_master.{h,c}` | **master-role** JOIN/HOLD: the cdea/cfea establishment FSM + captured control-block templates (S2) |
-| `src/reac_pacer.{h,c}` | **master-role** SCHED_FIFO cadence pacer + TX frame ring; stamps the master block on egress (S6) |
+| `src/reac_pacer.{h,c}` | **the SENDING**, in either role: SCHED_FIFO cadence pacer + TX frame ring, stamping the master block on egress (S6). `cfg.tick_on_rx` (0.5.5) swaps the deadline for the peer's own arriving frame, which is the whole of what a box-master wire changes — everything after the wake is byte-identical, and a wait that times out is not a slot |
 | `src/reac_sink_node.{h,c}` | `reac:playback` Audio/Sink: process() encodes + submits to the pacer (the master TX) |
 | `src/reac_ctrl.{h,c}`, `src/reac_fsm.{h,c}` | the slave control plane: virtual-stagebox builders/parser/checksum + the pure JOIN/HOLD FSM |
 | `src/reac_slave.{h,c}` | **slave-role** engine: drives `reac_fsm` from RX events, locks to the master cadence, returns our inputs upstream (S7) |
@@ -1182,6 +1221,9 @@ private PipeWire, like every veth proof in this repository.
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
-| `tests/` | 65 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |
+| `tests/box-master-sends-downstream.sh` | **the 0.5.5 job, measured at the far end of the cable**: the emission ratio, the 1492 B frame, nothing before the box's first frame, a tone through `reac-playback` decoded back off the wire at two levels 20 dB apart, a head-amp write read out of a control block we sent, and a quiet box stopping the downstream. Needs a session manager (a tone has to be LINKED) and skips without one |
+| `tests/box-master-rejoins.sh` | **a box-master segment dropped and heard again still carries audio, both ways**, twice in a row — the 2026-09-09 13:36 rig defect's measurement. The accepted-frame count is read only from the journal written AFTER the drop, because a feeder that accepts nothing prints no telemetry line at all |
+| `tests/fake_box_master.c` | the stagebox on M: broadcast box geometry with a distinct constant per channel and one master-only record a second, built by the same libreac builders the unit fixtures use. Since 0.5.5 it also LISTENS — counting, decoding and reporting what the daemon sends back, through libreac's own oracles so it cannot agree with a daemon that got the layout wrong. `SIGUSR1` pauses transmission while it keeps listening |
+| `tests/` | 69 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |
 | `meson.build`, `meson_options.txt` | build: pipewire/spa + libreac via pkg-config, libreac subproject fallback; no build options |
 | `subprojects/libreac.wrap` + `packagefiles/libreac/meson.build` | libreac as a meson subproject |
