@@ -1824,9 +1824,39 @@ static void on_topo_io(void *data, int fd, uint32_t mask)
 
 /* Watch a parent for tags. A STACKED netdev is never watched: a VLAN sub-interface has no
  * VLANs of its own, and the frames on it arrive with the tag already stripped. */
+/* IS THIS NETDEV A VLAN OF A PARENT WE ARE ALREADY WATCHING?
+ *
+ * reac_topo_is_stacked answers the general question from `/sys/class/net/<if>/lower_*`,
+ * and it answers NOT STACKED when the path cannot be read — the same answer an ordinary
+ * NIC gives. That is a fail-open on a topology ACTION: measured inside the veth proof's
+ * namespace, where /sys is the host's and none of the test netdevs appear in it, the
+ * daemon tapped its own `trunk1.13`, read vid 13 out of the tag the kernel had just
+ * stripped for it, and minted `trunk1.13.13` — a VLAN on a VLAN, with the real segment
+ * then probing at a netdev nobody was on.
+ *
+ * The daemon does not need sysfs to know this one: `<parent>.<vid>` is the name it uses
+ * itself (reac_vlan_name), so a netdev whose prefix up to the last dot is a parent in the
+ * topology table IS that parent's sub-interface. A physical NIC can never match — it would
+ * have to be named after a watched parent plus a suffix. Absence of the fact stays absence;
+ * this only ever adds a refusal. */
+static int tap_is_vlan_of_watched(struct hearing *h, const char *name)
+{
+	const char *dot = strrchr(name, '.');
+	if (!dot || dot == name || !dot[1])
+		return 0;
+	char parent[IFNAMSIZ];
+	size_t n = (size_t)(dot - name);
+	if (n >= sizeof parent)
+		return 0;
+	memcpy(parent, name, n);
+	parent[n] = '\0';
+	return reac_topo_find(&h->topo, parent) != NULL;
+}
+
 static void topo_watch_iface(struct hearing *h, const char *name)
 {
-	if (tap_find(h, name) || reac_topo_is_stacked(NULL, name))
+	if (tap_find(h, name) || reac_topo_is_stacked(NULL, name) ||
+	    tap_is_vlan_of_watched(h, name))
 		return;
 	struct topo_tap *tp = NULL;
 	for (int i = 0; i < REAC_TOPO_MAX_PARENTS; i++)
