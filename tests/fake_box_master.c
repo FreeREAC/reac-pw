@@ -100,6 +100,18 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_term);
 
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	/* THE BOX'S MICROPHONES, one distinct constant per channel — the same pattern
+	 * tests/test_reac_box_master_audio.c reads back by value out of the ring. A flood
+	 * filler with NULL audio is silence, and a segment that decoded every frame into
+	 * silence reads exactly like one that decoded nothing: this is what makes the
+	 * frames the daemon counts frames that CARRY something. */
+	float pcm[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
+	float *planar[REAC_MAX_CHANNELS];
+	for (int c = 0; c < REAC_MAX_CHANNELS; c++) {
+		planar[c] = pcm[c];
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
+			pcm[c][s] = (float)(c + 1) / 64.0f;
+	}
 	uint8_t f[2048];
 	uint16_t counter = 0;
 	long sent = 0, announces = 0;
@@ -107,13 +119,15 @@ int main(int argc, char **argv)
 	period.tv_nsec = 1000000000L / fps;
 
 	fprintf(stderr, "fake-box-master: %s, %d ch (%zu B frames) at ~%d fps from "
-	        "%02x:%02x:%02x:%02x:%02x:%02x — broadcast box geometry, one master-only "
-	        "record per second, no handshake of any kind\n",
+	        "%02x:%02x:%02x:%02x:%02x:%02x — broadcast box geometry carrying a distinct "
+	        "constant per channel, one master-only record per second, no handshake of "
+	        "any kind\n",
 	        iface, n_ch, reac_ctrl_box_frame_len(n_ch), fps,
 	        src[0], src[1], src[2], src[3], src[4], src[5]);
 
 	while (!stop_now) {
-		size_t n = reac_ctrl_build_flood_filler(f, BCAST, src, counter++, n_ch, NULL, 12);
+		size_t n = reac_ctrl_build_flood_filler(f, BCAST, src, counter++, n_ch,
+		                                        planar, REAC_SAMPLES_PER_PKT);
 		if (n == 0)
 			break;
 		/* ONE FRAME A SECOND CARRIES THE MASTER SIGNATURE. A head-amp record is
