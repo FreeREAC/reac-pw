@@ -1398,56 +1398,6 @@ enum reac_pace_source reac_pacer_pace_source(const struct reac_pacer *p)
 
 /* ---- the RT pacer thread ------------------------------------------------ */
 
-/* ONE SLOT'S WAIT, and the whole of what separates the two roles.
- *
- * MASTER (the default): sleep to the next absolute deadline — we own the clock, so the
- * cadence is ours to keep — then drain whatever the box sent inside that slot, bounded, so
- * the FSM sees it before this slot's frame is decided. Always returns 1: a slot elapsed
- * whether or not anything arrived, and a master that skipped a slot for a quiet box would
- * stall the box's own recovered clock.
- *
- * BOX MASTER (tick_on_rx, 0.5.5): the box provides the cadence, so the wait IS the box's
- * next frame — one blocking recv, and the frame that returns is the slot. A timeout, a
- * runt, or a non-REAC frame is NOT a slot and returns 0, which is what makes "nothing is
- * sent before the first box frame" fall out of the pacing instead of being a rule somebody
- * has to remember. Our own egress can never tick us: PACKET_IGNORE_OUTGOING drops it at
- * the kernel and rx_ingest's src filter drops what that misses.
- *
- * Runs on the SCHED_FIFO thread: no allocation, no locks, no stdio. */
-static int pacer_slot_wait(struct reac_pacer *p, uint64_t *deadline,
-                           uint8_t *rxbuf, size_t rxbuf_sz)
-{
-	if (p->tick_on_rx) {
-		ssize_t rn = recv(p->fd, rxbuf, rxbuf_sz, 0);
-		if (rn <= 0)
-			return 0;                      /* the box said nothing: no slot */
-		if (!reac_frame_is_reac(rxbuf, (size_t)rn))
-			return 0;
-		reac_pacer_rx_ingest(p, rxbuf, (size_t)rn);
-		return 1;
-	}
-
-	struct timespec d = { *deadline / 1000000000ull, *deadline % 1000000000ull };
-	/* Re-arm the SAME absolute deadline if interrupted (belt-and-braces: all signals
-	 * are blocked on this thread). An EINTR return means the slot sleep was cut short —
-	 * sleeping again to the same absolute target keeps cadence; just emitting would put
-	 * a frame ahead of the beat. */
-	while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL) == EINTR)
-		;
-
-	/* Bounded non-blocking RX drain: apply the box's frames to the FSM BEFORE deciding
-	 * this slot's emission. Budget 8 = 8x wire-rate headroom per slot (the box floods
-	 * <=1 frame/slot on average); a kernel-queue overflow only costs box FILLER, and a
-	 * dropped JOIN is retried by the box on its ~100 ms grid. */
-	for (int i = 0; i < REAC_PACER_RX_BUDGET; i++) {
-		ssize_t rn = recv(p->fd, rxbuf, rxbuf_sz, MSG_DONTWAIT);
-		if (rn <= 0)
-			break;                          /* EAGAIN = drained */
-		reac_pacer_rx_ingest(p, rxbuf, (size_t)rn);
-	}
-	return 1;
-}
-
 static void *pacer_loop(void *arg)
 {
 	struct reac_pacer *p = arg;
@@ -1487,22 +1437,27 @@ static void *pacer_loop(void *arg)
 	sll.sll_family  = AF_PACKET;
 	sll.sll_ifindex = p->ifindex;
 	sll.sll_halen   = 6;
-	/* BROADCAST, ON EVERY WIRE, INCLUDING ONE A BOX MASTERS (0.5.5, DESIGN.md).
-	 * The destination address IS the direction on this protocol — mixer->box OUTPUT
-	 * frames are ff:ff:ff:ff:ff:ff and box->mixer INPUT frames are unicast to the
-	 * console (reac-protocol/wire-format.md) — so a 1492 B downstream unicast to the
-	 * box's own MAC would arrive labelled as the upstream direction. It would also cut
-	 * every passive SPLIT listener on the segment out of the audio it is entitled to
-	 * decode. One builder, one destination: sending is always the same. */
 	memset(sll.sll_addr, 0xFF, 6);  /* broadcast dst */
 
 	while (atomic_load_explicit(&p->running, memory_order_acquire)) {
-		/* WAIT FOR THIS SLOT, then apply everything the box said inside it. Which
-		 * of the two waits runs is the ONLY difference between mastering a wire
-		 * and driving a wire somebody else clocks (0.5.5): a 0 return means no
-		 * slot happened at all, and nothing may be emitted for it. */
-		if (!pacer_slot_wait(p, &deadline, rxbuf, sizeof rxbuf))
-			continue;
+		struct timespec d = { deadline / 1000000000ull, deadline % 1000000000ull };
+		/* Re-arm the SAME absolute deadline if interrupted (belt-and-braces: all
+		 * signals are blocked on this thread). An EINTR return means the slot sleep
+		 * was cut short — sleeping again to the same absolute target keeps cadence;
+		 * just emitting would put a frame ahead of the beat. */
+		while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &d, NULL) == EINTR)
+			;
+
+		/* Bounded non-blocking RX drain: apply the box's frames to the FSM BEFORE
+		 * deciding this slot's emission. Budget 8 = 8x wire-rate headroom per slot;
+		 * a kernel-queue overflow only costs box FILLER, and a dropped JOIN is
+		 * retried by the box on its ~100 ms grid. */
+		for (int i = 0; i < REAC_PACER_RX_BUDGET; i++) {
+			ssize_t rn = recv(p->fd, rxbuf, sizeof rxbuf, MSG_DONTWAIT);
+			if (rn <= 0)
+				break;                      /* EAGAIN = drained */
+			reac_pacer_rx_ingest(p, rxbuf, (size_t)rn);
+		}
 
 		/* Bound the graph->wire buffering (task #152). The graph clock can run
 		 * marginally fast vs. the fixed wire clock, walking the ring depth up over
@@ -1580,14 +1535,8 @@ static void *pacer_loop(void *arg)
 		 * power-cycle restore); once both are drained the wire goes silent again.
 		 * The counter + audio the frame already carries are preserved (stamp only
 		 * rewrites the control block [16:50]). */
-		/* AND ON A BOX-MASTER WIRE THERE IS NO SWEEP TO PROTECT (0.5.5). The
-		 * ESTABLISHED bar exists so a preamp write can never overwrite a frame of
-		 * the grant sweep; a box on M grants nothing and is never swept, so the
-		 * bar would only mean "this segment's head-amp keys are decoration". Every
-		 * emission on that path is a FILLER, which is exactly what the overlay is
-		 * allowed to overwrite in the master role too. */
 		if (emit == REAC_M_EMIT_FILLER &&
-		    (p->master.state == REAC_M_ESTABLISHED || p->tick_on_rx) &&
+		    p->master.state == REAC_M_ESTABLISHED &&
 		    (p->headamp.active || p->headamp.replay_width)) {
 			uint8_t hch, hparam, hval;
 			if (reac_headamp_tx_next(&p->headamp, &hch, &hparam, &hval))
@@ -1626,15 +1575,6 @@ static void *pacer_loop(void *arg)
 			atomic_fetch_add_explicit(&p->tx_errors, 1, memory_order_relaxed);
 		else
 			atomic_fetch_add_explicit(&p->tx_frames, 1, memory_order_relaxed);
-
-		/* NO DEADLINE MEANS NO BOOKKEEPING ABOUT ONE (0.5.5). On a box-master wire
-		 * the next slot is the box's next frame, so there is no grid to advance, no
-		 * phase to steer and no slot debt that could exist — and leaving the block
-		 * below to run would book every frame as an oversleep against a deadline
-		 * that stopped meaning anything, then "repay" a debt to a clock we do not
-		 * own. */
-		if (p->tick_on_rx)
-			continue;
 
 		/* Advance the absolute deadline by exactly one period (no drift).
 		 *
@@ -1747,9 +1687,6 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	 * the pacer advances its deadline by p->period_ns exactly as it always has.
 	 * The pacer is the MASTER path by definition (a slave runs no pacer; frame
 	 * arrival is its slot clock), hence the master hierarchy. */
-	/* 0.5.5: the peer's own frame is the slot tick on a wire a box masters. Read
-	 * before the socket is opened, because it changes how that socket is used. */
-	p->tick_on_rx = cfg->tick_on_rx ? 1 : 0;
 	p->clock_follow = cfg->clock_follow;
 	p->slot_period_ns = p->period_ns;
 	reac_clock_disc_init(&p->clock, REAC_ROLE_MASTER, p->period_ns);
@@ -1890,40 +1827,8 @@ int reac_pacer_open(struct reac_pacer *p, const struct reac_pacer_cfg *cfg)
 	}
 #endif
 
-	/* THE TICK SOURCE NEEDS A BLOCKING RECV WITH A FLOOR UNDER IT (0.5.5). With
-	 * tick_on_rx the loop's only wake is a frame from the box, so it must BLOCK — a
-	 * spin on MSG_DONTWAIT would burn a core at SCHED_FIFO between two 125 us frames.
-	 * The timeout is what still lets `running` be re-read when the box goes quiet, the
-	 * same reason reac_rx.c and reac_slave.c carry one: SIGTERM is blocked on this
-	 * thread and cannot EINTR the call, so without a timeout a stopped daemon would
-	 * hang in pthread_join until a frame that is never coming. A timed-out recv emits
-	 * NOTHING — no frame arrived, so no slot happened. */
-	if (p->tick_on_rx) {
-		struct timeval tv = { 0, 200000 };   /* 200 ms, well under the shutdown budget */
-		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-	}
-
 	p->fd = fd;
 	return 0;
-}
-
-void reac_pacer_declare_box_master(struct reac_pacer *p, const uint8_t mac[6],
-                                   int in_ch, int out_ch, int headamp_base,
-                                   const uint8_t declaration[32])
-{
-	if (!p || !mac || in_ch <= 0)
-		return;
-	/* The width and strap the wire's own geometry identified: rebuilds the grant sweep
-	 * over this chassis's real cells, so what the sequence emits addresses the box in
-	 * front of us and not a template. */
-	reac_master_set_box(&p->master, in_ch, out_ch, headamp_base);
-	/* And the event the wire will never deliver. The declaration is the matrix row's own
-	 * config block — the bytes this model sends when it announces at all — so the FSM
-	 * classifies a JOIN carrying a real declaration rather than a bare one. */
-	reac_master_rx(&p->master, REAC_M_RX_BOX_JOIN, mac, declaration);
-	sync_published_box(p);
-	atomic_store_explicit(&p->fsm_state, p->master.state, memory_order_release);
-	p->prev_state = p->master.state;
 }
 
 int reac_pacer_start(struct reac_pacer *p)
