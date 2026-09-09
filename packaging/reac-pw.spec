@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        9%{?dist}
+Release:        10%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,14 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-10
+- A joining box's fillers carry three states in their control area and we sent one: zero
+  before the announce, 0x52 while requesting, 0x7a once granted. We sent zero throughout,
+  which is the only field-level difference across 40001 frames of ours and of the enrolment
+  that IS granted - and replaying that granted file with the 0x52 window zeroed is refused,
+  the only variant of it that is. The S-0808 as master tolerates zeros, which is why the
+  first rig round enrolled and the S-1608 refuses.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-9
 - A box-master wire is LISTENED to before it is spoken on. Replays settled that neither the
   declaration nor the phase is refused - the S-0808's own flood-less enrolment was granted at

@@ -391,3 +391,135 @@ def s0808_enrol(tmp):
         print("     V9  announce block: %s" % ann[0][16:50].hex())
         print("     V9a announce block: %s" %
               [d for _, _, d in v if d[16:22] == KIND_ANNOUNCE][0][16:50].hex())
+
+
+# ---- V9b/V9c: the two differences left between our join and the granted one -------------
+#
+# V9 is the S-0808's own enrolment onto the S-1608 and it is granted. Frame 49 carries its
+# announce, frames 8741/8742 its burst — TWO records, JOIN then BOX_READY — and 8743 its
+# first heartbeat. Ours differs in exactly two ways that no replay has isolated:
+#
+#   V9b  our THREE-record burst: the 0000 head_mark inserted between them. The second ground
+#        truth shows that record coming from the MASTER, not the slave, so a slave that sends
+#        it may be sending the master's own line back. If V9b is refused, the slave burst is
+#        two records and the ksy's "tags 0100 / 0000 / 0302" describes the GRANT.
+#   V9c  our TIMING: the burst 200 ms after the announce instead of 1.1 s, and the pair
+#        repeated every 2 s.
+#
+# Both keep the carrier, the cadence and the frame count exactly: only WHICH FRAME carries a
+# control block moves, because that is the variable and a re-timed file would move two.
+
+HEADMARK_BLK = bytes.fromhex(
+    "cdea04030014000200fe0ff0410a000012120000030000007df70000000000000000")
+
+
+def _ctrl_frames(recs):
+    return [i for i, r in enumerate(recs) if r[2][16] == 0xCD and r[2][17] == 0xEA]
+
+
+def _blank(d):
+    """Make a control frame a plain FILLER again, leaving its audio untouched."""
+    d[16] = 0x00
+    d[17] = 0x00
+    for i in range(18, 50):
+        d[i] = 0x00
+
+
+def join_variants(tmp):
+    dst = os.path.join(tmp, "variants")
+    base = read(os.path.join(dst, "V9-s0808-enrol.pcap"))
+    idx = _ctrl_frames(base)
+    if len(idx) < 3:
+        print("V9b/V9c: V9 has %d control frames, expected the announce + 2 records" % len(idx))
+        return
+    ann, rec1, rec2 = idx[0], idx[1], idx[2]
+
+    # V9b — the head_mark rides the frame right after the JOIN, and BOX_READY moves on by
+    # one, so the three records are consecutive exactly as ours are.
+    v = [[ts, tu, bytearray(d)] for ts, tu, d in base]
+    v[rec2][2][16:50] = HEADMARK_BLK[:34]
+    nxt = rec2 + 1
+    v[nxt][2][16:50] = bytearray(base[rec2][2][16:50])   # BOX_READY, one frame later
+    write(os.path.join(dst, "V9b-three-record-burst.pcap"), v)
+
+    # V9c — our timing: the burst 200 ms after the announce, and the pair again every 2 s.
+    v = [[ts, tu, bytearray(d)] for ts, tu, d in base]
+    fps = 8000
+    step = fps // 5                       # 200 ms at the wire rate
+    _blank(v[rec1][2]); _blank(v[rec2][2])
+    ann_blk = bytearray(base[ann][2][16:50])
+    r1_blk  = bytearray(base[rec1][2][16:50])
+    r2_blk  = bytearray(base[rec2][2][16:50])
+    placed = 0
+    for k in range(4):                    # the pair, then a retry every 2 s
+        a = ann + k * 2 * fps
+        b = a + step
+        if b + 1 >= len(v):
+            break
+        if k:                             # the first announce is already in place
+            v[a][2][16:50] = ann_blk
+        v[b][2][16:50] = r1_blk
+        v[b + 1][2][16:50] = r2_blk
+        placed += 1
+    write(os.path.join(dst, "V9c-our-timing.pcap"), v)
+    print("V9b-three-record-burst.pcap            %6d frames  our 0000 head_mark inserted "
+          "between JOIN and BOX_READY" % len(v))
+    print("V9c-our-timing.pcap                    %6d frames  burst 200 ms after the "
+          "announce, pair repeated every 2 s (%d pairs)" % (len(v), placed))
+
+
+# ---- V9l/V9m: separating "our fillers" from "our sequence" ------------------------------
+#
+# Every element of ours passes inside V9 and ours as a whole fails, so what is left is an
+# interaction. These two cut the stream in half along the only seam left:
+#
+#   V9l  OUR stream with V9's announce and burst frames substituted WHOLE at our positions.
+#        Our fillers, their control frames. If this is granted, our fillers are fine and our
+#        control frames are not - even though each passed alone inside their stream.
+#   V9m  V9 with ALL our fillers substituted, kind-matched, keeping V9's control frames AND
+#        its timing. Their sequence, our fillers. If this is refused, the fillers are it.
+#
+# Between them the two halves are exhaustive: one of them must fail, or the difference is in
+# something neither file carries (the pacing, which V9k already tested, or the socket).
+
+def _is_ctrl(d):
+    return d[16] == 0xCD and d[17] == 0xEA
+
+
+def fillers_vs_sequence(tmp):
+    dst = os.path.join(tmp, "variants")
+    theirs = read(os.path.join(dst, "V9-s0808-enrol.pcap"))
+    ours = read(os.path.join(dst, "V0p-ours-r9-unmodified.pcap"))
+    t_ctrl = [r for r in theirs if _is_ctrl(r[2])]
+    o_ctrl_i = [i for i, r in enumerate(ours) if _is_ctrl(r[2])]
+    if not t_ctrl or not o_ctrl_i:
+        print("V9l/V9m: need control frames in both files (%d / %d)"
+              % (len(t_ctrl), len(o_ctrl_i)))
+        return
+
+    # V9l — our stream, their control frames at OUR control positions, in their order.
+    v = [[ts, tu, bytearray(d)] for ts, tu, d in ours]
+    for k, i in enumerate(o_ctrl_i):
+        src = t_ctrl[k % len(t_ctrl)][2]
+        v[i][2][16:50] = bytearray(src[16:50])
+    write(os.path.join(dst, "V9l-our-fillers-their-control.pcap"), v)
+
+    # V9m — their stream and their timing, our FILLERS' control area (which is what a filler
+    # carries: the descriptor) and our audio, frame for frame.
+    of = [r for r in ours if not _is_ctrl(r[2])]
+    v = [[ts, tu, bytearray(d)] for ts, tu, d in theirs]
+    j = 0
+    n = 0
+    for r in v:
+        if _is_ctrl(r[2]):
+            continue                      # their announce, burst and heartbeats stay
+        mine = of[j % len(of)][2]
+        j += 1
+        r[2][16:50] = bytearray(mine[16:50])     # our descriptor state
+        r[2][50:len(r[2]) - 2] = mine[50:len(mine) - 2][:len(r[2]) - 52]
+        n += 1
+    write(os.path.join(dst, "V9m-their-sequence-our-fillers.pcap"), v)
+    print("V9l-our-fillers-their-control.pcap     %6d frames  our stream, THEIR announce and "
+          "burst frames at our positions (%d control frames)" % (len(ours), len(o_ctrl_i)))
+    print("V9m-their-sequence-our-fillers.pcap    %6d frames  their sequence and timing, OUR "
+          "fillers throughout (%d substituted)" % (len(theirs), n))

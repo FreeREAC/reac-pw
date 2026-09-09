@@ -293,6 +293,15 @@ DBG=$(awk '$1 == "descriptor" { print $7 }' "$RT/box.rep")
 [ -n "$DESC" ] && [ "$DESC" != "0" ] && [ "$DESC" -gt "${GRF:-0}" ] || {
 	echo "FAIL: the descriptor never appeared after the grant (first='$DESC' grant='$GRF'),"
 	echo "      so an established peer is indistinguishable from a joining one"; exit 1; }
+# AND THE REQUESTING STATE BEFORE IT. A real slave's fillers carry 0x52 from its announce
+# until the grant; zeroing that window is REFUSED by a real S-1608 (replay V9e), and ours
+# carried zero for the whole enrolment — the only field-level difference across the two
+# streams.
+REQ=$(awk '$1 == "descriptor" { print $9 }' "$RT/box.rep")
+[ -n "$REQ" ] && [ "$REQ" -gt 100 ] || {
+	echo "FAIL: only ${REQ:-0} fillers carried the REQUESTING descriptor between our announce"
+	echo "      and the grant; a real slave fills that whole window with it"; exit 1; }
+echo "MEASURED: $REQ fillers carried REQUESTING (0x52) between the announce and the grant"
 echo "MEASURED: ESTABLISHED descriptor first at peer frame $DESC, grant at $GRF — after, as"
 echo "          the granted box sent it"
 echo "MEASURED: established; $HB heartbeats, period $HBP s (frame-counted: this emulator"

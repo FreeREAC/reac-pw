@@ -127,6 +127,7 @@ struct ear {
 	 * build that made this mistake, which is three of them. */
 	unsigned long rx_frames_seen;      /* peer frames, for a frame INDEX */
 	unsigned long desc_first_frame;    /* where 007a first appeared */
+	unsigned long desc_req_frames;     /* fillers carrying REQUESTING (0x52) */
 	unsigned long grant_frame;         /* where we granted */
 	int desc_before_grant;             /* the refusal */
 	unsigned long steady_bcast;   /* broadcast downstream after the announce */
@@ -158,7 +159,13 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 		int desc = 0;
 		for (int i = 18; i < 50; i++)
 			if (f[i] != 0x00) { desc = 1; break; }
-		if (desc && k == REAC_CTRL_FILLER) {
+		/* THE REQUESTING STATE (0.5.6-10). A real slave's fillers carry 0x52 from its
+		 * announce until the grant and 0x7a after; zeroing that window is refused by a
+		 * real S-1608, so an emulator that ignores it would pass a daemon the rig will
+		 * not. Counted here and asserted by the proof. */
+		if (k == REAC_CTRL_FILLER && f[19] == 0x52)
+			e->desc_req_frames++;
+		if (desc && f[19] != 0x52 && k == REAC_CTRL_FILLER) {
 			if (!e->desc_first_frame)
 				e->desc_first_frame = e->rx_frames_seen;
 			if (!e->grant_frame)
@@ -357,8 +364,8 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	fprintf(f, "announce ok %d refused %lu in_scene %lu\n",
 	        e->announce_ok, e->announce_refused, e->announce_in_scene);
 	fprintf(f, "steady bcast %lu\n", e->steady_bcast);
-	fprintf(f, "descriptor first %lu grant %lu before_grant %d\n",
-	        e->desc_first_frame, e->grant_frame, e->desc_before_grant);
+	fprintf(f, "descriptor first %lu grant %lu before_grant %d requesting %lu\n",
+	        e->desc_first_frame, e->grant_frame, e->desc_before_grant, e->desc_req_frames);
 	fprintf(f, "distinct records %d\n", e->grant_n_total);
 	if (e->have_announce_seen) {
 		fprintf(f, "announceblk ");
