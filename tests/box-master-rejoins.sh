@@ -4,7 +4,7 @@
 #
 # WHOLE-BINARY: a segment joined to a BOX MASTER, dropped by a link loss past the hold and
 # heard again, CARRIES AUDIO AGAIN — in BOTH directions since 0.5.5, because a rejoin that
-# receives and no longer drives is a live segment on the console and a dead one at the box.
+# receives and no longer enrols is a live segment on the console and a dead one at the box.
 # Twice in a row.
 #
 # THE DEFECT THIS EXISTS AGAINST, measured on the rig 2026-09-09 13:36 with an S-0808 on M
@@ -173,21 +173,22 @@ check_joined() {   # check_joined <cycle-name> <log-line-floor>
 		echo "FAIL ($what): rx.frames_ok is not advancing ($ok1 -> $ok2) while the box"
 		echo "      floods the wire — the ports it published carry digital silence"
 		tail -n "+$floor" "$LOG" | tail -20; return 1; }
-	# AND THE SENDING CAME BACK WITH IT (0.5.5). A rejoin that receives but no longer
-	# drives is the same segment on a console and a dead one at the box: its outputs
-	# stop. Measured at the far end, over the same window as the reception above.
+	# AND THE ENROLMENT CAME BACK WITH IT (0.5.6). A rejoin that receives but no longer
+	# sends is the same segment on a console and a dead one at the box: its outputs stop.
+	# Measured at the far end, over the same window as the reception above — the UPSTREAM
+	# we unicast to the box master, which is what reaches its outputs.
 	local d1 d2
-	d1=$(rep rx_down)
+	d1=$(awk '$1 == "up" { print $3; exit }' "$RT/box.rep")
 	sleep 1.5
-	d2=$(rep rx_down)
+	d2=$(awk '$1 == "up" { print $3; exit }' "$RT/box.rep")
 	[ -n "$d2" ] || {
 		echo "FAIL ($what): the emulator wrote no report, so nothing can be said about"
 		echo "      what the daemon sent"; tail -3 "$RT/box.log"; return 1; }
 	[ "$d2" -gt "$((${d1:-0} + 1000))" ] || {
-		echo "FAIL ($what): the segment is receiving again but sent only $((d2 - ${d1:-0}))"
-		echo "      downstream frames in 1.5 s — the box's outputs are dead"
+		echo "FAIL ($what): the segment is receiving again but unicast only"
+		echo "      $((d2 - ${d1:-0})) upstream frames in 1.5 s — the box's outputs are dead"
 		tail -n "+$floor" "$LOG" | tail -20; return 1; }
-	echo "MEASURED ($what): rx.frames_ok $ok1 -> $ok2 over 2.5 s; downstream sent"
+	echo "MEASURED ($what): rx.frames_ok $ok1 -> $ok2 over 2.5 s; upstream sent"
 	echo "          $((d2 - ${d1:-0})) frames in 1.5 s; props $P"
 	return 0
 }
