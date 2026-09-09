@@ -1487,6 +1487,53 @@ those are facts about the WIRE, not about the pairing.
 selects the role and the hunt's verdict still carries the rival's kind and width into the
 listener — one join path, not two.
 
+### The rig will not grant it, and the diff is two fields (2026-09-09)
+
+0.5.6 on the rig: the daemon takes the new path, the wire carries 8000 fps of 340 B broadcast
+from the S-0808 and 8000 fps of 340 B UNICAST from us to it, and after 60 s both nodes still
+read `probing`. `rig-0.5.6-enrol.pcap` (5 s, both directions), decoded read-only:
+
+- **What we send** — 19995 frames in 2.5 s: FILLER 19982, **config-announce ×4** (t=0.019 s,
+  then ~0.8 s apart), **cold-connect ×9** = three bursts of 2 × `0014` + 1 × `0013`, each
+  burst exactly **0.200 s** after its announce. No heartbeat, because nothing established.
+  So the retry works; the S-1608 needed one pair and was echoed in 4 ms.
+- **What the box sends** — filler, its scene push and its ~1/s chanmap. **Zero `cdea 04 03`**
+  in the window: it is not granting.
+- **The cold-connect burst is BYTE-IDENTICAL to the S-1608's**, both records, so the join
+  trigger is right.
+- **The config-announce differs in exactly two fields**, both aligned, both 34 bytes:
+
+  | block offset | ours | the S-1608's | what it is |
+  |---|---|---|---|
+  | 6 | `84` | `80` | the model-family SELECTOR |
+  | 12–15 | `01 01 03 03` | `02 02 01 01` | the per-port type table |
+  | 33 | `4a` | `50` | the block checksum that follows |
+
+**AND THAT IS ONE MISTAKE, MADE TWICE: WE SIZED OUR DECLARATION TO THE MASTER TOO.** The
+ground truth separates two axes that 0.5.6 fused. The S-1608 sent its AUDIO at the master's
+width — 340 B, 8 slots — and declared ITSELF unchanged: selector `0x80`, its own 16-input
+port table. We derive both from the master's 8, so we announce selector `0x84` — the S-0808
+family, which is the chassis we are talking TO — with an 8-port table. The width belongs to
+the audio; the declaration belongs to the declarer.
+
+Ranked, for the rig to settle:
+
+1. **The selector.** Declare our own identity, not the master's: `0x80` at our own width, as
+   the granted box did. It is the only field whose meaning is "which model is this" and the
+   only one whose value we chose wrongly on purpose.
+2. **The port-type table with it** — the same fix, since the builder derives both from the
+   one width argument. Splitting that argument in two is the whole change.
+3. **The source MAC's OUI.** Ours is the NIC's own `00:14:5c:9b:28:2d`; every box that has
+   ever been granted on this rig announced from `00:40:ab:…`. The master role already spoofs
+   a Roland OUI for a related reason (a box unicasts to the address it was announced from).
+   Cheap to test alongside 1.
+4. **Retry cadence** — ruled out by the capture: four announce/burst pairs went out and none
+   was echoed.
+
+No first-seconds capture is needed: the steady state carries the announce and the burst in
+full, repeatedly. What would settle it is the operator's lamp state plus one rebuild with
+(1)+(2), and (3) if that is not enough.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
