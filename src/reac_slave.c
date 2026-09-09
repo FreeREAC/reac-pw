@@ -85,6 +85,7 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->bm_fill_noise = cfg && cfg->box_master_fill_noise;
 	s->bm_presilence_ms = cfg ? cfg->box_master_presilence_ms : 0;
 	s->bm_start_ns = 0;
+	snprintf(s->tag, sizeof s->tag, "%s", (cfg && cfg->tag) ? cfg->tag : "");
 	s->bm_rng = 0x1234567u;
 	s->bm_chanmap_hit = 0;
 	s->bm_announced = 0;
@@ -482,6 +483,12 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					 * the rig sent four correct bursts behind it and was echoed
 					 * nothing, lamp blinking. The captured block above is the
 					 * declaration that was granted. */
+					/* OUR OWN INVENTORY, at the width we send. Announcing
+					 * the S-1608's table to an S-1608 master told it its own
+					 * identity and was refused twice; the S-0808 that WAS
+					 * granted by that master declared its own 8-input table.
+					 * `box_channels` here is the master's output count, which
+					 * is the number of slots we fill (0.5.6-9). */
 					cl = reac_ctrl_build_config_announce_box_master(
 					         ctl, s->fsm.master_mac, s->src, counter,
 					         s->box_channels);
@@ -720,14 +727,14 @@ static void *slave_loop(void *arg)
 		"PHY_DOWN", "FLOOD_ANNOUNCE", "COLDCONNECT", "TX_MUTE", "ESTABLISHED", "DROP"
 	};
 	enum reac_fsm_state prev_state = s->fsm.state;
-	fprintf(stderr, "reac_slave: STATE %s\n", st_name[prev_state]);
+	fprintf(stderr, "reac_slave: %sSTATE %s\n", s->tag, st_name[prev_state]);
 
 	while (atomic_load_explicit(&s->running, memory_order_acquire)) {
 		/* State-transition trace (task #130): the FSM's phase is the ground truth
 		 * for establishment — log every change so a live run shows FLOOD ->
 		 * COLDCONNECT -> (grant) TX_MUTE -> ESTABLISHED and any DROP/re-flood flap. */
 		if (s->fsm.state != prev_state) {
-			fprintf(stderr, "reac_slave: STATE %s -> %s%s\n",
+			fprintf(stderr, "reac_slave: %sSTATE %s -> %s%s\n", s->tag,
 			        st_name[prev_state], st_name[s->fsm.state],
 			        s->fsm.state == FSM_DROP ? " (drop)" : "");
 			prev_state = s->fsm.state;

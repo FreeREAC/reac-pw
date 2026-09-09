@@ -111,6 +111,12 @@ struct reac_slave_cfg {
 	 * and beginning its flood; a box may key its enrolment window on a peer appearing
 	 * out of silence. `REACPW_BOX_MASTER_PRESILENCE_MS`. Also a hypothesis. */
 	int box_master_presilence_ms;
+	/* WHOSE TRANSITIONS THESE ARE (0.5.6-8). The engine printed `reac_slave: STATE …`
+	 * untagged, and with two box-master segments on one host the lines are
+	 * unattributable — which also made a hearing test wait match another phase's
+	 * ESTABLISHED and return instantly on somebody else's success. "[iface] " or ""
+	 * for a lone segment, exactly as every other per-segment line is tagged. */
+	const char *tag;
 };
 
 /* The slave engine. The FSM is the brain; everything else is the I/O the FSM's
@@ -151,6 +157,7 @@ struct reac_slave {
 	int      bm_announced;        /* the config-announce has gone out at least once */
 	int      bm_fill_noise;       /* -60 dBFS in the slots until the grant (see the cfg) */
 	int      bm_presilence_ms;    /* say nothing for this long first (see the cfg) */
+	char     tag[24];             /* "[iface] " for this engine's own transcript */
 	uint64_t bm_start_ns;         /* when the engine began, for that silence */
 	uint32_t bm_rng;              /* the noise generator's state, engine thread only */
 	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */

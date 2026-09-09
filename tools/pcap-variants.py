@@ -337,3 +337,57 @@ def second_record(tmp):
     write(os.path.join(dst, "V6g-their-burst-repeated.pcap"), v)
     print("V6g-their-burst-repeated.pcap           %3d frames changed  "
           "their 2nd cold-connect record replaced by a copy of the 1st, as ours does" % n)
+
+
+# ---- V9/V9a: does a master refuse a peer that declares the master's own inventory? -----
+#
+# The second ground truth (S-1608 in master mode, S-0808 joining it) shows each real box
+# declaring ITS OWN port table — the S-0808 `01 01 01 01 02 02 03x6`, the S-1608
+# `02 02 02 02 01 01 03x6`, both selector 0x80 — while we send the S-1608's table to
+# everyone, so on the S-1608's own wire we announced its identity back at it and were
+# refused twice.
+#
+# V9  is that box's enrolment cut out verbatim: announce, burst, then unicast. It floods
+#     NOTHING, which is the other half of the finding. It is the CONTROL and must be granted.
+# V9a is V9 with only the announce's port table replaced by the S-1608's, block checksum
+#     recomputed. If V9 grants and V9a is refused, the declaration must be our own.
+
+S0808 = bytes.fromhex("0040abc4dc9c")
+S1608_TABLE = bytes.fromhex("020202020101")   # the S-1608's own port table
+
+
+def block_cksum_fix(d):
+    """The 32-byte block frame[18:50] sums to 0 mod 256; the last byte carries it."""
+    s = sum(d[18:49]) & 0xFF
+    d[49] = (0x100 - s) & 0xFF
+
+
+def s0808_enrol(tmp):
+    dst = os.path.join(tmp, "variants")
+    src = os.path.join(tmp, "box-to-box-enroll.pcap")
+    recs = read(src, only_src=S0808)
+    if not recs:
+        print("V9: no S-0808 frames in %s — is that the S-1608-master capture?" % src)
+        return
+    # from its first unicast frame to three seconds past its cold-connect burst
+    t0 = recs[0][0] * 1000000 + recs[0][1]
+    keep = [r for r in recs if (r[0] * 1000000 + r[1]) - t0 <= 5000000]
+    write(os.path.join(dst, "V9-s0808-enrol.pcap"), keep)
+
+    v = [[ts, tu, bytearray(d)] for ts, tu, d in keep]
+    n = 0
+    for _, _, d in v:
+        if d[16:22] == KIND_ANNOUNCE:
+            d[26:32] = S1608_TABLE      # control-area offsets 10..15, the port table
+            block_cksum_fix(d)
+            n += 1
+    write(os.path.join(dst, "V9a-s0808-enrol-s1608-table.pcap"), v)
+    ann = [d for _, _, d in keep if d[16:22] == KIND_ANNOUNCE]
+    print("V9-s0808-enrol.pcap                    %6d frames  the S-0808's own enrolment, "
+          "verbatim: no flood, announce then burst (CONTROL: must be granted)" % len(keep))
+    print("V9a-s0808-enrol-s1608-table.pcap       %6d frames  the same with the announce's "
+          "port table made the S-1608's (%d announce frames rewritten)" % (len(v), n))
+    if ann:
+        print("     V9  announce block: %s" % ann[0][16:50].hex())
+        print("     V9a announce block: %s" %
+              [d for _, _, d in v if d[16:22] == KIND_ANNOUNCE][0][16:50].hex())

@@ -1250,11 +1250,24 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * never the frame's own geometry (reac_slave.c's bm_downstream). What we
 		 * DECLARE stays ours: the S-1608 sent 8 slots of audio to that same chassis
 		 * and announced its own 16-input self. */
-		int up_ch = c->join_box_master ? (int)c->wire_channels : c->box_channels;
+		/* THE BOX'S OUTPUT COUNT, NOT ITS INPUT WIDTH (0.5.6-9). What we send a box
+		 * master feeds its OUTPUTS, so the slots are its out count — and both real
+		 * captures agree: an S-1608 slave sent 8 slots to an 8-out master, and an
+		 * S-0808 slave sent 8 slots to a 16-in/8-out master. (Both boxes are 8-out,
+		 * so "the master's outputs" and "the slave's outputs" are not yet told apart
+		 * by any capture; the master's is what the frames feed and is what is used.)
+		 * `wire_channels` is the width the box BROADCASTS, which is its INPUT count —
+		 * using it sized an S-1608's playback door to 16 where the box has 8. */
+		const struct reac_box_model *bm_up = c->join_box_master
+			? reac_box_master_model(c->wire_channels) : NULL;
+		int up_ch = c->join_box_master
+			? (bm_up ? bm_up->out_ch : (int)c->wire_channels)
+			: c->box_channels;
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
 		                                .box_channels = up_ch,
 		                                .sample_rate = L->rx.sample_rate,
 		                                .src_mac = box_mac,
+		                                .tag = c->tag,
 		                                .box_master = c->join_box_master,
 		                                /* The rig experiment, no rebuild between runs:
 		                                 * REACPW_BOX_MASTER_FRAME=box imitates the S-1608
@@ -1300,8 +1313,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 				 * width the wire declared, and labelled with the model that width
 				 * identified where it identifies one (0.5.2). */
 				if (c->join_box_master) {
-					const struct reac_box_model *bm =
-						reac_box_master_model(c->wire_channels);
+					const struct reac_box_model *bm = bm_up;
 					struct reac_sink_cfg ucfg = {
 						.ifname = c->tx_if,
 						.channels = up_ch,
@@ -1403,7 +1415,16 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * guess — an 8-channel box gets an 8-port capture node rather than a 40-slot
 		 * fabric with 32 rows of silence in it. */
 		int width = c->join_box_master ? (int)c->wire_channels : 0;
-		if (reac_source_node_ensure(&L->src, &L->src_cfg, width, NULL) != 0) {
+		/* AND IT NAMES THE BOX, as the master path's capture node does (0.5.6-9). The
+		 * identity keys were published either way, but a console reads the node's
+		 * DESCRIPTION for the operator-facing name, so a joined box read the generic
+		 * "REAC 16ch capture" where a served one reads "S-1608 (16 in / 8 out)". The
+		 * label comes from the row the broadcast width matched, and is absent where no
+		 * row matches — the same rule the identity keys already follow. */
+		const struct reac_box_model *bm_cap = c->join_box_master
+			? reac_box_master_model(c->wire_channels) : NULL;
+		if (reac_source_node_ensure(&L->src, &L->src_cfg, width,
+		                            bm_cap ? bm_cap->display : NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
 			return -1;
 		}
@@ -1896,6 +1917,40 @@ static void hearing_drop(struct hearing *h, const char *name, const char *why)
 	L->rx_started = 0;
 	h->dropped++;
 	fprintf(stderr, "reac-pw: [%s] segment dropped — %s\n", name, why);
+}
+
+/* The definition promised above the poll. Placed here because it needs hearing_drop. */
+static int listener_reopen_role_reclassify(struct listener *L, struct pw_loop *loop,
+                                           enum reac_role role)
+{
+	(void)loop;
+	if (!g_hear.enabled || !L->cfg.rxcfg.source || L->cfg.rxcfg.kind != REAC_RX_LIVE)
+		return 0;               /* a --live segment: the caller swaps in place */
+	char name[IFNAMSIZ];
+	snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source);
+	if (!hearing_listener(&g_hear, name))
+		return 0;               /* not one of the heard segments after all */
+	fprintf(stderr, "reac-pw: [%s] REAC role -> %s: dropping the segment so the wire is "
+	        "CLASSIFIED again rather than re-opened on the old verdict — a stagebox on M "
+	        "is joined as one only if the hunt says so, and the hunt is what a role swap "
+	        "used to skip\n", name, reac_role_name(role));
+	hearing_drop(&g_hear, name, "role changed — re-hearing the wire to classify it afresh");
+	/* AND THE SNIFFER'S PIN IS STALE TOO. `sniffer_open` reads `REAC_ROLE_<segment>` once
+	 * and hands it to the hunt (`reac_hunt_pin`), so a sniffer that outlives the drop
+	 * keeps answering with the pin the operator has just changed — measured on the veth:
+	 * the segment was re-heard and classified REFUSED again, on a wire whose pin now said
+	 * auto. Closing it makes the next link tick open a sniffer that reads the pin as it is
+	 * now, which is the same path a cold start takes. */
+	sniffer_close(&g_hear, name);
+	/* AND THE WIRE HAS TO BE LISTENED TO AGAIN. A drop normally comes from a link edge,
+	 * and the link brings the sniffer back on the way up; here the cable never moved, so
+	 * nothing would re-open it and the segment would sit down for ever — measured. The
+	 * sniffer is opened straight away with the pin as it now reads, and the scan is told
+	 * this segment needs serving again, which is the same retry path a serve that failed
+	 * takes. */
+	sniffer_open(&g_hear, name);
+	reac_ifscan_serve_failed(&g_hear.scan, name, monotonic_ns());
+	return 1;
 }
 
 /* ---- TRUNK TOPOLOGY: the VLANs on a parent, and the netdevs they need ---------
@@ -2649,6 +2704,29 @@ struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop
  * restarts us; read only on the loop thread after pw_main_loop_run returns. */
 static int g_iface_lost;
 
+/* A ROLE CHANGE ON A HEARD SEGMENT RE-ASKS THE WIRE, IT DOES NOT GUESS (0.5.6-8).
+ *
+ * `listener_reopen_at_role` swaps the engine in place and carries the listener's
+ * configuration across — which is right for a `--live` segment, where nothing classified it
+ * in the first place. On a HEARD segment it is wrong, and the rig showed how: a wire pinned
+ * MASTER with a stagebox on M was published as the 0.5.1 refusal door; the pin was changed
+ * to `auto` through the console, and the in-place swap took the segment into the DESK-slave
+ * engine — "rx stream = master downstream (40 ch)", role_reestablish_pending — because
+ * `join_box_master` and `wire_channels` are the HUNT's verdict and the swap never re-runs it.
+ * A service restart took the right path, which is the tell: the difference was the
+ * classification, not the role.
+ *
+ * So a heard segment is DROPPED instead. Its sniffer re-hears the wire, the hunt classifies
+ * it afresh with the new pin in hand, and `hearing_serve` opens it through the same seam a
+ * cold start uses — the one path that has ever been right about what is on a wire. Returns 1
+ * when it took the segment down, 0 when this is not a heard segment and the caller should do
+ * the in-place swap.
+ *
+ * THE ROLE ASSERTION IS NOT LOST. It was written to the conf by whoever asked for it, which
+ * is where `listener_cfg_from_conf` reads it on the way back up. */
+static int listener_reopen_role_reclassify(struct listener *L, struct pw_loop *loop,
+                                           enum reac_role role);
+
 /* ONE main-loop poll (200 ms) for every segment, not per-listener: a
  * listener_close from inside a per-listener timer would free that very timer.
  * Runs on the loop thread, never inside a node callback, so the destroy+rebuild
@@ -2699,7 +2777,9 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		if (!L->sink || L->cfg.join_box_master) {
 			int back = reac_source_node_take_reopen_role(L->src);
 			if (back >= 0) {
-				listener_reopen_at_role(L, c->loop, (enum reac_role)back);
+				if (!listener_reopen_role_reclassify(L, c->loop,
+				                                     (enum reac_role)back))
+					listener_reopen_at_role(L, c->loop, (enum reac_role)back);
 				continue;   /* the capture node was rebuilt; nothing more this tick */
 			}
 			listener_publish_segment(L);
@@ -2707,7 +2787,8 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		}
 		int role = reac_sink_node_take_reopen_role(L->sink);
 		if (role >= 0) {
-			listener_reopen_at_role(L, c->loop, (enum reac_role)role);
+			if (!listener_reopen_role_reclassify(L, c->loop, (enum reac_role)role))
+				listener_reopen_at_role(L, c->loop, (enum reac_role)role);
 			continue;   /* the master sink is gone after a swap to slave; nothing more this tick */
 		}
 		int hz = reac_sink_node_take_reopen_rate(L->sink);
