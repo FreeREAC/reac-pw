@@ -92,6 +92,8 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_seglock.c',
   'src/reac_ifscan.c',
+  'src/reac_topo.c',
+  'src/reac_vlan.c',
   'src/reac_arbitration.c',
   'src/reac_hunt.c',
   'src/reac_knock.c',
@@ -288,6 +290,19 @@ ifscan_test = executable('test_reac_ifscan',
   ['tests/test_reac_ifscan.c', 'src/reac_ifscan.c'],
   include_directories : [include_directories('src')])
 test('reac_ifscan', ifscan_test)
+
+# --- unit test: the trunk tag classifier and the per-parent VLAN table ---------
+# Nothing in src/ read a VLAN tag before 0.5.3, so this is the first gate on the
+# one question a trunk asks: which VIDs carry REAC on this parent. It feeds the
+# classifier BOTH kernel shapes -- the tag in PACKET_AUXDATA (what this kernel
+# does, measured) and the tag left in the buffer -- because a classifier that
+# assumed one goes deaf on the other; and it walks the netdev lifecycle of the
+# spec's 4d, where MINTED and ADOPTED must stay distinct all the way to the
+# release that decides whether a netdev is deleted.
+topo_test = executable('test_reac_topo',
+  ['tests/test_reac_topo.c', 'src/reac_topo.c', 'src/reac_vlan.c'],
+  include_directories : [include_directories('src')])
+test('reac_topo', topo_test)
 
 # --- unit test: the segment's bus+address-derived name ------------------------
 # reac_ifname is NOT YET WIRED into main.c/reac_ifscan.c's segment identity (see
