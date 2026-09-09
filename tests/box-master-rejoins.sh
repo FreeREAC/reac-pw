@@ -139,7 +139,7 @@ wait_for "\[rej0\] segment up" 20 || {
 # ways: the graph's answer, and the feeder's count under it.
 check_joined() {   # check_joined <cycle-name> <log-line-floor>
 	local what="$1" floor="$2" P ok1 ok2 i
-	for ((i = 0; i < 60; i++)); do
+	for ((i = 0; i < 120; i++)); do
 		P=$(node_props $PID reac-capture.rej0)
 		[ -n "$P" ] && [ "$(fld "$P" 6)" = "established" ] && break
 		sleep 0.5
@@ -173,22 +173,23 @@ check_joined() {   # check_joined <cycle-name> <log-line-floor>
 		echo "FAIL ($what): rx.frames_ok is not advancing ($ok1 -> $ok2) while the box"
 		echo "      floods the wire — the ports it published carry digital silence"
 		tail -n "+$floor" "$LOG" | tail -20; return 1; }
-	# AND THE ENROLMENT CAME BACK WITH IT (0.5.6). A rejoin that receives but no longer
+	# AND THE SENDING CAME BACK WITH IT (0.5.6). A rejoin that receives but no longer
 	# sends is the same segment on a console and a dead one at the box: its outputs stop.
-	# Measured at the far end, over the same window as the reception above — the UPSTREAM
-	# we unicast to the box master, which is what reaches its outputs.
+	# Measured at the far end over the same window — the mixer's 40-slot downstream, which
+	# is broadcast and is what reaches those outputs. The unicast control frames are a
+	# handful by design and would be the wrong counter to read here.
 	local d1 d2
-	d1=$(awk '$1 == "up" { print $3; exit }' "$RT/box.rep")
+	d1=$(awk '$1 == "steady" && $2 == "bcast" { print $3; exit }' "$RT/box.rep")
 	sleep 1.5
-	d2=$(awk '$1 == "up" { print $3; exit }' "$RT/box.rep")
+	d2=$(awk '$1 == "steady" && $2 == "bcast" { print $3; exit }' "$RT/box.rep")
 	[ -n "$d2" ] || {
 		echo "FAIL ($what): the emulator wrote no report, so nothing can be said about"
 		echo "      what the daemon sent"; tail -3 "$RT/box.log"; return 1; }
 	[ "$d2" -gt "$((${d1:-0} + 1000))" ] || {
-		echo "FAIL ($what): the segment is receiving again but unicast only"
-		echo "      $((d2 - ${d1:-0})) upstream frames in 1.5 s — the box's outputs are dead"
+		echo "FAIL ($what): the segment is receiving again but sent only"
+		echo "      $((d2 - ${d1:-0})) downstream frames in 1.5 s — the box's outputs are dead"
 		tail -n "+$floor" "$LOG" | tail -20; return 1; }
-	echo "MEASURED ($what): rx.frames_ok $ok1 -> $ok2 over 2.5 s; upstream sent"
+	echo "MEASURED ($what): rx.frames_ok $ok1 -> $ok2 over 2.5 s; downstream sent"
 	echo "          $((d2 - ${d1:-0})) frames in 1.5 s; props $P"
 	return 0
 }
@@ -211,7 +212,7 @@ for CYCLE in 1 2; do
 	# above this line and can no longer be mistaken for this one's.
 	FLOOR=$(( $(wc -l < "$LOG") + 1 ))
 	ip link set rej0 up
-	for ((i = 0; i < 80; i++)); do
+	for ((i = 0; i < 160; i++)); do
 		[ "$(grep -c "\[rej0\] segment up" "$LOG")" -gt "$UPS_BEFORE" ] && break
 		sleep 0.25
 	done

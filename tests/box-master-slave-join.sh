@@ -183,10 +183,13 @@ FL=$(rep_f flood 3 "$RT/box.rep"); FLEN=$(rep_f flood 5 "$RT/box.rep")
 [ -n "$FL" ] && [ "$FL" -gt 5000 ] || {
 	echo "FAIL: the daemon broadcast only ${FL:-0} flood frames; a box announces itself"
 	echo "      with a bounded flood before it may go unicast"; cat "$RT/box.rep"; exit 1; }
-[ "$FLEN" = "340" ] || {
-	echo "FAIL: the flood frames are $FLEN B. The master broadcasts 8 slots (340 B) and the"
-	echo "      recipe is to speak ITS geometry, not our own width"; exit 1; }
-echo "MEASURED: flood $FL frames of $FLEN B, broadcast, at the master's own 8-slot width"
+# "mixer always sends 40ch, boxes send their width only" — so every audio frame we put on
+# this wire is the fixed 1492 B downstream, in the presence flood as much as after the grant.
+# The 340 B the S-1608 sent this same box is what a BOX sends; we are not one.
+[ "$FLEN" = "1492" ] || {
+	echo "FAIL: the flood frames are $FLEN B. A mixer floods with its own 40-slot"
+	echo "      downstream; 340 B is what a box sends"; exit 1; }
+echo "MEASURED: flood $FL frames of $FLEN B (the mixer's 40 slots), broadcast"
 
 # ---- 2. THE ORDER: ANNOUNCE FIRST, THEN THE BURST. ---------------------------------
 # This is the assertion the ground-truth capture is FOR. The S-1608 went unicast WITH its
@@ -211,10 +214,31 @@ python3 -c "import sys; sys.exit(0 if $ORD > 0 else 1)" || {
 	echo "FAIL: the cold-connect burst arrived $ORD s BEFORE the config-announce. A box"
 	echo "      announces itself first and cold-connects after — the master enrols it from"
 	echo "      that announce"; exit 1; }
-[ "$ULEN" = "340" ] || {
-	echo "FAIL: the unicast upstream is $ULEN B; the master's width is 8 slots = 340 B"; exit 1; }
+[ "$ULEN" = "1492" ] || {
+	echo "FAIL: the unicast control frames are $ULEN B; they ride the mixer's own frame"; exit 1; }
+# THE DECLARATION IS THE ONE THAT WAS GRANTED, byte for byte. 0.5.6-1 derived it from the
+# MASTER's width and announced selector 0x84 — the family of the box it was talking TO — and
+# the real S-0808 echoed nothing behind four correct bursts. This is the block a real S-1608
+# unicast to that same chassis 4 ms before it was granted.
+S1608_ANN=cdea0103001080000000020202020101030303030303000000000000000000000050
+ANNBLK=$(awk '$1 == "announceblk" { print $2 }' "$RT/box.rep")
+[ "$ANNBLK" = "$S1608_ANN" ] || {
+	echo "FAIL: our config-announce is not the one that was granted."
+	echo "      ours   $ANNBLK"
+	echo "      S-1608 $S1608_ANN"
+	python3 - "$ANNBLK" "$S1608_ANN" <<'PYEOF'
+import sys
+a = bytes.fromhex(sys.argv[1]); b = bytes.fromhex(sys.argv[2])
+print("      differs at offsets:", [i for i in range(min(len(a), len(b))) if a[i] != b[i]])
+PYEOF
+	exit 1; }
+AOK=$(awk '$1 == "announce" && $2 == "ok" { print $3 }' "$RT/box.rep")
+[ "$AOK" = "1" ] || {
+	echo "FAIL: the box refused our declaration ($(awk '$1=="announce"&&$2=="ok"{print $5}' "$RT/box.rep") refusals)"
+	exit 1; }
 echo "MEASURED: announce then burst, $AN announce / $JN cold-connect records, the burst"
-echo "          $ORD s after the announce; unicast frames $ULEN B, $UCH slots"
+echo "          $ORD s after the announce; control frames $ULEN B, unicast; the announce"
+echo "          block is byte-identical to the S-1608's (selector 0x80 at offset 6)"
 
 # ---- 3. IT ESTABLISHED, AND IT HEARTBEATS. -----------------------------------------
 wait_for "reac_slave: STATE .*-> ESTABLISHED" 30 || {
@@ -276,7 +300,7 @@ PYEOF
 		echo "UNLINKED"; kill -TERM $CATPID 2>/dev/null; return
 	fi
 	sleep 1
-	echo "$(up_ch 0 rms) $(up_ch 1 rms) $(up_ch 0 peak) $(up_ch 5 rms)"
+	echo "$(rep_ch 0 rms) $(rep_ch 1 rms) $(rep_ch 0 peak) $(rep_ch 5 rms)"
 	kill -TERM $CATPID 2>/dev/null; wait $CATPID 2>/dev/null; sleep 0.5
 }
 LOUD=$(play_tone 0.5)
@@ -292,7 +316,7 @@ set -- $SOFT; S0="$1"
 	echo "FAIL: the emulator reported no per-slot energy on the upstream"
 	cat "$RT/box.rep"; exit 1; }
 python3 -c "import sys; sys.exit(0 if $L0 > -40.0 and $L1 > -40.0 else 1)" || {
-	echo "FAIL: a 0.5 FS sine was played into the segment and the upstream's slots 0/1 carry"
+	echo "FAIL: a 0.5 FS sine was played into the segment and the downstream's slots 0/1 carry"
 	echo "      $L0 / $L1 dBFS — that is the floor, not audio. The box master's outputs are"
 	echo "      fed by THIS stream"; cat "$RT/box.rep"; exit 1; }
 python3 -c "import sys; sys.exit(0 if $LQ < -60.0 else 1)" || {
@@ -300,7 +324,7 @@ python3 -c "import sys; sys.exit(0 if $LQ < -60.0 else 1)" || {
 DELTA=$(python3 -c "print('%.2f' % ($L0 - $S0))")
 python3 -c "import sys; sys.exit(0 if abs(($L0) - ($S0) - 20.0) < 1.5 else 1)" || {
 	echo "FAIL: a 20 dB change at the sink moved the wire by $DELTA dB"; exit 1; }
-echo "MEASURED: tone on the UPSTREAM at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed"
+echo "MEASURED: tone in the 40-slot DOWNSTREAM at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed"
 echo "          slot 5 = $LQ dBFS; -20 dB at the source reads $S0, a delta of $DELTA dB"
 
 # ---- 5. AND NOTHING WAS SENT BEFORE THE BOX SPOKE. ---------------------------------
@@ -308,9 +332,11 @@ BEFORE=$(rep rx_before_tx)
 [ "$BEFORE" = "0" ] || {
 	echo "FAIL: $BEFORE frames reached the box before it had sent one"; exit 1; }
 # THE ABSENCE CLAIM'S POSITIVE CONTROL: the same counter, for frames that DID arrive.
-[ "$(rep_f up 3 "$RT/box.rep")" -gt 1000 ] || {
-	echo "FAIL: too few upstream frames for that absence to mean anything"; exit 1; }
-echo "MEASURED: 0 frames before the box's first; $(rep_f up 3 "$RT/box.rep") upstream frames in total"
+SB=$(awk '$1 == "steady" && $2 == "bcast" { print $3 }' "$RT/box.rep")
+[ -n "$SB" ] && [ "$SB" -gt 1000 ] || {
+	echo "FAIL: too few steady-state frames for that absence to mean anything"; exit 1; }
+echo "MEASURED: 0 frames before the box's first; $SB broadcast downstream frames after the"
+echo "          announce, and $(rep_f up 3 "$RT/box.rep") unicast control frames"
 
 # ---- 6. THE LAMP IS THE PAIRING, NOT THE HEARING. ---------------------------------
 # The rig, 2026-09-09: "S-0808 is not enrolled but omx sees it available" — the segment
