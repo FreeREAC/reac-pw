@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        8%{?dist}
+Release:        9%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,19 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-9
+- A box-master wire is LISTENED to before it is spoken on. Replays settled that neither the
+  declaration nor the phase is refused - the S-0808's own flood-less enrolment was granted at
+  three different phases, and so was the same file carrying the master's own port table - so
+  what is left is what no granted sequence does: flooding at a master that is calling, and
+  announcing on our own clock inside its scene transfer.
+- The wire stays empty for two announce cadences; a cfea inside that window ends the flood
+  before it starts, and the flood is kept for a SILENT master because that is how one is
+  found. The announce waits 200 ms without a scene record. The burst is asked once and
+  retried only after 2 s with no echo, and never re-floods.
+- The FSM's flood bound is counted from when we speak: it advances per tick whether or not a
+  frame left, so the listening window was spending the flood it exists to decide about.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-8
 - A box-master segment's doors are sized from the model's OUTPUT count, not from the width
   the box broadcasts. An S-1608 master's playback door came up at sixteen channels where that
