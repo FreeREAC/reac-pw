@@ -658,6 +658,15 @@ frame will never send one — a cold-connect flood aimed at it would be noise wi
 machine behind it. What the operator gets is the box's channels in the graph, and props that
 name whose clock they arrived on.
 
+> **OVERTURNED 2026-09-09 by the operator (see "## 0.5.5" below).** The paragraph above is
+> kept because its EVIDENCE stands and is still the reason the slave ENGINE stays shut: a box
+> on M grants nothing, so there is nothing to enrol with and no handshake to answer. What was
+> wrong is the leap from that to silence. The three experiments behind it were all HANDSHAKE
+> exchanges — the cold-connect flood, the grant, the enrolment — and nobody had tried plainly
+> SENDING THE DOWNSTREAM paced by the box's own frames. Since 0.5.5 a box-master join emits
+> the ordinary master downstream at the box's cadence; the receive-only sentence describes
+> 0.5.1 through 0.5.4 and nothing after.
+
 *(The rig's own S-0808 on M, 2026-09-09, put a MASTER-role frame on the wire beside that
 box-width geometry: the 0.5.0-3 refusal cannot fire without one, since only
 `REAC_DISCO_ROLE_MASTER` evidence reaches `reac_arbitrate`'s `foreign_master`. The S-4000S
@@ -760,6 +769,15 @@ runs no handshake to receive one. And its OUTPUTS ARE NOT OURS: an S-0808 on M i
 its 8 outputs from a stream we are not driving, so this segment has no `reac-playback` node,
 publishes no head-amp keys, and an operator cannot route to that box from here. The mode
 switch on the box's front panel is what changes any of that.
+
+> **OVERTURNED 2026-09-09, the same day, by the operator's ruling in "## 0.5.5".** The
+> paragraph above confused two things a REAC endpoint keeps apart: WHO IS ENROLLED WITH WHOM,
+> which really is nothing on this wire, and WHAT IS SENT ON IT, which never depended on an
+> enrolment. Since 0.5.5 a box-master segment DOES have a `reac-playback` node, DOES publish
+> the `reac.headamp.*` keys, and an operator CAN route to that box's outputs from here. Only
+> the identity half of this section — the box is the same box whichever end sends the clock,
+> and the model is implied by the width — is unchanged, and it is what the playback node is
+> sized from.
 
 ## 0.5.3 — the TRUNK: a VLAN is a segment, and the daemon makes the netdev (2026-09-09)
 
@@ -994,6 +1012,139 @@ daemon takes the wire back and is measured DRIVING it again. The same phase read
 the daemon's own clock transcript says — under a private PipeWire with no hardware to
 offer, which never locks, so the agreement is what is proven there and the LOCKED mapping
 is proven above it.
+
+## 0.5.5 — a box master gets the same downstream; clock slave is only the pacing (2026-09-09)
+
+**Operator ruling, 2026-09-09 13:45, verbatim:** *"Sending is always the same, being clock
+slave is only part of the enrollment."*
+
+It overturns 0.5.1's conclusion "therefore the join is RECEIVE-ONLY" and 0.5.2's
+receive-only contract, both amended in place above rather than deleted, because the
+measurements under them are still true and only the conclusion drawn from them was wrong.
+What was wrong is one substitution: 0.5.1 measured that **nothing can be ENROLLED** with a
+box on M and concluded that **nothing can be SENT** to it. Those are different facts about a
+REAC wire. The desk→box DOWNSTREAM — the fixed 1492 B, 40-slot broadcast carrying the box's
+output audio and the control/head-amp blocks — is what a box CONSUMES, and it consumes it
+whoever owns the clock: a box on M provides the cadence instead of following one, and that
+is the only thing its mode switch changed. Every experiment 0.5.1 ran was a HANDSHAKE
+exchange (the cold-connect flood, the grant, the enrolment); nobody had tried plainly
+sending the downstream, paced by the box's own frames.
+
+**So a box-master join is a MASTER'S SENDING ON A SLAVE'S CLOCK, and both halves are the
+ones that already exist.**
+
+| the half | what runs | unchanged from |
+|---|---|---|
+| the pace | the box's frame ARRIVAL is the slot tick — one downstream frame emitted per received box frame, and no `clock_nanosleep` anywhere | S7's slave engine, which clocks the same way off a desk |
+| the sending | `reac_downstream_build` → the frame ring → the master's counter + control block stamped on egress, head-amp overlay included | S6's pacer and the master role, byte for byte |
+| the enrolment | NOTHING. No cold-connect, no grant, no announce is expected back, and no slave engine is opened | 0.5.1's measurement, which stands |
+
+`reac_pacer_cfg.tick_on_rx` is the whole switch. Set, the pacer's loop blocks on its own
+RX instead of on a deadline, ingests the frame, and then runs the SAME emission body — ring
+pop or silent FILLER, rate drain, `reac_master_next`, stamp, head-amp overlay, `sendto`. The
+period, the catch-up budget and the clock discipline are all dead code on that path by
+construction: there is no deadline to advance, so there is nothing to drift, repay or
+discipline. The wire's rate is whatever the box is running at, exactly, because every one of
+our frames is a reply to one of its own.
+
+**THE DOWNSTREAM IS BROADCAST ON A BOX-MASTER WIRE, exactly as on a desk's.** This was the
+one addressing question the ruling left open, and the protocol answers it three times over
+(`reac-protocol/wire-format.md`):
+
+- **The destination address IS the direction.** "dst MAC → direction/role (mixer→box OUTPUT
+  frames are broadcast `ff:ff:ff:ff:ff:ff`, box→mixer INPUT frames are unicast to the console
+  MAC)" — the wire carries no other discriminator, and byte 0 of the frame is where a box's
+  parser reads it. A 1492 B downstream unicast to the box's own MAC would arrive labelled as
+  the UPSTREAM direction: the length says master, the address says slave, and every capture
+  in the corpus says a receiver believes the address.
+- **A REAC segment is not a point-to-point link.** The SPLIT listener "periodically unicasts a
+  `SPLIT_ANNOUNCE` … and still decodes the broadcast audio — this is why a bridge can decode
+  without" being paired at all. Unicasting the downstream would cut every passive listener on
+  the segment out of the audio, which is a change to the SEGMENT and not to our pairing with
+  one box.
+- **And "sending is always the same" is the ruling itself.** A second addressing mode for one
+  peer kind is a second sender to keep honest; there is one builder, one destination, and the
+  only difference between the two roles is what wakes the loop.
+
+**BEFORE THE FIRST BOX FRAME, NOTHING IS SENT — no frame, and no tick.** The tick IS the box's
+frame, so a wire whose box has not spoken yet has had no slots at all, and the segment emits
+nothing rather than filler. This is not a grace period or a hold-off: it falls out of the
+pacing and cannot be got wrong. It is also what keeps 0.5.1's central promise intact — a
+daemon that hears a box mastering a wire never puts a frame on it until that box has proved,
+frame by frame, that it is there.
+
+**THE DOOR STAYS ON THE CAPTURE NODE, and the playback node never publishes a second copy of
+the segment's answer.** A box-master segment now has two nodes, and only one of them may
+answer for the segment (the one-store law). 0.5.2 put the answer on `reac-capture.<segment>`
+because a receive-only join had no other node, and it stays there for a better reason than
+inertia: the aggregate is a statement about WHOSE CLOCK THIS SEGMENT IS ON, which is the
+box's, and the playback node is an OUTPUT onto a wire we do not own. So on a joined
+box-master wire the sink node publishes its own node identity, the segment name, the
+head-amp control keys and the discovery table, and skips `reac.master.*`, `reac.link-state`
+and the `reac.box-*` badge entirely. `reac.master.refusal` in particular would have read
+`rival-master-box` off the shared composer — a refusal published over a segment we joined
+and are driving audio into.
+
+The published answer on the capture node is unchanged from 0.5.2 and is what the rig proof
+reads: `reac.master.state=foreign`, `reac.master.rival.kind=box`, `reac.pace.source=foreign-master`,
+`reac.cfg.role.state=applied`, `reac.link-state=established` once the stream is locked. None
+of it is asserted; `reac_arbitrate` derives `foreign` because the master FSM is PROBING and a
+rival unambiguously masters the wire — which is exactly what is happening, and the reason the
+FSM is deliberately left probing rather than declared established.
+
+**THE HEAD-AMP OVERLAY FIRES WITHOUT AN ESTABLISHMENT, and only here.** The master role guards
+the overlay with `state == ESTABLISHED` so a preamp write can never overwrite a frame of the
+grant sweep. On a box-master wire there is no sweep to protect and there never will be, so the
+guard admits `tick_on_rx` as well; every other emission on that path is a FILLER, which is what
+the overlay is allowed to overwrite in either role.
+
+### The rejoin-after-drop defect, and what the veth could not reproduce
+
+**Measured on the rig, 2026-09-09 13:36** (`/home/pau/.claude/jobs/87a4861e/tmp/s0808-rejoin.log`),
+with an S-0808 on M and 0.5.4 deployed. After `segment dropped — link down past the hold` the
+wire was heard again inside a second and re-served — `segment up (slave, receive-only on a box
+master…) — 3 served so far` — and the re-created `reac-capture.enp128s20f0u2` published DIGITAL
+SILENCE on all eight channels while the NIC was taking 8019 frames a second of real samples off
+the wire. Its properties stayed at their create-time seeds: `reac.link-state=probing`,
+`reac.master.state=none`, `reac.pace.source=free-run`, `reac.cfg.role.state=role_hunting`. A
+daemon restart fixed it; the first join of a daemon's life was never affected.
+
+**All four of those seeds are one fact.** Each is derived from `reac_segment_heard_step` over
+`rx.frames_ok`, so a segment whose feeder accepts nothing publishes exactly that set and no
+other — the four properties are not four symptoms, they are one counter at zero, reported four
+times. That is what makes the RX feeder the only place to look.
+
+**What the veth could not reproduce, said plainly rather than left as a fixed bug.** The
+sequence was rebuilt on a veth against `fake-box-master` (`tests/box-master-rejoins.sh`) and run
+under both of the conditions the rig can present: a carrier loss past the 3 s hold, twice in a
+row, and an interface DELETED and re-created under the same name with a new ifindex — the
+AX88179 re-enumeration this rig is documented to do (`reac_rx.c`, 2026-08-29). Both rejoined
+carrying audio, with the feeder counting ~3 500 accepted frames per 2.5 s window and all four
+properties back at `established` / `foreign` / `foreign-master` / `applied`. The static reading
+agrees: `hearing_serve` memsets the whole `struct listener` before it re-opens one, so
+`L->cfg.rxcfg`, `L->heard`, `L->role_swap` and the ring cannot carry anything across a drop, and
+`reac_rx_open` memsets `struct reac_rx` on top of that. Nothing in the listener survives.
+
+So the defect is NOT in the state this file can name, and it is not fixed by asserting that it
+is. What the lane leaves behind instead is the measurement: the proof runs two full drop/rejoin
+cycles and reads the feeder's accepted-frame count ONLY from the journal written after the drop
+— because a feeder that accepts nothing prints no telemetry line at all, and `tail -1` over the
+whole log hands back the previous listener's healthy number and calls the defect a pass. The
+two candidates the evidence still allows are outside the listener and both are visible on the
+rig and not here: the feeder thread's own `reac_capture_open` failing at start (it reports on a
+line that carries no `[segment]` tag, so a journal filtered by segment drops it), and a second
+`hearing_serve` for the same interface landing in a second slot. The next rig occurrence should
+be caught with the journal UNFILTERED and `ss -f link` on the daemon's pid.
+
+### What the veth measures
+
+`tests/box-master-sends-downstream.sh` is the job: `fake-box-master` broadcasts 8-channel box
+geometry on a veth, the daemon joins it, and the emulator's own capture in its own namespace
+counts what came back. It measures the emission ratio (downstream frames out per box frame in),
+the frame length, that nothing at all was sent before the first box frame, and the head-amp
+value decoded out of the control block of a frame the daemon sent. `tests/box-master-rejoins.sh`
+is the drop/rejoin measurement above. Both run in an unprivileged user+net+pid namespace with a
+private PipeWire, like every veth proof in this repository.
 
 ## Files
 
