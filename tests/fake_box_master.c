@@ -111,12 +111,59 @@ struct ear {
 	double up_sq[REAC_MAX_CHANNELS], up_pk[REAC_MAX_CHANNELS];
 	unsigned long up_ns; int up_nch;
 	unsigned long flood_frames; double flood_t0, flood_t1; size_t flood_len;
+	uint8_t announce_seen[34]; int have_announce_seen;
+	int announce_ok; unsigned long announce_refused;
+	unsigned long steady_bcast;   /* broadcast downstream after the announce */
 };
 
 static double ear_now(void)
 {
 	struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
 	return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+/* THE PEER'S CONTROL PLANE, and the bar it has to clear to be granted.
+ *
+ * A REAL BOX ON M IS STRICT, and the rig proved it the hard way: 0.5.6-1 sent this chassis
+ * four byte-perfect cold-connect bursts and was echoed nothing, lamp blinking, because its
+ * config-announce declared the WRONG THING — selector 0x84 (the family of the box it was
+ * talking TO) instead of 0x80, from a source MAC that was the NIC's own rather than a
+ * Roland OUI. An emulator that grants anything with a cdea 04 03 in it would have passed
+ * that build, so it grants only what the wire granted: an announce declaring 0x80 with a
+ * self-consistent port table, from 00:40:ab. */
+static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
+{
+	struct reac_ctrl_parsed p;
+	enum reac_ctrl_kind k = reac_ctrl_parse(f, n, &p);
+	if (k == REAC_CTRL_CONFIG_ANNOUNCE) {
+		if (!e->up_announce) e->up_t_announce = t;
+		e->up_announce++;
+		memcpy(e->announce_seen, f + 16, sizeof e->announce_seen);
+		e->have_announce_seen = 1;
+		/* block[6] is the model-family selector and block[10:22] the port-type
+		 * table; a table of all-equal entries declares nothing. The OUI is Roland's
+		 * or this is not gear a box has ever enrolled. */
+		int sel_ok = f[16 + 6] == 0x80;
+		int oui_ok = f[6] == 0x00 && f[7] == 0x40 && f[8] == 0xab;
+		int tbl_ok = 0;
+		for (int i = 11; i < 22; i++)
+			if (f[16 + i] != f[16 + 10])
+				tbl_ok = 1;
+		e->announce_ok = sel_ok && oui_ok && tbl_ok;
+		if (!e->announce_ok)
+			e->announce_refused++;
+	} else if (k == REAC_CTRL_GRANT) {
+		if (!e->up_join) e->up_t_join = t;
+		e->up_join++;
+		/* NOT GRANTED UNTIL WE WERE TOLD WHAT IS ASKING. */
+		if (e->announce_ok && e->grant_n < 4) {
+			memcpy(e->grant_q[e->grant_n], f + 16, 34);
+			e->grant_n++;
+		}
+	} else if (k == REAC_CTRL_BOX_HB) {
+		if (!e->up_hb) e->up_t_hb_first = t;
+		e->up_hb++; e->up_t_hb_last = t;
+	}
 }
 
 static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t src[6],
@@ -143,22 +190,7 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 			return;
 		}
 		e->up_frames++; e->up_len = n; e->up_nch = nch;
-		struct reac_ctrl_parsed up;
-		enum reac_ctrl_kind uk = reac_ctrl_parse(f, n, &up);
-		if (uk == REAC_CTRL_CONFIG_ANNOUNCE) {
-			if (!e->up_announce) e->up_t_announce = t;
-			e->up_announce++;
-		} else if (uk == REAC_CTRL_GRANT) {
-			if (!e->up_join) e->up_t_join = t;
-			e->up_join++;
-			if (e->grant_n < 4) {          /* owe it back, byte for byte */
-				memcpy(e->grant_q[e->grant_n], f + 16, 34);
-				e->grant_n++;
-			}
-		} else if (uk == REAC_CTRL_BOX_HB) {
-			if (!e->up_hb) e->up_t_hb_first = t;
-			e->up_hb++; e->up_t_hb_last = t;
-		}
+		ear_control(e, f, n, t);
 		static uint8_t us24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 		int uns = reac_upstream_decode(f, n, us24);
 		if (uns > 0) {
@@ -177,6 +209,29 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 	e->last_len = n;
 	if (tx_so_far == 0)
 		e->rx_before_tx++;
+	/* THE MIXER'S OWN FRAME IS 1492 B (0.5.6, operator ruling: "mixer always sends 40ch,
+	 * boxes send their width only"), so the enrolment we are being asked for arrives
+	 * inside these and not in a box-shaped upstream. Same classification, same grant
+	 * queue — what changed is the geometry it rides in. */
+	{
+		double t = ear_now();
+		/* THE FLOOD IS WHAT COMES BEFORE THE ANNOUNCE. A mixer's steady-state
+		 * downstream is broadcast too (0.5.6), so counting every broadcast frame
+		 * as "the presence flood" would report the whole run as one — measured:
+		 * 21925 frames over 12.6 s where the flood is bounded at 5460. The announce
+		 * is the boundary the box itself uses: the peer stops flooding and speaks. */
+		if (memcmp(f, "\xff\xff\xff\xff\xff\xff", 6) == 0) {
+			if (!e->up_announce) {
+				if (!e->flood_frames) e->flood_t0 = t;
+				e->flood_frames++; e->flood_t1 = t; e->flood_len = n;
+			} else {
+				e->steady_bcast++;
+			}
+		} else {
+			e->up_frames++; e->up_len = n;
+		}
+		ear_control(e, f, n, t);
+	}
 
 	/* THE AUDIO, through the same decoder the daemon's own capture path uses. */
 	static uint8_t s24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
@@ -250,6 +305,14 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	}
 	fprintf(f, "flood frames %lu len %zu secs %.3f\n", e->flood_frames, e->flood_len,
 	        e->flood_frames ? e->flood_t1 - e->flood_t0 : 0.0);
+	fprintf(f, "announce ok %d refused %lu\n", e->announce_ok, e->announce_refused);
+	fprintf(f, "steady bcast %lu\n", e->steady_bcast);
+	if (e->have_announce_seen) {
+		fprintf(f, "announceblk ");
+		for (size_t i = 0; i < sizeof e->announce_seen; i++)
+			fprintf(f, "%02x", e->announce_seen[i]);
+		fprintf(f, "\n");
+	}
 	fprintf(f, "up frames %lu len %zu ch %d announce %lu join %lu hb %lu\n",
 	        e->up_frames, e->up_len, e->up_nch, e->up_announce, e->up_join, e->up_hb);
 	if (e->up_announce && e->up_join)
