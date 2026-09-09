@@ -1886,6 +1886,32 @@ The flood assertion is scoped to the box geometry, because in the mixer shape ev
 frame is a broadcast downstream by the ruling and "broadcast before the announce" is not a
 flood.
 
+### Release 9 on the rig: all three rules bit, and the box still refuses (diagnosis)
+
+`rig-r9-s1608.pcap`, 40 s, decoded. Each of the three reported symptoms has an answer and none
+of them is a defect in Release 9.
+
+- **The S-1608 master does emit `cfea`** — 36 announces over t=1.369..38.407, about one a
+  second. The earlier claim holds on this file too.
+- **The 1492 B broadcast flood is not this run's.** Those 5285 frames span t=0.000..1.056 and
+  stop; the box-shape run's own traffic begins at t=4.584 and is 260724 frames of **340 B
+  UNICAST with no broadcast at all**. The capture starts across a daemon restart, so the
+  mixer-shape frames belong to the process that was being replaced. The no-flood rule bit
+  exactly as designed: zero flood frames in the run under test.
+- **The announce lands in the clear.** The master's scene transfer repeats until t=30.998;
+  our announce at **29.223** and its burst at **29.423** sit in a quiet window whose next
+  transfer does not begin until **30.709**, and later announces (33.9, 36.3, 39.1) come after
+  the transfer has stopped altogether. Fifteen announces, forty-five cold-connect records,
+  **zero echoes**.
+
+So listening first, not flooding at a caller, and waiting for the transfer are all doing what
+they were built to do, and the S-1608 in master mode refuses us anyway — while a replay of a
+real box's frames onto the same wire is granted at any phase. Every field we can vary has now
+been cleared by a replay, and every timing rule the captures showed is implemented. What is
+left is not visible from this side of the wire, and it is not something more guessing in
+reac-pw will find: the next move is the operator's ruling to put the control plane where the
+captures are the tests (libreac 0.8).
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
