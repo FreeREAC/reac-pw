@@ -6,6 +6,7 @@
  */
 #include "reac_topo.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -308,6 +309,24 @@ int reac_topo_count(const struct reac_topo *t, const char *parent, enum reac_top
 		if (p->v[i].state == st)
 			n++;
 	return n;
+}
+
+int reac_topo_is_stacked(const char *root, const char *ifname)
+{
+	if (!ifname || !ifname[0])
+		return 0;
+	char path[512];
+	snprintf(path, sizeof path, "%s/%s", root ? root : "/sys/class/net", ifname);
+	DIR *d = opendir(path);
+	if (!d)
+		return 0;
+	int stacked = 0;
+	const struct dirent *e;
+	while (!stacked && (e = readdir(d)) != NULL)
+		if (strncmp(e->d_name, "lower_", 6) == 0)
+			stacked = 1;
+	closedir(d);
+	return stacked;
 }
 
 /* ---- the socket shell ------------------------------------------------------------- */
