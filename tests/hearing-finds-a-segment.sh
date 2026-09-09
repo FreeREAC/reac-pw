@@ -75,6 +75,20 @@ wait_for() {
 	return 1
 }
 
+# THE SAME WAIT, ANCHORED. Untagged journal lines -- the slave engine's STATE transitions
+# are one segment's news printed without its name -- match an EARLIER phase's line and the
+# wait returns instantly on somebody else's success. Every phase after the first that waits
+# on an untagged line has to say where its own log begins.
+LINE0() { echo $(( $(wc -l < "$LOG") + 1 )); }
+wait_for_since() {   # wait_for_since <first-line> <pattern> <secs>
+	local floor="$1" pat="$2" secs="$3" i
+	for ((i = 0; i < secs * 5; i++)); do
+		tail -n "+$floor" "$LOG" | grep -q "$pat" && return 0
+		sleep 0.2
+	done
+	return 1
+}
+
 # THE GRAPH, as this daemon's own nodes: pw-dump filtered by the hearing daemon's PID, so
 # the fake stagebox peers in the same namespace can never be mistaken for its work.
 # One line per node: <node.name> <reac.segment> <reac.box-width> <reac.box.mac>
@@ -749,6 +763,7 @@ down_pair venue0 vbox0
 # up, so the wire carries a master from the first instant of carrier and the masterless
 # licence is not in the race at all.
 BOXMAC=00:40:ab:c4:08:bc
+BOXM_FLOOR=$(LINE0)
 $in_peer "$FAKE" mbox0 "$BOXMAC" 8 2000 >"$RT/boxm.log" 2>&1 &
 FAKEPID=$!
 sleep 0.5
@@ -759,9 +774,15 @@ $in_peer python3 "$RT/sniff.py" mbox0 "$RT/boxm0.cnt" & SNIFF4=$!
 wait_for "\[boxm0\] box masters this wire — joining it as a slave (operator rule: a box that wants to be master gets the clock)" 15 || {
 	echo "FAIL: a box mastered an unpinned wire and the daemon did not join it"
 	tail -20 "$LOG"; tail -3 "$RT/boxm.log"; exit 1; }
-wait_for "\[boxm0\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 15 || {
-	echo "FAIL: joined in the journal, but the segment never came up receive-only"
+wait_for "\[boxm0\] segment up (slave" 20 || {
+	echo "FAIL: joined in the journal, but the segment never came up"
 	tail -20 "$LOG"; exit 1; }
+# AND IT ENROLS WITH IT, WHICH TAKES A FLOOD AND A HANDSHAKE (0.5.6). The lamp follows the
+# engine now, not the RX, so the assertions below wait for the pairing rather than for the
+# first decoded frame.
+wait_for_since "$BOXM_FLOOR" "reac_slave: STATE .*-> ESTABLISHED" 60 || {
+	echo "FAIL: the box master granted nothing, or we never enrolled with it"
+	grep "reac_slave: STATE" "$LOG" | tail -6; tail -5 "$RT/boxm.log"; exit 1; }
 # THE JOB: the box's channels are on the graph, sized by what the box announced -- 8, not
 # a 40-slot fabric with 32 rows of silence -- and the node says whose clock they are on.
 sleep 1.5
@@ -792,9 +813,14 @@ BP=$(daemon_node_props $PID reac-capture.boxm0)
 	echo "      (reac.box-model): $BP"; exit 1; }
 [ "$(fld "$BP" 9)" = "8x8" ] || {
 	echo "FAIL: reac.box-width must be the recognised model's own geometry: $BP"; exit 1; }
+# THE LAMP IS THE PAIRING (0.5.6, operator ruling): established means ENROLLED — granted,
+# unicasting and heartbeating — not merely heard. The rig published `established` off the
+# RX's own evidence while the box's front lamp sat unlocked ("S-0808 is not enrolled but omx
+# sees it available").
 [ "$(fld "$BP" 10)" = "established" ] || {
-	echo "FAIL: the stream is locked and decoding, so reac.link-state must be"
-	echo "      established: $BP"; exit 1; }
+	echo "FAIL: we are enrolled with the box master, so reac.link-state must be"
+	echo "      established: $BP"
+	grep -E "reac_slave: STATE|\[boxm0\]" "$LOG" | tail -12; tail -3 "$RT/boxm.log"; exit 1; }
 # AND THE ROLE IS APPLIED. role_reestablish_pending means the engine asked for is not the
 # one performing; the receive-only join IS the slave role performed -- there is no
 # enrolment to wait for on a peer that grants nothing -- and the rig published pending over
@@ -824,13 +850,14 @@ done
 	echo "FAIL: the feeder decoded no audio from the box master $BOXMAC (ok='$RXOK'), so"
 	echo "      the 8 ports it published carry nothing"; grep "reac_rx: \[boxm0\]" "$LOG" | tail -3
 	exit 1; }
-# AND WE DRIVE THAT WIRE (0.5.5). Until 0.5.4 this phase asserted the opposite -- a
-# receive-only join that put NOTHING on the wire -- and the operator's ruling of 2026-09-09
-# overturned it: "sending is always the same, being clock slave is only part of the
-# enrollment". The downstream is what a box CONSUMES whoever owns the clock. Here that is
-# asserted at the coarse grain this file works at, on the peer's own capture and against the
-# same live control; the CADENCE (one frame per box frame), the placement of the audio and
-# the head-amp are measured frame by frame in tests/box-master-sends-downstream.sh.
+# AND WE SPEAK ON THAT WIRE (0.5.6). Until 0.5.4 this phase asserted the opposite -- a
+# receive-only join that put NOTHING on the wire. 0.5.5 sent a desk's downstream at the box,
+# which the ground-truth capture retired; what a stagebox on M actually grants is a SLAVE
+# speaking its own geometry, so what leaves us here is the announce flood and then the
+# unicast upstream. Asserted at the coarse grain this file works at, on the peer's own
+# capture and against the same live control; the recipe frame by frame -- the flood width,
+# the announce-before-burst ordering, the tone in the upstream and the heartbeat -- is
+# tests/box-master-slave-join.sh.
 sleep 1
 OURS_B=$(other "$RT/boxm0.cnt" "$(echo $BOXMAC | tr -d :)")
 BOXFR=$(seen x "$RT/boxm0.cnt" "$(echo $BOXMAC | tr -d :)")
@@ -991,11 +1018,11 @@ wait_for "\[trunk0\] this parent carries tagged REAC, so it is not itself a segm
 
 # THE JOB: BOTH VLANS ARE SERVED AS ORDINARY SEGMENTS, each following its own box's clock,
 # each with its own node on the graph at its own width. Two boxes, one cable.
-wait_for "\[trunk0.11\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
+wait_for "\[trunk0.11\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" 25 || {
 	echo "FAIL: trunk0.11 was created and never served as a segment"; tail -30 "$LOG"; exit 1; }
-wait_for "\[trunk0.12\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
+wait_for "\[trunk0.12\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" 25 || {
 	echo "FAIL: trunk0.12 was created and never served as a segment"; tail -30 "$LOG"; exit 1; }
-wait_for "\[trunk1.13\] segment up (slave, receive-only on a box master, chosen by hearing the wire)" 25 || {
+wait_for "\[trunk1.13\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" 25 || {
 	echo "FAIL: the adopted trunk1.13 was not served like any other interface"
 	tail -30 "$LOG"; exit 1; }
 # AND NOTHING WAS STACKED ON A STACK. A sub-interface has no VLANs of its own: the frame
@@ -1097,7 +1124,7 @@ echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the h
     its nodes on the graph, served a per-segment pin without a hunt, DROVE A PINNED WIRE
     ON LINK with a silent peer, DROVE an unpinned wire proven silent and established with
     the cold box that answered its stream, YIELDED that wire to a desk that turned up
-    on it, JOINED A BOX MASTER on an unpinned wire at its own 8 ch and sent nothing back,
+    on it, ENROLLED WITH A BOX MASTER on an unpinned wire, its way, at its own 8 ch,
     and REFUSED the same box on a wire pinned master while PUBLISHING the door that says
     so -- then took that segment when the box stopped mastering it; HEARD TWO 802.1Q VIDS
     ON ONE VETH, created a sub-interface for each with nothing typed, served both as

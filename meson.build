@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '0.5.5',
+  version: '0.5.6',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -376,16 +376,17 @@ test('reac_hearing_finds_a_segment',
   args : [reac_pw_exe, fake_box_master],
   timeout : 600)
 
-# --- whole-binary test: a box master is JOINED **AND DRIVEN** (0.5.5) ---------
+# --- whole-binary test: a box master is ENROLLED WITH, its own way (0.5.6) ----
 #
-# The operator's ruling of 2026-09-09 — "sending is always the same, being clock slave is
-# only part of the enrollment" — measured at the far end of the cable: the emission ratio
-# (one downstream frame per box frame), the 1492 B frame, a tone played into
-# reac-playback.<segment> and decoded back off the wire, a head-amp write decoded out of a
-# control block the daemon sent, and that a box going quiet stops the downstream. Needs a
-# session manager (the tone has to be LINKED) and skips without one.
-test('reac_box_master_sends_downstream',
-  find_program('tests/box-master-sends-downstream.sh'),
+# "It is only a matter of following the same protocol that we expect." Measured at the far
+# end of the cable, against the ground-truth capture of a real S-1608 meeting the real
+# S-0808: the bounded broadcast flood AT THE MASTER'S WIDTH, the config-announce BEFORE the
+# cold-connect burst, the grant, the 1/s heartbeat, and a tone played into
+# reac-playback.<segment> decoded off the UPSTREAM the daemon unicasts — which is what
+# reaches that box's outputs. Needs a session manager (the tone has to be LINKED) and skips
+# without one.
+test('reac_box_master_slave_join',
+  find_program('tests/box-master-slave-join.sh'),
   args : [reac_pw_exe, fake_box_master],
   timeout : 420)
 

@@ -2,34 +2,29 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# WHOLE-BINARY, END TO END: a stagebox on M masters a wire, the daemon joins it, and the
-# BOX'S OUTPUTS ARE PLAYABLE FROM THE GRAPH. The operator's job, measured at the far end of
-# the cable rather than argued from the journal — a tone is played into
-# `reac-playback.<segment>` through a real session manager, and the emulator decodes it back
-# out of the frames the daemon sent, through libreac's own decoder.
+# WHOLE-BINARY, END TO END: a stagebox on M masters a wire, and the daemon ENROLS WITH IT
+# THE WAY A STAGEBOX DOES — then routes audio to its outputs.
 #
-# THE RULING THIS PROVES (2026-09-09, DESIGN.md "## 0.5.5"): "Sending is always the same,
-# being clock slave is only part of the enrollment." Until 0.5.4 this wire was joined
-# RECEIVE-ONLY and tests/hearing-finds-a-segment.sh asserted that the daemon put NOTHING on
-# it. That assertion is now the opposite one, and it is measured the same way: on the peer's
-# own capture, against a live control.
+# THE RULING (2026-09-09): "It is only a matter of following the same protocol that we
+# expect." 0.5.5 sent a DESK'S downstream at a box on M and the box ignored every byte of
+# it; the ground-truth capture of a real S-1608 meeting the real S-0808
+# (DESIGN.md 0.5.6) shows what that box actually grants: a SLAVE speaking the MASTER'S OWN
+# geometry. This proof is that recipe, measured at the far end of the cable:
 #
-# WHAT IS MEASURED, each with a number in the output:
-#   1. the emission RATIO — downstream frames out per box frame in, over a 2 s window; the
-#      pacing law is one frame per frame, so this is 1.000 or the cadence is invented;
-#   2. the frame LENGTH — 1492 B, the fixed downstream, not the box's own geometry;
-#   3. the tone's dBFS on the slots wire-format.md puts it on, and silence on the others;
-#   4. that a BOX GOING QUIET stops the downstream: a timeout is not a slot, so nothing is
-#      emitted for it. Its positive control is the resume, in the same window;
-#   5. a head-amp write on the segment, decoded out of the control block of a frame the
-#      daemon sent.
+#   1. the flood is broadcast, at the MASTER's width (340 B / 8 slots), and bounded;
+#   2. the config-announce comes FIRST, as the frame the daemon goes unicast with, and the
+#      cold-connect burst follows it — the ORDER is the assertion, and its sabotage is
+#      reversing it;
+#   3. the steady state is unicast at the master's width carrying the reac-playback sink's
+#      channels — a tone is played into that node and decoded off the emulator (slot, dBFS);
+#   4. the heartbeat cadence;
+#   5. and none of it happens before the box has spoken.
 #
 # ISOLATION IS PART OF THE TEST (tests/hearing-finds-a-segment.sh's header has the full
-# reasoning): an unprivileged user+net+pid namespace, a private PipeWire, and the peer end of
-# the veth in a NESTED network namespace so the daemon can never hear its own transmissions
-# as another host's. The session manager this one additionally needs runs with EVERY hardware
-# monitor disabled — the namespace owns no devices, and the ones it can see through /dev are
-# the operator's live rig.
+# reasoning): an unprivileged user+net+pid namespace, a private PipeWire, the peer end of the
+# veth in a NESTED network namespace. The session manager the tone needs runs with EVERY
+# hardware monitor disabled — the namespace owns no devices and the ones it can see through
+# /dev are the operator's live rig.
 set -u
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
@@ -110,10 +105,31 @@ rep() {   # rep <key>
 	[ -s "$RT/box.rep" ] || return 1
 	awk -v k="$1" '$1 == k { print $2; found = 1 } END { exit !found }' "$RT/box.rep"
 }
+# field N of a keyed line in the emulator's report ("up frames 15817 len 340 ch 8 ...")
+rep_f() {   # rep_f <key> <field-index> <file>
+	[ -s "$3" ] || return 1
+	awk -v k="$1" -v n="$2" '$1 == k { print $n; f = 1; exit } END { exit !f }' "$3"
+}
+# one slot's energy on the UPSTREAM the daemon sends
+up_ch() {   # up_ch <slot> <rms|peak>
+	[ -s "$RT/box.rep" ] || return 1
+	awk -v c="$1" -v w="$2" '$1 == "upch" && $2 == c { for (i = 3; i < NF; i++) if ($i == w) print $(i+1) }' \
+	    "$RT/box.rep"
+}
 rep_ch() {   # rep_ch <channel> <rms|peak>
 	[ -s "$RT/box.rep" ] || return 1
 	awk -v c="ch$1" -v w="$2" '$1 == c { for (i = 2; i < NF; i++) if ($i == w) print $(i+1) }' \
 	    "$RT/box.rep"
+}
+# ONE PROPERTY of one of this daemon's nodes, empty when the node is not there.
+node_prop() {   # node_prop <node.name> <key>
+	pw-dump | python3 -c '
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get("type") == "PipeWire:Interface:Node" and \
+       o["info"]["props"].get("node.name") == sys.argv[1]:
+        print(o["info"]["props"].get(sys.argv[2], "")); break
+' "$1" "$2"
 }
 node_id() {   # node_id <node.name>
 	pw-dump | python3 -c '
@@ -155,13 +171,80 @@ wait_for "\[bmx0\] box masters this wire" 20 || {
 wait_for "\[bmx0\] segment up" 20 || {
 	echo "FAIL: joined, but the segment never came up"; tail -20 "$LOG"; exit 1; }
 
-# ---- 1. THE SEGMENT HAS AN OUTPUT, SIZED BY THE BOX. -------------------------------
-sleep 2
+# ---- 1. THE FLOOD: BROADCAST, AT THE MASTER'S WIDTH, BOUNDED. ----------------------
+wait_for "\[bmx0\] SLAVE role on a BOX MASTER" 25 || {
+	echo "FAIL: a box mastered the wire and the daemon did not enrol with it as a slave"
+	tail -20 "$LOG"; tail -3 "$RT/box.log"; exit 1; }
+for i in $(seq 120); do
+	FL=$(rep_f flood 3 "$RT/box.rep"); [ -n "$FL" ] && [ "$FL" -gt 5000 ] && break
+	sleep 0.5
+done
+FL=$(rep_f flood 3 "$RT/box.rep"); FLEN=$(rep_f flood 5 "$RT/box.rep")
+[ -n "$FL" ] && [ "$FL" -gt 5000 ] || {
+	echo "FAIL: the daemon broadcast only ${FL:-0} flood frames; a box announces itself"
+	echo "      with a bounded flood before it may go unicast"; cat "$RT/box.rep"; exit 1; }
+[ "$FLEN" = "340" ] || {
+	echo "FAIL: the flood frames are $FLEN B. The master broadcasts 8 slots (340 B) and the"
+	echo "      recipe is to speak ITS geometry, not our own width"; exit 1; }
+echo "MEASURED: flood $FL frames of $FLEN B, broadcast, at the master's own 8-slot width"
+
+# ---- 2. THE ORDER: ANNOUNCE FIRST, THEN THE BURST. ---------------------------------
+# This is the assertion the ground-truth capture is FOR. The S-1608 went unicast WITH its
+# config-announce and sent the cold-connect burst 214 ms later; reversing the two is the
+# sabotage this phase exists to catch.
+for i in $(seq 80); do
+	AN=$(rep_f up 9 "$RT/box.rep"); JN=$(rep_f up 11 "$RT/box.rep")
+	[ -n "$JN" ] && [ "$JN" -ge 3 ] && break
+	sleep 0.25
+done
+AN=$(rep_f up 9 "$RT/box.rep"); JN=$(rep_f up 11 "$RT/box.rep")
+ULEN=$(rep_f up 5 "$RT/box.rep")
+UCH=$(awk '$1 == "up" { for (i = 2; i < NF; i++) if ($i == "ch") print $(i+1) }' "$RT/box.rep")
+[ -n "$AN" ] && [ "$AN" -ge 1 ] || {
+	echo "FAIL: no config-announce ever reached the box master"; cat "$RT/box.rep"; exit 1; }
+[ -n "$JN" ] && [ "$JN" -ge 3 ] || {
+	echo "FAIL: the cold-connect burst never reached the box master (${JN:-0} records; the"
+	echo "      capture shows three)"; cat "$RT/box.rep"; exit 1; }
+ORD=$(awk '$1 == "up" && $2 == "order" { print $4 }' "$RT/box.rep")
+[ -n "$ORD" ] || { echo "FAIL: the emulator saw no announce/burst ordering at all"; exit 1; }
+python3 -c "import sys; sys.exit(0 if $ORD > 0 else 1)" || {
+	echo "FAIL: the cold-connect burst arrived $ORD s BEFORE the config-announce. A box"
+	echo "      announces itself first and cold-connects after — the master enrols it from"
+	echo "      that announce"; exit 1; }
+[ "$ULEN" = "340" ] || {
+	echo "FAIL: the unicast upstream is $ULEN B; the master's width is 8 slots = 340 B"; exit 1; }
+echo "MEASURED: announce then burst, $AN announce / $JN cold-connect records, the burst"
+echo "          $ORD s after the announce; unicast frames $ULEN B, $UCH slots"
+
+# ---- 3. IT ESTABLISHED, AND IT HEARTBEATS. -----------------------------------------
+wait_for "reac_slave: STATE .*-> ESTABLISHED" 30 || {
+	echo "FAIL: the box master granted and the engine never reached ESTABLISHED"
+	grep "reac_slave: STATE" "$LOG" | tail -6; cat "$RT/box.rep"; exit 1; }
+for i in $(seq 60); do
+	HB=$(rep_f up 13 "$RT/box.rep"); [ -n "$HB" ] && [ "$HB" -ge 3 ] && break
+	sleep 0.5
+done
+HB=$(rep_f up 13 "$RT/box.rep")
+HBP=$(awk '$1 == "up" && $2 == "hb_period" { print $3 }' "$RT/box.rep")
+[ -n "$HB" ] && [ "$HB" -ge 3 ] || {
+	echo "FAIL: only ${HB:-0} heartbeats reached the box master; a linked box beats ~1/s"
+	cat "$RT/box.rep"; exit 1; }
+# THE PERIOD IS FRAME-COUNTED, so on a veth whose emulator paces slower than the rate the
+# daemon recovered from it the wall-clock period stretches by exactly that ratio. What is
+# asserted is that it BEATS on a sane cadence; the 1.00 s the ground truth measured belongs
+# to a wire actually running at its nominal rate.
+python3 -c "import sys; sys.exit(0 if 0.3 < $HBP < 4.0 else 1)" || {
+	echo "FAIL: the heartbeat period is $HBP s — a linked box beats about once a second"
+	exit 1; }
+echo "MEASURED: established; $HB heartbeats, period $HBP s (frame-counted: this emulator"
+echo "          paces slower than the rate the daemon recovered, and it scales with that)"
+
+# ---- 4. THE TONE: THE OPERATOR'S JOB, INTO THE BOX MASTER'S OUTPUTS. ---------------
 PLAY=$(node_id reac-playback.bmx0)
 [ -n "$PLAY" ] || {
-	echo "FAIL: a joined box master published no reac-playback.bmx0 — its outputs are"
-	echo "      unroutable, which is the 0.5.1 contract 0.5.5 overturns"
-	pw-dump | grep -o '"node.name": "[^"]*"' | sort -u | head; tail -20 "$LOG"; exit 1; }
+	echo "FAIL: the segment published no reac-playback.bmx0, so the box master's outputs"
+	echo "      are unroutable"; pw-dump | grep -o '"node.name": "[^"]*"' | sort -u | head
+	exit 1; }
 NPORT=$(pw-dump | python3 -c '
 import json,sys
 d = json.load(sys.stdin); want = int(sys.argv[1]); n = 0
@@ -172,63 +255,15 @@ for o in d:
             n += 1
 print(n)' "$PLAY")
 [ "$NPORT" = "8" ] || {
-	echo "FAIL: reac-playback.bmx0 has $NPORT input ports; an S-0808 has 8 outputs"; exit 1; }
-
-# ---- 2. THE RATIO: ONE DOWNSTREAM FRAME PER BOX FRAME. -----------------------------
-# Sampled over a window, not since the start: the box was transmitting before the daemon
-# ever saw the wire, and the frames from before the join are not this measure's business.
-TX1=$(rep tx) && RX1=$(rep rx_down) || {
-	echo "FAIL: the emulator wrote no report at all — nothing below can be measured"
-	tail -5 "$RT/box.log"; exit 1; }
-sleep 2
-TX2=$(rep tx); RX2=$(rep rx_down)
-DTX=$((TX2 - TX1)); DRX=$((RX2 - RX1))
-# THE PROBE'S OWN POSITIVE CONTROL, before any claim about the ratio: a capture that
-# receives nothing reports a ratio of 0.000 and a capture that is not running reports the
-# same, and neither is a measurement of the daemon.
-[ "$DTX" -gt 1000 ] || {
-	echo "FAIL: the box emulator sent only $DTX frames in 2 s — its own transmit is what"
-	echo "      the ratio is measured against, so nothing below would mean anything"; exit 1; }
-[ "$DRX" -gt 0 ] || {
-	echo "FAIL: the daemon joined a box master and sent NOTHING back over 2 s ($DRX frames"
-	echo "      of $DTX). Since 0.5.5 the downstream is sent on this wire"
-	cat "$RT/box.rep"; grep -E "bmx0|pacer" "$LOG" | tail -10; exit 1; }
-RATIO=$(python3 -c "print('%.4f' % ($DRX / $DTX))")
-python3 -c "import sys; sys.exit(0 if abs($DRX/$DTX - 1.0) <= 0.01 else 1)" || {
-	echo "FAIL: the emission ratio is $RATIO downstream frames per box frame ($DRX/$DTX)."
-	echo "      The pacing law is one frame per frame: the box's arrival IS the slot."
-	cat "$RT/box.rep"; exit 1; }
-echo "MEASURED: emission ratio $RATIO downstream frames per box frame ($DRX/$DTX over 2 s)"
-
-# ---- 3. THE FRAME IS THE FIXED DOWNSTREAM, AND NOTHING PRECEDED THE BOX. -----------
-LEN=$(rep last_len)
-[ "$LEN" = "1492" ] || {
-	echo "FAIL: the daemon sent a $LEN B frame; a master downstream is 1492 B at every"
-	echo "      rate and every box width (wire-format.md)"; exit 1; }
-BEFORE=$(rep rx_before_tx)
-[ "$BEFORE" = "0" ] || {
-	echo "FAIL: $BEFORE downstream frames reached the box before it had sent one. Nothing"
-	echo "      may leave until the box's first frame — the tick IS that frame"; exit 1; }
-BAD=$(rep rx_bad_decode)
-[ "$BAD" = "0" ] || {
-	echo "FAIL: $BAD of the daemon's frames would not decode as a REAC downstream"; exit 1; }
-echo "MEASURED: frame length ${LEN} B, ${BEFORE} frames sent before the box's first, ${BAD} undecodable"
-
-# ---- 4. THE TONE: THE OPERATOR'S JOB, END TO END. ----------------------------------
-# A 1 kHz sine is played into the segment's playback node and read back off the wire at the
-# far end, decoded by libreac. It is played TWICE, 20 dB apart, and what is asserted is the
-# DELTA: a graph has gain staging in it that this proof does not own — measured here, the
-# session manager alone puts 8 dB between a player's full scale and a node's input — and an
-# absolute reading would be asserting that stage rather than the daemon's. A ratio survives
-# a constant nobody declared; an absolute does not. Both absolutes are still REPORTED, and
-# the loud one is required to be a SIGNAL rather than a number near the floor, or the delta
-# would be two silences agreeing with each other.
-play_tone() {   # play_tone <amplitude> -> echoes "<ch0-rms> <ch1-rms> <ch0-peak>"
+	echo "FAIL: reac-playback.bmx0 has $NPORT input ports; the box master declared 8"; exit 1; }
+# Played TWICE, 20 dB apart: a graph has gain staging this proof does not own (the session
+# manager alone puts 8 dB between a player's full scale and a node's input, measured), so
+# what is asserted is the DELTA. A ratio survives a constant nobody declared.
+play_tone() {   # play_tone <amplitude> -> "<ch0-rms> <ch1-rms> <ch0-peak> <ch5-rms>"
 	python3 - "$RT/tone.wav" "$1" <<'PYEOF'
 import math, struct, sys, wave
 amp = float(sys.argv[2])
-w = wave.open(sys.argv[1], "wb")
-w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+w = wave.open(sys.argv[1], "wb"); w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
 w.writeframes(b"".join(struct.pack("<hh", *(2 * (int(amp * 32767 * math.sin(2 * math.pi * 1000 * n / 48000)),)))
                        for n in range(48000 * 6)))
 w.close()
@@ -237,225 +272,97 @@ PYEOF
 	       >"$RT/cat.log" 2>&1 &
 	CATPID=$!
 	sleep 2.5
-	LINKED=$(pw-link -l 2>/dev/null | grep -c "reac-playback.bmx0")
-	if [ "$LINKED" -eq 0 ]; then
-		echo "UNLINKED"
-		kill -TERM $CATPID 2>/dev/null
-		return
+	if [ "$(pw-link -l 2>/dev/null | grep -c reac-playback.bmx0)" -eq 0 ]; then
+		echo "UNLINKED"; kill -TERM $CATPID 2>/dev/null; return
 	fi
 	sleep 1
-	echo "$(rep_ch 0 rms) $(rep_ch 1 rms) $(rep_ch 0 peak) $(rep_ch 5 rms)"
-	kill -TERM $CATPID 2>/dev/null; wait $CATPID 2>/dev/null
-	sleep 0.5
+	echo "$(up_ch 0 rms) $(up_ch 1 rms) $(up_ch 0 peak) $(up_ch 5 rms)"
+	kill -TERM $CATPID 2>/dev/null; wait $CATPID 2>/dev/null; sleep 0.5
 }
-
 LOUD=$(play_tone 0.5)
 [ "$LOUD" != "UNLINKED" ] || {
 	echo "FAIL: the tone player never linked to reac-playback.bmx0, so no audio was ever"
-	echo "      offered to the segment and its silence would prove nothing"
+	echo "      offered and its silence would prove nothing"
 	pw-link -l; tail -5 "$RT/cat.log"; tail -5 "$RT/wp.log"; exit 1; }
 set -- $LOUD; L0="$1"; L1="$2"; LPK="$3"; LQ="$4"
 SOFT=$(play_tone 0.05)
 [ "$SOFT" != "UNLINKED" ] || { echo "FAIL: the second tone never linked"; exit 1; }
-set -- $SOFT; S0="$1"; S1="$2"
-
-[ -n "$L0" ] && [ -n "$L1" ] && [ -n "$S0" ] && [ -n "$LQ" ] || {
-	echo "FAIL: the emulator reported no per-channel energy at all"; cat "$RT/box.rep"; exit 1; }
-# THE BASELINE IS A SIGNAL. Two readings 20 dB apart at the bottom of the floor would pass
-# a delta test and mean nothing: -110 -> -130 is not a gain measurement (CLAUDE.md's own
-# lesson, 2026-08-13). The loud tone must be well clear of the floor first.
+set -- $SOFT; S0="$1"
+[ -n "$L0" ] && [ -n "$S0" ] && [ -n "$LQ" ] || {
+	echo "FAIL: the emulator reported no per-slot energy on the upstream"
+	cat "$RT/box.rep"; exit 1; }
 python3 -c "import sys; sys.exit(0 if $L0 > -40.0 and $L1 > -40.0 else 1)" || {
-	echo "FAIL: a 0.5 FS sine was played into the segment and slots 0/1 of the downstream"
-	echo "      carry $L0 / $L1 dBFS — that is the floor, not audio"
-	cat "$RT/box.rep"; exit 1; }
-# AND THE SLOTS NOBODY FED ARE SILENT. Placement is half the claim: the right samples in
-# the wrong slots is a downstream that decodes and plays the wrong thing.
+	echo "FAIL: a 0.5 FS sine was played into the segment and the upstream's slots 0/1 carry"
+	echo "      $L0 / $L1 dBFS — that is the floor, not audio. The box master's outputs are"
+	echo "      fed by THIS stream"; cat "$RT/box.rep"; exit 1; }
 python3 -c "import sys; sys.exit(0 if $LQ < -60.0 else 1)" || {
-	echo "FAIL: slot 5 was fed nothing and carries $LQ dBFS — the placement is wrong, or"
-	echo "      the frame is being filled with something that is not the graph's audio"
-	cat "$RT/box.rep"; exit 1; }
+	echo "FAIL: slot 5 was fed nothing and carries $LQ dBFS — wrong placement"; exit 1; }
 DELTA=$(python3 -c "print('%.2f' % ($L0 - $S0))")
 python3 -c "import sys; sys.exit(0 if abs(($L0) - ($S0) - 20.0) < 1.5 else 1)" || {
-	echo "FAIL: a 20 dB change at the sink moved the wire by $DELTA dB. The downstream is"
-	echo "      not carrying the graph's audio linearly"; exit 1; }
-echo "MEASURED: tone at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed slot 5 = $LQ dBFS;"
-echo "          -20 dB at the source reads $S0 dBFS, a delta of $DELTA dB"
+	echo "FAIL: a 20 dB change at the sink moved the wire by $DELTA dB"; exit 1; }
+echo "MEASURED: tone on the UPSTREAM at slots 0/1 = $L0 / $L1 dBFS RMS (peak $LPK), unfed"
+echo "          slot 5 = $LQ dBFS; -20 dB at the source reads $S0, a delta of $DELTA dB"
 
-# ---- 5. A HEAD-AMP WRITE REACHES THE WIRE, THROUGH THE PUBLISHED PATH. -------------
-# The console does not know a wire channel. It reads reac.headamp.channels / .base off the
-# node and composes the key for INPUT 1 as base + 1 - 1; a `channels` of 0 means "this box
-# has no preamps" and its gain, pad and phantom writes are refused before they are sent.
-# That is what the rig read on a joined box master (2026-09-09, S-0808 at 0 against the
-# S-1608 on the neighbouring segment at 16) — so the capabilities are read HERE, from the
-# node, and the write is composed from them exactly as the console composes it.
-HA_CH=$(pw-dump | python3 -c '
-import json,sys
-for o in json.load(sys.stdin):
-    if o.get("type") == "PipeWire:Interface:Node" and \
-       o["info"]["props"].get("node.name") == "reac-playback.bmx0":
-        p = o["info"]["props"]
-        print(p.get("reac.headamp.channels","(none)"), p.get("reac.headamp.base","(none)"),
-              p.get("reac.headamp.caps","(none)"))
-        break')
-set -- $HA_CH; HACH="${1:-}"; HABASE="${2:-}"; HACAPS="${3:-}"
-[ "$HACH" = "8" ] || {
-	echo "FAIL: reac-playback.bmx0 publishes reac.headamp.channels=$HACH. An S-0808 has 8"
-	echo "      preamps and its width is on the wire; a console reads 0 as 'no preamps'"
-	echo "      and never sends the write at all"; exit 1; }
-# The S-0808's chassis strap is 0 and the S-1608's is 32: the base is READ from the model
-# row's declaration byte, never computed from the width, so this pins the row and not a
-# formula that happens to agree at one width.
-[ "$HABASE" = "0" ] || {
-	echo "FAIL: reac.headamp.base=$HABASE; the S-0808 declares strap byte 0, so base 0"; exit 1; }
-case "$HACAPS" in
-  *phantom*|*sens*) : ;;
-  *) echo "FAIL: reac.headamp.caps=$HACAPS names no capability"; exit 1 ;;
-esac
-# COMPOSED THE WAY A CONSOLE COMPOSES IT: input 1 of this box is wire channel base + 0.
-WIRECH=$((HABASE + 0))
-pw-cli set-param "$PLAY" Props \
-	"{ params = [ \"reac.headamp.$WIRECH.sens\", 20 ] }" >/dev/null 2>&1
-# READ THE CELL, NOT THE LAST RECORD. Since the engine is handed its establishment
-# (0.5.5) the wire also carries the COMPLETE head-amp scene replay an enrolled box gets,
-# so "the last head-amp record" is whatever cell that sweep ended on.
-for i in $(seq 40); do
-	HAV=$(awk -v c="$WIRECH" '$1 == "headampcell" && $2 == c && $3 == 2 { print $4 }' \
-	      "$RT/box.rep" 2>/dev/null)
-	[ "$HAV" = "20" ] && break
+# ---- 5. AND NOTHING WAS SENT BEFORE THE BOX SPOKE. ---------------------------------
+BEFORE=$(rep rx_before_tx)
+[ "$BEFORE" = "0" ] || {
+	echo "FAIL: $BEFORE frames reached the box before it had sent one"; exit 1; }
+# THE ABSENCE CLAIM'S POSITIVE CONTROL: the same counter, for frames that DID arrive.
+[ "$(rep_f up 3 "$RT/box.rep")" -gt 1000 ] || {
+	echo "FAIL: too few upstream frames for that absence to mean anything"; exit 1; }
+echo "MEASURED: 0 frames before the box's first; $(rep_f up 3 "$RT/box.rep") upstream frames in total"
+
+# ---- 6. THE LAMP IS THE PAIRING, NOT THE HEARING. ---------------------------------
+# The rig, 2026-09-09: "S-0808 is not enrolled but omx sees it available" — the segment
+# published reac.link-state=established off the RX's own evidence while the box's front
+# lamp sat unlocked. A console keys a stagebox off that key (openmixer's
+# stageboxConnected: only `established` is a locked, streaming box), so it must follow the
+# ENGINE. The timeline below is that claim, both edges of it, on the graph.
+LS=$(node_prop reac-capture.bmx0 reac.link-state)
+[ "$LS" = "established" ] || {
+	echo "FAIL: the segment is enrolled and streaming and publishes link-state=$LS"; exit 1; }
+# The drop edge: the wire goes away past the hold, and the lamp must go back.
+ip link set bmx0 down
+T0=$(date +%s.%N)
+for i in $(seq 80); do
+	LS=$(node_prop reac-capture.bmx0 reac.link-state)
+	[ -z "$LS" ] || [ "$LS" = "probing" ] && break
 	sleep 0.25
 done
-[ -n "$HAV" ] || {
-	echo "FAIL: no head-amp record for wire channel $WIRECH ever reached the wire"
-	cat "$RT/box.rep"; exit 1; }
-[ "$HAV" = "20" ] || {
-	echo "FAIL: wire channel $WIRECH's sens cell reads $HAV on the wire; the write was 20"
-	exit 1; }
-echo "MEASURED: head-amp published as channels=$HACH base=$HABASE caps=$HACAPS; a write on"
-echo "          input 1 (wire ch $WIRECH) arrives as ch $WIRECH, param 2 (sens), value $HAV"
+T1=$(date +%s.%N)
+[ -z "$LS" ] || [ "$LS" = "probing" ] || {
+	echo "FAIL: the link went down and the segment still publishes link-state=$LS"; exit 1; }
+echo "MEASURED: link-state established -> ${LS:-<segment gone>} $(python3 -c "print('%.1f' % ($T1 - $T0))") s after the link went down"
+# And back up. THE WHOLE POINT IS THE WINDOW IN BETWEEN: the segment comes back, its
+# capture door is real and streaming, and it must read `probing` for as long as the recipe
+# is still running — flood, announce, burst, waiting for the grant echo. Reading
+# `established` there is the rig's own defect, and it is what a console renders as a locked
+# stagebox that is not locked.
+ip link set bmx0 up
+T2=$(date +%s.%N)
+SAW_PROBING=0
+for i in $(seq 200); do
+	LS=$(node_prop reac-capture.bmx0 reac.link-state)
+	[ "$LS" = "probing" ] && SAW_PROBING=1
+	[ "$LS" = "established" ] && break
+	sleep 0.1
+done
+T3=$(date +%s.%N)
+[ "$SAW_PROBING" = "1" ] || {
+	echo "FAIL: the segment went straight to established without ever publishing probing."
+	echo "      The enrolment takes seconds; a console must not be told the box is locked"
+	echo "      while the flood and the cold-connect are still running"; exit 1; }
+echo "MEASURED: link-state probing while the recipe ran, on the segment's own live door"
+[ "$LS" = "established" ] || {
+	echo "FAIL: the wire came back and the segment never re-enrolled (link-state=$LS)"
+	grep "reac_slave: STATE" "$LOG" | tail -6; exit 1; }
+echo "MEASURED: re-enrolled, link-state established $(python3 -c "print('%.1f' % ($T3 - $T2))") s after the link returned"
+# THE ABSENCE CLAIM'S POSITIVE CONTROL: `probing` must be a state this probe can SEE, not
+# just one it failed to read. It was read above, on the drop edge, from the same node.
 
-# ---- 6. THE BOX GOES QUIET AND THE DOWNSTREAM STOPS WITH IT. -----------------------
-# A timeout is not a slot. This is the same law as "nothing before the first frame", in the
-# direction a running wire can actually be asked about.
-kill -USR1 $FAKEPID
-sleep 0.8
-Q1=$(rep rx_down); sleep 1.5; Q2=$(rep rx_down)
-QD=$((Q2 - Q1))
-[ "$QD" -le 20 ] || {
-	echo "FAIL: the box stopped transmitting and the daemon put $QD more frames on the wire"
-	echo "      over 1.5 s. With no frame there is no slot, so there is nothing to send"
-	exit 1; }
-# ITS POSITIVE CONTROL: the same counter, over the same length of window, with the box back.
-kill -USR1 $FAKEPID
-sleep 0.8
-R1=$(rep rx_down); sleep 1.5; R2=$(rep rx_down)
-RD=$((R2 - R1))
-[ "$RD" -gt 1000 ] || {
-	echo "FAIL: the box resumed and the daemon sent only $RD frames in 1.5 s, so the quiet"
-	echo "      window above measured a dead daemon rather than an obeyed cadence"; exit 1; }
-echo "MEASURED: box quiet -> $QD frames sent in 1.5 s; box back -> $RD frames in 1.5 s"
-
-# ---- 7. AND THE CONTROL AREA IS THE ONE AN ENROLLED BOX RECEIVES. ------------------
-# "Sending is always the same" is literal, and until now the joined wire was NOT the same:
-# measured on the rig over matched 3 s windows, the joined downstream carried 343
-# scene-transfer pushes an established master sends none of, one chanmap where an
-# established master sends three, and an announce whose enrolled-box count byte read 0
-# against 1. All three are one fact -- the master FSM's state -- so the fix is that the
-# engine is told which box the wire identified, and the SAME table emits everything.
-#
-# THE COMPARISON IS AGAINST A REAL ENROLLED WIRE IN THIS SAME RUN, not against numbers
-# copied out of a rig journal: a second veth whose peer is a reac-pw SLAVE, which this
-# daemon hunts, grants and establishes with in the ordinary way. Both wires are decoded by
-# ONE tool -- fake-box-master's own ear, transmitting nothing (fps 0) on the enrolled side.
-ip link add enr0 type veth peer name ebox0 || exit 90
-ip link set ebox0 netns $NSPID || exit 90
-ip link set enr0 up; peer ip link set ebox0 up
-$in_peer "$BIN" --live ebox0 --tx ebox0 --role slave --box-channels 16 --name ebox \
-	--src-mac 00:40:ab:c4:80:41 >"$RT/ebox.log" 2>&1 &
-EBOXPID=$!
-$in_peer "$FAKE" ebox0 00:40:ab:00:00:01 8 0 "$RT/enr.rep" >"$RT/enr.log" 2>&1 &
-EARPID=$!
-wait_for "\[enr0\] segment up (master" 40 || {
-	echo "FAIL: the reference wire never came up as master, so there is nothing to"
-	echo "      compare the joined wire against"; tail -20 "$LOG"; exit 1; }
-wait_for "reac-master: .* -> ESTABLISHED" 40 || {
-	echo "FAIL: the reference box never enrolled"; tail -20 "$LOG"; tail -5 "$RT/ebox.log"; exit 1; }
-sleep 4     # let both wires settle past their establishment bursts
-
-# One field out of EITHER report.
-repf() { [ -s "$2" ] || return 1
-         awk -v k="$1" '$1 == k { print $2; f = 1 } END { exit !f }' "$2"; }
-kindf() { awk -v k="$2" '$1 == "kind" && $2 == k { print $3 }' "$1"; }
-
-J="$RT/box.rep"; E="$RT/enr.rep"
-[ -s "$E" ] || { echo "FAIL: the enrolled wire's ear wrote no report"; tail -5 "$RT/enr.log"; exit 1; }
-# THE PROBE'S POSITIVE CONTROL: the reference ear must be hearing a master at all.
-EFILL=$(kindf "$E" filler)
-[ -n "$EFILL" ] && [ "$EFILL" -gt 100 ] || {
-	echo "FAIL: the reference ear decoded $EFILL filler frames — it is not hearing the"
-	echo "      master it is supposed to be the reference for"; cat "$E"; exit 1; }
-# THE SCENE PUSH IS ONE-SHOT PER ESTABLISHMENT, so what is asserted is that the two wires
-# carry the SAME one and not that either carries none. (The rig's enrolled capture read 0
-# because that box had been established for hours; its joined capture read 343 because
-# PROBING keeps pushing at a peer that never accepts. Both are consistent with one push
-# per establishment, and the ears here are started before either wire establishes.)
-JSC=$(kindf "$J" scene_transfer); ESC=$(kindf "$E" scene_transfer)
-[ "${JSC:-0}" = "${ESC:-0}" ] || {
-	echo "FAIL: the joined wire carried ${JSC:-0} scene-transfer frames and the enrolled"
-	echo "      wire ${ESC:-0}. The push is one per establishment on both or the two"
-	echo "      downstreams are not the same"; exit 1; }
-JANN=$(repf announce "$J"); EANN=$(repf announce "$E")
-[ -n "$JANN" ] && [ -n "$EANN" ] || {
-	echo "FAIL: no announce block on one of the wires (joined='$JANN' enrolled='$EANN')"
-	exit 1; }
-# THE ENROLLED-BOX COUNT, block byte 21, and the whole-block diff around it. The two
-# announces MUST differ in the source MAC (two NICs) and the box width (8 against 16), and
-# in NOTHING ELSE -- that residue is what "the same downstream" means here.
-python3 - "$JANN" "$EANN" <<'PYEOF'
-import sys
-j = bytes.fromhex(sys.argv[1]); e = bytes.fromhex(sys.argv[2])
-diff = [i for i in range(min(len(j), len(e))) if j[i] != e[i]]
-# The four fields that describe WHICH BOX and WHICH RATE, and nothing else:
-#   11..16 our source MAC (two NICs), 18 the box's input width (8 against 16),
-#   19 the console FAMILY byte, which on this protocol is the RATE GATE and is derived
-#      from each wire's own pace (the joined wire runs at the box's 44.1 k, the enrolled
-#      one at the rate we chose) -- reac_pacer.c, tool+rig verified 2026-08-26,
-#   33 the block checksum, which follows from any of the above.
-# What must NOT differ is the enrolment state, and byte 21 is where the wire carries it.
-allowed = set(range(11, 17)) | {18, 19, 33}
-stray = [i for i in diff if i not in allowed]
-if j[21] != 1 or e[21] != 1:
-    print("FAIL: announce enrolled-box count (byte 21) reads %d joined, %d enrolled;"
-          " both must read 1 — the joined box IS the one box" % (j[21], e[21]))
-    sys.exit(1)
-if stray:
-    print("FAIL: the two announce blocks differ outside the source MAC and the width, at "
-          "offsets %s (joined %s / enrolled %s)"
-          % (stray, [j[i] for i in stray], [e[i] for i in stray]))
-    sys.exit(1)
-print("MEASURED: announce blocks differ only at %s (source MAC, box width, the "
-      "family/rate-gate byte and the checksum); enrolled-box count byte 21 = 1 on both,"
-      " family %d joined / %d enrolled" % (diff, j[19], e[19]))
-PYEOF
-[ $? -eq 0 ] || exit 1
-JCM=$(repf chanmap "$J"); ECM=$(repf chanmap "$E")
-[ -n "$JCM" ] && [ -n "$ECM" ] || {
-	echo "FAIL: no chanmap on one of the wires — an established master walks it ~1/s"
-	echo "      (joined='$JCM' enrolled='$ECM')"; exit 1; }
-# The chanmap enumerates each box's OWN cells, so its bytes are expected to differ; what
-# must match is its SHAPE -- the same opcode, segment and block length.
-[ "${JCM:0:12}" = "${ECM:0:12}" ] || {
-	echo "FAIL: the two chanmaps are not the same frame shape:"
-	echo "      joined  ${JCM:0:12}"
-	echo "      enrolled ${ECM:0:12}"; exit 1; }
-echo "MEASURED: chanmap present on both, same shape ${JCM:0:12}; joined cells ${JCM:12:24}"
-echo "MEASURED: scene push ${JSC:-0} frames joined / ${ESC:-0} enrolled (one per establishment)"
-echo "MEASURED: control kinds joined  [$(awk '$1=="kind"{printf "%s=%s ", $2, $3}' "$J")]"
-echo "MEASURED: control kinds enrolled[$(awk '$1=="kind"{printf "%s=%s ", $2, $3}' "$E")]"
-
-kill -TERM $EARPID 2>/dev/null; kill -TERM $EBOXPID 2>/dev/null
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 kill -TERM $PID 2>/dev/null; wait $PID 2>/dev/null
-echo "PASS: a box master is joined AND driven — one downstream per box frame, audio placed, head-amp delivered"
+echo "PASS: a box master is ENROLLED WITH, its way — flood, announce, burst, grant, and its outputs carry our audio"
 INNER
 )
 rc=$?

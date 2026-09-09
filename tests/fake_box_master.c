@@ -43,6 +43,7 @@
 #include <reac/reac_ctrlblk.h>
 #include <reac/reac_decode.h>
 #include <reac/reac_sample.h>
+#include <reac/reac_upstream.h>
 
 #include <math.h>
 
@@ -98,7 +99,25 @@ struct ear {
 	int ha_seen;
 	unsigned ha_ch, ha_param, ha_value;
 	unsigned long ha_count;
+	/* THE JOINING BOX'S UPSTREAM, and what we owe it back (0.5.6). A stagebox on M
+	 * does grant: the ground-truth capture has the S-0808 echoing the joining
+	 * S-1608's own cdea 04 03 records back inside its broadcast, byte for byte, 4 ms
+	 * after the burst. That echo IS the grant, so the records are kept here for the
+	 * TX side to hand back — without it nothing on this wire can ever establish. */
+	uint8_t grant_q[4][34]; int grant_n;
+	unsigned long up_frames, up_announce, up_join, up_hb;
+	size_t up_len;
+	double up_t_announce, up_t_join, up_t_hb_first, up_t_hb_last;
+	double up_sq[REAC_MAX_CHANNELS], up_pk[REAC_MAX_CHANNELS];
+	unsigned long up_ns; int up_nch;
+	unsigned long flood_frames; double flood_t0, flood_t1; size_t flood_len;
 };
+
+static double ear_now(void)
+{
+	struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+	return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
 
 static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t src[6],
                        unsigned long tx_so_far, const struct reac_mode *mode)
@@ -108,7 +127,50 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 	if (memcmp(f + 6, src, 6) == 0)
 		return;                    /* our own egress, if the kernel ever echoes it */
 	if (n != (size_t)REAC_FRAME_BYTES && n != (size_t)REAC_FRAME_BYTES_OHRCA) {
+		/* NOT OURS TO DECODE AS A DOWNSTREAM — but on a wire we master it is the
+		 * only interesting traffic there is: a box joining us speaks our own
+		 * upstream geometry (0.5.6). Classify it, keep its records, and measure the
+		 * audio it is sending into our outputs. */
 		e->rx_other++;
+		int nch = reac_upstream_channels(n);
+		if (nch <= 0)
+			return;
+		double t = ear_now();
+		int bcast = memcmp(f, "\xff\xff\xff\xff\xff\xff", 6) == 0;
+		if (bcast) {
+			if (!e->flood_frames) e->flood_t0 = t;
+			e->flood_frames++; e->flood_t1 = t; e->flood_len = n;
+			return;
+		}
+		e->up_frames++; e->up_len = n; e->up_nch = nch;
+		struct reac_ctrl_parsed up;
+		enum reac_ctrl_kind uk = reac_ctrl_parse(f, n, &up);
+		if (uk == REAC_CTRL_CONFIG_ANNOUNCE) {
+			if (!e->up_announce) e->up_t_announce = t;
+			e->up_announce++;
+		} else if (uk == REAC_CTRL_GRANT) {
+			if (!e->up_join) e->up_t_join = t;
+			e->up_join++;
+			if (e->grant_n < 4) {          /* owe it back, byte for byte */
+				memcpy(e->grant_q[e->grant_n], f + 16, 34);
+				e->grant_n++;
+			}
+		} else if (uk == REAC_CTRL_BOX_HB) {
+			if (!e->up_hb) e->up_t_hb_first = t;
+			e->up_hb++; e->up_t_hb_last = t;
+		}
+		static uint8_t us24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
+		int uns = reac_upstream_decode(f, n, us24);
+		if (uns > 0) {
+			for (int c = 0; c < nch && c < REAC_MAX_CHANNELS; c++)
+				for (int i = 0; i < uns; i++) {
+					float v = reac_s24le_to_f32(&us24[(size_t)(c * uns + i) * 3]);
+					e->up_sq[c] += (double)v * v;
+					double a = v < 0 ? -(double)v : (double)v;
+					if (a > e->up_pk[c]) e->up_pk[c] = a;
+				}
+			e->up_ns += (unsigned long)uns;
+		}
 		return;
 	}
 	e->rx_down++;
@@ -186,6 +248,25 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 		double pdb = e->peak[c] > 0 ? 20.0 * log10(e->peak[c]) : -999.0;
 		fprintf(f, "ch%d rms %.2f peak %.2f\n", c, db, pdb);
 	}
+	fprintf(f, "flood frames %lu len %zu secs %.3f\n", e->flood_frames, e->flood_len,
+	        e->flood_frames ? e->flood_t1 - e->flood_t0 : 0.0);
+	fprintf(f, "up frames %lu len %zu ch %d announce %lu join %lu hb %lu\n",
+	        e->up_frames, e->up_len, e->up_nch, e->up_announce, e->up_join, e->up_hb);
+	if (e->up_announce && e->up_join)
+		fprintf(f, "up order announce_to_join %.3f\n", e->up_t_join - e->up_t_announce);
+	if (e->up_hb > 1)
+		fprintf(f, "up hb_period %.3f\n",
+		        (e->up_t_hb_last - e->up_t_hb_first) / (double)(e->up_hb - 1));
+	for (int c = 0; c < e->up_nch && c < REAC_MAX_CHANNELS; c++) {
+		if (!e->up_ns) break;
+		double r = sqrt(e->up_sq[c] / (double)e->up_ns);
+		fprintf(f, "upch %d rms %.2f peak %.2f\n", c,
+		        r > 0 ? 20.0 * log10(r) : -999.0,
+		        e->up_pk[c] > 0 ? 20.0 * log10(e->up_pk[c]) : -999.0);
+	}
+	memset(e->up_sq, 0, sizeof e->up_sq);
+	memset(e->up_pk, 0, sizeof e->up_pk);
+	e->up_ns = 0;
 	for (int k = 0; k < 24; k++)
 		if (e->kind[k])
 			fprintf(f, "kind %s %lu\n", reac_ctrl_kind_name(k), e->kind[k]);
@@ -292,7 +373,13 @@ int main(int argc, char **argv)
 	const struct reac_mode *dmode = reac_mode_for(fps * REAC_SAMPLES_PER_PKT);
 	if (!dmode)
 		dmode = &REAC_MODE_48K;
-	if (report) {
+	/* THE EAR IS NOT A REPORTING OPTION, IT IS HALF OF BEING A BOX (0.5.6). A stagebox on
+	 * M grants: it echoes a joining box's own cdea 04 03 records back inside its
+	 * broadcast, and a peer that cannot hear cannot grant — so a run without a report
+	 * file would silently be a box nothing can ever enrol with, which is exactly the
+	 * `probing` a console must not see. The socket is always opened; `report` only says
+	 * whether a snapshot is also written. */
+	{
 		ear.fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
 		if (ear.fd < 0) {
 			fprintf(stderr, "fake-box-master: RX socket: %s\n", strerror(errno));
@@ -309,7 +396,8 @@ int main(int argc, char **argv)
 		}
 		int rcvbuf = 8 << 20;
 		setsockopt(ear.fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof rcvbuf);
-		fprintf(stderr, "fake-box-master: listening too — report -> %s\n", report);
+		fprintf(stderr, "fake-box-master: listening too (grants what joins us)%s%s\n",
+		        report ? " — report -> " : "", report ? report : "");
 	}
 
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -327,7 +415,7 @@ int main(int argc, char **argv)
 	}
 	uint8_t f[2048];
 	uint16_t counter = 0;
-	long sent = 0, announces = 0;
+	long sent = 0, announces = 0, granted = 0;
 	struct timespec period = { 0, 0 };
 	period.tv_nsec = 1000000000L / fps;
 
@@ -355,7 +443,7 @@ int main(int argc, char **argv)
 			clock_gettime(CLOCK_MONOTONIC, &now);
 			double dt = (double)(now.tv_sec - last_report.tv_sec)
 			          + (double)(now.tv_nsec - last_report.tv_nsec) / 1e9;
-			if (dt > 0.3) {
+			if (report && dt > 0.3) {
 				last_report = now;
 				ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
 			}
@@ -368,6 +456,20 @@ int main(int argc, char **argv)
 		                                        planar, REAC_SAMPLES_PER_PKT);
 		if (n == 0)
 			break;
+		/* AND WE GRANT (0.5.6). A stagebox on M is not deaf: the ground-truth capture
+		 * has the S-0808 echoing the joining S-1608's own cdea 04 03 records back
+		 * inside its BROADCAST, byte for byte, 4 ms after the burst — that echo IS
+		 * the grant, and without it nothing on this wire can ever establish. One
+		 * queued record per frame, stamped over the filler's control block and
+		 * re-checksummed, exactly as the head-amp record below is. */
+		if (ear.grant_n > 0) {
+			memcpy(f + 16, ear.grant_q[0], 34);
+			memmove(ear.grant_q[0], ear.grant_q[1], sizeof ear.grant_q[0] * 3);
+			ear.grant_n--;
+			reac_ctrl_checksum_apply(f);
+			granted++;
+			goto send;
+		}
 		/* ONE FRAME A SECOND CARRIES THE MASTER SIGNATURE. A head-amp record is
 		 * console-only (reac_disco.c's role_of), so this is what files the peer as a
 		 * MASTER — at a length that is unambiguously a box's. The block checksum is
@@ -383,6 +485,7 @@ int main(int argc, char **argv)
 		 * first instant of carrier and the daemon's masterless observation cannot win
 		 * a race it was never meant to be in. A frame sent into a down interface is
 		 * dropped by the kernel; the loop simply keeps offering. */
+send:
 		if (sendto(fd, f, n, 0, (struct sockaddr *)&sll, sizeof sll) < 0 &&
 		    errno != ENOBUFS && errno != EAGAIN && errno != ENETDOWN) {
 			fprintf(stderr, "fake-box-master: send: %s\n", strerror(errno));
@@ -391,8 +494,9 @@ int main(int argc, char **argv)
 		sent++;
 		nanosleep(&period, NULL);
 	}
-	fprintf(stderr, "fake-box-master: stopped after %ld frames (%ld master records), "
-	        "heard %lu downstream frames back\n", sent, announces, ear.rx_down);
+	fprintf(stderr, "fake-box-master: stopped after %ld frames (%ld master records, "
+	        "%ld grants echoed), heard %lu downstream / %lu upstream frames back\n",
+	        sent, announces, granted, ear.rx_down, ear.up_frames);
 	if (report)
 		ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
 	if (ear.fd >= 0)
