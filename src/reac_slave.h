@@ -61,6 +61,22 @@ struct reac_slave_cfg {
 	int prio;                 /* SCHED_FIFO priority for the engine thread; 0 ->
 	                           * resolved by reac_rt.h (REACPW_RT_PRIO, else the
 	                           * built-in that sits BELOW the PipeWire graph) */
+	/* THE PEER IS A STAGEBOX ON M, NOT A DESK (0.5.6). Two things change and
+	 * nothing else does:
+	 *
+	 *   - `box_channels` is THE MASTER'S width, read off its broadcast, not ours.
+	 *     Ground truth (`box-to-box-enroll.pcap`): a real 16-input S-1608 joining a
+	 *     real S-0808 on M sent 340 B / 8 slots, not its own 628 B / 16, from its
+	 *     very first flood frame. Its inputs 9-16 never reached that master at all —
+	 *     the one identifiable signal on its input 9 appears in no slot of the
+	 *     8-channel stream. The caller passes the width; this flag says whose it is.
+	 *
+	 *   - the cold-connect ORDER. To a desk the engine escalates one record per
+	 *     ~100 ms grid slot (0014 -> 0013 -> 0016 -> 001a -> announce -> ...). To a
+	 *     box on M the capture shows the config-announce FIRST, as the very frame
+	 *     the box goes unicast with, and the cold-connect burst ~214 ms later as
+	 *     three CONSECUTIVE frames (0014, 0014, 0013). The desk path is untouched. */
+	int box_master;
 };
 
 /* The slave engine. The FSM is the brain; everything else is the I/O the FSM's
@@ -94,6 +110,9 @@ struct reac_slave {
 	uint16_t counter_offset;
 	int      counter_locked;      /* 1 once the offset is latched (reset on PHY-up) */
 	int      coldconnect_phase;   /* cycles the cdea 04 03 escalation 0014->0013->0016->001a */
+	int      box_master;          /* 0.5.6: the peer is a stagebox on M (see the cfg) */
+	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */
+	int      bm_burst;            /* frames left of the 3-frame cold-connect burst */
 
 	/* --- received head-amp -> per-input GAIN (virtual-stagebox SENS/PAD apply) ---
 	 * A real box applies the console's per-channel SENS/PAD to its mic preamp
