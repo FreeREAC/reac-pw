@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.2}
+Version:        %{?version_override}%{!?version_override:0.5.3}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -92,6 +92,31 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.3-1
+- THE TRUNK: a VLAN is a segment, and the daemon makes the netdev it needs. Nothing in
+  src/ read a VLAN tag before this release. Every physical parent with carrier now gets a
+  read-only ETH_P_ALL tap, BPF-filtered to 0x8819 and reading PACKET_AUXDATA, which is the
+  only socket that can tell a tagged frame from an untagged one: measured again on
+  7.2.4-200.fc44, a socket bound to 0x8819 on the parent receives every tagged frame with
+  the 802.1Q header absent from the buffer and vlan_tci none, so a detector built on the
+  obvious socket reports every trunk as an access port.
+- Each VID heard becomes <parent>.<vid>: ADOPTED where the host pre-created it, CREATED
+  over rtnetlink and marked reac-pw:minted where it did not exist, brought up either way,
+  and then served as an ordinary interface by the hearing that was already there. A netdev
+  we minted is removed on a clean exit and after 30 s of silence on its VID; one we adopted
+  is left exactly as it was found. A netdev carrying our alias at startup is a leaked mint
+  from an unclean exit: re-owned rather than inherited for ever.
+- A parent carrying tagged REAC is never itself a segment. It receives every
+  sub-interface's frames with the tag gone, so serving it would put one master over several
+  VLANs' boxes; untagged REAC on such a parent is refused by name, and the plain untagged
+  NIC with no tagged traffic is unchanged in every respect.
+- Without CAP_NET_ADMIN the daemon reports and goes on hearing: it names each VID it cannot
+  serve and prints the ip link command that would fix it. Adoption needs no capability, so
+  a host that pre-created its sub-interfaces is fully served by an unprivileged daemon. The
+  RPM's %%caps line already grants cap_net_raw,cap_net_admin,cap_sys_nice.
+- Proven on veth, not on a rig: the whole-binary proof now hears two VIDs on one wire,
+  creates a sub-interface for each, serves both as segments at their own widths with audio
+  decoding on both, adopts a pre-created one, and on exit removes only what it made.
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.2-1
 - A JOINED BOX MASTER IS THE SAME BOX IT IS WHEN WE MASTER IT. 0.5.1 joined an S-0808 on
   M and put its eight channels on the graph; the rig showed a segment with no stagebox on

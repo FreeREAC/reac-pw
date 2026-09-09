@@ -177,13 +177,24 @@ as pw-filter nodes, adaptive resample via `io_rate_match`).
   node pair is `reac-capture.enp131s0` / `reac-playback.enp131s0` and the per-segment conf
   key is `REAC_ROLE_enp131s0`; `<iface>.env` files are no longer read at all. Node names
   that follow the BOX instead are owed — see DESIGN.md's "what it owes". Later increments
-  are 0.5.1, 0.5.2, ...; the middle digit does not move again for them.
+  are 0.5.1, 0.5.2, 0.5.3, ...; the middle digit does not move again for them.
 - **Autodetect + role election** (0.5.0, `reac_ifscan` + `reac_hunt`) — the daemon
   finds its own segments (rtnetlink link state, a passive `0x8819` sniff) and elects
   its own role per segment from what it hears. Proven on a veth pair inside an
   unprivileged namespace, whole-binary: a desk on the peer end is joined as a slave,
   and a box on a vacant wire is taken as master, granted, and reaches ESTABLISHED —
   with an empty `$HOME` and no arguments (`tests/hearing-finds-a-segment.sh`).
+- **Trunk topology** (0.5.3, `reac_topo` + `reac_vlan`) — on a trunk port the daemon hears
+  the 802.1Q tags on each physical parent (a read-only `ETH_P_ALL` tap reading
+  `PACKET_AUXDATA`, the only socket that can tell a tagged frame from an untagged one) and
+  makes the sub-interface each VLAN needs: `<parent>.<vid>` ADOPTED where the host already
+  created it, CREATED over rtnetlink and marked `reac-pw:minted` where it did not exist.
+  Each is then an ordinary segment. What the daemon minted it removes on exit; what it
+  adopted it leaves. **Capabilities: `cap_net_raw` for the sockets and `cap_net_admin` for
+  creating, marking and removing those netdevs** (the RPM's `%caps` line grants both, and
+  `tools/build.sh` re-applies them after every relink). Without `cap_net_admin` the daemon
+  names every VLAN it cannot serve and goes on hearing — adoption needs no capability.
+  Proven on veth, whole-binary: two VIDs on one wire, two segments, two boxes.
 - **Clock discipline** (0.5.0, `reac_clock`) — ON by default: the TX cadence follows
   the best available reference (NIC/external PHC > a hardware-driven graph clock >
   the box's counter slope), the period is slewed and never phase-stepped, and with no
