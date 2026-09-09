@@ -22,7 +22,7 @@
 #ifndef REAC_HEADAMP_PROP_H
 #define REAC_HEADAMP_PROP_H
 
-#include "reac_headamp_tx.h"   /* struct reac_headamp_setting */
+#include <reac/reac_headamp_tx.h>   /* struct reac_headamp_setting */
 
 struct spa_pod;
 

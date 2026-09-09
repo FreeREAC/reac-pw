@@ -7,7 +7,7 @@
  * knob-turn record (ctl2.pcap), the parser TAG dispatch (a preamp knob-turn is
  * NOT a grant), and the pad-relative SENS dB codec. MAC-free like the other
  * ctrl tests: the control block [18:50] is MAC-independent. */
-#include "reac_ctrl.h"
+#include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 #include <stdio.h>
 #include <string.h>

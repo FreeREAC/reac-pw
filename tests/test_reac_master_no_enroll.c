@@ -25,8 +25,8 @@
 #ifdef _WIN32
 #error "setenv is POSIX-only; this test does not run on Windows"
 #endif
-#include "reac_master.h"
-#include "reac_ctrl.h"
+#include <reac/reac_master.h>
+#include <reac/reac_ctrl.h>
 
 #include <stdio.h>
 #include <string.h>

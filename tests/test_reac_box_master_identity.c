@@ -21,7 +21,7 @@
  *      and its VALUE, and a formatter tested alone leaves "is it written at all" — the half
  *      that was wrong on the rig — untested.
  */
-#include "reac_link_state.h"
+#include <reac/reac_link_state.h>
 #include "reac_mac.h"
 
 #include <stdio.h>

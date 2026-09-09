@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_headamp_prop.h"
-#include "reac_ctrl.h"     /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
+#include <reac/reac_ctrl.h>     /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 
 #include <reac/reac.h>     /* REAC_SAMPLES_PER_PKT, ... */
 #include <spa/param/props.h>

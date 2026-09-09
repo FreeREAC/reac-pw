@@ -35,7 +35,7 @@
  *               block, both nested checksums, the box-model matrix — untouched.
  *               The NULL-planar path is exercised at every width.
  */
-#include "reac_ctrl.h"
+#include <reac/reac_ctrl.h>
 
 #include <reac/reac.h>
 #include <reac/reac_encode.h>

@@ -36,7 +36,7 @@
 #ifndef REAC_BOX_PIN_H
 #define REAC_BOX_PIN_H
 
-#include "reac_ctrl.h"   /* struct reac_box_model, reac_box_model_table */
+#include <reac/reac_ctrl.h>   /* struct reac_box_model, reac_box_model_table */
 
 /**
  * Parse `MODEL[:LABEL]` into a known box model plus the label to name its nodes with.

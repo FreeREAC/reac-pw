@@ -38,7 +38,7 @@
 #ifndef REAC_WATCH_H
 #define REAC_WATCH_H
 
-#include "reac_hunt.h"
+#include <reac/reac_hunt.h>
 
 #include <stdint.h>
 

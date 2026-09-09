@@ -6,7 +6,7 @@
 #endif
 #include "reac_slave.h"
 #include "reac_rt.h"
-#include "reac_ctrl.h"
+#include <reac/reac_ctrl.h>
 #include "reac_mac.h"
 
 #include <reac/reac.h>

@@ -24,10 +24,10 @@
  * construction reac_pacer_rx_ingest is documented for) and fed real frames built
  * by reac_ctrl's builders, so the answer comes out of the same code path the
  * daemon runs — no CAP_NET_RAW, no wire, no PipeWire. */
-#include "reac_link_state.h"
+#include <reac/reac_link_state.h>
 #include "reac_mac.h"
 #include "reac_pacer.h"
-#include "reac_ctrl.h"
+#include <reac/reac_ctrl.h>
 
 #include <reac/reac.h>
 

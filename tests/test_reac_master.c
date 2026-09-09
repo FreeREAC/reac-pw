@@ -25,8 +25,8 @@
  *   c. safety fallbacks only move BACKWARD: grant-window expiry, 600-frame
  *      peer-gone budget, explicit BYE, box-MAC change;
  *   d. the counter free-runs monotonically (mod 2^16) across every transition. */
-#include "reac_master.h"
-#include "reac_ctrl.h"
+#include <reac/reac_master.h>
+#include <reac/reac_ctrl.h>
 #include "reac_tx.h"
 #include <reac/reac_decode.h>
 #include <reac/reac.h>

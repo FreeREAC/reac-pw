@@ -12,7 +12,7 @@
  * nothing carrying it out — including that a role-changing assertion answers
  * `role_reestablish_pending` and never `applied`. */
 #include "reac_role_cfg.h"
-#include "reac_role.h"
+#include <reac/reac_role.h>
 
 #include <spa/param/props.h>
 #include <spa/pod/builder.h>

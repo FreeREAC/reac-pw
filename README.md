@@ -230,3 +230,37 @@ must have landed there first.
 Target: Fedora + PipeWire 1.4.
 
 GPL-3.0-or-later. Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>.
+
+## Install
+
+**From a release.** Every tagged release attaches the built RPMs and the source tarball:
+
+```
+gh release download v0.5.7 -R FreeREAC/reac-pw -p 'reac-pw-*.rpm' -p 'libreac-*.rpm'
+sudo dnf install ./libreac-*.rpm ./reac-pw-*.rpm
+```
+
+`reac-pw` needs `libreac >= 0.8.0`, which carries the REAC control plane; install both from
+the same release. The RPM sets the file capabilities the daemon needs
+(`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without root.
+
+**From source.**
+
+```
+sudo dnf install meson ninja-build gcc pipewire-devel libreac-devel
+meson setup build && ninja -C build && meson test -C build
+```
+
+Run it with no arguments: it finds its segments by hearing them.
+
+## Licence
+
+GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+## The protocol
+
+REAC is not a published protocol; everything here was measured. The entry points are
+[libreac's `docs/REAC-CONTROL-PLANE.md`](https://github.com/FreeREAC/libreac/blob/main/docs/REAC-CONTROL-PLANE.md)
+for how endpoints pair, and `reac-protocol`'s `spec/reac.ksy` and `wire-format.md` for the
+frames themselves. Where a document and a capture disagree, the capture wins and the document
+is amended with the date and the evidence.

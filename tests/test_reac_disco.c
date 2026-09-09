@@ -17,8 +17,8 @@
  *   (c) a model is only ever the byte-exact config-block match, never inferred;
  *   (d) the table ages a vanished box out and bumps seq on real change only;
  *   (e) the JSON is a complete snapshot or nothing — never truncated. */
-#include "reac_disco.h"
-#include "reac_ctrl.h"
+#include <reac/reac_disco.h>
+#include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 #include <stdio.h>
 #include <string.h>

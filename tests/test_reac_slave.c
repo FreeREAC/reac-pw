@@ -24,7 +24,7 @@
  * against an external master + audio both ways) is the hardware-verify gate in
  * DESIGN.md; this test fixes everything below it. */
 #include "reac_slave.h"
-#include "reac_ctrl.h"
+#include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 
 #include <stdio.h>

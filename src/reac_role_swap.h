@@ -51,9 +51,9 @@
 #ifndef REAC_ROLE_SWAP_H
 #define REAC_ROLE_SWAP_H
 
-#include "reac_role.h"
+#include <reac/reac_role.h>
 #include "reac_role_cfg.h"  /* the answer vocabulary this one extends (see below) */
-#include "reac_master.h"   /* enum reac_master_state — the master engine's FSM */
+#include <reac/reac_master.h>   /* enum reac_master_state — the master engine's FSM */
 
 /* The answer strings published on REAC_PROP_ROLE_STATE (reac_role_cfg.h). The
  * first two are that header's already-declared vocabulary, repeated by include

@@ -23,7 +23,7 @@
  * window starts there plus every window that runs through the wrap — the count is
  * asserted rather than assumed, because a generator that stopped emitting the
  * marker entirely would otherwise pass property 1 vacuously. */
-#include "reac_master.h"
+#include <reac/reac_master.h>
 
 #include <stdio.h>
 #include <string.h>

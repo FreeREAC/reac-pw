@@ -20,7 +20,7 @@
  * that is one line, `.clock_follow = reac_envflag("REACPW_CLOCK_FOLLOW",
  * REAC_CLOCK_FOLLOW_DEFAULT)`, and the journal line the pacer prints on a real start
  * ("following ENABLED (the default; ...)") is what witnesses it on the rig. */
-#include "reac_envflag.h"
+#include <reac/reac_envflag.h>
 #include "reac_sink_node.h"   /* REAC_CLOCK_FOLLOW_DEFAULT */
 
 #include <stdio.h>

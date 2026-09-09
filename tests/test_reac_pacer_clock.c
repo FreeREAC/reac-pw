@@ -23,8 +23,8 @@
  *     slope is merely our own pace handed back.
  */
 #include "reac_pacer.h"
-#include "reac_clock.h"
-#include "reac_arbitration.h"
+#include <reac/reac_clock.h>
+#include <reac/reac_arbitration.h>
 
 #include <math.h>
 #include <stdio.h>

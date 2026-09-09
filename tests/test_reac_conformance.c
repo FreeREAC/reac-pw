@@ -25,10 +25,10 @@
  * masked) since it IS the identity under test.
  *
  * Pure — no socket, no PipeWire, no rig. */
-#include "reac_master.h"
-#include "reac_ctrl.h"
-#include "reac_grant.h"
-#include "reac_headamp_tx.h"
+#include <reac/reac_master.h>
+#include <reac/reac_ctrl.h>
+#include <reac/reac_grant.h>
+#include <reac/reac_headamp_tx.h>
 #include "reac_tx.h"
 #include <reac/reac.h>
 #include <reac/reac_encode.h>

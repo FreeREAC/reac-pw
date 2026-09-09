@@ -29,7 +29,7 @@
 #include "reac_role_cfg.h"
 #include "reac_seglock.h"
 #include "reac_segment_ident.h"   /* W1: the segment's identity + a slave's answer */
-#include "reac_arbitration.h"     /* the vocabulary those answers must BE */
+#include <reac/reac_arbitration.h>     /* the vocabulary those answers must BE */
 #include <reac/reac.h>            /* REAC_MAX_CHANNELS — a desk's downstream width */
 
 #include <stdio.h>

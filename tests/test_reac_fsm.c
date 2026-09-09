@@ -5,7 +5,7 @@
  * master events (the parser is covered by test_reac_ctrl; here we exercise the
  * state logic). HOLD asserts — re-arm on master heartbeat, peer-gone after the
  * 600-frame budget, MAC-change drop — mirror the real-capture behaviour. */
-#include "reac_fsm.h"
+#include <reac/reac_fsm.h>
 #include <stdio.h>
 #include <string.h>
 

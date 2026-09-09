@@ -4,8 +4,8 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        10%{?dist}
+Version:        %{?version_override}%{!?version_override:0.5.7}
+Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -17,7 +17,7 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 0.7.1
+BuildRequires:  pkgconfig(libreac) >= 0.8.0
 Requires:       pipewire
 
 %description
@@ -28,13 +28,19 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-Links dynamically against the system libreac (>= 0.7.0), which carries the
-shared REAC byte-layout core: frame validation, 24-bit decode of the braid in
+Links dynamically against the system libreac (>= 0.8.0), which carries the
+shared REAC byte-layout core AND, since 0.8.0, the whole CONTROL PLANE — the
+enrolment FSMs, the hunt, the grant and the frame builders behind
+<reac/reac_link.h>. This daemon is sockets, the pacer and PipeWire; it does not
+decide the protocol. The byte-layout half is: frame validation, 24-bit decode of the braid in
 both directions (downstream and box upstream), the braided encode, the
 f32<->s24 sample pair, the OHRCA +2 length rule, capture and pcap replay.
 Nothing is vendored.
 
-The floor is 0.7.0 because that is the release that removed
+The floor is 0.8.0 because that is the release the control plane moved into, and
+a daemon built against it will not resolve reac_link's symbols in anything older.
+The 0.7.0 floor below is kept as the history of why a floor exists at all:
+it was the release that removed
 reac_ctrl_build_name_frame() and reac_ctrl_build_extra_frame() and replaced them
 with reac_ctrl_build_identity_first(), which this package calls. libreac shipped
 that break once as 0.6.0 with its soname still 0, and every guard was inert at
@@ -92,6 +98,15 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.7-1
+- THE DAEMON NO LONGER SPEAKS REAC CONTROL. Operator ruling: sockets and PipeWire only. The
+  JOIN/HOLD table, the master establishment and grant sweep, the hunt and arbitration, the box
+  registry, the clock discipline and the virtual-stagebox builders are gone from here and live
+  in libreac >= 0.8.0 behind <reac/reac_link.h>. What stays is what a daemon is: AF_PACKET
+  sockets, the SCHED_FIFO pacer, netlink, PipeWire nodes and the lifecycle around them.
+- No behaviour change is intended by the move: the files went across unchanged, because they
+  had been written pure from the start.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-10
 - A joining box's fillers carry three states in their control area and we sent one: zero
   before the announce, 0x52 while requesting, 0x7a once granted. We sent zero throughout,

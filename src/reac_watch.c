@@ -4,7 +4,7 @@
 // reac_watch — see reac_watch.h for what a served segment's fresh verdict means.
 
 #include "reac_watch.h"
-#include "reac_disco.h"
+#include <reac/reac_disco.h>
 
 const char *reac_watch_act_name(enum reac_watch_act a)
 {

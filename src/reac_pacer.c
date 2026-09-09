@@ -7,7 +7,7 @@
 #include "reac_pacer.h"
 #include "reac_rt.h"
 #include "reac_link.h"   /* the wire before the protocol */
-#include "reac_ctrl.h"     /* reac_ctrl_classify_box_frame */
+#include <reac/reac_ctrl.h>     /* reac_ctrl_classify_box_frame */
 #include "reac_mac.h"
 
 #include <reac/reac.h>     /* REAC_FRAME_BYTES, REAC_HDR_COUNTER_OFF, ... */
