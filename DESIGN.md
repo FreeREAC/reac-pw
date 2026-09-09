@@ -1163,6 +1163,58 @@ PROBING (0.5.5's own choice, because that is what makes the segment publish `for
 a box on M can act on a downstream SET at all, having never entered LINKED, is a question about
 the box and is settled by a rig test, not by this file.
 
+### The enrolled path adds NOTHING around a head-amp SET (rig captures, 2026-09-09)
+
+Both captures decoded with `reac_ctrl_parse`: `ha-write.pcap` (S-0808 on M, joined) and
+`ha-write-s1608.pcap` (S-1608 enrolled to us, and it ACTED — input-1 floor +18.9 dB). Same
+console sequence, 24000 frames and 3.00 s each, all broadcast.
+
+**The SET frames are byte-identical.** Block `[16:50]`, the enrolled sens=52 record against the
+joined one:
+
+```
+enrolled  cd ea 04 03 00 13 00 02 00 fe 0e f0 41 0a 00 00 12 12 01 01 20 02 34 28 f7
+joined    cd ea 04 03 00 13 00 02 00 fe 0e f0 41 0a 00 00 12 12 01 01 00 02 34 48 f7
+                                                                    ^^          ^^
+```
+Two bytes differ: the CELL (0x20 = 32, the S-1608's strap, against 0x00, the S-0808's) and the
+record checksum that follows from it. Both are correct for their box. Same DT1 tag 0x0101, same
+template, same count (6 records, the two console edges each sending the channel's whole trio
+once), same relative timing (t≈0.971/1.978 against t≈0.969/1.977).
+
+**And nothing brackets the SET on either wire.** Neither capture contains a GRANT burst or an
+ENROLL frame; on the enrolled side the nearest control frames are a chanmap and an announce on
+their own ~1/s background cadence, hundreds of frames away. The whole delta over 3 s is:
+
+| | joined S-0808 | enrolled S-1608 |
+|---|---|---|
+| FILLER | 23647 | 23988 |
+| scene_transfer | 343 | 0 |
+| chanmap (`cdea 01 03 0019`) | 1 | 3 |
+| announce (`cfea ff ff`) | 3 | 3 |
+| HEADAMP SET | 6 | 6 |
+| GRANT / ENROLL | 0 / 0 | 0 / 0 |
+
+The chanmaps enumerate each box's own cells correctly (0x00..0x07 for the 8-in box at base 0,
+0x1e.. for the 16-in box at base 32); only their cadence differs, PROBING against ESTABLISHED.
+The one field-level difference anywhere outside the head-amp record is in the announce, block
+byte 20: `01` enrolled against `00` joined, immediately after `28` (40 fabric slots) and the box
+width — plausibly an enrolled-box count. Unexplained, and NOT around a SET.
+
+**So ranking 2 is dead and this is ranking 3, and it is a protocol finding rather than a code
+change.** There is no field the enrolled path fills that the box-master path leaves at a seed:
+the daemon puts the same bytes on the wire in both cases, and one box acts on them while the
+other does not. What remains is the box: `wire-format.md` has M as the SPLITTER's clock role —
+clock-slave on its uplink, master on its split outputs — so our downstream arrives on the port
+the S-0808 is MASTERING, where its master parser reads upstream frames and a downstream control
+block is not addressed to anything. That is a claim about the box's firmware, it is consistent
+with 0.5.1's "nothing pairs with it in either direction, both were tried", and no amount of
+filling fields on our side can test it. It goes to the operator.
+
+**What 0.5.5 still delivers on that wire is unchanged and proven:** the box's inputs, its clock,
+and the downstream carrying our audio to its outputs at 1:1. Only the preamps are the box's own,
+and the remedy for them is the switch on its front panel.
+
 ### The rejoin-after-drop defect, and what the veth could not reproduce
 
 **Measured on the rig, 2026-09-09 13:36** (`/home/pau/.claude/jobs/87a4861e/tmp/s0808-rejoin.log`),
