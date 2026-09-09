@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.4}
+Version:        %{?version_override}%{!?version_override:0.5.5}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -92,6 +92,34 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.5-1
+- A STAGEBOX THAT MASTERS THE WIRE NOW GETS THE SAME DOWNSTREAM WE SEND A BOX WE MASTER.
+  Operator ruling: sending is always the same, and being clock slave is only part of the
+  enrolment. A box with its REAC Mode switch on M provides the cadence instead of following
+  one, and it consumes the desk-to-box downstream whoever owns the clock -- so the segment
+  keeps following the box's clock (its arriving frame IS the slot; no pacer deadline) and
+  now also builds and broadcasts the ordinary 1492 B master downstream on it, one frame per
+  frame received. Nothing at all leaves before the box's first frame: a timeout is not a
+  slot.
+- The segment therefore publishes reac-playback.<segment>, sized to the box's outputs from
+  the width it broadcasts, and the reac.headamp.<ch>.<param> control keys with it. An
+  operator can route to that box and set its preamps without touching the switch on its
+  front panel. What does NOT change: no handshake is attempted in either direction, no
+  slave engine is opened, and the segment's answer stays on its capture node --
+  reac.master.state=foreign, reac.pace.source=foreign-master. This wire is driven, not
+  owned.
+- Measured on a veth against the box-master emulator, which now decodes what comes back
+  through libreac's own oracles: emission ratio 1.0000 downstream frames per box frame over
+  2 s, 1492 B, zero frames before the box's first, a tone played into the playback node read
+  back off the wire on the slots wire-format.md places it on and 20.01 dB down when the
+  source drops 20 dB, a head-amp write decoded out of a control block the daemon sent, and
+  zero frames sent in 1.5 s of a silent box against 2624 in the same window with it back.
+- A box-master segment dropped by a link loss past the hold and heard again is proven to
+  carry audio in BOTH directions afterwards, twice in a row. The rig defect of 2026-09-09
+  13:36 that prompted it (a rejoined segment publishing digital silence and its create-time
+  property seeds over a live wire) does NOT reproduce on a veth under either condition that
+  rig can present, and is recorded in DESIGN.md as an open measurement rather than a fix.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.4-1
 - THE WIRE IS OURS ONLY WHILE NOBODY ELSE CLAIMS IT. Every segment served as MASTER on an
   interface nobody pinned keeps its passive sniffer now, not just one taken on proven
