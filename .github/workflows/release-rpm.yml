@@ -195,7 +195,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_reac-pw}"
+          TAG="${RELEASE_TAG:-${{ inputs.tag }}}"
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --generate-notes
           # Count before uploading: an empty glob would upload nothing and say nothing.
