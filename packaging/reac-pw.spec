@@ -5,7 +5,7 @@ Name:           reac-pw
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
 Version:        %{?version_override}%{!?version_override:0.5.6}
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
 License:        GPL-3.0-or-later
@@ -92,6 +92,17 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-4
+- REAC_SRC_MAC / REAC_SRC_MAC_<segment>: the source address per wire, from the layered conf,
+  because --src-mac has always existed and the packaged daemon takes no arguments. It
+  overrides both defaults, and its first use is trying a granted box's own address on a
+  box-master wire.
+- No behaviour change otherwise. DESIGN.md records the byte diff of the box-shaped run
+  against the granted S-1608: one non-cell difference, our unicast FILLER carrying the 007a
+  ESTABLISHED descriptor before the grant where that box carried zeros until after it, and no
+  probe-response relation - the S-0808 sends nothing to answer in the two seconds before the
+  announce, so none was implemented.
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.6-3
 - REACPW_BOX_MASTER_FRAME=mixer|box, the run that separates two readings the rig has not
   been able to tell apart. Two builds were refused by the real S-0808 and each differed from

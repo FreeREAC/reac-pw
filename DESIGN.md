@@ -1631,6 +1631,44 @@ Both are proven on the veth: `mixer` floods 5153 frames of 1492 B broadcast and 
 broadcast — the granted box's own shape. Both enrol, heartbeat, carry the tone at
 −17.0 dBFS on slots 0/1 with −999 on an unfed slot, and publish `probing` then `established`.
 
+### The byte diff below the control layer, and what it is NOT (0.5.6-4)
+
+`REACPW_BOX_MASTER_FRAME=box` on the rig put the S-1608's exact shape on the wire — 340 B
+unicast to the box, 9999 frames in 2.5 s — and the box still granted nothing. Diffed frame for
+frame against `box-to-box-enroll.pcap`.
+
+**Everything in the 52-byte header matches except one field, and it is not a counter.** Our
+unicast FILLER carries `00 00 00 7a 00 7a … 00 7a` in the control area `[16:50]`; the
+S-1608's carries **all zeros there until it is granted**:
+
+```
+S-1608  t=6.619 (unicast begins)  0000000000000000000000000000000000
+S-1608  t=7.619 (after the grant) 0000007a007a007a007a007a007a007a007a…
+ours    t=0.000 (first frame on)  0000007a007a007a007a007a007a007a007a…
+```
+
+The grant lands at 6.84, between those two lines. **`007a` is the ESTABLISHED descriptor** —
+this repository already says so, in `reac_slave.c`'s own flood comment: *"the descriptor, not
+the audio, is what marks the ESTABLISHED unicast."* We emit it from the first unicast frame,
+which tells the box we are already linked to it before it has granted anything. A box asked to
+enrol a peer that claims to be enrolled has nothing to do. Everything else — dst, src, the
+Roland OUI, the ethertype, the free-running counter, the announce block, both cold-connect
+records — is byte-identical; the trailer differs only in audio content, ours silent.
+
+**RANKED.** 1. the `007a` descriptor before the grant (above). 2. nothing else non-cell was
+found. The audio content and the counter value are not protocol differences.
+
+**AND IT IS NOT A PROBE WE FAILED TO ANSWER.** The operator's hypothesis was that the S-1608
+answered something from the box. The capture says no: in the 2 s before its announce the
+S-0808 sent a scene push that ENDED at t=5.5264 (`cdea 0102 000e`) and nothing else until a
+chanmap at 6.8325, which comes AFTER the announce. The S-1608's flood begins at 5.937 — 0.411 s
+after that scene end, n=1 — and its announce is 0.682 s after its own flood START, which is the
+flood's own frame-counted bound and not a delay from anything the box did. The S-0808 emits no
+`cdea 01` probe sub-states to answer at all: its control output is one scene push and a ~1/s
+chanmap walk (0.5.1 measured the same thing as "no handshake"). The burst does land 1.0 ms
+after a chanmap, which is striking, but it is one sample and it follows from a fixed 214 ms
+delay after the announce. **No probe-response relation is established, so none is implemented.**
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does

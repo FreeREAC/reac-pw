@@ -202,3 +202,17 @@ unicast to the box after the flood as the granted box unicast.
 It changes nothing else — the enrolment, the declaration, the source MAC and the link-state
 are the same either way — so the two runs differ in exactly the field under test. Set it on
 the daemon and read the box's front lamp; nothing else can tell them apart from this side.
+
+## `REAC_SRC_MAC` / `REAC_SRC_MAC_<segment>` — a MAC, or unset
+
+THE SOURCE ADDRESS THIS DAEMON EMITS FROM ON ONE WIRE. `--src-mac` has always existed and the
+packaged daemon takes no arguments, so on a real rig there was no way to try a different
+source on one segment without a rebuild. Same layered lookup as every other key: the
+per-segment form answers for that wire, the bare form is the floor for every wire, and
+`--src-mac` still wins where a command line exists.
+
+It overrides both defaults — the NIC's own address (`reac_mac.h`'s law) and the Roland-OUI
+stand-in a box-master join uses. Its first use is that experiment: putting a REAL granted
+box's address, `00:40:ab:c4:80:41`, on the wire to see whether the S-0808 grants an address
+it has enrolled before. **Two devices must never carry one address at the same time** — the
+box whose MAC is borrowed has to be off the segment.
