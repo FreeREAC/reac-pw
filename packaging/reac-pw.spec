@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.3}
+Version:        %{?version_override}%{!?version_override:0.5.4}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -92,6 +92,38 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.4-1
+- THE WIRE IS OURS ONLY WHILE NOBODY ELSE CLAIMS IT. Every segment served as MASTER on an
+  interface nobody pinned keeps its passive sniffer now, not just one taken on proven
+  silence, and a desk (or a stagebox on M) that starts mastering it is yielded to: master
+  down, slave up, no shouting. The venue case is the whole argument -- a house console
+  hears the stageboxes, grants them and drives, and the Roland desk is switched on
+  afterwards. A pinned segment keeps the operator's answer; the only thing a rival does to
+  one is the 0.5.1 refusal.
+- AND A YIELD IS NOT A ONE-WAY DOOR. The sniffer is kept ACROSS the yield, so when the
+  desk goes home and its sighting ages out of the discovery table (5 s, the same bar "a
+  device is really gone" means everywhere else here) the wire is taken back as master,
+  through the same drop-then-serve seam a cold start uses. It does not re-enrol the boxes
+  by itself -- a stagebox announces on its own PHY-up edge and on nothing else -- but it
+  is DRIVING for them when they do, and that is measured on the peer's own capture.
+- The decision is a pure table (src/reac_watch.{h,c}): yield, retake, unrefuse or stand.
+  Inline in main.c the only thing that could exercise it was a 70 s veth run, and that run
+  cannot choose which route took the wire.
+- reac.pace.source STOPS BEING A CONSTANT. The playback door built its arbitration with
+  REAC_PACE_FREE_RUN written in -- true under the 2026-08-21 config of record in which
+  clock-follow was off, and false since 0.5.0 made following the default: on the rig
+  2026-09-08/09 the journal read "locked to graph clock (api.alsa.0)" while the console's
+  segment row read "free-run". The pacer mirrors its discipline into an atomic and the
+  door maps it: phc, graph-ref or box-slope where the DLL is LOCKED, free-run while
+  acquiring, in holdover or with following off, and foreign-master wherever somebody else
+  times the wire.
+- Three defects the new proof found on the way. A served interface goes LISTEN -> SERVE ->
+  DROP and never through UNLISTEN, so every segment that ever dropped leaked its topology
+  tap AND its topology-table row -- both bounded at eight, and past the eighth every trunk
+  is served as one flat segment; the table's refusal was silent as well. And a
+  sub-interface could be tapped where /sys was unreadable, which minted a VLAN on a VLAN;
+  the daemon now refuses that from a fact it already holds.
+- meson test: 67 tests, 66 ok, 1 skipped (reac_pacer's live cadence, needs CAP_NET_RAW).
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.3-1
 - THE TRUNK: a VLAN is a segment, and the daemon makes the netdev it needs. Nothing in
   src/ read a VLAN tag before this release. Every physical parent with carrier now gets a

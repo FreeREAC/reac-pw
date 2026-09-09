@@ -31,6 +31,22 @@ const char *reac_pace_source_name(enum reac_pace_source p)
 	}
 }
 
+enum reac_pace_source reac_pace_from_clock(enum reac_clock_source src,
+                                          enum reac_clock_state state)
+{
+	if (src == REAC_CLOCK_SRC_WIRE)
+		return REAC_PACE_FOREIGN_MASTER;   /* the slave path; it times nothing itself */
+	if (state != REAC_CLOCK_LOCKED)
+		return REAC_PACE_FREE_RUN;
+	switch (src) {
+	case REAC_CLOCK_SRC_PHC:   return REAC_PACE_PHC;
+	case REAC_CLOCK_SRC_GRAPH: return REAC_PACE_GRAPH_REF;
+	case REAC_CLOCK_SRC_BOX:   return REAC_PACE_BOX_SLOPE;
+	case REAC_CLOCK_SRC_FREERUN:
+	default:                   return REAC_PACE_FREE_RUN;
+	}
+}
+
 /**
  * The newest LIVE foreign master in the table, or NULL.
  *

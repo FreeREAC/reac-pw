@@ -37,6 +37,7 @@
 #include "reac_disco.h"
 #include "reac_headamp_tx.h"
 #include "reac_clock.h"
+#include "reac_arbitration.h"  /* enum reac_pace_source: what a segment PUBLISHES */
 #include "reac_rate_cfg.h"
 #include "reac_rt.h"
 #include <reac/reac_identity.h>   /* the box identity-page decode (DT1 tag 0x0500) */
@@ -580,6 +581,15 @@ struct reac_pacer {
 	 * with no publisher has no availability bit either. */
 	_Atomic int      clock_quality[REAC_CLOCK_SRC_COUNT];    /* reac_clock_quality */
 
+	/* THE DISCIPLINE, AS THE MAIN THREAD MAY READ IT. `clock` below is pacer-thread
+	 * state and the property publisher runs on the main loop, so the one fact a
+	 * segment PUBLISHES about its pace — which reference, and whether we are locked to
+	 * it — is mirrored here on every evaluation: source in the low byte, state in the
+	 * next. Written by the pacer thread, read by anyone; a torn read is impossible on
+	 * a 32-bit atomic and a stale one is a tick old. Zero is FREERUN/UNLOCKED, which is
+	 * the truth before the first evaluation. */
+	_Atomic uint32_t clock_pace;
+
 	/* pacer-thread-local bookkeeping (single-writer, no atomics needed) */
 	struct reac_clock_disc clock;    /* PACER THREAD ONLY */
 	long     slot_period_ns;         /* the steered period actually slept to */
@@ -764,6 +774,21 @@ void reac_pacer_clock_publish_graph(struct reac_pacer *p, const char *name, int 
  * test can drive the whole path (including proving inertness) without the RT
  * thread or a socket. */
 long reac_pacer_clock_tick(struct reac_pacer *p, uint64_t now_ns);
+
+/**
+ * What this segment's pace is DISCIPLINED TO, in the vocabulary the props publish.
+ *
+ * The playback door hard-coded `REAC_PACE_FREE_RUN` until 0.5.4 and so published a
+ * constant: on the rig, 2026-09-08/09, `locked to graph clock (api.alsa.0)` in the
+ * journal beside `free-run` in `reac.pace.source`. The discipline lives on the pacer
+ * thread; this reads its mirror and maps it (reac_arbitration.h's
+ * `reac_pace_from_clock` — only LOCKED names a reference).
+ *
+ * Any thread. A foreign master still overrides it: reac_arbitrate takes this as what WE
+ * would run on, and a wire somebody else times reads `foreign-master` whatever we
+ * discipline to.
+ */
+enum reac_pace_source reac_pacer_pace_source(const struct reac_pacer *p);
 
 /* ---- HEALTH, published where an operator can see it (workstream CLK) --------
  *

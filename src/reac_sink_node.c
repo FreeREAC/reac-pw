@@ -1128,12 +1128,16 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 	 * they move together with the seq. Passive: reac_arbitrate decides nothing, and nothing
 	 * downstream acts on it yet.
 	 *
-	 * The pace source is what we ARE running on, not what we would prefer: with clock-follow
-	 * off (the config of record after the 2026-08-21 verdict) that is free-run, and saying
-	 * "graph-ref" because the code exists would be the same lie as a soft meter. */
+	 * The pace source is what we ARE running on, not what we would prefer — and until 0.5.4
+	 * it was neither. The constant REAC_PACE_FREE_RUN was written in here, true under the
+	 * 2026-08-21 config of record in which clock-follow was OFF and false since 0.5.0 made
+	 * following the default: on the rig, 2026-09-08/09, the journal read `locked to graph
+	 * clock (api.alsa.0)` while this row read `free-run`. It is ASKED of the pacer now,
+	 * which is the only thing that knows what the DLL is steering to — and only a LOCKED
+	 * discipline names a reference, so a claim is never dressed up as a lock. */
 	struct reac_arbitration arb;
 	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
-	               REAC_PACE_FREE_RUN, reac_pacer_mono_ns(), &arb);
+	               reac_pacer_pace_source(&n->pacer), reac_pacer_mono_ns(), &arb);
 
 	char master_mac[24];
 	if (arb.have_mac)
@@ -1176,12 +1180,12 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
 {
 	if (!n)
 		return 0;
-	/* The SAME computation the property publisher above makes, from the same table and
-	 * the same FSM state — asked rather than displayed. Duplicating the reasoning here
-	 * would be a second opinion about one segment. */
+	/* The SAME computation the property publisher above makes, from the same table, the
+	 * same FSM state and the same pace — asked rather than displayed. Duplicating the
+	 * reasoning here would be a second opinion about one segment. */
 	struct reac_arbitration arb;
 	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
-	               REAC_PACE_FREE_RUN, reac_pacer_mono_ns(), &arb);
+	               reac_pacer_pace_source(&n->pacer), reac_pacer_mono_ns(), &arb);
 	if (arb.state != REAC_SEGMENT_FOREIGN || arb.rival != REAC_RIVAL_BOX || !arb.have_mac)
 		return 0;
 	if (mac)
