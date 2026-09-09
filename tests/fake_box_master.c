@@ -114,6 +114,12 @@ struct ear {
 	unsigned long flood_frames; double flood_t0, flood_t1; size_t flood_len;
 	uint8_t announce_seen[34]; int have_announce_seen;
 	int announce_ok; unsigned long announce_refused;
+	/* THE TWO THINGS A REAL MASTER'S TIMING REFUSES (0.5.6-9). An announce that lands
+	 * INSIDE the master's scene transfer is not answered - both granted joins waited for
+	 * it to stop - and the emulator has to be able to say so, or a daemon that announces
+	 * mid-transfer passes here and is refused on the rig. */
+	int scene_running;                 /* the master is pushing its scene right now */
+	unsigned long announce_in_scene;   /* announces that arrived while it was */
 	/* THE STATE CLAIM, AND WHEN IT WAS MADE (0.5.6-5). A peer that carries the
 	 * ESTABLISHED descriptor before we have granted it is telling us it is already
 	 * linked, and the real S-0808 grants nothing to one that does — measured. The
@@ -167,6 +173,12 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 		/* block[6] is the model-family selector and block[10:22] the port-type
 		 * table; a table of all-equal entries declares nothing. The OUI is Roland's
 		 * or this is not gear a box has ever enrolled. */
+		if (e->scene_running) {
+			e->announce_in_scene++;
+			e->announce_ok = 0;
+			e->announce_refused++;
+			return;      /* a box joining mid-transfer must not cancel it */
+		}
 		int sel_ok = f[16 + 6] == 0x80;
 		int oui_ok = f[6] == 0x00 && f[7] == 0x40 && f[8] == 0xab;
 		int tbl_ok = 0;
@@ -342,7 +354,8 @@ static void ear_report(struct ear *e, const char *path, unsigned long tx, int n_
 	}
 	fprintf(f, "flood frames %lu len %zu secs %.3f\n", e->flood_frames, e->flood_len,
 	        e->flood_frames ? e->flood_t1 - e->flood_t0 : 0.0);
-	fprintf(f, "announce ok %d refused %lu\n", e->announce_ok, e->announce_refused);
+	fprintf(f, "announce ok %d refused %lu in_scene %lu\n",
+	        e->announce_ok, e->announce_refused, e->announce_in_scene);
 	fprintf(f, "steady bcast %lu\n", e->steady_bcast);
 	fprintf(f, "descriptor first %lu grant %lu before_grant %d\n",
 	        e->desc_first_frame, e->grant_frame, e->desc_before_grant);
@@ -426,6 +439,11 @@ int main(int argc, char **argv)
 	int n_ch = atoi(argv[3]);
 	int fps = argc > 4 ? atoi(argv[4]) : 2000;
 	const char *report = argc > 5 ? argv[5] : NULL;
+	/* A MASTER THAT CALLS, and one that is silent. The S-1608 in master mode sends a
+	 * `cfea` announce about once a second and pushes a scene transfer; the S-0808 sends
+	 * neither. A joining box floods only at the silent one, and waits for the other's
+	 * transfer to stop - so both kinds have to exist here or half the rule is untested. */
+	int announcing = (argc > 6 && strcmp(argv[6], "announcing") == 0);
 	/* fps 0 IS A MODE, NOT A REFUSAL (0.5.5): transmit nothing and only listen. It is
 	 * how the SAME decoder is pointed at a wire somebody else's box is enrolled on, so
 	 * the two downstreams can be diffed by one tool instead of two readings. */
@@ -559,6 +577,45 @@ int main(int argc, char **argv)
 		                                        planar, REAC_SAMPLES_PER_PKT);
 		if (n == 0)
 			break;
+		/* THE ANNOUNCING MASTER'S OWN CONTROL PLANE (0.5.6-9): a bounded scene
+		 * transfer over the first second, then a `cfea` announce about once a
+		 * second. Both are stamped over the filler's control block and
+		 * re-checksummed, exactly as the head-amp record below is. */
+		if (announcing) {
+			/* THE TRANSFER REPEATS UNTIL IT IS ANSWERED (spec/reac.ksy: four
+			 * complete bodies in one capture, ten in another, all at the same
+			 * period). A single burst would let an unguarded announce miss it by
+			 * luck, which is not a test of anything: 0.5 s of transfer every
+			 * 2 s, so a daemon that announces on its own clock lands inside one
+			 * and a daemon that waits for quiet always has a window. */
+			ear.scene_running = ((sent / (fps / 2)) % 4) == 0 && sent > fps / 4;
+			if (ear.scene_running) {
+				static const uint8_t SCENE[6] = { 0xcd, 0xea, 0x01, 0x00,
+				                                  0x00, 0x1a };
+				memcpy(f + 16, SCENE, sizeof SCENE);
+				memset(f + 22, 0, 28);
+				reac_ctrl_checksum_apply(f);
+				announces++;
+				goto send;
+			}
+			if (!ear.scene_running && sent % fps == fps / 4) {
+				/* cfea: the master naming itself, its fabric and its width -
+				 * the shape a real S-1608 in master mode broadcasts. */
+				uint8_t *b = f + 16;
+				static const uint8_t H[11] = { 0xcf, 0xea, 0xff, 0xff, 0x01,
+				                               0x00, 0x01, 0x03, 0x0d, 0x01,
+				                               0x04 };
+				memcpy(b, H, sizeof H);
+				memcpy(b + 11, src, 6);
+				b[17] = (uint8_t)n_ch; b[18] = 0x08; b[19] = 0x01;
+				b[20] = 0x00; b[21] = 0x01;
+				memset(b + 22, 0, 12);
+				reac_ctrl_checksum_apply(f);
+				announces++;
+				goto send;
+			}
+		}
+
 		/* AND WE GRANT (0.5.6). A stagebox on M is not deaf: the ground-truth capture
 		 * has the S-0808 echoing the joining S-1608's own cdea 04 03 records back
 		 * inside its BROADCAST, byte for byte, 4 ms after the burst — that echo IS

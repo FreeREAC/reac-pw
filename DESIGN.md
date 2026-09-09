@@ -1855,6 +1855,37 @@ an S-1608 master's door came up at SIXTEEN because it was sized from the width t
 BROADCASTS, which is its input count — and the upstream slots follow it. The capture door also
 names the box now, as the master path's does, because a console reads that description.
 
+### The three rules the replays left standing (0.5.6-9)
+
+The bisect cleared every field: V9 — the S-0808's own flood-less enrolment — was granted at
+three different phases of the S-1608's cycle, and V9a, the same with that master's OWN port
+table in the announce, was granted too. So neither the declaration's table nor the phase is
+what refuses us. What is left is what our daemon does that no granted sequence does: it
+FLOODS at a master that is calling, and it ANNOUNCES on its own clock, inside that master's
+scene transfer, retrying every 0.8 s.
+
+| rule | evidence | what the daemon does now |
+|---|---|---|
+| listen before speaking | both granted boxes were quiet for 15 s and 4 s first | the wire stays empty for **2.5 s** — two announce cadences, because one can fall between two announces and start a flood at a master that was about to call (measured: 1195 frames) |
+| no flood at a master that announces itself | the S-1608 sends `cfea` ~1/s and the box joining it broadcast NOTHING; the S-0808 sends none and the box joining it flooded 0.68 s | a `cfea` inside the listen window ends the flood before it starts. The flood is KEPT for a silent master: it is how that one is found, and it is the only behaviour the captures show there |
+| announce after the transfer stops | +0.411 s and +0.217 s, twice; the ksy says a box joining mid-transfer must not cancel it | the announce waits for **200 ms** without a scene record |
+| ask once, then wait | every granted join was echoed within milliseconds | the burst is sent once and retried only after **2 s** with no echo, and never re-floods |
+
+The FSM's flood bound is counted from when we SPEAK, not from when the engine opened — the
+counter advances on every tick whether or not a frame left, so the listening window was
+silently spending the flood it exists to decide about (3323 frames on the wire against a
+5460 bound).
+
+**Proven on the veth against BOTH master kinds.** The emulator gained an announcing mode: a
+`cfea` about once a second and a scene transfer that REPEATS — 0.5 s in every 2 s, as the ksy
+says a real one does until it is answered — and it refuses an announce that arrives inside
+one. Measured: **0 flood frames and 0 announces inside the transfer** at the announcing
+master, and the silent one still draws the full 5461-frame flood. Both sabotage-verified:
+announcing without waiting for quiet is refused, and ignoring the `cfea` puts the flood back.
+The flood assertion is scoped to the box geometry, because in the mixer shape every audio
+frame is a broadcast downstream by the ruling and "broadcast before the announce" is not a
+flood.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does

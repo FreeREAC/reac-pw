@@ -481,6 +481,53 @@ echo "MEASURED: 16-in box master — playback door $NP16 ch (its outputs), captu
 kill -TERM $FAKE16 2>/dev/null; wait $FAKE16 2>/dev/null
 ip link set bmx1 down
 
+# ---- 8. AN ANNOUNCING MASTER IS NOT HUNTED, AND ITS TRANSFER IS NOT INTERRUPTED. ----
+# The two rules the rig taught, one per master kind. A master that sends `cfea` (the S-1608
+# in master mode) is found without a flood — the box that joined one broadcast NOTHING, where
+# the box that joined the SILENT S-0808 flooded 0.68 s first. And both granted joins landed
+# after the master's scene transfer stopped, +0.411 s and +0.217 s; the ksy says a box joining
+# mid-transfer must not cancel it, and the emulator refuses an announce that arrives inside
+# one, so a daemon that announces on its own clock fails here as it failed on the rig.
+ip link add bmx2 type veth peer name mbx2 || exit 90
+ip link set mbx2 netns $NSPID || exit 90
+$in_peer "$FAKE" mbx2 00:40:ab:c4:08:cd 8 2000 "$RT/box2.rep" announcing >"$RT/box2.log" 2>&1 &
+FAKE2=$!
+sleep 0.5
+ip link set bmx2 up; peer ip link set mbx2 up
+wait_for "\[bmx2\] SLAVE role on a BOX MASTER" 30 || {
+	echo "FAIL: the announcing box master was not joined"; tail -10 "$LOG"; exit 1; }
+FL2=""
+for i in $(seq 100); do
+	FL2=$(rep_f flood 3 "$RT/box2.rep"); INS=$(awk '$1=="announce"{print $7}' "$RT/box2.rep")
+	AOK2=$(awk '$1=="announce"{print $3}' "$RT/box2.rep")
+	[ "$AOK2" = "1" ] && break
+	sleep 0.5
+done
+[ "$AOK2" = "1" ] || {
+	echo "FAIL: the announcing master never accepted our declaration (in_scene=${INS:-?})"
+	cat "$RT/box2.rep"; exit 1; }
+[ "${INS:-0}" = "0" ] || {
+	echo "FAIL: $INS of our announces arrived INSIDE the master's scene transfer — a box"
+	echo "      joining mid-transfer must not cancel it, and this master does not answer one"
+	exit 1; }
+wait_for "\[bmx2\] .*the master announces itself — no flood needed" 10 || {
+	echo "FAIL: the master's cfea was never noticed"; tail -8 "$LOG"; exit 1; }
+FL2=$(rep_f flood 3 "$RT/box2.rep")
+# ONLY THE BOX GEOMETRY HAS A FLOOD TO SUPPRESS. In the mixer shape every audio frame is a
+# broadcast downstream by the operator's ruling, so "broadcast frames before the announce" is
+# not a flood at all and counting them as one would assert against the ruling. What both
+# shapes share — the cfea noticed, the announce accepted, none of it inside the transfer — is
+# asserted above for either.
+[ "$WANT_LEN" = "340" ] || FL2=0
+[ "${FL2:-0}" -lt 500 ] || {
+	echo "FAIL: we broadcast $FL2 flood frames at a master that announces itself; a flood is"
+	echo "      how a SILENT master is found, and noise at one that is calling"
+	grep -E "\[bmx2\]" "$LOG" | tail -8; exit 1; }
+echo "MEASURED: announcing master — $FL2 flood frames, $INS announces inside its transfer,"
+echo "          declaration accepted"
+kill -TERM $FAKE2 2>/dev/null; wait $FAKE2 2>/dev/null
+ip link set bmx2 down
+
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 kill -TERM $PID 2>/dev/null; wait $PID 2>/dev/null
 echo "PASS: a box master is ENROLLED WITH, its way — flood, announce, burst, grant, and its outputs carry our audio"

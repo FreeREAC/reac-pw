@@ -89,6 +89,10 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->bm_rng = 0x1234567u;
 	s->bm_chanmap_hit = 0;
 	s->bm_announced = 0;
+	s->bm_saw_cfea = 0;
+	s->bm_last_scene_ns = 0;
+	s->bm_burst_sent_ns = 0;
+	s->bm_listened = 0;
 	(void)0;   /* the box-master declaration is a captured golden, not a width */
 	s->bm_seq = 0;
 	s->bm_burst = 0;
@@ -252,16 +256,51 @@ static int stage_inputs(struct reac_slave *s,
  * peer appearing out of silence rather than one that was already talking. Zero by default, so
  * the wire is byte-identical unless the knob is set. The clock starts at the first call, which
  * is the engine's first decision. */
-static int bm_presilent(struct reac_slave *s)
+static uint64_t slave_mono_ns(void)
 {
-	if (!s->box_master || s->bm_presilence_ms <= 0)
-		return 0;
 	struct timespec t;
 	clock_gettime(CLOCK_MONOTONIC, &t);
-	uint64_t now = (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+	return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+
+/* LISTEN BEFORE SPEAKING, for one announce cadence (0.5.6-9).
+ *
+ * A flood is how a SILENT master is found, and it is noise at one that is calling — but
+ * which kind this is cannot be known until it has had a chance to call. A real master
+ * announces about once a second, and both boxes that were granted had been quiet far longer
+ * than that before they spoke (15 s and 4 s). So the wire stays empty for one cadence, and
+ * whether a flood follows is then a fact rather than a guess. `REACPW_BOX_MASTER_PRESILENCE_MS`
+ * overrides it in either direction. */
+/* TWO ANNOUNCE CADENCES, not one. A master announces about once a second, so a window of
+ * one cadence can fall between two of them and the flood starts at a master that was about
+ * to call — measured on the veth: 1195 frames went out before the next announce arrived.
+ * Two cadences cannot miss a 1 Hz caller, and it is still far short of the 4 s and 15 s the
+ * two granted boxes were quiet for. */
+#define REAC_BM_LISTEN_MS 2500
+
+static int bm_presilent(struct reac_slave *s)
+{
+	if (!s->box_master)
+		return 0;
+	int hold = s->bm_presilence_ms > 0 ? s->bm_presilence_ms : REAC_BM_LISTEN_MS;
+	uint64_t now = slave_mono_ns();
 	if (!s->bm_start_ns)
 		s->bm_start_ns = now;
-	return (now - s->bm_start_ns) < (uint64_t)s->bm_presilence_ms * 1000000ull;
+	if ((now - s->bm_start_ns) < (uint64_t)hold * 1000000ull)
+		return 1;
+	/* THE BOUND IS COUNTED FROM WHEN WE SPEAK, not from when the engine opened. The FSM
+	 * advances its flood counter on every tick whether or not a frame left, so a listening
+	 * window silently spends the flood it is there to decide about — measured: 3323 frames
+	 * on the wire where the bound is 5460. Reset once, on the way out. */
+	if (!s->bm_listened) {
+		s->bm_listened = 1;
+		/* UNLESS THE MASTER CALLED DURING THE WINDOW, which is the whole point of
+		 * listening: the flood was marked satisfied on that frame's arrival, and
+		 * resetting the count here would put it straight back. */
+		if (!s->bm_saw_cfea)
+			s->fsm.flood_frames = 0;
+	}
+	return 0;
 }
 
 /* -60 dBFS OF NOISE IN THE SLOTS, until the grant (0.5.6-6). A hypothesis with a knob: the
@@ -277,6 +316,23 @@ static void bm_fill(struct reac_slave *s, float *const planar[REAC_MAX_CHANNELS]
 			planar[c][i] += ((float)((int32_t)(s->bm_rng >> 8) & 0xffff) - 32768.0f)
 			                / 32768.0f * 0.001f;   /* ~ -60 dBFS */
 		}
+}
+
+/* HAS THE MASTER'S SCENE TRANSFER STOPPED? (0.5.6-9)
+ *
+ * Both granted joins landed just after the master's transfer ended — +0.411 s and +0.217 s —
+ * and `spec/reac.ksy` says the transfer is repeated until answered and that a box joining
+ * mid-transfer must not cancel it. Ours announced on its own clock, inside it, and was
+ * refused twice. A master that has never pushed a scene (none was seen) is not waited for:
+ * absence of a transfer is not a transfer in progress. */
+#define REAC_BM_SCENE_QUIET_NS  (200ull * 1000000ull)   /* the shorter of the two, halved */
+#define REAC_BM_RETRY_NS        (2ull * 1000000000ull)  /* no echo in 2 s: ask again */
+
+static int bm_scene_quiet(struct reac_slave *s)
+{
+	if (!s->bm_last_scene_ns)
+		return 1;
+	return slave_mono_ns() - s->bm_last_scene_ns >= REAC_BM_SCENE_QUIET_NS;
 }
 
 /* THE ESTABLISHED DESCRIPTOR, AND WHEN IT MAY BE CLAIMED (0.5.6-5).
@@ -475,7 +531,7 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					}
 					if (++s->bm_seq >= 24)
 						{ s->bm_seq = 0; s->bm_announced = 0; }
-				} else if (s->bm_seq == 0) {
+				} else if (s->bm_seq == 0 && bm_scene_quiet(s)) {
 					/* WE DECLARE OURSELVES, NOT THE PEER — and we declare the
 					 * one thing this chassis has ever granted. 0.5.6-1 derived
 					 * the declaration from the MASTER's width and announced
@@ -501,8 +557,25 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 					         REAC_SAMPLES_PER_PKT);
 					s->bm_burst--;
 				}
-				if (++s->bm_seq >= 8)
+				/* THE BURST IS SENT ONCE AND THEN WE WAIT (0.5.6-9). Every
+				 * granted sequence on this rig was announce -> burst -> echo
+				 * within milliseconds; ours retried the pair every 0.8 s and
+				 * never sat still long enough to be answered. Retry only if no
+				 * echo has arrived within the bound, and never re-flood: the
+				 * master is known, and hunting one that is already answering is
+				 * how a retry becomes noise. */
+				if (s->bm_burst == 0 && s->bm_seq >= 3 && !s->bm_burst_sent_ns)
+					s->bm_burst_sent_ns = slave_mono_ns();
+				if (s->bm_burst_sent_ns) {
+					if (slave_mono_ns() - s->bm_burst_sent_ns
+					      >= REAC_BM_RETRY_NS) {
+						s->bm_burst_sent_ns = 0;
+	s->bm_listened = 0;
+						s->bm_seq = 0;
+					}
+				} else if (++s->bm_seq >= 8) {
 					s->bm_seq = 0;
+				}
 			}
 		} else if (d->emit == REAC_SLAVE_EMIT_HEARTBEAT || d->with_heartbeat) {
 			/* THE HEARTBEAT RIDES TWO DECISIONS, and missing the second one is a
@@ -821,6 +894,31 @@ static void *slave_loop(void *arg)
 		 * the emit below, so a plain flag is the whole synchronisation. */
 		if (s->bm_burst_chanmap && p.kind == REAC_CTRL_MASTER_HB)
 			s->bm_chanmap_hit = 1;
+
+		if (s->box_master) {
+			/* A MASTER THAT ANNOUNCES ITSELF NEEDS NO HUNTING (0.5.6-9). The
+			 * S-1608 in master mode sends `cfea` about once a second and the
+			 * S-0808 sends none — and the box that joined the announcing one
+			 * broadcast NOTHING, while the box that joined the silent one flooded
+			 * for 0.68 s first. So the flood is how a silent master is FOUND, and
+			 * it is noise at one that is calling. The FSM's own bound is what ends
+			 * it; telling it the bound is reached is the engine saying the flood's
+			 * purpose is already served. */
+			if (p.kind == REAC_CTRL_MASTER_ANNOUNCE && !s->bm_saw_cfea) {
+				s->bm_saw_cfea = 1;
+				if (s->fsm.state == FSM_FLOOD_ANNOUNCE) {
+					s->fsm.flood_frames = REAC_FSM_FLOOD_BURST;
+					fprintf(stderr, "reac_slave: %sthe master announces itself "
+					        "— no flood needed, going straight to the "
+					        "cold-connect\n", s->tag);
+				}
+			}
+			/* AND A JOIN LANDS AFTER ITS SCENE TRANSFER STOPS. Measured twice:
+			 * +0.411 s and +0.217 s after the last scene record, and the ksy says
+			 * a box joining mid-transfer must not cancel it. */
+			if (p.kind == REAC_CTRL_SCENE_TRANSFER)
+				s->bm_last_scene_ns = slave_mono_ns();
+		}
 
 		atomic_fetch_add_explicit(&s->rx_master_frames, 1, memory_order_relaxed);
 

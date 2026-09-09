@@ -158,6 +158,13 @@ struct reac_slave {
 	int      bm_fill_noise;       /* -60 dBFS in the slots until the grant (see the cfg) */
 	int      bm_presilence_ms;    /* say nothing for this long first (see the cfg) */
 	char     tag[24];             /* "[iface] " for this engine's own transcript */
+	/* WHAT THE MASTER IS DOING, on a box-master wire (0.5.6-9). Both settled by two
+	 * captures and by replay: a master that ANNOUNCES itself is found without a flood,
+	 * and a join lands after its scene transfer has stopped. Engine-thread only. */
+	int      bm_saw_cfea;         /* the master announces itself: no flood is needed */
+	uint64_t bm_last_scene_ns;    /* when its scene transfer last spoke */
+	uint64_t bm_burst_sent_ns;    /* when the last cold-connect burst went out */
+	int      bm_listened;         /* the opening listen window is over */
 	uint64_t bm_start_ns;         /* when the engine began, for that silence */
 	uint32_t bm_rng;              /* the noise generator's state, engine thread only */
 	int      bm_seq;              /* its grid position: 0 = announce, 2 = the burst */
