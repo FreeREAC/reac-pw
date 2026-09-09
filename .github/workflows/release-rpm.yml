@@ -267,6 +267,11 @@ jobs:
             AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
               aws s3 sync "s3://$R2_BUCKET/rpm/" tree/rpm/ \
               --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+            # The pulled metadata is discarded: the assembly below regenerates it from the
+            # package bytes actually in the tree, so a checksum can never describe a package
+            # this run did not push (createrepo_c --update would trust a same-size, same-mtime
+            # entry it has no reason to doubt).
+            find tree/rpm -type d -name repodata -prune -exec rm -rf {} +
             echo "PULLED_TREE=1" >> "$GITHUB_ENV"
           else
             echo "::warning::R2 write credentials are not set -- publishing into an EMPTY local tree."
