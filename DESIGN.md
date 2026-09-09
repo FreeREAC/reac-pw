@@ -1744,6 +1744,42 @@ frame against `box-to-box-enroll.pcap`:
 Both knobs are hypotheses and are labelled so in [docs/ENV-KNOBS.md](docs/ENV-KNOBS.md); neither
 changes a byte unless set.
 
+### THE BOX ANSWERS, AND IT ANSWERS PER DISTINCT RECORD (0.5.6-7)
+
+The pcap bisect settled it without a daemon. Replaying the S-1608's own recorded enrolment
+draws three `cdea 04 03` echoes from the S-0808; replaying the same file with its second
+cold-connect record replaced by a copy of the first draws TWO. **The box echoes one record per
+DISTINCT record it receives** — and our burst sent the first record twice, because
+`reac_ctrl_build_coldconnect` was called for both of its opening frames.
+
+`spec/reac.ksy` had said so all along: the burst is *"op 04 03 tags 0100 / 0000 / 0302"*.
+libreac had builders for two of those tags and none for the middle one, so this was libreac's
+gap and it is fixed there (0.7.2), not worked around here. The record is GENERATED — the
+container `dt1_record` describes, tag `0000`, data `03 00 00 00`, and the ordinary Roland
+record checksum, which computes to the `0x7d` the real box put on the wire. The same
+arithmetic gives `0x78` for JOIN and `0x7a` for BOX_READY, so the three records are one
+construction with three tags and none of them is a magic block. The config-announce moved to
+libreac too, as a captured block beside the matrix it differs from.
+
+**What the bisect cleared, each on its own:** the audio slots (V2, granted), the source MAC
+(V1, granted), the flood length (V4, granted), the counter rebased and frozen (V3/V3b,
+granted), and the pre-grant descriptor (V5, granted). Our announce alone, substituted into
+their stream, was granted (V6a). So no single field we send is refused.
+
+**AND THE BOX HAS NEVER ECHOED THE LIVE DAEMON.** All three daemon captures — 0.5.6-2, -3 and
+-5 — contain zero grant-kind frames from `00:40:ab:c4:dc:9c`; the only `cdea 04 03` frames in
+them are our own. So the FSM's grant acceptance is not what is failing: it takes ANY
+`REAC_CTRL_GRANT` from the learned master, in FLOOD_ANNOUNCE and in COLDCONNECT alike, so a
+two-record echo would already complete. Nothing about acceptance is changed, because nothing
+about it is broken.
+
+What is left, and what the next rig run should look at: the daemon's stream as a WHOLE differs
+from the replay in ways no single frame shows. Its flood runs **11599 frames over 1.65 s**
+against the granted box's 5459 over 0.682, because the FSM holds the flood open until a
+master-kind frame arrives and this box sends one about once a second; and the 45 s capture
+carries **two** broadcast runs, so the listener is being re-served mid-enrolment. An enrolment
+that restarts cannot finish, and no protocol field will fix that.
+
 ### What the veth measured (0.5.6)
 
 `tests/box-master-slave-join.sh`, with the emulator extended to GRANT the way the S-0808 does
