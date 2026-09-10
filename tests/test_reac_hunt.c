@@ -51,6 +51,27 @@ static int box_flood(struct reac_hunt *h, const uint8_t src[6], int n_ch, uint64
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
+/* A BOX'S OWN BYE: link 1, SINGLE, opcode 0x00 (REAC_OP_BULK) — the exact four header
+ * bytes a master's SCENE_TRANSFER bulk push uses (reac_ctrl.c's documented residue: the
+ * box's disconnect and the master's scene push are told apart only by DIRECTION, and
+ * role_of() — the discovery-time classifier, a promiscuous tap by construction — has no
+ * direction check to make that call with). Sent when a box gives up on a lost master. */
+static int box_bye(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+{
+	uint8_t f[50];
+	memset(f, 0, sizeof f);
+	memcpy(f, BCAST, 6);
+	memcpy(f + 6, src, 6);
+	f[12] = 0x88; f[13] = 0x19;
+	f[16] = 0xcd; f[17] = 0xea;
+	uint8_t *block = f + 18;
+	block[0] = 0x01;   /* REAC_LINK_CTRL */
+	block[1] = 0x03;   /* REAC_SEG_SINGLE */
+	block[4] = 0x00;   /* REAC_OP_BULK */
+	reac_ctrl_checksum_apply(f);
+	return reac_hunt_observe(h, f, sizeof f, now, NULL);
+}
+
 /* A DESK: only a console emits head-amp records, and it emits them at the 40-channel
  * downstream width. Role master AND desk geometry, in one frame. */
 static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
@@ -352,6 +373,40 @@ int main(void)
 	CHK(rival_no_geometry(&h, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
 	CHK(h.verdict == REAC_HUNT_REFUSED);    /* an unreadable one still is not */
+
+	/* ---- K. A BOX DOES NOT UN-PROVE ITSELF (misheard-as-master, S-1608
+	 * 00:40:ab:c4:80:41, 2026-09-10 10:22:23 — reac-captures/
+	 * s1608-misheard-as-master-2026-09-10.pcap). The box is heard unambiguously
+	 * (a heartbeat); it then gives up on its lost master and sends its own BYE, whose
+	 * four header bytes classify by KIND as a master's SCENE_TRANSFER. Before the fix
+	 * this flipped the table entry to MASTER and the hunt joined the box AS ITS SLAVE
+	 * — exactly the log line reac-pw printed on the rig: "box masters this wire —
+	 * joining it as a slave". The remedy is not occupancy (both frames are the same
+	 * 16-channel geometry throughout): a box already proven by unambiguous evidence
+	 * does not reclassify to MASTER on one later ambiguous-shaped frame from the same
+	 * MAC. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(box_heartbeat(&h, t0) == 1);
+	CHK(reac_hunt_step(&h, t0) == 0);
+	CHK(h.verdict == REAC_HUNT_HUNTING);
+	CHK(box_bye(&h, BOX, t0 + SEC) == 0);     /* NOT an observable change: refused */
+	CHK(reac_hunt_step(&h, t0 + SEC) == 0);
+	CHK(h.verdict != REAC_HUNT_SLAVE);
+	CHK(h.arb.state != REAC_SEGMENT_FOREIGN);
+	/* And the box is still exactly what it was: a masterless wire with a box on it is
+	 * ours to drive once the window closes, never a wire to join as a slave. */
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 1);
+	CHK(h.verdict == REAC_HUNT_MASTER);
+
+	/* K2. POSITIVE CONTROL — an UNAMBIGUOUS master (a real desk's head-amp record,
+	 * never emitted by a box) still classifies MASTER and is still joined, whether or
+	 * not this MAC was ever heard as a box before. The fix narrows one specific
+	 * ambiguous-shape collision; it does not blunt real master evidence. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(desk_headamp(&h, DESK, t0) == 1);
+	CHK(reac_hunt_step(&h, t0 + SEC / 10) == 1);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(h.arb.rival == REAC_RIVAL_DESK);
 
 	/* ---- The window itself, stated as the number and its reason: three master announce
 	 * cadences, and a cadence is one second (reac_master.c: announce_tick >= fps). */
