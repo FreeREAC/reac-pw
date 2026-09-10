@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '0.5.7',
+  version: '0.5.10',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -54,7 +54,7 @@ m_dep        = cc.find_library('m', required : false)
 # and the mismatch surfaced only when the installed binary hit `undefined
 # symbol` at exec. A floor that accepts both sides of an API break is not a
 # floor. Raising it to 0.7.0 makes the wrong library fail at CONFIGURE.
-libreac_dep = dependency('libreac', version : '>=0.8.0',
+libreac_dep = dependency('libreac', version : '>=0.8.1',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
