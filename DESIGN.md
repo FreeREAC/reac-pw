@@ -1471,6 +1471,16 @@ pairing, **no head-amp record travels in either direction**. A capability the wi
 carry is a control an operator can move and a box that never hears it, so the keys stay at
 `channels=0` and the remedy for that box's preamps is its own front panel.
 
+> **OVERTURNED 2026-09-10 by operator ruling — see "## 0.5.8" below.** *"we sync it and we
+> should be able to set the pre-amp params as usual, no changes"*; *"there is no change in
+> the protocol once we exchange frames, it is exactly the same"*. The MEASUREMENT above
+> stands unaltered and is not being argued with. What was wrong is the INFERENCE: an
+> absence across one capture of two boxes talking to each other is evidence about those
+> boxes, not a rule about the protocol, and a door that refuses on our side can never be
+> tested. Since 0.5.8 a box-master segment publishes `reac.headamp.channels` from the
+> model row and EMITS the operator's SET; `reac.headamp.base` stays `none`, because a box
+> on M announces no chassis strap and there is no honest base to publish.
+
 **AND THE LAMP IS THE PAIRING, NOT THE HEARING** (operator, same day: *"S-0808 is not
 enrolled but omx sees it available"*). `reac.link-state` is what a console keys a stagebox
 off — openmixer's `stageboxConnected` treats only `established` as a locked, streaming box —
@@ -2005,6 +2015,88 @@ the proof red. The desk-slave path is untouched (its `coldconnect_phase` escalat
 `!s->box_master`) and `tests/hearing-finds-a-segment.sh` still proves it end to end; the
 master role is untouched and its goldens are green.
 
+## 0.5.8 — the preamp door is open in every role (2026-09-10)
+
+**The ruling, verbatim.** *"the clock owner has nothing to do with normal audio operations,
+only enrolment"* · *"we sync it and we should be able to set the pre-amp params as usual, no
+changes"* · *"there is no change in the protocol once we exchange frames, it is exactly the
+same"* · *"libreac should allow preamp control in any mode (m, s or SP)"* · *"and reac-pw
+should simply connect it"*.
+
+### The audio half was already right, and the morning's symptom was not ours
+
+The task this increment opened with was "the box's broadcast carries live audio and our
+slave rx never lands it". Measured instead, from the capture itself
+(`reac-captures/s1608-misheard-as-master-2026-09-10.pcap`, src `00:40:ab:c4:80:41`, 1500
+broadcast frames of 628 B = 52 + 16×36):
+
+| | measured |
+|---|---|
+| frames accepted by the joined-box-master accept mode | **all of them**, 0 bad, 0 gated out as the other stream |
+| the box's 16 inputs on the capture ring | **all 16 present**, independent per channel |
+| their level | **−102.5 dBFS**, uniform |
+
+That is sixteen quiet microphone preamps, decoded correctly — not a dropped stream. The
+earlier reading of that capture ("every audio region non-zero and distinct, stdev of the
+first 256 audio bytes 114.7") measured BYTES, and the two low bytes of a near-zero 24-bit
+sample are noise whatever the channel is doing; it cannot tell dither from a microphone.
+The positive control that settles it is in the same test: the same chassis's ordinary
+upstream return with music on its input 16 reads **−32.4 dBFS against a −93.8 dBFS floor**
+through this same path. So the path carries signal, and the wire carried none.
+
+`tests/test_reac_box_master_real_audio.c` is that measurement, ratcheted: the box's own
+bytes (`tests/box_master_frames.inc`, verbatim from reac-captures) through the real feeder,
+16 rows non-silent, mutually distinct, inside a level band that fails both digital silence
+and the plain-LE sign-extension smear — beside the real-bytes control. `reac-pw should
+simply connect it` is therefore what the code already did, and this is what keeps it true.
+**Why the operator heard nothing is upstream of the wire: preamps that never got their
+settings.** Which is the other half.
+
+### The head-amp half: one door, any role
+
+`reac_ctrl_stamp_headamp` writes `frame[16:50]` — the REAC type word plus the 32-byte
+control block — and `spec/reac.ksy` gives that window the SAME absolute offsets in every
+0x8819 frame (`control, size: 34, i.e. frame[16:50]`), with a width changing only the
+LENGTH of the audio region that follows. So the 1492 B downstream this daemon broadcasts on
+a box-master wire and the 628 B box-width return carry a SET in identical bytes. Nothing had
+to be invented; libreac's `tests/test_link.c` now asserts it against the four `cdea 04 03`
+blocks reac-pw actually broadcast at the S-1608 on 2026-09-09 (`ha-write-s1608.pcap`).
+
+What was missing was an ACTUATOR. `reac_sink_node` consumes the `reac.headamp.<ch>.<param>`
+keys in every role, but handed every one of them to `n->pacer` — and on a joined box-master
+segment the pacer is never opened (`reac_sink_node_new` returns early; the slave engine owns
+the wire). A PATCH was accepted, parsed, and posted into a table nothing emitted from: the
+house's canonical dead path. So:
+
+| | before | 0.5.8 |
+|---|---|---|
+| `reac.headamp.channels` on a joined segment | `0` | the matched model row's `in_ch` |
+| `reac.headamp.base` | `none` | `none` — unchanged, and see below |
+| a console's SET | parsed into an unopened pacer | `reac_slave_headamp_set` → the engine thread's table → `reac_ctrl_stamp_headamp` on an ESTABLISHED slot |
+
+Guarded exactly as the master role guards its own overlay: **never over a control block the
+slot already carries** (a declaration, a cold-connect record, a heartbeat — a preamp record
+written over one of those is a lost grant, not a lost knob) and **never before ESTABLISHED**.
+Broadcast, on the mixer carrier, which is how the rig sent it and how a real console sends
+it. The table is engine-thread-owned and a controller's change crosses on the same
+one-atomic-word SPSC ring the pacer uses, so a `(ch,param,value)` can never be read torn.
+
+**`reac.headamp.base` stays `none`, and that is the honest answer rather than a leftover.**
+A box's head-amp base is the chassis strap it ANNOUNCES (`reac_ports.h`; libreac's
+`tools/conformance-headamp-base.sh` refuses any width-derived substitute, and refuses it
+because width and strap are collinear on every chassis in this building, so no test built
+from our own captures could catch the difference). A box on M announces nothing. A console
+therefore addresses this segment by the absolute wire channel it names in the key, and
+**which base the chassis listens on is a rig question**.
+
+**WHAT IS STILL UNPROVEN, and no test here may claim it:** whether a box on M ACTS on a SET
+from the peer it is mastering. A byte-identical record reached an S-0808 on M on 2026-09-09
+and its preamp did not move. The arbiter is the box's own 48V lamp, and the rig test is:
+enroll, set phantom on input 1 at wire channel `0x20`, watch the lamp; if it does not light,
+repeat at wire channel `0x00`, which distinguishes "the box refuses a SET from its slave"
+from "we addressed the wrong base". Until that runs, this increment's claim is exactly that
+the record leaves — no more.
+
 ## Files
 
 | File | Role |
@@ -2021,7 +2113,7 @@ master role is untouched and its goldens are green.
 | `src/reac_pacer.{h,c}` | **master-role** SCHED_FIFO cadence pacer + TX frame ring; stamps the master block on egress (S6). 0.5.5's `tick_on_rx` is retired: a box on M grants a slave, so nothing paces a downstream at it |
 | `src/reac_sink_node.{h,c}` | `reac:playback` Audio/Sink: process() encodes + submits to the pacer (the master TX), or — with `cfg.upstream_ring` (0.5.6) — writes the graph's PCM into the slave engine's ring with no pacer and no socket of its own, which is how an operator routes to a box master's outputs. One playback node, two carriers |
 | `src/reac_ctrl.{h,c}`, `src/reac_fsm.{h,c}` | the slave control plane: virtual-stagebox builders/parser/checksum + the pure JOIN/HOLD FSM |
-| `src/reac_slave.{h,c}` | **slave-role** engine: drives `reac_fsm` from RX events, locks to the master cadence, returns our inputs upstream (S7). `cfg.box_master` (0.5.6) is the same engine towards a stagebox on M — the upstream is sized to THE MASTER'S declared width, and the cold-connect follows the captured order (announce first, then a three-frame burst) instead of the desk escalation |
+| `src/reac_slave.{h,c}` | **slave-role** engine (since 0.5.8 also the head-amp SEND door: `reac_slave_headamp_set` / `_drain` / `_stamp`, the master role's own `reac_headamp_tx` scheduler and libreac's own record, on a slot no control frame claims): drives `reac_fsm` from RX events, locks to the master cadence, returns our inputs upstream (S7). `cfg.box_master` (0.5.6) is the same engine towards a stagebox on M — the upstream is sized to THE MASTER'S declared width, and the cold-connect follows the captured order (announce first, then a three-frame burst) instead of the desk escalation |
 | `src/reac_master_fsm.{h,c}` | the master establishment decisions as a PURE `(state, event) → (state, entry action, drop)` table — the shape `reac_fsm.h` gave the slave side (#61); spec = [docs/MASTER-FSM.md](docs/MASTER-FSM.md) |
 | `src/reac_slots.h` | the TWO slot spaces, named once with their capture evidence: AUDIO fabric 40 vs HEAD-AMP/chanmap 48 (`0x00..0x2f`). Never one for the other (#69) |
 | `src/reac_boxreg.{h,c}` | the multi-box registry: box MAC → (base, nch, name) over the 40-slot AUDIO fabric, allocated by first-JOIN order or pre-declared |
@@ -2041,6 +2133,8 @@ master role is untouched and its goldens are green.
 | `src/reac_linkmon.{h,c}` | **the cable CHANGING** — an `RTM_NEWLINK` watch on one named interface, reporting edges. A box leaves BOOT for ANNOUNCE on PHY link-up and on nothing else, so that edge is the only instant it enrols; the sink node drives an internal re-establish from it, at the standing rate (#95). Uses `IFF_LOWER_UP`, never `IFLA_CARRIER`: only the flag folds in `netif_running`, and `ip link set <nic> down` must read as a loss |
 | `src/reac_disco.{h,c}` | passive segment discovery: what is on this wire, including the frames the master classifier deliberately discards |
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
+| `tests/test_reac_box_master_real_audio.c` | **a REAL box master's frames** (`tests/box_master_frames.inc`, verbatim from reac-captures) through the accept mode `main.c` sets for a joined box master: 16 rows non-silent and mutually distinct inside a level band that fails both digital silence and the plain-LE smear, with a real-bytes POSITIVE CONTROL (the same chassis as a slave, music on input 16) so a floor reading measures the wire and not the path |
+| `tests/test_reac_slave_headamp_tx.c` | **the preamp door in the slave role** (0.5.8): enqueue / drain / stamp, asserted byte-identical to the four `cdea 04 03` blocks reac-pw broadcast at the S-1608 on 2026-09-09, refused over a control slot and before ESTABLISHED, audio and counter untouched |
 | `tests/box-master-slave-join.sh` | **the 0.5.6 job, measured at the far end of the cable**: the bounded flood at the MASTER's width, the config-announce before the cold-connect burst, the grant, the heartbeat, a tone through `reac-playback` decoded back off the UPSTREAM at two levels 20 dB apart, nothing before the box spoke, and the link-state timeline across the join and a drop. Needs a session manager (a tone has to be LINKED) and skips without one |
 | `tests/box-master-rejoins.sh` | **a box-master segment dropped and heard again still carries audio, both ways**, twice in a row — the 2026-09-09 13:36 rig defect's measurement. The accepted-frame count is read only from the journal written AFTER the drop, because a feeder that accepts nothing prints no telemetry line at all |
 | `tests/fake_box_master.c` | the stagebox on M: broadcast box geometry with a distinct constant per channel and one master-only record a second, built by the same libreac builders the unit fixtures use. Since 0.5.5 it also LISTENS — counting, decoding and reporting what the daemon sends back, through libreac's own oracles so it cannot agree with a daemon that got the layout wrong. `SIGUSR1` pauses transmission while it keeps listening |

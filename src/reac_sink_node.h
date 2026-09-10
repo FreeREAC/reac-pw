@@ -50,6 +50,8 @@ struct reac_headamp_setting;   /* reac_headamp_tx.h — optional master head-amp
  * free-runs AND SAYS SO. REACPW_CLOCK_FOLLOW=0 opts out. */
 #define REAC_CLOCK_FOLLOW_DEFAULT 1
 
+struct reac_slave;   /* reac_slave.h — the engine that owns the wire in the joined role */
+
 struct reac_sink_cfg {
 	const char *ifname;   /* TX NIC (raw AF_PACKET 0x8819) */
 	int channels;         /* the box's input count (<= 40) */
@@ -64,6 +66,14 @@ struct reac_sink_cfg {
 	/* Optional MASTER head-amp send table (task #155), forwarded to the pacer. */
 	const struct reac_headamp_setting *headamps;
 	int n_headamps;
+	/* THE PEER'S PREAMP-CAPABLE INPUT COUNT, on a segment JOINED to a box master
+	 * (2026-09-10 ruling). In the master role this stays 0 and the count is learned
+	 * from the wire on recognition (sink_publish_link_props); a box on M declares
+	 * nothing, so the only evidence is the width it broadcasts and the model row that
+	 * width matched — which the caller has already resolved and passes here rather
+	 * than this node re-deriving it. 0 publishes "0", which reads as "no preamps
+	 * discovered" and is a fact, not a default. */
+	int headamp_channels;
 	/* Clock discipline (#75), forwarded to the pacer. 0 = the pacer free-runs on
 	 * CLOCK_MONOTONIC and no reference is ever read; 1 = the best-reference ladder
 	 * disciplines the cadence. THE SHIPPED DEFAULT IS ON — REAC_CLOCK_FOLLOW_DEFAULT
@@ -225,6 +235,19 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
  * touched. Never wired -> the box tier is simply never available, and with clock
  * following disabled the forward is not even attempted. */
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx);
+
+/* THE PREAMP DOOR'S ACTUATOR, ON A SEGMENT JOINED TO A BOX MASTER (2026-09-10 ruling:
+ * "we sync it and we should be able to set the pre-amp params as usual, no changes").
+ *
+ * This node consumes the reac.headamp.<ch>.<param> control keys in EVERY role, because
+ * it is the node a console drives — but in the upstream-carrier role there is no pacer
+ * behind it to hand them to, and for as long as that was unwired a PATCH was accepted,
+ * parsed, and posted into a pacer that had never been opened. That is the shape the
+ * house rules call a dead path: a control that claims to reach audio and does not.
+ * Point the node at the slave engine that DOES own the wire here and the same keys
+ * reach the same libreac record. NULL detaches. Master role: never called (the pacer
+ * is the actuator and reac_sink_node_new opened it). */
+void reac_sink_node_set_slave(struct reac_sink_node *n, struct reac_slave *slave);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 

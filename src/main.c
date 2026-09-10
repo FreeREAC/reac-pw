@@ -1323,6 +1323,12 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 						.inst = c->inst_name,
 						.label = bm ? bm->display : NULL,
 						.rate_match_off = -1,
+						/* THE PREAMP DOOR IS OPEN HERE TOO (2026-09-10 ruling).
+						 * The count is the model's INPUT width — the box's mic
+						 * pins — where the broadcast width named a model; where
+						 * it named none, 0, which reads as "no preamps
+						 * discovered". Never up_ch: that is its OUTPUT count. */
+						.headamp_channels = bm ? bm->in_ch : 0,
 						.upstream_ring = &L->tx_ring };
 					L->sink = reac_sink_node_new(loop, &L->tx_ring, &ucfg);
 					if (!L->sink)
@@ -1334,6 +1340,12 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 					                               bm ? bm->display : NULL) != 0)
 						fprintf(stderr, "reac-pw: %scould not size reac-playback "
 						        "to the box master's %d outputs\n", c->tag, up_ch);
+					/* THE HEAD-AMP KEYS' ACTUATOR ON THIS SEGMENT. There is no
+					 * pacer behind this node — the slave engine owns the wire —
+					 * so the door has to be pointed at it or a PATCH is parsed
+					 * into a table nothing emits from. */
+					if (L->sink)
+						reac_sink_node_set_slave(L->sink, &L->slave);
 				}
 			} else {
 				fprintf(stderr, "reac-pw: %sslave engine thread failed to start\n", c->tag);

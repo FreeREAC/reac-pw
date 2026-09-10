@@ -219,6 +219,20 @@ box_master_audio_test = executable('test_reac_box_master_audio',
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_box_master_audio', box_master_audio_test)
 
+# --- unit test: a REAL box master's frames, off the rig ------------------------
+# The test above builds its input with our own builder, so it can only prove the
+# decoder agrees with our encoder. This one replays the S-1608's own broadcast
+# (tests/box_master_frames.inc, verbatim from reac-captures) through the same
+# accept mode main.c sets for a joined box master, and carries a real-bytes
+# positive control — the same chassis as an ordinary slave with music on its
+# input 16 — so a floor reading is a measurement of the wire and not of the path.
+box_master_real_test = executable('test_reac_box_master_real_audio',
+  ['tests/test_reac_box_master_real_audio.c', 'src/reac_rx.c', 'src/reac_ring.c',
+   'src/reac_pace_watch.c'],
+  include_directories : [include_directories('src'), include_directories('tests')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_box_master_real_audio', box_master_real_test)
+
 # --- unit test: the OHRCA duplicate-frame guard (frames_dup) ------------------
 # Runs the real feeder thread over a temp pcap of DOUBLED byte-identical
 # delivery (the mirrored-RX-path / doubled-cadence granulated-audio bug):
@@ -567,6 +581,20 @@ slave_test = executable('test_reac_slave',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
+
+# --- unit test: the slave role's head-amp SEND door (2026-09-10 ruling) --------
+# On a segment a stagebox MASTERS, reac-pw is the mixer and the operator's 48V
+# switch has to reach the chassis with the XLR pins. This drives the door's three
+# pure halves (enqueue / drain / stamp) and asserts the emitted control block is
+# byte-identical to the four cdea 04 03 blocks reac-pw actually broadcast at the
+# S-1608 on 2026-09-09 — a conformance assertion against a capture, not against a
+# second call of our own. Same link set as slave_test.
+slave_headamp_tx_test = executable('test_reac_slave_headamp_tx',
+  ['tests/test_reac_slave_headamp_tx.c', 'src/reac_slave.c', 'src/reac_rt.c',
+   'src/reac_conf.c', 'src/reac_ring.c', 'src/reac_mac.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, threads_dep, m_dep])
+test('reac_slave_headamp_tx', slave_headamp_tx_test)
 
 # --- unit test: virtual-stagebox head-amp -> input gain (task #202) ------------
 # The slave APPLIES received SENS/PAD as per-input digital gain on the upstream

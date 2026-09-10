@@ -86,6 +86,11 @@ void reac_slave_fsm_init(struct reac_slave *s, const struct reac_slave_cfg *cfg)
 	s->bm_presilence_ms = cfg ? cfg->box_master_presilence_ms : 0;
 	s->bm_start_ns = 0;
 	snprintf(s->tag, sizeof s->tag, "%s", (cfg && cfg->tag) ? cfg->tag : "");
+	/* THE SEND TABLE STARTS EMPTY AND SILENT. An empty reac_headamp_tx is `active`
+	 * 0 with no replay armed, so reac_slave_headamp_stamp emits nothing at all until
+	 * an operator sets a cell — the wire is byte-identical to before this door
+	 * existed until somebody actually asks for 48V. */
+	reac_headamp_tx_init(&s->hatx);
 	s->bm_rng = 0x1234567u;
 	s->bm_chanmap_hit = 0;
 	s->bm_announced = 0;
@@ -426,6 +431,87 @@ static int bm_stamp(uint8_t *frame, const uint8_t *ctl, size_t ctl_len,
 	return 1;
 }
 
+/* ---- the head-amp SEND door (2026-09-10 ruling; reac_slave.h) ------------- *
+ *
+ * The same three moving parts the master role has, in the same order and with the
+ * same threading rule: a controller ENQUEUES, the engine thread DRAINS into the
+ * table (so the table has one writer and the sweep cursor cannot be raced), and the
+ * emit path asks the table whether this slot carries a record.
+ *
+ * WHAT IS NOT DUPLICATED: the scheduler (reac_headamp_tx) and the record builder
+ * (reac_ctrl_stamp_headamp) are libreac's, unchanged and role-blind — the whole
+ * point of the ruling. Nothing here knows a byte of the protocol. */
+
+int reac_slave_headamp_set(struct reac_slave *s, uint8_t ch, uint8_t param,
+                           uint8_t value)
+{
+	if (!s)
+		return 0;
+	uint32_t h = atomic_load_explicit(&s->ha_tx_head, memory_order_relaxed);
+	uint32_t t = atomic_load_explicit(&s->ha_tx_tail, memory_order_acquire);
+	if (h - t >= REAC_SLAVE_HEADAMP_CMD_RING) {
+		atomic_fetch_add_explicit(&s->ha_tx_drops, 1, memory_order_relaxed);
+		return 0;
+	}
+	atomic_store_explicit(&s->ha_tx_cmd[h % REAC_SLAVE_HEADAMP_CMD_RING],
+	                      reac_headamp_pack(ch, param, value), memory_order_relaxed);
+	/* Release after the cell store, so the consumer cannot observe a head index
+	 * vouching for a word it has not seen written. */
+	atomic_store_explicit(&s->ha_tx_head, h + 1, memory_order_release);
+	return 1;
+}
+
+int reac_slave_headamp_drain(struct reac_slave *s)
+{
+	if (!s)
+		return 0;
+	int applied = 0;
+	uint32_t t = atomic_load_explicit(&s->ha_tx_tail, memory_order_relaxed);
+	for (;;) {
+		uint32_t h = atomic_load_explicit(&s->ha_tx_head, memory_order_acquire);
+		if (t == h)
+			break;
+		uint32_t w = atomic_load_explicit(&s->ha_tx_cmd[t % REAC_SLAVE_HEADAMP_CMD_RING],
+		                                  memory_order_relaxed);
+		atomic_store_explicit(&s->ha_tx_tail, ++t, memory_order_release);
+		uint8_t ch, param, value;
+		reac_headamp_unpack(w, &ch, &param, &value);
+		/* Validates and silently rejects a bad triple, arms the table, and marks
+		 * the cell dirty so the change leaves as an EDGE on the next eligible
+		 * slot. Pure array writes: no alloc, no syscall. */
+		reac_headamp_tx_set(&s->hatx, ch, param, value);
+		applied++;
+	}
+	if (applied)
+		atomic_fetch_add_explicit(&s->ha_tx_applied, (uint64_t)applied,
+		                          memory_order_relaxed);
+	return applied;
+}
+
+int reac_slave_headamp_stamp(struct reac_slave *s, uint8_t *frame,
+                             int slot_has_ctrl, int linked)
+{
+	if (!s || !frame || slot_has_ctrl || !linked)
+		return 0;
+	/* NOT BEFORE THE PAIRING IS REAL, and never over another control block. The
+	 * enrolment's own frames — the declaration, the cold-connect burst, the
+	 * heartbeat — are what the peer answers, and a preamp record written over one
+	 * of them would be a lost grant, not a lost knob. Same guard the master role
+	 * states as "only ever a FILLER slot, and only once ESTABLISHED". */
+	if (!s->hatx.active && !s->hatx.replay_width)
+		return 0;
+	uint8_t ch, param, value;
+	if (!reac_headamp_tx_next(&s->hatx, &ch, &param, &value))
+		return 0;
+	if (reac_ctrl_stamp_headamp(frame, ch, param, value) != 0)
+		return 0;
+	/* COUNT WHAT WENT ON THE WIRE, not what was accepted at the door. A PATCH that
+	 * is queued, a cell that is set and a record that is stamped are three different
+	 * facts, and only this one is evidence that anything was asked of the box. */
+	atomic_fetch_add_explicit(&s->ha_tx_records, 1, memory_order_relaxed);
+	return 1;
+}
+
 /* Emit one frame for the decision `d` on the wire. `bcast` = the broadcast dst
  * (presence-flood), else the learned master MAC (unicast linked traffic). */
 static void emit_decision(struct reac_slave *s, const struct reac_slave_decision *d,
@@ -633,8 +719,22 @@ static void emit_decision(struct reac_slave *s, const struct reac_slave_decision
 		 * holding ITS upstream back while the master settles; holding a desk's
 		 * downstream back would take the box's outputs away for the length of it.
 		 * The slot still carries the ordinary broadcast frame. */
-		if (cl && bm_stamp(frame, ctl, cl, s->fsm.master_mac))
+		int stamped_ctl = cl && bm_stamp(frame, ctl, cl, s->fsm.master_mac);
+		if (stamped_ctl)
 			sll = uni_sll;      /* the control frames are the box's to answer */
+		/* THE OPERATOR'S 48V SWITCH, ON A WIRE THE BOX MASTERS (2026-09-10 ruling).
+		 * Guarded exactly as the master role guards its own overlay: never over a
+		 * control block this slot already carries, and never before ESTABLISHED. It
+		 * DOES overwrite the frame's descriptor word for this one slot, which is
+		 * what a real M-200 does too — the descriptor is repeated 8000 times a
+		 * second and the record is a handful of frames.
+		 *
+		 * ADDRESSED AS THE RIG ADDRESSED IT: `sll` is left alone, so the record
+		 * rides the broadcast mixer carrier. That is what reac-pw put on enp131s0 at
+		 * this very box on 2026-09-09 (ha-write-s1608.pcap: dst ff:ff:ff:ff:ff:ff,
+		 * 1492 B) and what a real console does — a head-amp command is broadcast on
+		 * the segment, not unicast to a chassis. */
+		reac_slave_headamp_stamp(s, frame, stamped_ctl, linked);
 		if (len) {
 			ssize_t r = sendto(s->fd, frame, len, 0,
 			                   (struct sockaddr *)sll, sizeof *sll);
@@ -855,6 +955,11 @@ static void *slave_loop(void *arg)
 			        s->fsm.state == FSM_DROP ? " (drop)" : "");
 			prev_state = s->fsm.state;
 		}
+		/* Absorb any head-amp change a controller pushed since the last slot, on
+		 * THIS thread so the table stays single-writer. Every tick regardless of
+		 * state, so a change is already in the table the instant an ESTABLISHED slot
+		 * comes round; two relaxed loads when the ring is empty. */
+		reac_slave_headamp_drain(s);
 		/* Apply a pending PHY change on THIS thread (the FSM owner). */
 		int want = atomic_load_explicit(&s->phy_up_req, memory_order_acquire);
 		if (want != s->phy_up_seen) {

@@ -496,9 +496,15 @@ void reac_source_node_publish_box_master(struct reac_source_node *n,
  *
  * WHAT IS NOT HERE IS NOT AN OMISSION. A slave publishes no reac.discovery.*
  * (it runs no disco classifier), no reac.link-state / reac.box-* (a different
- * FSM), no reac.rate.drivable (it drives no pace) and no reac.headamp.* (a box
- * is told what its preamps do). Each absence is a fact a consumer reads as one;
- * a default would be a claim. */
+ * FSM) and no reac.rate.drivable (it drives no pace). Each absence is a fact a
+ * consumer reads as one; a default would be a claim.
+ *
+ * AND NO reac.headamp.* ON THIS NODE, in EITHER role — which since the 2026-09-10
+ * ruling is a statement about the NODE and not about the role. A joined box master's
+ * preamp keys are published on that segment's reac-playback node, the one a console
+ * already drives them on (reac_headamp_prop.h: the read side and the write side live
+ * together, on one node, by design). Putting them here as well would be a second
+ * answer to one fact. See reac_segment_ident.h and DESIGN.md 0.5.8. */
 void reac_source_node_publish_segment(struct reac_source_node *n,
                                       const char *role,
                                       const char *state,

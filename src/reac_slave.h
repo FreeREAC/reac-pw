@@ -43,6 +43,7 @@
 #include <reac/reac.h>   /* REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT */
 
 #include <reac/reac_fsm.h>
+#include <reac/reac_headamp_tx.h>   /* the head-amp SEND table — role-blind since 0.5.8 */
 #include "reac_ring.h"
 #include "reac_rt.h"
 
@@ -51,6 +52,12 @@ struct reac_ctrl_parsed;   /* reac_ctrl.h — a parsed received frame */
 /* How many of our input channels we return upstream (a box's width: S-1608 = 16,
  * S-0808 = 8). 628 B / 340 B box-width frames per reac_ctrl_build_upstream_filler. */
 #define REAC_SLAVE_BOX_CHANNELS_DEFAULT 16
+
+/* Live head-amp command ring, slave side. Same size and same reasoning as the
+ * pacer's REAC_HEADAMP_CMD_RING: 128 slots absorbs a controller pushing a whole
+ * desk's worth of preamp state in one gesture faster than the engine drains one
+ * per slot. Power of two. */
+#define REAC_SLAVE_HEADAMP_CMD_RING 128
 
 struct reac_slave_cfg {
 	const char *ifname;       /* the REAC NIC (raw AF_PACKET 0x8819, RX + TX) */
@@ -191,6 +198,45 @@ struct reac_slave {
 	uint8_t  ha_phantom[REAC_MAX_CHANNELS]; /* received +48V (state only; NOT a gain) */
 	_Atomic float ha_gain[REAC_MAX_CHANNELS]; /* precomputed linear input gain (relaxed) */
 
+	/* ---- the head-amp SEND door, OPEN IN THIS ROLE TOO (2026-09-10 ruling) ---
+	 *
+	 * Operator, verbatim: "the clock owner has nothing to do with normal audio
+	 * operations, only enrolment"; "we sync it and we should be able to set the
+	 * pre-amp params as usual, no changes"; "there is no change in the protocol once
+	 * we exchange frames, it is exactly the same". Until that ruling this engine had
+	 * only the RECEIVE half above — a virtual box being told what its preamps do —
+	 * on the stance that a box never tells its desk. On a wire a stagebox MASTERS we
+	 * are not the box: we are the mixer, we send the mixer's frames, and the operator's
+	 * 48V switch has to reach the chassis that owns the XLR pins.
+	 *
+	 * IT IS THE SAME TABLE AND THE SAME BYTES the master role uses. reac_headamp_tx is
+	 * a table and a cursor with no role in it, and reac_ctrl_stamp_headamp writes
+	 * frame[16:50] — the window spec/reac.ksy gives every 0x8819 frame at the same
+	 * absolute offsets, whatever its width. libreac's tests/test_link.c holds the byte
+	 * proof; tests/test_reac_slave_headamp.c holds this side's.
+	 *
+	 * THREADING mirrors the pacer's exactly (reac_pacer.h, task #203): the table is
+	 * written ONLY by the engine thread, so a controller's change crosses on a
+	 * lock-free SPSC ring of reac_headamp_pack()'d words — one atomic word per
+	 * command, so a (ch,param,value) can never be observed torn. */
+	struct reac_headamp_tx hatx;        /* engine-thread-owned table + scheduler */
+	_Atomic uint32_t ha_tx_cmd[REAC_SLAVE_HEADAMP_CMD_RING];
+	_Atomic uint32_t ha_tx_head, ha_tx_tail;   /* free-running u32 indices */
+	_Atomic uint64_t ha_tx_drops;              /* commands dropped (ring full) */
+	_Atomic uint64_t ha_tx_applied;            /* commands drained + applied (diag) */
+	_Atomic uint64_t ha_tx_records;            /* records actually STAMPED on the wire —
+	                                            * the count a claim of actuation may
+	                                            * cite, unlike an accepted PATCH */
+	/* NO COMPLETE-SCENE REPLAY ON THIS SIDE, and its absence is a decision. The master
+	 * role arms one at every establishment because it KNOWS the box's head-amp base —
+	 * the chassis strap the box announces (reac_ports.h). A stagebox with its Mode
+	 * switch on M announces nothing at all, so this segment has no strap and no honest
+	 * base to sweep from; inventing one from the width is the exact derivation
+	 * libreac's tools/conformance-headamp-base.sh exists to refuse. What an operator
+	 * SETS is emitted at the wire channel the operator named, and re-application after
+	 * an outage stays where it already lives — openmixer's scene watch
+	 * (REAC_HEADAMP_RESWEEP_SECONDS's own note). */
+
 	/* THE LEARNED MASTER'S MAC, PUBLISHED AS ONE ATOMIC. The FSM's own copy
 	 * (fsm.master_mac) is engine-thread state; the main loop publishes the
 	 * segment's answer from a 200 ms timer, and reading six loose bytes across
@@ -297,6 +343,31 @@ int  reac_slave_start(struct reac_slave *s);
 
 /* Tell the engine the PHY is up/down (begin/stop the establishment). */
 void reac_slave_set_phy_up(struct reac_slave *s, int up);
+
+/* ---- the head-amp SEND door (2026-09-10 ruling; see the struct comment) ---- */
+
+/* Enqueue ONE absolute head-amp cell for the peer. `ch` is the WIRE channel the
+ * caller resolved (the console's own key carries it — reac_headamp_prop.h), `param`
+ * a reac_headamp_param, `value` 0/1 for phantom+pad and 0..0x37 for SENS. Callable
+ * from any thread; the engine thread drains it and is the table's only writer.
+ * Returns 1 when the command was queued, 0 when the ring was full (dropped, which
+ * is benign: these are ABSOLUTE values, so a later set of the same cell supersedes
+ * a lost one wholesale and nothing accumulates a wrong offset). */
+int reac_slave_headamp_set(struct reac_slave *s, uint8_t ch, uint8_t param,
+                           uint8_t value);
+
+/* ENGINE THREAD ONLY: drain the ring into the table. Returns how many were applied.
+ * Exposed for the unit test, which drives the pure halves without a socket. */
+int reac_slave_headamp_drain(struct reac_slave *s);
+
+/* ENGINE THREAD ONLY: decide whether THIS slot's frame carries a head-amp record and
+ * stamp it if so. `frame` is the already-built frame for this slot, `slot_has_ctrl`
+ * says another control block already claimed it (a grant/announce/heartbeat — those
+ * are never overwritten, exactly as the master role refuses to overwrite anything but
+ * a FILLER), and `linked` is the FSM's ESTABLISHED. Returns 1 when a record was
+ * stamped. Pure but for the frame it writes; the unit test drives it directly. */
+int reac_slave_headamp_stamp(struct reac_slave *s, uint8_t *frame,
+                             int slot_has_ctrl, int linked);
 
 void reac_slave_stop(struct reac_slave *s);
 void reac_slave_close(struct reac_slave *s);

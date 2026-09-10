@@ -39,8 +39,25 @@
  * What a slave cannot witness is ABSENT rather than defaulted: no
  * reac.discovery.* (a slave runs no disco classifier), no reac.link-state or
  * reac.box-* (a different FSM entirely), no reac.rate.drivable (a slave drives no
- * pace — its cadence is the desk's), no reac.headamp.* (a box is told what its
- * preamps do; it never tells its desk). Absence is a fact. */
+ * pace — its cadence is the desk's). Absence is a fact.
+ *
+ * THE HEAD-AMP EXCEPTION, AND IT IS NOT AN EXCEPTION TO THAT RULE (2026-09-10).
+ * This comment used to close the list with "no reac.headamp.* (a box is told what
+ * its preamps do; it never tells its desk)". That sentence is about a segment
+ * slaved to a DESK, where it is still true and where nothing publishes head-amp
+ * keys. It was read as a statement about the SLAVE ROLE, which is wider than the
+ * fact it rests on: on a wire a STAGEBOX masters, this daemon is in the slave role
+ * and is nevertheless the mixer — the box owns the XLR pins and the operator's 48V
+ * switch has to reach them. Operator ruling, verbatim: "we sync it and we should be
+ * able to set the pre-amp params as usual, no changes"; "there is no change in the
+ * protocol once we exchange frames, it is exactly the same"; "libreac should allow
+ * preamp control in any mode (m, s or SP)". So a joined box-master segment DOES
+ * publish reac.headamp.channels / .caps and DOES emit the operator's SET (DESIGN.md
+ * 0.5.8; the keys live on that segment's reac-playback node, which is where a
+ * console already drives them, not on the answer set this file composes). What
+ * stays absent here is reac.headamp.base: a box on M announces no chassis strap,
+ * and the base has exactly one honest source (reac_ports.h). Absence is still a
+ * fact — this one is just a narrower fact than the sentence it replaces. */
 #ifndef REAC_SEGMENT_IDENT_H
 #define REAC_SEGMENT_IDENT_H
 

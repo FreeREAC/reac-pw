@@ -24,6 +24,7 @@
  * decodes, with the cdea/cfea control frames interspersed ~1/s. */
 
 #include "reac_sink_node.h"
+#include "reac_slave.h"   /* the actuator behind the head-amp keys in the joined role */
 #include "reac_segment_ident.h" /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
 #include "reac_tx.h"
@@ -247,6 +248,12 @@ struct reac_sink_node {
 	/* 0.5.6: the slave's upstream carrier. Non-NULL = no pacer, no socket; process()
 	 * writes planar PCM here and reac_slave puts it on the wire. */
 	struct reac_ring *upstream_ring;
+	/* The actuator behind the head-amp keys when there is no pacer — see
+	 * reac_sink_node_set_slave. NULL in the master role. */
+	struct reac_slave *slave;
+	/* The peer's preamp-capable input count on a joined box-master segment; 0 in
+	 * the master role, where the wire declares it (see reac_sink_cfg). */
+	int headamp_channels;
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -631,8 +638,19 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 	struct reac_headamp_setting ha[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int nha = reac_headamp_prop_parse(param, ha,
 	                                  (int)(sizeof ha / sizeof ha[0]));
-	for (int i = 0; i < nha; i++)
-		reac_pacer_headamp_set(&n->pacer, ha[i].ch, ha[i].param, ha[i].value);
+	for (int i = 0; i < nha; i++) {
+		/* WHICHEVER ENGINE OWNS THE WIRE ON THIS SEGMENT (2026-09-10 ruling). The
+		 * parse is one and the keys are one; only the actuator differs, and the
+		 * node knows which one it has. Handing every role's change to `n->pacer`
+		 * was correct while this node existed only in the master role and became a
+		 * dead write the day it also carried a joined box master's outputs: the
+		 * pacer is not opened there (reac_sink_node_new returns early), so the
+		 * command went into a table nothing ever emitted from. */
+		if (n->slave)
+			reac_slave_headamp_set(n->slave, ha[i].ch, ha[i].param, ha[i].value);
+		else
+			reac_pacer_headamp_set(&n->pacer, ha[i].ch, ha[i].param, ha[i].value);
+	}
 
 	/* LIVE rate control (2026-08-26-reac-runtime-config.md): the same Props
 	 * object may carry a `reac.cfg.rate` assertion under SPA_PROP_params. The
@@ -1487,16 +1505,33 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	char desc[128];
 	sink_build_desc(desc, sizeof desc, n->label[0] ? n->label : NULL, n->channels);
 
-	/* NO HEAD-AMP CAPABILITIES ON A BOX-MASTER SEGMENT (0.5.6, DESIGN.md). 0.5.5
-	 * published channels=8/base=0 for a joined box master from the model row. The
-	 * console's write then reached the node and the real S-0808's preamp did not move
-	 * — floor -91.4 dBFS at gain 32, 52 and 32 again, against +18.9 dB on an enrolled
-	 * S-1608 by the same path — and the ground-truth capture says why: on a wire a box
-	 * masters there is NO head-amp record in either direction, ever. Publishing a
-	 * capability the wire cannot carry is a control an operator can move and a box that
-	 * never hears it. So these stay at the master role's empties unless a box is
-	 * enrolled WITH US. */
-	char ha_seed_channels[16] = "0";
+	/* THE PREAMP DOOR EXISTS IN EVERY ROLE (operator ruling, 2026-09-10: "we sync it
+	 * and we should be able to set the pre-amp params as usual, no changes"; "there is
+	 * no change in the protocol once we exchange frames, it is exactly the same";
+	 * "libreac should allow preamp control in any mode (m, s or SP)").
+	 *
+	 * WHAT THIS REPLACES, AND WHAT SURVIVES IT. 0.5.6 published nothing here on the
+	 * reasoning that "on a wire a box masters there is NO head-amp record in either
+	 * direction, ever" — read off a capture in which no head-amp record appears. The
+	 * measurement it rested on stands and is not being argued with: on 2026-09-09 a
+	 * byte-identical SET reached an S-0808 on M and its preamp did not move (floor
+	 * -91.4 dBFS at gain 32, 52 and 32 again, against +18.9 dB on the same box enrolled
+	 * as a slave). What was wrong was the INFERENCE from it — an absence in one capture
+	 * of two boxes talking to each other is evidence about those boxes, not a rule
+	 * about the protocol, and the ruling above says a segment that exchanges frames
+	 * exchanges all of them. A door that refuses on our side can never be tested; one
+	 * that emits can, and the box's own 48V lamp is the arbiter.
+	 *
+	 * THE BASE IS STILL `none`, AND THAT IS THE HONEST ANSWER, not a leftover. A box's
+	 * head-amp base is the chassis strap it ANNOUNCES (reac_ports.h, and libreac's
+	 * tools/conformance-headamp-base.sh refuses any width-derived substitute). A box
+	 * with its Mode switch on M announces nothing, so this segment has no strap to
+	 * read: a console addresses it by the absolute wire channel it names in the key,
+	 * and which base the chassis listens on is a RIG question, not one this side can
+	 * answer. */
+	char ha_seed_channels[16];
+	snprintf(ha_seed_channels, sizeof ha_seed_channels, "%d",
+	         n->headamp_channels > 0 ? n->headamp_channels : 0);
 	char ha_seed_base[16] = REAC_BOX_SOURCE_NONE;
 
 
@@ -1640,6 +1675,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->inst = cfg->inst;          /* stable for the process; used by every filter build */
 	n->disco_ifname = cfg->ifname;
 	n->upstream_ring = cfg->upstream_ring;
+	n->headamp_channels = cfg->headamp_channels;
 	n->channels = 0;              /* no graph filter yet — DEFERRED to reac_sink_node_ensure */
 	n->sample_rate = cfg->sample_rate;
 	snprintf(n->label, sizeof n->label, "%s", cfg->label ? cfg->label : "");
@@ -1886,6 +1922,12 @@ void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx
 		n->pacer.session_ctx = rx;
 	}
 		n->pacer.on_session  = sink_on_session;
+}
+
+void reac_sink_node_set_slave(struct reac_sink_node *n, struct reac_slave *slave)
+{
+	if (n)
+		n->slave = slave;
 }
 
 void reac_sink_node_destroy(struct reac_sink_node *n)
