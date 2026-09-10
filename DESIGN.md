@@ -2097,6 +2097,73 @@ repeat at wire channel `0x00`, which distinguishes "the box refuses a SET from i
 from "we addressed the wrong base". Until that runs, this increment's claim is exactly that
 the record leaves — no more.
 
+## 0.5.9 — the record leaves once, and once is not enough (2026-09-10, rig)
+
+**What the rig reported against 0.5.8**, S-1608 on M, enp131s0 ESTABLISHED as slave, the
+sink publishing `reac.headamp.channels=16` / `base=none`: the operator drove the door
+directly (`pw-cli set-param <sink> Props { params = [ "reac.headamp.46.sens" 52 ] }`, and
+again at wire 14) and a 40 s `tcpdump` of our own control frames
+(`ether src 00:40:ab:9f:9e:be and ether[16]=0xcd`) held **39 `cdea 0103` heartbeats and
+zero `cdea 0403`**. Read as: the param is parsed and the record never reaches the wire.
+
+### What was measured against that, and what it says
+
+The operator's exact gesture is now driven end to end in
+`tests/box-master-slave-join.sh` — a real daemon, a real private PipeWire, `pw-cli
+set-param` on the real node, and the record decoded **off the frames the emulator receives
+at the far end of the cable**, which is the seam the 0.5.8 unit test did not reach (it
+proved the stamping, not the emission). It passes, on BOTH geometries:
+
+| box master | `reac.headamp.channels` | the write | received |
+|---|---|---|---|
+| 8-input (S-0808 row) | 8 | SENS 52 at wire ch 46, phantom ON at ch 14 | both cells, values exact |
+| 16-input (S-1608 row) — the rig's own | 16 | SENS 52 at wire ch 46 | value exact |
+
+And the phase is **sabotage-verified against the reported symptom**: restoring the
+pre-0.5.8 routing (every parsed cell to `n->pacer`, which on this segment is never opened)
+turns it red with *"a SENS of 52 was set on wire channel 46 and NO head-amp record ever
+reached the box master"*. So the routing is not the defect, and this test is the one that
+would have caught it if it had been.
+
+**WHAT WAS ACTUALLY WRONG IS THE SHAPE OF THE EVIDENCE, and it is a real defect.** 0.5.8
+emitted an operator edge **exactly once** — one 1492 B frame among the ~24 000 this wire
+carries every second — and then went silent, because `reac_headamp_tx` emits one record per
+changed cell and this segment arms no establishment scene replay (there is no announced
+strap to sweep from). Two consequences, and both are faults rather than trivia:
+
+1. **One lost frame is one lost setting, for ever.** The protocol has no readback, so
+   nothing on this wire could ever tell us the box did not get it.
+2. **A capture that did not overlap those microseconds proves nothing at all**, which is
+   the position the rig question was asked from.
+
+### What 0.5.9 changes
+
+- **The edge is sent `REAC_SLAVE_HEADAMP_EDGE_SENDS` (3) times, spaced by
+  `REAC_HEADAMP_SWEEP_STRIDE`.** Both numbers are the protocol's own: a lone op-0403 write
+  of an absolute value self-commits and no commit pair exists on the wire
+  (HEADAMP-PROTOCOL-AUDIT-2026-07-22), so a repeat is a no-op at the box rather than a
+  second event, and 12 slots is the spacing a real M-200's enrolment burst uses. It is
+  **loss tolerance, not a re-assert**: it does not survive an outage and does not override
+  the box's own front panel. Re-application after an outage stays with openmixer's scene
+  watch.
+- **The daemon says what LEFT.** `reac_slave.ha_tx_records` counts records actually stamped
+  onto a frame — not PATCHes accepted, not cells set — and the main loop prints the count
+  whenever it moves. The next "did it leave?" is a `journalctl` line, not a race with
+  `tcpdump`.
+- **And it says where the gesture went.** `on_param_changed` logs, once per Props object,
+  whether the parsed cells went to the slave engine, the master pacer, or *nothing at all* —
+  because "the door is not wired to an engine" and "the engine has nothing to send on yet"
+  were two different faults behind one silence.
+
+**Rig procedure now:** set the cell, then `journalctl --user -u reac-pw -n 30 | grep -e
+'head-amp cell' -e 'head-amp records'`. The first line says the gesture was parsed and which
+engine took it; the second says how many records went on the wire. If the count moves and
+the lamp does not, the answer is the box's firmware, and that is the question the capture
+being taken this afternoon — **a real Roland desk slaved to a box on M** — exists to settle.
+Note for that capture: the desk-shaped replays tried so far (yesterday's byte-exact frame,
+unicast and broadcast, at base 32 and at base 0) were all ignored by the box on M, so the
+thing to look for is what a real desk sends that we do not.
+
 ## Files
 
 | File | Role |
@@ -2135,7 +2202,7 @@ the record leaves — no more.
 | `src/reac_mac.{h,c}` | the stand-in source MAC: Roland OUI + our own NIC's host part, so it cannot collide with a real box |
 | `tests/test_reac_box_master_real_audio.c` | **a REAL box master's frames** (`tests/box_master_frames.inc`, verbatim from reac-captures) through the accept mode `main.c` sets for a joined box master: 16 rows non-silent and mutually distinct inside a level band that fails both digital silence and the plain-LE smear, with a real-bytes POSITIVE CONTROL (the same chassis as a slave, music on input 16) so a floor reading measures the wire and not the path |
 | `tests/test_reac_slave_headamp_tx.c` | **the preamp door in the slave role** (0.5.8): enqueue / drain / stamp, asserted byte-identical to the four `cdea 04 03` blocks reac-pw broadcast at the S-1608 on 2026-09-09, refused over a control slot and before ESTABLISHED, audio and counter untouched |
-| `tests/box-master-slave-join.sh` | **the 0.5.6 job, measured at the far end of the cable**: the bounded flood at the MASTER's width, the config-announce before the cold-connect burst, the grant, the heartbeat, a tone through `reac-playback` decoded back off the UPSTREAM at two levels 20 dB apart, nothing before the box spoke, and the link-state timeline across the join and a drop. Needs a session manager (a tone has to be LINKED) and skips without one |
+| `tests/box-master-slave-join.sh` | **the 0.5.6 job, measured at the far end of the cable** — and since 0.5.9 the PREAMP DOOR with it: `pw-cli set-param` on the real node, the record decoded off the frames the emulator receives, on an 8-input and a 16-input box master, with the send count and the journal's own claim asserted: the bounded flood at the MASTER's width, the config-announce before the cold-connect burst, the grant, the heartbeat, a tone through `reac-playback` decoded back off the UPSTREAM at two levels 20 dB apart, nothing before the box spoke, and the link-state timeline across the join and a drop. Needs a session manager (a tone has to be LINKED) and skips without one |
 | `tests/box-master-rejoins.sh` | **a box-master segment dropped and heard again still carries audio, both ways**, twice in a row — the 2026-09-09 13:36 rig defect's measurement. The accepted-frame count is read only from the journal written AFTER the drop, because a feeder that accepts nothing prints no telemetry line at all |
 | `tests/fake_box_master.c` | the stagebox on M: broadcast box geometry with a distinct constant per channel and one master-only record a second, built by the same libreac builders the unit fixtures use. Since 0.5.5 it also LISTENS — counting, decoding and reporting what the daemon sends back, through libreac's own oracles so it cannot agree with a daemon that got the layout wrong. `SIGUSR1` pauses transmission while it keeps listening |
 | `tests/` | 69 meson tests, all offline except `reac_pacer`'s live-cadence case (SKIPs without `CAP_NET_RAW`). `meson test -C build` lists them; the goldens (`reac_conformance_golden.inc`, `reac_grant_golden.inc`, `reac_m200_golden.inc`, `upstream_fixtures.inc`) are real captured bytes and are the oracle — never regenerate one to make a diff go away |

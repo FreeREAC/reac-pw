@@ -30,6 +30,7 @@
 
 #include <reac/reac.h>
 #include <reac/reac_ctrlblk.h>
+#include <reac/reac_headamp_tx.h>   /* REAC_HEADAMP_SWEEP_STRIDE */
 #include <reac/reac_encode.h>
 
 #include "reac_ring.h"
@@ -108,11 +109,38 @@ int main(void)
 	CHK(memcmp(frame, pristine, 16) == 0);
 	CHK(memcmp(frame + 50, pristine + 50, (size_t)flen - 50) == 0);
 
-	/* ONE RECORD PER SLOT, and the table goes quiet once the edge has drained — the
-	 * master role's cadence, because it is the master role's scheduler. */
-	memcpy(frame, pristine, (size_t)flen);
-	CHK(reac_slave_headamp_stamp(&s, frame, 0, 1) == 0);
-	CHK(memcmp(frame, pristine, (size_t)flen) == 0);
+	/* ONE RECORD PER SLOT, AND THE EDGE IS SENT MORE THAN ONCE. The protocol has no
+	 * readback, so a single frame carrying a 48V command means one lost frame is one
+	 * lost setting for ever; this segment has no establishment scene replay to repair
+	 * that (no announced base to sweep from), so the edge itself repeats — three sends
+	 * spaced by the protocol's own record stride. Asserted by walking slots: the
+	 * repeats must be SPACED (a slot in between carries nothing) and must carry the
+	 * SAME cell, and after the third the wire goes quiet for good. */
+	{
+		int sends = 1;                       /* the one already stamped above */
+		int gaps = 0;
+		for (int slot = 0; slot < REAC_HEADAMP_SWEEP_STRIDE * 8; slot++) {
+			memcpy(frame, pristine, (size_t)flen);
+			if (reac_slave_headamp_stamp(&s, frame, 0, 1)) {
+				sends++;
+				hex34(got, frame);
+				CHK(strcmp(got, RIG[1].want) == 0);   /* the same cell, again */
+			} else {
+				gaps++;
+				CHK(memcmp(frame, pristine, (size_t)flen) == 0);
+			}
+		}
+		CHK(sends == REAC_SLAVE_HEADAMP_EDGE_SENDS);
+		/* SPACED, not bunched: two repeats cost at least a stride of silence each. */
+		CHK(gaps >= REAC_HEADAMP_SWEEP_STRIDE);
+	}
+	/* AND THEN IT IS QUIET FOR GOOD — the repeat is loss tolerance, not a re-assert,
+	 * and a segment nobody is touching must not keep writing 48V at a box. */
+	for (int slot = 0; slot < 500; slot++) {
+		memcpy(frame, pristine, (size_t)flen);
+		CHK(reac_slave_headamp_stamp(&s, frame, 0, 1) == 0);
+		CHK(memcmp(frame, pristine, (size_t)flen) == 0);
+	}
 
 	/* EVERY CELL THE RIG SENT, each one its own bytes. Distinct goldens are what makes
 	 * a stamp that ignored its arguments fail here instead of passing four times. */
@@ -124,7 +152,10 @@ int main(void)
 		hex34(got, frame);
 		CHK(strcmp(got, RIG[k].want) == 0);
 	}
-	CHK(atomic_load(&s.ha_tx_records) == 5);
+	/* The first phantom edge plus its two repeats, then one stamp per rig cell (each
+	 * SET re-arms the repeater, and only its first send is taken here). */
+	CHK(atomic_load(&s.ha_tx_records) ==
+	    (uint64_t)(REAC_SLAVE_HEADAMP_EDGE_SENDS + (int)(sizeof RIG / sizeof RIG[0])));
 
 	/* THE PROBE CAN SEE A DIFFERENCE: a cell the rig did not send must not produce the
 	 * rig's bytes. Without this, a stamp hard-coded to one record would pass everything

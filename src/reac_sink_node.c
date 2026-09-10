@@ -638,6 +638,21 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 	struct reac_headamp_setting ha[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int nha = reac_headamp_prop_parse(param, ha,
 	                                  (int)(sizeof ha / sizeof ha[0]));
+	if (nha > 0)
+		/* WHERE THE GESTURE WENT, said once per Props object rather than once per
+		 * cell (an openmixer scene push carries dozens). On 2026-09-10 a rig write
+		 * was parsed and nothing reached the wire, and the journal could not tell
+		 * "the door is not wired to an engine" from "the engine has nothing to send
+		 * on yet" — two different faults with one silence. Main loop, and only when
+		 * an operator actually moved a preamp. */
+		pw_log_info("reac: %d head-amp cell(s) -> %s (first: ch %u %s = %u)",
+		            nha, n->slave ? "the slave engine (this segment is joined to a "
+		                            "box master; it owns the wire)"
+		                          : n->pacer_open ? "the master pacer"
+		                          : "NOTHING — no pacer and no slave engine is "
+		                            "attached to this node, so this write cannot "
+		                            "reach any wire",
+		            ha[0].ch, reac_headamp_param_name(ha[0].param), ha[0].value);
 	for (int i = 0; i < nha; i++) {
 		/* WHICHEVER ENGINE OWNS THE WIRE ON THIS SEGMENT (2026-09-10 ruling). The
 		 * parse is one and the keys are one; only the actuator differs, and the

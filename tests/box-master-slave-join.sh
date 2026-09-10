@@ -456,6 +456,93 @@ echo "MEASURED: re-enrolled, link-state established $(python3 -c "print('%.1f' %
 # THE ABSENCE CLAIM'S POSITIVE CONTROL: `probing` must be a state this probe can SEE, not
 # just one it failed to read. It was read above, on the drop edge, from the same node.
 
+# ---- 6b. THE PREAMP DOOR, MEASURED AT THE FAR END OF THE CABLE. --------------------
+# Operator ruling, 2026-09-10: "we sync it and we should be able to set the pre-amp params
+# as usual, no changes". 0.5.8 opened that door and a unit test proved the STAMPING; the rig
+# then showed the record never leaving — the daemon parsed the param and the wire carried
+# 39 heartbeats and zero cdea 0403. A test that asserts a table cannot see that. This one
+# asserts the BYTES the emulator decodes off the wire, which is the only claim that means
+# anything: the console sets a cell, and the box receives that cell.
+#
+# THE WIRE CHANNEL IS DELIBERATELY NOT DERIVABLE FROM ANY BASE. A box on M announces no
+# chassis strap, so the segment publishes base=none and the console addresses by absolute
+# wire channel. 46 and 14 are outside this 8-input emulator's own 0..7, so a daemon that
+# clamped, offset or dropped a channel it could not map to a base fails here — which is
+# exactly the shape the rig's silence could have had.
+PLAY0=$(node_id reac-playback.bmx0)
+[ -n "$PLAY0" ] || { echo "FAIL: no reac-playback.bmx0 to drive the preamps through"; exit 1; }
+HAC=$(node_prop reac-playback.bmx0 reac.headamp.channels)
+HAB=$(node_prop reac-playback.bmx0 reac.headamp.base)
+[ "$HAC" = "8" ] || {
+	echo "FAIL: the segment publishes reac.headamp.channels='$HAC'; this box master declared"
+	echo "      8 inputs and the door has to say so or no console will offer the control"
+	exit 1; }
+[ "$HAB" = "none" ] || {
+	echo "FAIL: reac.headamp.base='$HAB' — a box on M announces no chassis strap, so the"
+	echo "      only honest answer is 'none' and a console addresses by absolute wire channel"
+	exit 1; }
+# THE PROBE CAN SEE ABSENCE: nothing has been set yet, so the emulator must hold no cell.
+PRE=$(awk '$1 == "headampcell" { n++ } END { print n + 0 }' "$RT/box.rep")
+[ "$PRE" = "0" ] || {
+	echo "FAIL: the box master already holds $PRE head-amp cell(s) before anything was set,"
+	echo "      so a cell arriving later would prove nothing"; exit 1; }
+ha_cell() {   # ha_cell <ch> <param> -> "<value> <count>", empty when never seen
+	awk -v c="$1" -v q="$2" '$1 == "headampcell" && $2 == c && $3 == q { print $4, $5 }' \
+	    "$RT/box.rep"
+}
+ha_set() {    # ha_set <wire-ch> <param-name> <value>
+	pw-cli set-param "$PLAY0" Props "{ params = [ \"reac.headamp.$1.$2\" $3 ] }" \
+	       >"$RT/hacli.log" 2>&1
+}
+ha_set 46 sens 52 || { echo "FAIL: the node refused a head-amp Props set"; cat "$RT/hacli.log"; exit 1; }
+ha_set 14 phantom 1 || { echo "FAIL: the node refused a phantom Props set"; cat "$RT/hacli.log"; exit 1; }
+for i in $(seq 60); do
+	[ -n "$(ha_cell 46 2)" ] && [ -n "$(ha_cell 14 0)" ] && break
+	sleep 0.25
+done
+SENS=$(ha_cell 46 2); PH=$(ha_cell 14 0)
+[ -n "$SENS" ] || {
+	echo "FAIL: a SENS of 52 was set on wire channel 46 and NO head-amp record ever reached"
+	echo "      the box master. The param is parsed and the wire carries nothing — the door"
+	echo "      is open at the console and shut at the wire."
+	grep -c headampcell "$RT/box.rep"; cat "$RT/box.rep" | head -20; exit 1; }
+[ -n "$PH" ] || {
+	echo "FAIL: phantom ON for wire channel 14 never reached the box master"; exit 1; }
+set -- $SENS
+[ "$1" = "52" ] || {
+	echo "FAIL: wire channel 46 was set to SENS 52 and the box received $1"; exit 1; }
+set -- $PH
+[ "$1" = "1" ] || {
+	echo "FAIL: wire channel 14 was set to phantom ON and the box received $1"; exit 1; }
+# AND NOT A CELL MORE. A complete-scene sweep would light up channels nobody set; this
+# segment has no announced base to sweep from, so exactly the two cells asked for may exist.
+NCELL=$(awk '$1 == "headampcell" { n++ } END { print n + 0 }' "$RT/box.rep")
+[ "$NCELL" = "2" ] || {
+	echo "FAIL: $NCELL head-amp cells reached the box; two were set, and a segment with no"
+	echo "      announced base must never sweep one it invented"
+	awk '$1 == "headampcell"' "$RT/box.rep"; exit 1; }
+# EACH EDGE ARRIVES MORE THAN ONCE. There is no readback on this protocol, so a single
+# frame carrying a 48V command means one lost frame is one lost setting for ever; the
+# operator's edge is sent REAC_SLAVE_HEADAMP_EDGE_SENDS times, spaced by the record stride
+# a real M-200 uses. A count of exactly one here is the fragile shape this guards against.
+set -- $SENS; SN="$2"
+set -- $PH;   PN="$2"
+[ "${SN:-0}" -ge 2 ] && [ "${PN:-0}" -ge 2 ] || {
+	echo "FAIL: the SENS cell arrived ${SN:-0} time(s) and phantom ${PN:-0} — one send of a"
+	echo "      preamp record is one lost frame away from a setting that never happened,"
+	echo "      and nothing on this wire would ever tell us"; exit 1; }
+echo "MEASURED: the preamp door reaches the wire — SENS 52 at wire channel 46 ($SN sends)"
+echo "          and phantom ON at wire channel 14 ($PN sends) decoded off the frames the"
+echo "          box master received, with base=none and $NCELL cells total (no invented sweep)"
+# AND THE JOURNAL SAYS SO WITHOUT A CAPTURE. The rig could only ask "did it leave?" by
+# racing a tcpdump against three frames in a 24 000-frame second. The daemon counts what it
+# STAMPED — not what a node accepted — and prints the count when it moves.
+grep -q "head-amp records on the wire:" "$LOG" || {
+	echo "FAIL: records reached the box and the journal never said so. A preamp write that"
+	echo "      cannot be confirmed after the fact can only be confirmed by luck"
+	exit 1; }
+echo "MEASURED: $(grep 'head-amp records on the wire:' "$LOG" | tail -1 | sed 's/^reac-pw: //')"
+
 # ---- 7. A 16-INPUT BOX HAS EIGHT OUTPUTS, AND BOTH DOORS SAY SO. -------------------
 # The rig, with the S-1608 in master mode: reac-playback.<segment> came up at SIXTEEN
 # channels, because the door was sized from the width the box BROADCASTS - which is its input
@@ -493,6 +580,36 @@ case "$CAPD" in
      echo "      master path's does, because that is the operator-facing label"; exit 1 ;;
 esac
 echo "MEASURED: 16-in box master — playback door $NP16 ch (its outputs), capture door '$CAPD'"
+# AND ITS PREAMPS TOO — the rig's own geometry. Everything about the head-amp path is
+# width-blind by construction (the record is 34 bytes at a fixed offset in any frame), and
+# "by construction" is exactly the kind of claim that has been wrong here before: the
+# 8-input case above passed while the rig's 16-input one was reported silent. So it is
+# measured on both rather than argued once.
+HAC16=$(node_prop reac-playback.bmx1 reac.headamp.channels)
+[ "$HAC16" = "16" ] || {
+	echo "FAIL: the 16-input box master publishes reac.headamp.channels='$HAC16'; the model"
+	echo "      row its broadcast width matched has SIXTEEN preamps"; exit 1; }
+wait_for "\[bmx1\] .*STATE .*-> ESTABLISHED" 40 || {
+	echo "FAIL: the 16-ch box master never granted, so its preamps cannot be driven"
+	grep "reac_slave: \[bmx1\]" "$LOG" | tail -5; exit 1; }
+pw-cli set-param "$PLAY16" Props "{ params = [ \"reac.headamp.46.sens\" 52 ] }" \
+       >"$RT/hacli16.log" 2>&1 || {
+	echo "FAIL: the 16-ch segment's node refused a head-amp Props set"
+	cat "$RT/hacli16.log"; exit 1; }
+for i in $(seq 60); do
+	C16=$(awk '$1 == "headampcell" && $2 == 46 && $3 == 2 { print $4, $5 }' "$RT/box16.rep")
+	[ -n "$C16" ] && break
+	sleep 0.25
+done
+[ -n "$C16" ] || {
+	echo "FAIL: SENS 52 at wire channel 46 never reached the 16-input box master — the same"
+	echo "      write the 8-input case above delivered. This is the rig's geometry"
+	awk '$1 == "headampcell"' "$RT/box16.rep"; exit 1; }
+set -- $C16
+[ "$1" = "52" ] && [ "${2:-0}" -ge 2 ] || {
+	echo "FAIL: the 16-input box master received value $1 x ${2:-0}; 52, at least twice"
+	exit 1; }
+echo "MEASURED: 16-in box master — SENS 52 at wire channel 46 arrived $2 times, base=none"
 kill -TERM $FAKE16 2>/dev/null; wait $FAKE16 2>/dev/null
 ip link set bmx1 down
 

@@ -479,7 +479,14 @@ int reac_slave_headamp_drain(struct reac_slave *s)
 		/* Validates and silently rejects a bad triple, arms the table, and marks
 		 * the cell dirty so the change leaves as an EDGE on the next eligible
 		 * slot. Pure array writes: no alloc, no syscall. */
-		reac_headamp_tx_set(&s->hatx, ch, param, value);
+		if (reac_headamp_tx_set(&s->hatx, ch, param, value) == 0 &&
+		    ch < REAC_HEADAMP_MAX_CH && param < REAC_HEADAMP_NPARAMS) {
+			/* SET, not incremented: this absolute value replaces whatever that
+			 * cell was going to say, so its remaining sends are the new value's,
+			 * not the old one's plus the new one's. */
+			s->ha_rep[ch][param] = REAC_SLAVE_HEADAMP_EDGE_SENDS;
+			s->ha_rep_wait = 0;    /* the FIRST send is not delayed */
+		}
 		applied++;
 	}
 	if (applied)
@@ -501,10 +508,34 @@ int reac_slave_headamp_stamp(struct reac_slave *s, uint8_t *frame,
 	if (!s->hatx.active && !s->hatx.replay_width)
 		return 0;
 	uint8_t ch, param, value;
-	if (!reac_headamp_tx_next(&s->hatx, &ch, &param, &value))
-		return 0;
+	if (!reac_headamp_tx_next(&s->hatx, &ch, &param, &value)) {
+		/* NOTHING NEW — BUT A SEND MAY STILL BE OWED. The table emits one record
+		 * per changed cell and then goes quiet; with no readback and no scene
+		 * replay on this segment, that would make one lost frame one lost setting.
+		 * Re-dirty the cell that still owes sends, spaced by the protocol's own
+		 * record stride, and let the SAME scheduler and the SAME builder emit it. */
+		if (s->ha_rep_wait > 0) {
+			s->ha_rep_wait--;
+			return 0;
+		}
+		int rc = -1, rp = -1;
+		for (int c = 0; c < REAC_HEADAMP_MAX_CH && rc < 0; c++)
+			for (int q = 0; q < REAC_HEADAMP_NPARAMS; q++)
+				if (s->ha_rep[c][q]) { rc = c; rp = q; break; }
+		if (rc < 0)
+			return 0;
+		if (reac_headamp_tx_set(&s->hatx, (uint8_t)rc, (uint8_t)rp,
+		                        s->hatx.value[rc][rp]) != 0 ||
+		    !reac_headamp_tx_next(&s->hatx, &ch, &param, &value))
+			return 0;
+	}
 	if (reac_ctrl_stamp_headamp(frame, ch, param, value) != 0)
 		return 0;
+	if (ch < REAC_HEADAMP_MAX_CH && param < REAC_HEADAMP_NPARAMS &&
+	    s->ha_rep[ch][param]) {
+		s->ha_rep[ch][param]--;
+		s->ha_rep_wait = REAC_HEADAMP_SWEEP_STRIDE;
+	}
 	/* COUNT WHAT WENT ON THE WIRE, not what was accepted at the door. A PATCH that
 	 * is queued, a cell that is set and a record that is stamped are three different
 	 * facts, and only this one is evidence that anything was asked of the box. */

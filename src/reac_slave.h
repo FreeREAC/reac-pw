@@ -59,6 +59,29 @@ struct reac_ctrl_parsed;   /* reac_ctrl.h — a parsed received frame */
  * per slot. Power of two. */
 #define REAC_SLAVE_HEADAMP_CMD_RING 128
 
+/* HOW MANY TIMES ONE OPERATOR EDGE GOES ON THE WIRE, and why it is not once.
+ *
+ * The protocol has NO READBACK: a sender that emits a head-amp record once has no
+ * mechanism that could ever discover the box did not get it, so one lost frame is one
+ * lost setting until something re-asserts. The MASTER role covers that with the
+ * complete-scene replay it arms at every establishment; this segment has no such
+ * replay, because a box on M announces no chassis strap and there is no honest base
+ * to sweep from. So the edge itself carries the redundancy.
+ *
+ * THREE SENDS, TWELVE SLOTS APART — both numbers are the protocol's own, not invented.
+ * A lone op-0403 write of an absolute value SELF-COMMITS and no commit pair exists on
+ * the wire (HEADAMP-PROTOCOL-AUDIT-2026-07-22), so a repeat of the same absolute value
+ * is a no-op at the box rather than a second event; and REAC_HEADAMP_SWEEP_STRIDE is
+ * the spacing a real M-200's own enrolment burst uses between records. At 8000 fps
+ * that is three frames across 3 ms.
+ *
+ * IT IS LOSS TOLERANCE, NOT A RE-ASSERT. It does not survive an outage, it does not
+ * override the box's own front panel, and it does not make a change visible to an
+ * observer who started looking afterwards — the journal counter main.c prints from
+ * ha_tx_records is what answers that. Re-application after an outage stays where it
+ * already lives: openmixer's scene watch. */
+#define REAC_SLAVE_HEADAMP_EDGE_SENDS 3
+
 struct reac_slave_cfg {
 	const char *ifname;       /* the REAC NIC (raw AF_PACKET 0x8819, RX + TX) */
 	int box_channels;         /* our upstream input width (<= 40); 0 -> default 16 */
@@ -227,6 +250,15 @@ struct reac_slave {
 	_Atomic uint64_t ha_tx_records;            /* records actually STAMPED on the wire —
 	                                            * the count a claim of actuation may
 	                                            * cite, unlike an accepted PATCH */
+	/* THE EDGE REPEATER, engine-thread only (see REAC_SLAVE_HEADAMP_EDGE_SENDS).
+	 * `ha_rep[c][p]` is how many sends of that cell are still owed — SET, never
+	 * incremented, when a command is drained, because an absolute value supersedes
+	 * the one it replaces rather than queueing behind it. `ha_rep_wait` counts the
+	 * slots to the next repeat, so the sends are spaced instead of bunched onto
+	 * consecutive frames. */
+	uint8_t  ha_rep[REAC_HEADAMP_MAX_CH][REAC_HEADAMP_NPARAMS];
+	int      ha_rep_wait;
+
 	/* NO COMPLETE-SCENE REPLAY ON THIS SIDE, and its absence is a decision. The master
 	 * role arms one at every establishment because it KNOWS the box's head-amp base —
 	 * the chassis strap the box announces (reac_ports.h). A stagebox with its Mode

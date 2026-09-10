@@ -703,6 +703,13 @@ struct listener {
 
 	struct reac_slave slave;
 	int slave_open;
+	/* HOW MANY HEAD-AMP RECORDS THIS SEGMENT HAS PUT ON THE WIRE, as this loop last
+	 * reported it. An operator edge is three frames out of the ~24 000 a second this
+	 * wire carries, and on 2026-09-10 a rig question — "did the preamp record leave?"
+	 * — could only be answered by racing a tcpdump against it and was answered wrong.
+	 * A counter in the journal answers it after the fact and without a capture, which
+	 * is the difference between an observation and a guess. Main loop only. */
+	uint64_t ha_tx_records_seen;
 
 	struct reac_seglock seglock;
 
@@ -982,6 +989,28 @@ static void listener_publish_segment(struct listener *L)
 		reac_sink_node_publish_box_master(L->sink, L->cfg.wire_channels,
 		                                  master_mac48, established);
 	}
+}
+
+/* SAY WHAT LEFT, NOT WHAT WAS ACCEPTED. Three different things can be true at once on a
+ * preamp write — a PATCH was accepted at the node, a cell was set in the send table, and a
+ * record was stamped onto a frame — and only the last is evidence that anything was asked
+ * of the box. The engine counts the stamps; this prints the count when it moves, on the
+ * main loop, so an operator reads `journalctl` instead of racing a tcpdump against three
+ * frames in a 24 000-frame second (rig, 2026-09-10). Silent while nobody touches a preamp. */
+static void listener_report_headamp(struct listener *L)
+{
+	if (!L->slave_open)
+		return;
+	uint64_t n = atomic_load_explicit(&L->slave.ha_tx_records, memory_order_relaxed);
+	if (n == L->ha_tx_records_seen)
+		return;
+	uint64_t drops = atomic_load_explicit(&L->slave.ha_tx_drops, memory_order_relaxed);
+	fprintf(stderr, "reac-pw: %shead-amp records on the wire: %llu (+%llu since the last "
+	        "report, %llu command(s) dropped at the door). Whether the box ACTS on one is "
+	        "its own firmware's answer and is read at its 48V lamp, never here\n",
+	        L->cfg.tag, (unsigned long long)n,
+	        (unsigned long long)(n - L->ha_tx_records_seen), (unsigned long long)drops);
+	L->ha_tx_records_seen = n;
 }
 
 /* Bring one segment online: resolve its rate, open the RX feeder, and (role
@@ -2795,6 +2824,7 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 				continue;   /* the capture node was rebuilt; nothing more this tick */
 			}
 			listener_publish_segment(L);
+			listener_report_headamp(L);
 			continue;
 		}
 		int role = reac_sink_node_take_reopen_role(L->sink);

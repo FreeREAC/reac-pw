@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.8}
+Version:        %{?version_override}%{!?version_override:0.5.9}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -103,6 +103,14 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Thu Sep 10 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.9-1
+- a preamp edge goes on the wire three times, spaced by the protocol's own record
+  stride: there is no readback, so one lost frame was one lost setting for ever
+- the journal reports head-amp records actually STAMPED, and where a parsed gesture
+  was routed, so a preamp write can be confirmed after the fact without a capture
+- the box-master proof drives the operator's own pw-cli gesture end to end and reads
+  the record off the far end of the cable, on an 8- and a 16-input box master
+
 * Thu Sep 10 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.8-1
 - the preamp door is open in every role: a segment joined to a stagebox on M
   publishes reac.headamp.channels and emits the operator's SET on the wire,
