@@ -391,6 +391,22 @@ int main(void)
 		reac_frame_ring_free(&p5.ring);
 	}
 
+	/* cfea[19] is the PACE CODE the box follows, not the console family (measured
+	 * 2026-09-11 on one M-200: 0x00 at 48 k, 0x02 at 44.1 k; the M-5000 corpus 0x01 at
+	 * 96 k). Before this mapping our 44.1 k master announced the 48 k code and an
+	 * S-4000S returned 4000 pps under a 3675 pps cadence. Pin the mapping and the byte
+	 * placement without a socket. */
+	{
+		CHK(reac_pace_code(3675) == 2);   /* 44.1 kHz */
+		CHK(reac_pace_code(4000) == 0);   /* 48 kHz */
+		CHK(reac_pace_code(8000) == 1);   /* 96 kHz */
+		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		struct reac_console_cfg cfg = { .out_channels = 16, .console_field = reac_pace_code(3675) };
+		struct reac_master m;
+		reac_master_init(&m, OUR, &cfg, 3675);
+		CHK(m.announce_blk[19] == 2);     /* the byte a box paces by */
+	}
+
 	/* ---- the sustained-discard detector --------------------------------- *
 	 * Its predecessor counted CONSECUTIVE trimming drains and needed twenty. On
 	 * the rig the guard trims once every ~24 s against a 200 ms drain cadence, so
