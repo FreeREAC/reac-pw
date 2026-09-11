@@ -233,6 +233,18 @@ Target: Fedora + PipeWire 1.4.
 
 GPL-3.0-or-later. Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>.
 
+## Known issues
+
+- **A box that boots while reac-pw is a slave on its segment does not enrol with the desk.**
+  Measured 2026-09-11 with an M-200 and an S-1608 at 44.1 kHz, four trials. reac-pw's slave
+  announces and streams as a 16-channel box and keeps streaming while ungranted; the desk keeps
+  one box session per segment, fed by any upstream of that geometry, so it never notices the
+  real box rebooted and never reopens the slot. With reac-pw off the segment the desk drops the
+  session in about seven seconds and the box enrols. Until the bounded-courtship change in
+  `reac-captures/m200-master-441k-2026-09-11/box-boot-with-slave-analysis.md` is rig-proven,
+  the order rule for recording a desk's segment is: the venue's boxes enrol first, reac-pw joins
+  last, and a box that power-cycles mid-show needs reac-pw off its segment to come back.
+
 ## Install
 
 **From a release.** Every tagged release attaches the built RPMs and the source tarball:
