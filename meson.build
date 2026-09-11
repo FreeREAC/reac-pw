@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '0.5.11',
+  version: '0.5.12',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -64,7 +64,7 @@ libreac_dep = dependency('libreac', version : '>=0.9.0',
 # compiled here as src/*.c now live in this library, unchanged. No fallback subproject yet
 # -- a checkout without pkgconfig(libreac-transport) simply fails to configure, same as any
 # other required system dependency.
-libreac_transport_dep = dependency('libreac-transport', version : '>=0.9.0', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=0.9.1', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,

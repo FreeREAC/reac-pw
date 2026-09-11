@@ -232,8 +232,8 @@ static int test_headamp_is_master_only(void)
 static int test_segment_lock_changes_hands(void)
 {
 	struct reac_seglock held, rival;
-	held.fd = -1;
-	rival.fd = -1;
+	reac_seglock_init(&held);
+	reac_seglock_init(&rival);
 
 	/* PRESENCE BEFORE ABSENCE: prove the lock can be taken at all before any
 	 * conclusion is drawn from a refusal. */
@@ -244,21 +244,21 @@ static int test_segment_lock_changes_hands(void)
 		return 1;
 	}
 	CHK(claimed == 0);
-	CHK(held.fd >= 0);
+	CHK(reac_seglock_held(&held));
 
 	/* POSITIVE CONTROL for the refusal: while it is held, a second engine
 	 * asking for the same segment is refused. Without this, the release check
 	 * below would pass against a lock that never excluded anybody. */
 	CHK(reac_seglock_claim(&rival, "lo") == -1);
-	CHK(rival.fd < 0);
+	CHK(!reac_seglock_held(&rival));
 
 	/* The old engine goes down: the socket is closed and the name is free. */
 	reac_seglock_release(&held);
-	CHK(held.fd < 0);
+	CHK(!reac_seglock_held(&held));
 
 	/* The other engine can now own the segment. */
 	CHK(reac_seglock_claim(&rival, "lo") == 0);
-	CHK(rival.fd >= 0);
+	CHK(reac_seglock_held(&rival));
 
 	/* And back again, the same way. */
 	reac_seglock_release(&rival);
@@ -273,8 +273,8 @@ static int test_segment_lock_changes_hands(void)
 static int test_only_the_master_holds_the_segment(void)
 {
 	struct reac_seglock ours, theirs;
-	ours.fd = -1;
-	theirs.fd = -1;
+	reac_seglock_init(&ours);
+	reac_seglock_init(&theirs);
 
 	/* Master role: claimed. */
 	CHK(reac_role_emits_headamp(REAC_ROLE_MASTER) != 0);
