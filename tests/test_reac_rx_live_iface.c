@@ -41,8 +41,8 @@
  *      A NAME RESOLVING IS NOT THE BINDING SURVIVING. Compare the indices.
  */
 #include <stdio.h>
-#include "reac_ring.h"
-#include "reac_rx.h"
+#include <reac/transport/reac_ring.h>
+#include <reac/transport/reac_rx.h>
 
 static int fails;
 #define CHK(cond) do { \

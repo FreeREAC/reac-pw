@@ -12,7 +12,7 @@
  * PRESENCE BEFORE ABSENCE: every "nothing happened" assertion follows one that proved the
  * queue delivers, so a broken queue cannot pass the quiet cases by being deaf.
  */
-#include "reac_ifscan.h"
+#include <reac/transport/reac_ifscan.h>
 
 #include <stdio.h>
 #include <stdlib.h>

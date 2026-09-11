@@ -34,7 +34,7 @@
  *       no double-writes), and a distinct DC per channel round-trips through
  *       the braid within one 24-bit ULP (catches pair/stride swaps).
  */
-#include "reac_tx.h"
+#include <reac/transport/reac_tx.h>
 #include <reac/reac.h>
 #include <reac/reac_encode.h>
 

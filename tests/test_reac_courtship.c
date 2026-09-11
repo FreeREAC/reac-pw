@@ -26,12 +26,12 @@
  * builder to stay mutually compatible. */
 #include <reac/reac_ports.h>
 #include <reac/reac_master.h>
-#include "reac_slave.h"
+#include <reac/transport/reac_slave.h>
 #include <reac/reac_ctrl.h>
 #include <reac/reac_fsm.h>
-#include "reac_role_swap.h"   /* the role lifecycle answers off THESE FSMs */
-#include "reac_segment_ident.h" /* W1: the SEGMENT's answer, off the same FSMs */
-#include "reac_tx.h"
+#include <reac/transport/reac_role_swap.h>   /* the role lifecycle answers off THESE FSMs */
+#include <reac/transport/reac_segment_ident.h> /* W1: the SEGMENT's answer, off the same FSMs */
+#include <reac/transport/reac_tx.h>
 #include <reac/reac.h>
 #include <reac/reac_encode.h>
 

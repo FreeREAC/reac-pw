@@ -9,15 +9,15 @@
                                  * reac_sink_format.h's revised SCOPE note) */
 #include "reac_role_cfg.h"    /* the `reac.cfg.role` parse + refusal codes */
 #include "reac_rate_cfg.h"    /* REAC_PROP_RATE — the wire pace this segment locked to */
-#include "reac_segment_ident.h" /* the segment identity + the slave answer set */
-#include "reac_role_swap.h"   /* the swap's lifecycle answer (arbitration §8) */
+#include <reac/transport/reac_segment_ident.h> /* the segment identity + the slave answer set */
+#include <reac/transport/reac_role_swap.h>   /* the swap's lifecycle answer (arbitration §8) */
 
 #include <reac/reac.h>
 #include <spa/param/param.h>   /* SPA_PARAM_Props — the role write door */
 #include <spa/param/latency-utils.h>
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
-#include "reac_pacer.h"   /* the segment's clock discipline: the graph-clock door */
+#include <reac/transport/reac_pacer.h>   /* the segment's clock discipline: the graph-clock door */
 #include <reac/reac_clock.h>   /* reac_clock_name_is_hardware, for the REAC_DEBUG line */
 
 #include <pipewire/pipewire.h>

@@ -22,7 +22,7 @@
  * length guard before it reaches anything — a test that used one would bounce off the guard
  * and prove nothing about the code it named. The guard gets its own case, deliberately.
  */
-#include "reac_linkmon.h"
+#include <reac/transport/reac_linkmon.h>
 
 #include <poll.h>
 #include <stdio.h>

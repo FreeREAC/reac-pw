@@ -10,7 +10,7 @@
  * the higher one to win — a test that only checked "the value is found" would
  * pass against any order at all. */
 
-#include "reac_conf.h"
+#include <reac/transport/reac_conf.h>
 
 #include <assert.h>
 #include <stdio.h>

@@ -41,8 +41,8 @@
 #include <reac/reac.h>
 #include <reac/reac_ctrlblk.h>
 
-#include "reac_ring.h"
-#include "reac_rx.h"
+#include <reac/transport/reac_ring.h>
+#include <reac/transport/reac_rx.h>
 
 static int fails;
 #define CHK(cond) do { \
