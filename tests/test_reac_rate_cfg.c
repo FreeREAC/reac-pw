@@ -318,7 +318,7 @@ static void bare_pacer_init(struct reac_pacer *p, int fps,
                             const struct reac_console_cfg *cfg)
 {
 	memset(p, 0, sizeof *p);
-	p->fd = -1;
+	p->handle = NULL;
 	atomic_init(&p->recognized_headamp_base, -1);
 	memcpy(p->src, SRC, 6);
 	p->fps = fps;
