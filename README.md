@@ -34,11 +34,13 @@ Everything REAC-specific is reused, not reinvented:
   0.4.x libreac links fine and then decodes the downstream with the layout the
   encoder does not write (#80).
 
-reac-pw itself is the lock-free ring, the RX feeder, the control plane (cdea/cfea
-and DT1 record builders + the two checksums), the master and slave establishment
-FSMs, the grant/ENROLL sweep, the head-amp send model, the cadence pacer and its
-clock discipline, the multi-box registry, and the PipeWire nodes. See DESIGN.md's
-Files table.
+reac-pw itself is now only the PipeWire binding: the RX/TX nodes, head-amp/rate/role props, and
+`main()`'s node half. The control plane (cdea/cfea and DT1 record builders + the two checksums,
+the master and slave establishment FSMs, the grant/ENROLL sweep, the multi-box registry) moved to
+libreac in 0.8.0; the transport underneath it (the lock-free ring, the RX feeder, the cadence
+pacer and its clock discipline, interface/VLAN scanning, the segment lock) moved to
+libreac-transport in 0.5.11 (`docs/design/specs/2026-09-11-reac-transport-library.md`, in the
+libreac repo). See DESIGN.md's Files table.
 
 ## Build and run
 
@@ -157,9 +159,9 @@ gh workflow run release-rpm.yml -f tag=v0.5.3 -f sign=true    # signs and pushes
 `tag` must already exist and match `v[0-9]*`. `sign` defaults to `false`, which
 runs `packaging/publish-repo.sh --no-sign` and stops before the push step — the
 assembled tree is still attached to the run as an artifact for inspection.
-Building needs `pkgconfig(libreac) >= 0.7.1` resolvable from the same shared
-tree (`dnf builddep` against the spec), so libreac's own equivalent publish
-must have landed there first.
+Building needs `pkgconfig(libreac) >= 0.9.0` and `pkgconfig(libreac-transport) >= 0.9.0`
+resolvable from the same shared tree (`dnf builddep` against the spec), so libreac's own
+equivalent publish must have landed there first.
 
 ## Status
 
@@ -236,13 +238,16 @@ GPL-3.0-or-later. Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>.
 **From a release.** Every tagged release attaches the built RPMs and the source tarball:
 
 ```
-gh release download v0.5.7 -R FreeREAC/reac-pw -p 'reac-pw-*.rpm' -p 'libreac-*.rpm'
-sudo dnf install ./libreac-*.rpm ./reac-pw-*.rpm
+gh release download v0.5.7 -R FreeREAC/reac-pw -p 'reac-pw-*.rpm' -p 'libreac-*.rpm' -p 'libreac-transport-*.rpm'
+sudo dnf install ./libreac-*.rpm ./libreac-transport-*.rpm ./reac-pw-*.rpm
 ```
 
-`reac-pw` needs `libreac >= 0.8.0`, which carries the REAC control plane; install both from
-the same release. The RPM sets the file capabilities the daemon needs
-(`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without root.
+`reac-pw` needs `libreac >= 0.9.0`, which carries the REAC control plane, and
+`libreac-transport >= 0.9.0`, which carries the sockets/pacer/RT-thread/VLAN transport
+(`docs/design/specs/2026-09-11-reac-transport-library.md`, in the libreac repo); install all
+three from the same release. The RPM sets the file capabilities the daemon needs
+(`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without root — a library cannot hold a
+capability, so this package keeps them and the linked transport code runs inside this process.
 
 **From source.**
 

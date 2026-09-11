@@ -37,9 +37,13 @@
 #include <reac/reac.h>
 #include <reac/reac_braid.h>
 
-/* The unit under test, included whole so the static hot function is reachable. */
+/* The unit under test, included whole so the static hot function is reachable.
+ * reac_rx.c moved to libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md);
+ * only its HEADER ships publicly, so reaching the .c for this trick needs a sibling libreac
+ * checkout's transport/src on the include path — meson.build's LIBREAC_TRANSPORT_SRCDIR
+ * option, dev-only, which is why this target is not build_by_default any more. */
 #include "reac_rx.c"
-#include "reac_pacer.h"
+#include <reac/transport/reac_pacer.h>
 #include "upstream_fixtures.inc"
 
 #define FRAMES  20000   /* per pass */

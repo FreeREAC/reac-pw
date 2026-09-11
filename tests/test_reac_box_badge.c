@@ -25,8 +25,8 @@
  * by reac_ctrl's builders, so the answer comes out of the same code path the
  * daemon runs — no CAP_NET_RAW, no wire, no PipeWire. */
 #include <reac/reac_link_state.h>
-#include "reac_mac.h"
-#include "reac_pacer.h"
+#include <reac/transport/reac_mac.h>
+#include <reac/transport/reac_pacer.h>
 #include <reac/reac_ctrl.h>
 
 #include <reac/reac.h>

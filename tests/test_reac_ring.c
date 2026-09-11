@@ -5,7 +5,7 @@
  * zero-fill, overrun drop-oldest, and the NARROW-SOURCE contract. No PipeWire /
  * libreac needed. */
 
-#include "../src/reac_ring.h"
+#include <reac/transport/reac_ring.h>
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>

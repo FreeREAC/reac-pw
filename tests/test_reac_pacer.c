@@ -10,7 +10,7 @@
  *      interval. SKIPPED (exit 77) if the AF_PACKET socket can't open (no
  *      CAP_NET_RAW in the test sandbox) — the cadence math above already covers
  *      the timing contract; the live check is a bonus when privilege exists. */
-#include "reac_pacer.h"
+#include <reac/transport/reac_pacer.h>
 #include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 

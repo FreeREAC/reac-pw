@@ -30,8 +30,8 @@
 #include <math.h>
 
 #include <reac/reac.h>
-#include "reac_ring.h"
-#include "reac_rx.h"
+#include <reac/transport/reac_ring.h>
+#include <reac/transport/reac_rx.h>
 #include <reac/reac_braid.h>
 #include <reac/reac_upstream.h>
 

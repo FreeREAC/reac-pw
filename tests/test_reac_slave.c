@@ -23,7 +23,7 @@
  * verifiable off a real desk. The real-link gate (we go establishing->established
  * against an external master + audio both ways) is the hardware-verify gate in
  * DESIGN.md; this test fixes everything below it. */
-#include "reac_slave.h"
+#include <reac/transport/reac_slave.h>
 #include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 

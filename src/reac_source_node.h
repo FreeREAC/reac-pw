@@ -18,8 +18,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "reac_ring.h"
-#include "reac_rx.h"
+#include <reac/transport/reac_ring.h>
+#include <reac/transport/reac_rx.h>
 
 struct pw_loop;
 struct reac_source_node;
