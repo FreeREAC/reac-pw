@@ -107,7 +107,7 @@ int main(void)
 	{
 		struct reac_pacer pg;
 		memset(&pg, 0, sizeof pg);
-		pg.fd = -1;
+		pg.handle = NULL;
 		pg.fps = 4000;
 		pg.period_ns = reac_pacer_period_ns(4000);
 		atomic_store(&pg.ring_depth_min, UINT32_MAX);
@@ -151,7 +151,7 @@ int main(void)
 		static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 		struct reac_pacer p3;
 		memset(&p3, 0, sizeof p3);
-		p3.fd = -1;
+		p3.handle = NULL;
 		p3.fps = 8000;
 		memcpy(p3.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p3.ring, 8, 2048) == 0);
@@ -307,7 +307,7 @@ int main(void)
 		static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 };
 		struct reac_pacer p4;
 		memset(&p4, 0, sizeof p4);
-		p4.fd = -1;
+		p4.handle = NULL;
 		p4.fps = 8000;
 		memcpy(p4.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p4.ring, 8, 2048) == 0);
@@ -365,7 +365,7 @@ int main(void)
 		static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0xc4, 0x99, 0x99 };
 		struct reac_pacer p5;
 		memset(&p5, 0, sizeof p5);
-		p5.fd = -1;
+		p5.handle = NULL;
 		p5.fps = 8000;
 		memcpy(p5.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p5.ring, 8, 2048) == 0);
