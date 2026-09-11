@@ -1000,7 +1000,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	L->sink = NULL;
 	L->slave_open = 0;
 	L->tx_ring_init = 0;
-	L->seglock.fd = -1;
+	reac_seglock_init(&L->seglock);
 	L->ad_timer = NULL;
 
 	/* SAMPLE RATE — the master chooses it; the box follows. See
@@ -1613,7 +1613,7 @@ struct sniffer {
  * so no source is ever destroyed from inside its own callback. */
 struct topo_tap {
 	char parent[IFNAMSIZ];     /* "" = free slot */
-	int fd;
+	struct reac_topo_tap tap;
 	struct spa_source *io;
 	struct hearing *h;
 	int said_trunk;            /* "this parent is a trunk, not a segment", said once */
@@ -1971,13 +1971,14 @@ static struct topo_tap *tap_find(struct hearing *h, const char *parent)
 static void on_topo_io(void *data, int fd, uint32_t mask)
 {
 	struct topo_tap *tp = data;
+	(void)fd;  /* the tap reads through its own handle; the loop only wakes us */
 	if (!(mask & SPA_IO_IN))
 		return;
 	uint64_t now = monotonic_ns();
 	for (int i = 0; i < 256; i++) {
 		enum reac_topo_kind k = REAC_TOPO_NOT_REAC;
 		uint16_t vid = 0;
-		if (reac_topo_tap_next(fd, &k, &vid) <= 0)
+		if (reac_topo_tap_next(&tp->tap, &k, &vid) <= 0)
 			break;
 		reac_topo_saw(&tp->h->topo, tp->parent, k, vid, now);
 	}
@@ -2028,8 +2029,8 @@ static void topo_watch_iface(struct hearing *h, const char *name)
 		        REAC_TOPO_MAX_PARENTS);
 		return;
 	}
-	int fd = reac_topo_tap_open(name);
-	if (fd < 0) {
+	struct reac_topo_tap tap;
+	if (reac_topo_tap_open(&tap, name) != 0) {
 		/* NOT FATAL, AND NOT SILENT. Without the tap this interface is still sniffed
 		 * and still served untagged; what is lost is the ability to SEE a trunk on
 		 * it, and that has to be said or a trunk looks like an access port. */
@@ -2047,16 +2048,16 @@ static void topo_watch_iface(struct hearing *h, const char *name)
 		fprintf(stderr, "reac-pw: [%s] the topology table is full (%d parents) — "
 		        "a trunk on this parent would be invisible\n",
 		        name, REAC_TOPO_MAX_PARENTS);
-		reac_topo_tap_close(fd);
+		reac_topo_tap_close(&tap);
 		return;
 	}
 	memset(tp, 0, sizeof *tp);
 	snprintf(tp->parent, IFNAMSIZ, "%s", name);
-	tp->fd = fd;
+	tp->tap = tap;
 	tp->h = h;
-	tp->io = pw_loop_add_io(h->loop, fd, SPA_IO_IN, false, on_topo_io, tp);
+	tp->io = pw_loop_add_io(h->loop, reac_topo_tap_fd(&tp->tap), SPA_IO_IN, false, on_topo_io, tp);
 	if (!tp->io) {
-		reac_topo_tap_close(fd);
+		reac_topo_tap_close(&tp->tap);
 		reac_topo_unwatch(&h->topo, name, monotonic_ns());
 		memset(tp, 0, sizeof *tp);
 	}
@@ -2074,7 +2075,7 @@ static void topo_unwatch_iface(struct hearing *h, const char *name)
 		return;
 	if (tp->io)
 		pw_loop_destroy_source(h->loop, tp->io);
-	reac_topo_tap_close(tp->fd);
+	reac_topo_tap_close(&tp->tap);
 	memset(tp, 0, sizeof *tp);
 }
 

@@ -122,7 +122,7 @@ int main(void)
 	 * cross-thread atomic -> the composer -> the key a consumer reads. */
 	struct reac_pacer p;
 	memset(&p, 0, sizeof p);
-	p.fd = -1;
+	p.handle = NULL;
 	p.fps = 8000;
 	memcpy(p.src, OUR, 6);
 	CHK(reac_frame_ring_init(&p.ring, 8, 2048) == 0);
