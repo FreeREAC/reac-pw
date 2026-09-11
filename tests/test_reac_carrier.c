@@ -12,7 +12,7 @@
  * paid for more than once. Every negative case below asserts -1, never 0, and `lo` is the
  * positive control so an all-(-1) result cannot pass as agreement.
  */
-#include "reac_link.h"
+#include <reac/transport/reac_carrier.h>
 
 #include <stdio.h>
 

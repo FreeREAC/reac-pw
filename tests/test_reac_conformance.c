@@ -29,7 +29,7 @@
 #include <reac/reac_ctrl.h>
 #include <reac/reac_grant.h>
 #include <reac/reac_headamp_tx.h>
-#include "reac_tx.h"
+#include <reac/transport/reac_tx.h>
 #include <reac/reac.h>
 #include <reac/reac_encode.h>
 

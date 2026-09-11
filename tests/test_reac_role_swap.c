@@ -25,10 +25,10 @@
  * across a swap. No capture shows a desk ceding a segment, so that claim has no
  * evidence here or anywhere in the corpus — it is an operator-present rig test
  * (reac_role_swap.h's closing note). */
-#include "reac_role_swap.h"
+#include <reac/transport/reac_role_swap.h>
 #include "reac_role_cfg.h"
-#include "reac_seglock.h"
-#include "reac_segment_ident.h"   /* W1: the segment's identity + a slave's answer */
+#include <reac/transport/reac_seglock.h>
+#include <reac/transport/reac_segment_ident.h>   /* W1: the segment's identity + a slave's answer */
 #include <reac/reac_arbitration.h>     /* the vocabulary those answers must BE */
 #include <reac/reac.h>            /* REAC_MAX_CHANNELS — a desk's downstream width */
 

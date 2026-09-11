@@ -24,10 +24,10 @@
  * decodes, with the cdea/cfea control frames interspersed ~1/s. */
 
 #include "reac_sink_node.h"
-#include "reac_segment_ident.h" /* REAC_PROP_SEGMENT — the segment names itself */
+#include <reac/transport/reac_segment_ident.h> /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
-#include "reac_tx.h"
-#include "reac_pacer.h"
+#include <reac/transport/reac_tx.h>
+#include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
@@ -35,15 +35,15 @@
 #include "reac_sink_format.h"    /* the Format pod + renegotiate decision (#4.3) */
 #include <reac/reac_role.h>           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
-#include "reac_role_swap.h"      /* the swap's LIFECYCLE answer (arbitration §8) */
+#include <reac/transport/reac_role_swap.h>      /* the swap's LIFECYCLE answer (arbitration §8) */
 #include <reac/reac_link_state.h>
-#include "reac_linkmon.h"   /* the RTM_NEWLINK carrier watch (#95) */
+#include <reac/transport/reac_linkmon.h>   /* the RTM_NEWLINK carrier watch (#95) */
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
-#include "reac_mac.h"
-#include "reac_rx.h"      /* the BOX clock reference measurement source (#75) */
+#include <reac/transport/reac_mac.h>
+#include <reac/transport/reac_rx.h>      /* the BOX clock reference measurement source (#75) */
 
 #include <reac/reac.h>
 #include <reac/reac_encode.h>  /* reac_downstream_build — libreac owns the frame layout */
