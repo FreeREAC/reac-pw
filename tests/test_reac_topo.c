@@ -19,8 +19,8 @@
  * ONCE, an adopted netdev is never released with `minted`, a minted one always is, silence
  * past the hold releases, and a failed ensure retries on a window instead of at wire speed.
  */
-#include "reac_topo.h"
-#include "reac_vlan.h"
+#include <reac/transport/reac_topo.h>
+#include <reac/transport/reac_vlan.h>
 
 #include <stdio.h>
 #include <string.h>

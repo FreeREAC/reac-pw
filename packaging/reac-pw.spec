@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:0.5.10}
+Version:        %{?version_override}%{!?version_override:0.5.11}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,13 +17,18 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 0.8.1
+BuildRequires:  pkgconfig(libreac) >= 0.9.0
+# libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
+# sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
+# to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
+BuildRequires:  pkgconfig(libreac-transport) >= 0.9.0
 Requires:       pipewire
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 0.8.1
+Requires:       libreac >= 0.9.0
+Requires:       libreac-transport >= 0.9.0
 
 %description
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
@@ -103,6 +108,19 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Fri Sep 11 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.11-1
+- THE TRANSPORT LAYER MOVES OUT TOO. Operator ruling: a second library,
+  libreac-transport, in the libreac repo. reac_ifscan, reac_topo, reac_vlan, reac_slave,
+  reac_pacer, reac_tx, reac_rx, reac_linkmon, reac_segment_ident, reac_seglock,
+  reac_role_swap, reac_ring, reac_rt, reac_pace_watch, reac_ifname, reac_conf, reac_mac and
+  the local reac_link (renamed reac_carrier) are gone from src/ and come from
+  libreac-transport >= 0.9.0 unchanged; this package keeps only the PipeWire binding
+  (reac_sink_node, reac_source_node, reac_headamp_prop, reac_rate_cfg, reac_role_cfg's
+  PipeWire-facing part, main.c's node half) and CAP_NET_RAW/CAP_NET_ADMIN, which the
+  binding process still holds and the linked library runs inside. No behaviour change:
+  same test names, same counts (69 tests, 68 ok, 1 skipped), the --help/env vocabulary
+  byte-identical. See docs/design/specs/2026-09-11-reac-transport-library.md (in libreac).
+
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.7-1
 - THE DAEMON NO LONGER SPEAKS REAC CONTROL. Operator ruling: sockets and PipeWire only. The
   JOIN/HOLD table, the master establishment and grant sweep, the hunt and arbitration, the box

@@ -13,7 +13,7 @@
  * The pace IS the packet rate (libreac's byte law: pps = rate / 12), so the wire
  * can be asked directly. This watcher does that and says so out loud.
  */
-#include "reac_pace_watch.h"
+#include <reac/transport/reac_pace_watch.h>
 
 #include <stdio.h>
 

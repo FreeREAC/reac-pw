@@ -8,7 +8,7 @@
  * test a session. These offline tests pin the gain MODEL (direction / 1 dB step /
  * pad = 20 dB less / default unity), the WIRE-CH -> input-index mapping, and the
  * RT-path multiply-only apply. No socket, no live rig. */
-#include "reac_slave.h"
+#include <reac/transport/reac_slave.h>
 #include <reac/reac_ctrl.h>
 
 #include <reac/reac.h>

@@ -22,7 +22,7 @@
  *     including the closed-loop case where the box is slaved to US and its counter
  *     slope is merely our own pace handed back.
  */
-#include "reac_pacer.h"
+#include <reac/transport/reac_pacer.h>
 #include <reac/reac_clock.h>
 #include <reac/reac_arbitration.h>
 

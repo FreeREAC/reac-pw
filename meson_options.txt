@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# (no options — the REAC decode core is provided by the libreac subproject/system lib.)
+# (the REAC decode core is provided by the libreac subproject/system lib.)
+
+option('libreac_transport_srcdir', type : 'string', value : '',
+  description : 'A sibling libreac checkouts transport/src, for tools/bench_hotpath.c include ' +
+                '"reac_rx.c" trick (dev-only; the benchmark is not build_by_default).')

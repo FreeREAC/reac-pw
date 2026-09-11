@@ -22,7 +22,7 @@
  * generic path and this byte-exact test are the SAME code. */
 #include <reac/reac_master.h>
 #include <reac/reac_ctrl.h>
-#include "reac_tx.h"
+#include <reac/transport/reac_tx.h>
 #include <reac/reac.h>
 #include <reac/reac_encode.h>
 

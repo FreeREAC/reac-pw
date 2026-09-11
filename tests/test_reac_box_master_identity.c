@@ -22,7 +22,7 @@
  *      that was wrong on the rig — untested.
  */
 #include <reac/reac_link_state.h>
-#include "reac_mac.h"
+#include <reac/transport/reac_mac.h>
 
 #include <stdio.h>
 #include <string.h>

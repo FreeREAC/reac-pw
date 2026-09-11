@@ -29,7 +29,7 @@
  * SKIPs without CAP_NET_RAW. reac_pacer_apply_rate's OWN bookkeeping (the
  * immediate flip to `pending`, the box/badge forget, the ended session) is
  * fully covered here without that dependency. */
-#include "reac_pacer.h"
+#include <reac/transport/reac_pacer.h>
 #include "reac_rate_cfg.h"
 #include <reac/reac_role.h>
 #include <reac/reac_ctrl.h>

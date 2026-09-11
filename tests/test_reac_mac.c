@@ -5,7 +5,7 @@
  * (reac_mac.h: a borrowed identity collides with the real device and makes
  * captures ambiguous). The ioctl path is exercised only via the pure
  * reac_mac_compose so the test needs no NIC. */
-#include "reac_mac.h"
+#include <reac/transport/reac_mac.h>
 
 #include <net/if_arp.h>   /* ARPHRD_ETHER, ARPHRD_LOOPBACK */
 #include <stdio.h>

@@ -17,7 +17,7 @@
  * supposed to be needed to obtain, so the sabotage check (revert to a single readlink(), as
  * openmixer's classifyBus does) passed GREEN against the wrong fixture — caught only by
  * actually running the sabotage, per false-signals discipline. */
-#include "reac_ifname.h"
+#include <reac/transport/reac_ifname.h>
 
 #include <stdio.h>
 #include <stdlib.h>

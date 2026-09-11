@@ -59,28 +59,28 @@
  * single-interface invocation stay BYTE-IDENTICAL to today: a lone listener
  * is the same code path it always was, just reached through an array of one. */
 
-#include "reac_ring.h"
-#include "reac_rx.h"
+#include <reac/transport/reac_ring.h>
+#include <reac/transport/reac_rx.h>
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
-#include "reac_slave.h"
+#include <reac/transport/reac_slave.h>
 #include "reac_role_cfg.h"   /* the reac.cfg.role vocabulary + refusal codes */
-#include "reac_role_swap.h"  /* the role swap's lifecycle answer (arbitration §8) */
-#include "reac_segment_ident.h"  /* the segment identity + a slave's own answer set */
+#include <reac/transport/reac_role_swap.h>  /* the role swap's lifecycle answer (arbitration §8) */
+#include <reac/transport/reac_segment_ident.h>  /* the segment identity + a slave's own answer set */
 #include "reac_watch.h"          /* what a fresh verdict means on a segment already up */
 #include <reac/reac_role.h>
 #include "reac_rate_cfg.h"
-#include "reac_mac.h"
+#include <reac/transport/reac_mac.h>
 #include <reac/reac_ctrl.h>        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 #include <reac/reac_link_state.h>  /* reac_box_master_model — the width-to-model row, 0.5.2 */
 #include <reac/reac_headamp_tx.h>  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
-#include "reac_conf.h"     /* the LAYERED config lookup + which layer answered */
+#include <reac/transport/reac_conf.h>     /* the LAYERED config lookup + which layer answered */
 #include <reac/reac_envflag.h>  /* one reading of a boolean knob, for every boolean knob */
-#include "reac_seglock.h"    /* one master per segment, across processes */
-#include "reac_ifscan.h"     /* which interfaces to sniff, which are segments */
-#include "reac_topo.h"       /* is this NIC a trunk, and which VLANs carry REAC */
-#include "reac_vlan.h"       /* the <parent>.<vid> netdevs the answer needs */
+#include <reac/transport/reac_seglock.h>    /* one master per segment, across processes */
+#include <reac/transport/reac_ifscan.h>     /* which interfaces to sniff, which are segments */
+#include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */
+#include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */

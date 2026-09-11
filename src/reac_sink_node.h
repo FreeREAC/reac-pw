@@ -21,7 +21,7 @@
 #ifndef REAC_SINK_NODE_H
 #define REAC_SINK_NODE_H
 
-#include "reac_ring.h"
+#include <reac/transport/reac_ring.h>
 
 struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */
 struct reac_pacer;             /* reac_pacer.h — the cadence + the clock discipline */

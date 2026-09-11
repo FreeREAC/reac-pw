@@ -21,8 +21,8 @@
  * a priority is REFUSED rather than coerced into one, and the layer that decided
  * is the layer reported. */
 
-#include "reac_rt.h"
-#include "reac_conf.h"
+#include <reac/transport/reac_rt.h>
+#include <reac/transport/reac_conf.h>
 
 #include <assert.h>
 #include <stdio.h>
