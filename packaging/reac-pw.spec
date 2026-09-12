@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.0}
+Version:        %{?version_override}%{!?version_override:1.0.1}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,18 +17,18 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.0.0
+BuildRequires:  pkgconfig(libreac) >= 1.0.1
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.0.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.0.1
 Requires:       pipewire
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.0.0
-Requires:       libreac-transport >= 1.0.0
+Requires:       libreac >= 1.0.1
+Requires:       libreac-transport >= 1.0.1
 
 %description
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
@@ -108,6 +108,10 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Sat Sep 12 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.1-1
+- On libreac 1.0.1: a slave that is not granted leaves the wire for 10 s after 4 s of
+  courtship, so a stagebox that boots beside it can enrol with the desk. Real-socket test
+  tests/courtship-backs-off.sh.
 * Fri Sep 11 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.0-1
 - 1.0: the PipeWire-native REAC endpoint on libreac 1.0.0 / libreac-transport 1.0.0 —
   trunk VLAN segments, master and slave at 44.1/48/96 kHz, head-amp on the wire.
