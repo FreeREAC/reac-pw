@@ -240,10 +240,11 @@ GPL-3.0-or-later. Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>.
   announces and streams as a 16-channel box and keeps streaming while ungranted; the desk keeps
   one box session per segment, fed by any upstream of that geometry, so it never notices the
   real box rebooted and never reopens the slot. With reac-pw off the segment the desk drops the
-  session in about seven seconds and the box enrols. Until the bounded-courtship change in
-  `reac-captures/m200-master-441k-2026-09-11/box-boot-with-slave-analysis.md` is rig-proven,
-  the order rule for recording a desk's segment is: the venue's boxes enrol first, reac-pw joins
-  last, and a box that power-cycles mid-show needs reac-pw off its segment to come back.
+  session in about seven seconds and the box enrols. 1.0.1 bounds an ungranted slave's
+  courtship (4 s on, 10 s off) and that is all it does: on the rig (2026-09-12) the desk granted
+  the courting slave while its box was away, and the box was blocked just the same. The rule for
+  recording a desk's segment stands: the venue's boxes enrol first, reac-pw joins last, and a
+  box that power-cycles mid-show needs reac-pw off its segment to come back.
 
 ## Install
 
