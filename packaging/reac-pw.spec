@@ -110,8 +110,10 @@ meson test -C _build
 %changelog
 * Sat Sep 12 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.1-1
 - On libreac 1.0.1: a slave that is not granted leaves the wire for 10 s after 4 s of
-  courtship, so a stagebox that boots beside it can enrol with the desk. Real-socket test
-  tests/courtship-backs-off.sh.
+  courtship (wire duty 100 % -> 37 %; real-socket test tests/courtship-backs-off.sh). This
+  does NOT let a stagebox re-enrol beside a present reac-pw slave (measured 2026-09-12: the
+  desk grants whichever slave courts while its box is away). The recorder rule in the README
+  stands.
 * Fri Sep 11 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.0-1
 - 1.0: the PipeWire-native REAC endpoint on libreac 1.0.0 / libreac-transport 1.0.0 —
   trunk VLAN segments, master and slave at 44.1/48/96 kHz, head-amp on the wire.
