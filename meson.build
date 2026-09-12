@@ -408,6 +408,30 @@ test('reac_box_master_rejoins',
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
+# --- real sockets: an UNGRANTED slave gets off the wire (libreac 1.0.1) ------
+#
+# The M-200 capture of 2026-09-11 (reac-captures 85c1e97): our ungranted slave courted the
+# desk for 93 s at 100 % duty, holding the desk's ONE box session open, so the S-1608
+# rebooting beside us never enrolled. libreac now bounds the cold-connect at 4 s and then
+# emits NOTHING for 10 s — longer than the 7.148 s the same desk held the slot with us
+# absent. libreac's tests/test_link.c pins the pure FSM; this runs the REAL ENGINE
+# (reac_slave_open/start on AF_PACKET) against a master that announces at wire rate and
+# never grants, and reads the silence OFF THE WIRE at the far end of a veth pair — the only
+# end where "we are off the wire" is a measurement rather than a self-report.
+#
+# Nested user+net namespaces, nothing leaves them; skips (77) where they are unavailable or
+# where the master could not hold its pacing. Timeout covers the 40 s run plus setup.
+courtship_probe = executable('courtship-probe',
+  ['tests/courtship_probe.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep],
+  install : false)
+
+test('reac_courtship_backs_off',
+  find_program('tests/courtship-backs-off.sh'),
+  args : [courtship_probe],
+  timeout : 120)
+
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
