@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.0',
+  version: '1.0.1',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -55,7 +55,7 @@ m_dep        = cc.find_library('m', required : false)
 # and the mismatch surfaced only when the installed binary hit `undefined
 # symbol` at exec. A floor that accepts both sides of an API break is not a
 # floor. Raising it to 0.7.0 makes the wrong library fail at CONFIGURE.
-libreac_dep = dependency('libreac', version : '>=1.0.0',
+libreac_dep = dependency('libreac', version : '>=1.0.1',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -64,7 +64,7 @@ libreac_dep = dependency('libreac', version : '>=1.0.0',
 # compiled here as src/*.c now live in this library, unchanged. No fallback subproject yet
 # -- a checkout without pkgconfig(libreac-transport) simply fails to configure, same as any
 # other required system dependency.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.0.0', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.0.1', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
