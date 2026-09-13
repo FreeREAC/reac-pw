@@ -343,7 +343,7 @@ int main(void)
 	 *    pinned here, on the SAME span, side by side:
 	 *
 	 *      - AUDIO fabric = 40 slots. The master advertises it: cfea [17] = 0x28
-	 *        (tests/test_reac_s1608.c's CAP_CFEA golden), and the ENROLL group map
+	 *        (tests/reac_m300_golden.inc's M300_CFEA golden), and the ENROLL group map
 	 *        spans exactly those 40 as 5 groups x 8. A box placed past slot 39 has
 	 *        channels the downstream frame cannot carry — they go missing only once
 	 *        real boxes are on the wire.
