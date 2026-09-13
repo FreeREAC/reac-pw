@@ -71,6 +71,9 @@ env:
   # A different id here would emit a second, colliding .repo file over the same
   # directory instead of adding entries to the one dnf already trusts.
   OPENMIXER_REPO_ID: openmixer
+  # The key file the tree serves next to its .repo: the public FreeREAC tree ships
+  # RPM-GPG-KEY-freereac; a private worker tree sets the variable to its own name.
+  OPENMIXER_REPO_KEYFILE: ${{ vars.OPENMIXER_REPO_KEYFILE || 'RPM-GPG-KEY-freereac' }}
   OPENMIXER_REPO_NAME: openmixer / FreeREAC
 
 jobs:
@@ -138,7 +141,7 @@ jobs:
             echo "enabled=1"
             echo "gpgcheck=1"
             echo "repo_gpgcheck=1"
-            echo "gpgkey=${OPENMIXER_REPO_BASEURL}/RPM-GPG-KEY-openmixer"
+            echo "gpgkey=${OPENMIXER_REPO_BASEURL}/${OPENMIXER_REPO_KEYFILE}"
             echo "metadata_expire=0"
             if [ -n "${OPENMIXER_REPO_READ_USERNAME}" ]; then
               echo "username=${OPENMIXER_REPO_READ_USERNAME}"
