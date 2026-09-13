@@ -31,7 +31,7 @@
  * (see struct reac_mixer_profile's doc comment in reac_master.h).
  *
  * Cross-check: the m300 idle row below is BYTE-IDENTICAL to the independently
- * committed GOLD_CFEA_M300 in tests/test_reac_master.c (captured M-300, real
+ * committed M300_CFEA in tests/reac_m300_golden.inc (captured M-300, real
  * desk 00:40:ab:c9:d8:5b) — confirming this table was derived from the same
  * generator model, not hand-rolled. m200/m5000 share the identical head/tail
  * shape by construction (gen_cfea is one function for all three profiles);

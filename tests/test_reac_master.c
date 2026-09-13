@@ -48,14 +48,10 @@
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
-/* Gold captured M-300/S-1608 control blocks, bytes [16:50] (type[2] + block[32]).
- * The master MUST stamp exactly these (our MAC substituted into the cfea). */
-static const uint8_t GOLD_CHANMAP[34] =
- { 0xcd,0xea,0x01,0x03,0x00,0x19,0x01,0xfe,0x00,0x00,0x00,0x28,0x00,0x01,0x28,0x00,0x02,0x28,0x00,0x03,0x28,0x00,0x04,0x28,0x00,0x05,0x28,0x00,0x06,0x28,0x00,0x00,0x00,0xb7 };
-/* cfea with the captured M-300 MAC embedded at template idx 11..16. The master
- * emits it with OUR MAC substituted + the checksum recomputed. */
-static const uint8_t GOLD_CFEA_M300[34] =
- { 0xcf,0xea,0xff,0xff,0x01,0x00,0x01,0x03,0x0d,0x01,0x04,0x00,0x40,0xab,0xc9,0xd8,0x5b,0x28,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xd4 };
+/* The captured M-300/S-1608 chanmap marker window and cfea announce, bytes
+ * [16:50] (type[2] + block[32]) — the master MUST stamp exactly these, with our
+ * MAC substituted into the cfea. ONE copy, shared with test_reac_s1608.c. */
+#include "reac_m300_golden.inc"
 /* The header and the final chunk of the scene push, transcribed off a real desk
  * LONG BEFORE the transfer was understood — which is what makes them an oracle
  * here: the chunker must reproduce both from the recovered body alone. */
@@ -63,7 +59,6 @@ static const uint8_t GOLD_SUB01[34] =
  { 0xcd,0xea,0x01,0x01,0x00,0x18,0x00,0x22,0xc8,0x31,0x32,0x33,0x34,0x01,0x00,0x00,0x00,0x04,0x00,0x01,0x80,0x02,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0xa7 };
 static const uint8_t GOLD_SUB02[34] =
  { 0xcd,0xea,0x01,0x02,0x00,0x0e,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0xe7 };
-#define ANNOUNCE_MAC_IDX 11
 
 /* The byte-verified zoneA-48k S-1608 cold-connect block (what a real box sends
  * as its JOIN; the master must echo it verbatim as the grant). */
@@ -178,7 +173,7 @@ int main(void)
 	CHK(m.alloc.width == 0 && m.grant_burst_len == 0);
 
 	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
-	 * fe frame (marker + 0x00..0x06), asserted below against GOLD_CHANMAP. */
+	 * fe frame (marker + 0x00..0x06), asserted below against M300_CHANMAP_FE. */
 	CHK(m.chanmap_nframes == 49);
 
 	/* ---- byte oracle ---------------------------------------------------- */
@@ -186,7 +181,7 @@ int main(void)
 	/* 1. the generated channel-map frame byte-matches the captured M-300 block
 	 * (no MAC in the chanmap -> EXACT) + checksum. */
 	build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, 0, planar);
-	CHK(memcmp(f + 16, GOLD_CHANMAP, 34) == 0);      /* type + block exact */
+	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);      /* type + block exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);          /* Sum[18..49]%256==0 */
 	CHK(f[16] == 0xcd && f[17] == 0xea);             /* cdea */
 	CHK(f[18] == 0x01 && f[19] == 0x03);             /* established sub-state */
@@ -198,10 +193,10 @@ int main(void)
 	 * recomputed checksum (identity fix — NEVER a cloned desk MAC). */
 	build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
 	CHK(f[16] == 0xcf && f[17] == 0xea);                 /* cfea */
-	CHK(memcmp(f + 16, GOLD_CFEA_M300, ANNOUNCE_MAC_IDX) == 0); /* head intact */
-	CHK(memcmp(f + 16 + ANNOUNCE_MAC_IDX, SRC, 6) == 0); /* OUR MAC embedded */
-	CHK(memcmp(f + 16 + ANNOUNCE_MAC_IDX + 6,           /* tail intact (pre-cksum) */
-	           GOLD_CFEA_M300 + ANNOUNCE_MAC_IDX + 6, 34 - ANNOUNCE_MAC_IDX - 6 - 1) == 0);
+	CHK(memcmp(f + 16, M300_CFEA, M300_CFEA_MAC_IDX) == 0); /* head intact */
+	CHK(memcmp(f + 16 + M300_CFEA_MAC_IDX, SRC, 6) == 0); /* OUR MAC embedded */
+	CHK(memcmp(f + 16 + M300_CFEA_MAC_IDX + 6,           /* tail intact (pre-cksum) */
+	           M300_CFEA + M300_CFEA_MAC_IDX + 6, 34 - M300_CFEA_MAC_IDX - 6 - 1) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	CHK(f[16 + 17] == 0x28 && f[16 + 18] == 0x08);       /* inCh 40, outCh 8 */
 
@@ -387,7 +382,7 @@ int main(void)
 
 	/* 5. chanmap window 0 (the fe frame) lists the marker + channels 0x00..0x06. */
 	{
-		const uint8_t *blk = GOLD_CHANMAP + 2;   /* the 32-byte block */
+		const uint8_t *blk = M300_CHANMAP_FE + 2;   /* the 32-byte block */
 		CHK(blk[5] == 0xfe);                     /* slot 0 = section marker */
 		for (int c = 0; c <= 6; c++) {
 			const uint8_t *t = blk + 5 + (c + 1) * 3;
