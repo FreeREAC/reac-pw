@@ -7,7 +7,7 @@ Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 reac-pw puts the REAC fabric into the PipeWire graph as one node:
 `reac:capture`, an `Audio/Source` with mono float output ports
-`capture_01`..`capture_NN` (see [DESIGN.md](../DESIGN.md)). As a master it
+`capture_01`..`capture_NN` (see the README's [Node model](../README.md#node-model)). As a master it
 is sized and labelled to the RECOGNIZED box's real input width — learned
 from the box's own config-announce, never configured — so a saved patch
 sees the box rather than the fabric (`src/reac_source_node.h`); it is the
@@ -87,8 +87,8 @@ counter-slope ppm into `io_rate_match`, no work for you).
 Clock note: by default `reac:capture` is a *follower* (the DAC/graph
 drives, PipeWire resamples REAC into it). For a pure monitor you can run
 REAC as the graph **driver** instead so everything is sample-locked to
-the desk — see DESIGN.md "follower vs driver". That is a node flag, not
-a different output.
+the desk — see the README's node model, "follower vs driver". That is a node
+flag, not a different output.
 
 ---
 
@@ -234,8 +234,7 @@ REAC is 40 ch; MADI carries 64. Channels 1..40 map straight across;
 41..64 stay silent (or carry whatever else you patch in the graph).
 PipeWire resamples REAC↔card if the MADI clock differs, or — better for
 MADI — run the card as the graph driver and word-clock the rig and the
-MADI card off one house clock (Tier B in DESIGN.md) for a sample-locked,
-resampler-free path.
+MADI card off one house clock for a sample-locked, resampler-free path.
 
 ---
 
