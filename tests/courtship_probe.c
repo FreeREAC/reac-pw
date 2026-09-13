@@ -29,6 +29,7 @@
  */
 #include <reac/reac.h>
 #include <reac/reac_ctrlblk.h>
+#include <reac/reac_master.h>
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_slave.h>
 
@@ -96,6 +97,23 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	/* the M-200 of the capture */
 	static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0xc9, 0xcc, 0x03 };
+
+	/* THE ANNOUNCE COMES FROM libreac's OWN GENERATOR. This used to hand-write the
+	 * cfea head, then stamp `b[18]=0x08; b[19]=0x01; b[20]=0x00; b[21]=0x01` — a
+	 * second copy of the protocol living in a test, and a wrong one: [19] is the
+	 * PACE CODE, so a probe pacing 4000 fps announced 96 kHz, and [20:22] is the
+	 * enrolled-box count, so a master whose whole purpose is to grant NOTHING
+	 * announced one enrolled box. Both are named defects of our own emitters in
+	 * reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base.md §2.
+	 * reac_master_init generates the block from the console config; an idle master
+	 * with no box is exactly what this probe is, so its announce is taken as
+	 * generated and never patched. */
+	static struct reac_master ann;
+	struct reac_console_cfg ann_cfg = { .out_channels = 8,   /* the idle width in
+	                                                          * force: nothing is
+	                                                          * enrolled, ever    */
+	                                    .console_field = reac_pace_code(fps) };
+	reac_master_init(&ann, SRC, &ann_cfg, fps);
 
 	int ifindex = 0;
 	int tx = open_packet(iface, &ifindex);
@@ -175,16 +193,9 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 			break;
 		/* THE cfea ANNOUNCE, ~1/s: what makes this peer a MASTER to the slave's
 		 * classifier (reac_fsm.c is_master_frame) without ever granting anything.
-		 * Same shape fake_box_master.c stamps, re-checksummed after the stamp. */
+		 * Stamped from the generated block and re-checksummed over the frame. */
 		if (sent % fps == fps / 4) {
-			uint8_t *b = f + 16;
-			static const uint8_t H[11] = { 0xcf, 0xea, 0xff, 0xff, 0x01, 0x00,
-			                               0x01, 0x03, 0x0d, 0x01, 0x04 };
-			memcpy(b, H, sizeof H);
-			memcpy(b + 11, SRC, 6);
-			b[17] = (uint8_t)N_CH; b[18] = 0x08; b[19] = 0x01;
-			b[20] = 0x00; b[21] = 0x01;
-			memset(b + 22, 0, 12);
+			memcpy(f + 16, ann.announce_blk, sizeof ann.announce_blk);
 			reac_ctrl_checksum_apply(f);
 			announces++;
 		}
