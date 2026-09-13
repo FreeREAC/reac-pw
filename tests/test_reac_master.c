@@ -226,9 +226,21 @@ int main(void)
 		CHK(f[16 + 18] == 0x08);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
-		/* the re-stamp must not regress the box-count field: recognizing a NEW
-		 * box model while already GRANTING/ESTABLISHED (a warm relink) must keep
-		 * announcing count=1, not fall back to the idle count=0. */
+		/* THE WIDTH TRACKS RECOGNITION, THE COUNT TRACKS THE GRANT — two different
+		 * instants, measured ~2 s apart on an M-200 bouncing an S-1608 at 44.1 kHz
+		 * (reac-captures/m200-enrol-441k-2026-09-13/analysis.md, timeline):
+		 *
+		 *   box absent           cfea width 0x08, count 0
+		 *   box's commit report  width back to 0x10, count STILL 0
+		 *   the grant burst
+		 *   +0.5 s               count 0 -> 1
+		 *
+		 * So a recognition that lands mid-GRANTING — the cold path, during the dwell
+		 * enter_granting exists to hold — must still announce count 0: nothing is
+		 * enrolled until a grant has left the wire. The count rises at
+		 * enter_established and nowhere else, and a later recognition while
+		 * ESTABLISHED (a warm relink, a model change) keeps its 1. Both arms are
+		 * asserted below. */
 		/* THE PUSH RUNS TO COMPLETION BEFORE THE GRANT. A JOIN that lands before the
 		 * box has the whole scene is HELD — not dropped, not honoured — and taken on
 		 * the final chunk. Both halves of that law are asserted here, because it is
@@ -251,8 +263,40 @@ int main(void)
 		CHK(mw.state == REAC_M_GRANTING);
 		reac_master_set_box(&mw, 8, 8, S0808_BASE);              /* recognized mid-grant */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01); /* box-count stays latched */
+		CHK(f[16 + 18] == 0x08);                       /* the width follows at once */
+		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x00); /* ungranted: count still 0 */
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+
+		/* AND IT RISES WHEN THE GRANT HAS GONE OUT. Run the ENROLL->grant dwell
+		 * and the whole 32-block burst: this master commits to ESTABLISHED on
+		 * delivery rather than on a post-burst box unicast (reac_master.c's
+		 * GRANT_DELIVERED edge), and the count is re-stamped there and nowhere
+		 * else. Every slot of the dwell and the burst is checked, not just the
+		 * ends — the window the M-200 announces as ungranted is the whole of it. */
+		{
+			uint16_t c; int ix;
+			long budget = mw.grant_dwell +
+			              (long)mw.grant_burst_len * REAC_M_GRANT_STRIDE + 8;
+			while (mw.state == REAC_M_GRANTING && budget-- > 0) {
+				(void)reac_master_next(&mw, &c, &ix);
+				if (mw.state == REAC_M_GRANTING)
+					CHK(mw.announce_blk[20] == 0x00 &&
+					    mw.announce_blk[21] == 0x00);
+			}
+			CHK(budget > 0);                  /* the burst finished inside it */
+		}
+		CHK(mw.state == REAC_M_ESTABLISHED);
+		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
+		CHK(f[16 + 18] == 0x08);                       /* still the S-0808's width */
+		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01); /* count rises at the grant */
+		CHK(reac_ctrl_checksum_verify(f) == 0);
+
+		/* a warm relink (a DIFFERENT model recognized while established) moves the
+		 * width and keeps the 1 — the count must not fall back to the idle 0. */
+		reac_master_set_box(&mw, 16, 8, S1608_BASE);
+		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
+		CHK(f[16 + 18] == 0x10);
+		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 	}
 
