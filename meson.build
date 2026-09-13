@@ -459,7 +459,7 @@ test('reac_tap_sends_nothing',
 # nothing configured, and that a bare `reac-pw` gets PAST argument handling.
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
-  args : [reac_pw_exe],
+  args : [reac_pw_exe, meson.current_source_dir() / 'packaging' / 'reac-pw.service'],
   timeout : 30)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------

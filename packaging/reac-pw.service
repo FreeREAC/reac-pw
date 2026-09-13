@@ -18,11 +18,18 @@ Type=simple
 # interface, and every setting comes from the one conf reac_conf.h reads,
 # %h/.config/reac-pw/reac-pw.env (host-wide REAC_MIXER/REAC_RATE/REAC_ROLE,
 # and per-segment REAC_<KEY>_<segment> above them); packaging/reac-pw.conf is
-# the commented worked example for this rig's own two segments. `%h` is systemd's
-# specifier for the invoking user's home — this is a PipeWire client and must
-# run in that user's session (a bare system unit with no HOME cannot find
-# either file, or the user's PipeWire socket).
-EnvironmentFile=%h/.config/reac-pw/reac-pw.env
+# the commented worked example for this rig's own two segments. This unit needs
+# HOME, so it is a USER unit — a bare system unit with no HOME cannot find either
+# file, or the user's PipeWire socket.
+#
+# NO EnvironmentFile= (#100). The DAEMON reads that file, through reac_conf's own
+# layered lookup, and it is the only reader that can: a per-segment key on a VLAN
+# is `REAC_ROLE_enp131s0.11`, and A DOT IS NOT LEGAL in a systemd environment
+# variable name. Measured 2026-09-14 on reac-pw 1.0.2: systemd logged `Ignoring
+# invalid environment assignment` once per VLAN segment on every start, so the
+# line published nothing the daemon did not already have and printed a false
+# `invalid` over every pin that was in fact being applied. One store, one reader —
+# and the reader is the daemon.
 ExecStart=/usr/bin/reac-pw
 # raw 0x8819 capture/emit + VLAN sub-interface management + the SCHED_FIFO
 # pacer, all WITHOUT running as root: FILE capabilities on the binary
