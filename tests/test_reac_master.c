@@ -657,12 +657,11 @@ int main(void)
 	       "ESTABLISHED; backward-only fallbacks; continuous 5-message cadence both "
 	       "states; free-running counter)\n");
 
-	/* ---- task #156: 96 kHz OHRCA emit is PARAMETERIZED off the 48k path ------
+	/* ---- task #156: 96 kHz emit is PARAMETERIZED off the 48k path -----------
 	 * "96k is not anything different, same state diagram, doubled frequency" —
-	 * verify the master rate follows the mixer profile's console_field, NOT a
-	 * compile-time 48k assumption, and that the frame SHAPE (REAC_FRAME_BYTES)
-	 * is unaffected by either the profile or the rate (the #156 trailer RE:
-	 * reac_tx.h / tests/test_reac_tx.c). */
+	 * verify the master rate follows --rate, NOT a compile-time 48k assumption,
+	 * and that the frame SHAPE (REAC_FRAME_BYTES) is unaffected by either the
+	 * profile or the rate (the #156 trailer RE: reac_tx.h / tests/test_reac_tx.c). */
 	{
 		const struct reac_mixer_profile *m200 = reac_mixer_profile_by_name("m200");
 		const struct reac_mixer_profile *m300 = reac_mixer_profile_by_name("m300");
@@ -673,15 +672,9 @@ int main(void)
 
 		int clamped;
 
-		/* THE REQUESTED RATE IS HONOURED, for every desk profile.
-		 *
-		 * This block used to assert the opposite: that a V-Mixer-identified
-		 * master was forced to 48 kHz and --rate 96000 was reported as clamped.
-		 * That encoded an INFERENCE (rate rides the desk identity) which was
-		 * never demonstrated; the operator reports from the hardware that a
-		 * stagebox adapts to the rate it is driven at, whatever console family
-		 * the master claims. The clamp is gone and these assertions now pin the
-		 * honest contract, so the old belief cannot creep back (issue #73).
+		/* THE REQUESTED RATE IS HONOURED, for every desk profile: a stagebox
+		 * adapts to the rate it is driven at, whatever desk the master claims
+		 * to be, so which profile is selected never clamps --rate (issue #73).
 		 *
 		 * `clamped` is retained in the signature and is always 0 — kept so a
 		 * real, demonstrated rule would have one place to live. */
@@ -732,7 +725,7 @@ int main(void)
 		CHK(mm5000.cycle_len == mm200.cycle_len * 2);      /* fps doubled -> cycle doubled */
 		CHK(mm5000.chanmap_off == mm200.chanmap_off * 2);
 
-		printf("OK: --mixer m5000 resolves 96 kHz (48k for V-Mixer profiles "
+		printf("OK: --mixer m5000 resolves 96 kHz (48k for other profiles "
 		       "unchanged), fps = rate/12 (4000 @48k / 8000 @96k), frame size "
 		       "stays REAC_FRAME_BYTES for both\n");
 	}

@@ -7,8 +7,8 @@
  * 16+i (same convention as reac_m200_golden.inc / reac_grant_golden.inc).
  * Within that: [0:11] fixed head; [11:17] MAC (idx CONF_MAC_IDX=11);
  * [17]=0x28 fixed 40-slot total; [18]=box INPUT width (idle default 0x08,
- * see reac_master.c's gen_cfea comment); [19]=console_field — the OHRCA
- * discriminator (V-Mixer M-200/M-300 = 0x00, OHRCA M-5000 = 0x01);
+ * see reac_master.c's gen_cfea comment); [19]=console_field — the pace-code
+ * discriminator (48 kHz, M-200/M-300 = 0x00; 96 kHz, M-5000 = 0x01);
  * [20:22]=BE enrolled-box-count; [33]=cksum (Sum(block[18:50]) == 0 mod 256,
  * i.e. Sum(template[2:33]) == 0 mod 256).
  *
@@ -22,7 +22,7 @@
  * THE FINDING this pins: three real consoles (M-200, M-300, M-5000) differ
  * on the wire in the source MAC (the L2 identity), this cfea console_field
  * byte, the ENROLL console byte (same 0/1) — and, CORRECTED 2026-08-29, the
- * chanmap section marker's family byte (`fe 01 00` on an M-5000, `fe 00 00`
+ * chanmap section marker's pace-code byte (`fe 01 00` on an M-5000, `fe 00 00`
  * on an M-200/M-300; measured across 5 captures, see test_reac_conformance.c).
  * This comment previously read "exactly TWO bytes"; that held only because the
  * chanmap arm compared our M-200-shaped map against an M-200 golden for every

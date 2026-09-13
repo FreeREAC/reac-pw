@@ -13,7 +13,7 @@ over both when given.
 |---|---|---|
 | `REAC_TX=IFNAME` | The REAC TX NIC for this segment (master: the downstream sink; slave: the upstream return + handshake socket). | the same interface as the live/RX NIC |
 | `REAC_ROLE=master\|slave\|auto` / `REAC_ROLE_<segment>` | Which end of the desk↔stagebox pairing to present on a segment. `auto` listens first: a desk mastering the wire is joined as a slave, a wire with a box and no master is taken as master after a 3 s hunt and granted, a stagebox strapped to master is refused and logged. The per-segment key overrides the wire; the bare key is only a floor for a segment nobody has heard yet. | `auto` |
-| `REAC_MIXER=m200\|m300\|m5000` | Master role: which desk generation to speak as. Sets the console-model byte only — grants are box-defined, so any box locks to any profile. | `m200` |
+| `REAC_MIXER=m200\|m300\|m5000` | Master role: which desk name reac-pw logs as. Does not set the wire's pace-code byte — that comes from `--rate` alone, and grants are box-defined, so any box locks regardless of profile. | `m200` |
 | `REAC_NAME=NAME` | PipeWire node suffix (`reac-capture.NAME`, `reac-playback.NAME`) so more than one segment can coexist in the graph. | the interface name |
 | `REAC_HEADAMP="CH:PARAM:VALUE ..."` | Master role: the per-channel head-amp table the master re-asserts to the box (space or comma separated). `CH` is the head-amp channel, `PARAM` is `phantom`\|`pad`\|`sens`, `VALUE` is 0/1 for phantom/pad or a raw SENS code. | unset (nothing re-asserted) |
 | `REAC_BOX_CHANNELS=N` | Slave role: our own declared input width (even, 2..40; 8 = S-0808, 16 = S-1608, 32 = S-4000S). Sets the cold-connect/upstream/heartbeat width. | 16 |

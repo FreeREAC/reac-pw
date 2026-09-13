@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* The chanmap section marker carries the CONSOLE FAMILY, not a constant.
+/* The chanmap section marker carries the PACE CODE, not a constant.
  *
  * A real M-5000 writes the marker slot `fe 01 00` where an M-200/M-300 writes
  * `fe 00 00` (reac-captures: m5000-s1608-96k / m5000-s0808-96k against the m200i
- * 48k sessions, 2026-08-29). reac-pw emitted the V-Mixer form at every rate, so a
- * box driven under our OHRCA impersonation — cfea[19] = 1 since 0c0f4c9 — saw an
- * OHRCA console announce over an M-200's channel map. The S-1608 (fw 2.200) has
- * never followed that impersonation to 96 kHz; the S-0808 (fw 1.003) does.
+ * 48k sessions, 2026-08-29). reac-pw emitted the 48 kHz form at every rate, so a
+ * box driven at cfea[19] = 1 (96 kHz) since 0c0f4c9 saw a 96 kHz announce over
+ * an M-200's 48 kHz channel map. The S-1608 (fw 2.200) has never followed that
+ * mismatch to 96 kHz; the S-0808 (fw 1.003) does.
  *
  * The two properties this pins are equally load-bearing:
  *
- *   1. OHRCA (console_field 1) emits `fe 01 00`.
- *   2. V-Mixer (console_field 0) is BYTE-IDENTICAL to before, and the two builds
+ *   1. console_field 1 (96 kHz) emits `fe 01 00`.
+ *   2. console_field 0 (48 kHz) is BYTE-IDENTICAL to before, and the two builds
  *      differ in EXACTLY the marker byte — one byte, in the one window that holds
  *      the marker, checksum aside. This is an addition to what we can say, not a
  *      change to what we already said: tests/test_reac_s1608.c pins the captured
@@ -63,8 +63,8 @@ int main(void)
 	CHK(vmix.chanmap_nframes == ohrca.chanmap_nframes);
 	CHK(vmix.chanmap_nframes > 1);
 
-	/* 1. The marker exists, and carries the family. Neither build may emit the
-	 *    other's form — a generator that ignored cfg would fail both arms. */
+	/* 1. The marker exists, and carries the pace code. Neither build may emit
+	 *    the other's form — a generator that ignored cfg would fail both arms. */
 	int v_markers = count_marker_slots(&vmix, 0x00);
 	int o_markers = count_marker_slots(&ohrca, 0x01);
 	CHK(v_markers > 0);
@@ -73,8 +73,8 @@ int main(void)
 	CHK(count_marker_slots(&ohrca, 0x00) == 0);
 
 	/* 2. EXACTLY the marker byte moves. Walk every window byte-for-byte: the
-	 *    only permitted differences are the marker's family byte and the block
-	 *    checksum that covers it. */
+	 *    only permitted differences are the marker's pace-code byte and the
+	 *    block checksum that covers it. */
 	int diff_family = 0;
 	for (int f = 0; f < vmix.chanmap_nframes; f++) {
 		const uint8_t *a = vmix.chanmap[f], *b = ohrca.chanmap[f];
@@ -97,7 +97,7 @@ int main(void)
 	}
 	CHK(diff_family == v_markers);
 
-	printf("ohrca chanmap: %d marker slots, %d family bytes flipped, rest identical\n",
+	printf("ohrca chanmap: %d marker slots, %d pace-code bytes flipped, rest identical\n",
 	       v_markers, diff_family);
 	return 0;
 }

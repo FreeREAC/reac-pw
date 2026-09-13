@@ -1687,8 +1687,9 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		.cpu = -1,        /* no pin by default (set on a dedicated rig host) */
 		.src_mac = n->src,
 		/* The master's OWN identity, and NO BOX (2026-08-05). The box comes from
-		 * the wire; the console_field is the emulated mixer model, from the
-		 * --mixer profile (default V-Mixer). This line used to read
+		 * the wire; console_field here is the --mixer profile's default pace
+		 * code (default m200, 48 kHz) — the pacer overwrites it from --rate
+		 * before it reaches the wire. This line used to read
 		 * REAC_CONSOLE_CFG_S1608, whose in_channels=16 was the real origin of
 		 * every head-amp slot address until a box was recognized — a hard-coded
 		 * box, reachable from no flag and visible in no log. */
