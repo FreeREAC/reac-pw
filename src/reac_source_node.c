@@ -306,6 +306,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               int sample_rate,
                                               int channels,
                                               const char *inst,
+                                              const char *segment,
                                               const char *label,
                                               int master_role,
                                               struct reac_pacer *pacer,
@@ -383,7 +384,8 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	 * which node is the WRITE door is a different question, and role_swap still
 	 * answers it (see the role_swap field's comment). */
 	if (props)
-		pw_properties_set(props, REAC_PROP_SEGMENT, reac_segment_name(inst));
+		pw_properties_set(props, REAC_PROP_SEGMENT,
+		                  reac_segment_name(segment && *segment ? segment : inst));
 
 	n->stream = pw_stream_new_simple(loop, "reac:capture", props, &stream_events, n);
 	if (!n->stream) {
@@ -689,7 +691,7 @@ int reac_source_node_ensure(struct reac_source_node **slot,
 	 * graph-clock sample that stopped at the first box swap would be a reference that
 	 * quietly disappeared — and it is set INSIDE the constructor, before the connect. */
 	*slot = reac_source_node_new(cfg->loop, cfg->ring, cfg->rx, cfg->sample_rate,
-	                             want, cfg->inst, label, cfg->master_role,
+	                             want, cfg->inst, cfg->segment, label, cfg->master_role,
 	                             cfg->pacer, cfg->clock_ref);
 	return *slot ? 0 : -1;
 }

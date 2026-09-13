@@ -36,6 +36,17 @@ struct reac_source_node_cfg {
 	struct reac_rx   *rx;
 	int               sample_rate;
 	const char       *inst;         /* per-instance node suffix (may be NULL)   */
+	/* WHICH SEGMENT THIS NODE BELONGS TO, when that is not the same string as the
+	 * node's own suffix. NULL (every role but `tap`) means it IS `inst`, which is
+	 * the one-node-per-segment case every other role has.
+	 *
+	 * A TAP SERVES SEVERAL NODES OFF ONE SEGMENT — the desk's downstream and one
+	 * per box MAC — so their suffixes must differ (`<seg>` and `<seg>.<mac>`) while
+	 * `reac.segment` must NOT: a console keys a stagebox off that property, and
+	 * three nodes claiming three segments where there is one is the same class of
+	 * defect as the capture node whose reac.segment read `null` on 2026-09-08. The
+	 * NAME is an address; the SEGMENT is an identity. */
+	const char       *segment;
 	int               master_role;  /* stamp the create-time badge props (#154) */
 	/* THE GRAPH-CLOCK SAMPLE'S OTHER DOOR. This node is the one the console links
 	 * (a box's inputs are what an operator patches first), so it is often the only
@@ -84,12 +95,15 @@ struct reac_source_node_cfg {
 /* `pacer` / `clock_ref`: the segment's clock discipline and the operator's designation,
  * taken HERE rather than assigned after the call, because the RT callback reads them and
  * pw_stream_connect can start it before a caller's next line runs. Both may be NULL. */
+/* `segment` overrides the `reac.segment` identity; NULL means it is `inst` (see the
+ * cfg field of the same name for why a tap needs the two to differ). */
 struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
                                               struct reac_ring *ring,
                                               struct reac_rx *rx,
                                               int sample_rate,
                                               int channels,
                                               const char *inst,
+                                              const char *segment,
                                               const char *label,
                                               int master_role,
                                               struct reac_pacer *pacer,

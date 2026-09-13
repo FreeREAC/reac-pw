@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.1',
+  version: '1.0.2',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -430,6 +430,23 @@ courtship_probe = executable('courtship-probe',
 test('reac_courtship_backs_off',
   find_program('tests/courtship-backs-off.sh'),
   args : [courtship_probe],
+  timeout : 120)
+
+# --- REAL SOCKETS: a tap-role segment transmits ZERO frames ------------------
+#
+# The eighth amendment's owed proof, minus the rig half: the wire-level assertion that
+# the passive role puts nothing on a segment, measured from the far end of a veth with
+# the real slave engine as its control (tests/tap-sends-nothing.sh says why an absence
+# needs one).
+tap_probe = executable('tap-probe',
+  ['tests/tap_probe.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep],
+  install : false)
+
+test('reac_tap_sends_nothing',
+  find_program('tests/tap-sends-nothing.sh'),
+  args : [courtship_probe, tap_probe],
   timeout : 120)
 
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
