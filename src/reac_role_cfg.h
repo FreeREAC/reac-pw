@@ -104,6 +104,15 @@ struct spa_pod;
  * reads REAC_ROLE_STATE_HUNTING for as long as the hunt lasts. */
 #define REAC_ROLE_STATE_REESTABLISH_PENDING "role_reestablish_pending"
 
+/* THE TAP'S OWN ANSWER: serving, asserting nothing, and it will never read
+ * `applied`. `applied` means the engine PERFORMED a role change on the wire, and
+ * a tap performs none — it opens no TX socket, announces nothing and is granted
+ * nothing (openmixer master-arbitration, eighth amendment, 2026-09-13). A tap
+ * that published `applied` would be claiming the one thing about itself that is
+ * definitionally false; one that published `role_hunting` would be claiming a
+ * courtship it is defined by not running. So it publishes neither. */
+#define REAC_ROLE_STATE_TAP "role_tap"
+
 /* Why a `reac.cfg.role` assertion was refused. REFUSE_NONE doubles as the
  * published state once a refusal is superseded by an accepted role. There is
  * only one refusal today: role has no drivability-style constraint the way

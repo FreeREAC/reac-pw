@@ -64,6 +64,7 @@
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
 #include <reac/transport/reac_slave.h>
+#include <reac/transport/reac_tap.h>       /* the PASSIVE role: serve what is heard, send nothing */
 #include "reac_role_cfg.h"   /* the reac.cfg.role vocabulary + refusal codes */
 #include <reac/transport/reac_role_swap.h>  /* the role swap's lifecycle answer (arbitration §8) */
 #include <reac/transport/reac_segment_ident.h>  /* the segment identity + a slave's own answer set */
@@ -389,7 +390,13 @@ static void usage(const char *p)
 	  "                this ONE daemon — see \"auto-spine\" below.\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
 	  "                slaves to us) | slave (an external master drives; we lock to its\n"
-	  "                cadence + return our inputs upstream)\n"
+	  "                cadence + return our inputs upstream) | tap (PASSIVE: serve what\n"
+	  "                is heard and transmit NOTHING — no announce, join, grant or\n"
+	  "                segment lock. One reac-capture node per heard stream: the\n"
+	  "                master downstream as reac-capture.<segment>, each box as\n"
+	  "                reac-capture.<segment>.<mac6>. Useful on a switch MIRROR port\n"
+	  "                beside a real desk, where anything we transmit stops that\n"
+	  "                desk's own box from enrolling.)\n"
 	  "  --rate R      the REAC sample rate: 44100, 48000 or 96000.\n"
 	  "                Default 96000 in the MASTER role (a master DEFINES the rate;\n"
 	  "                there is nothing to detect on a segment nobody is driving).\n"
@@ -672,6 +679,12 @@ struct listener_cfg {
 	unsigned wire_channels;
 	int join_box_master;
 	int door_only;
+	/* THE PASSIVE ROLE (openmixer master-arbitration, eighth amendment, 2026-09-13).
+	 * `REAC_ROLE_<segment>=tap` or `--role tap`: serve what is heard and TRANSMIT
+	 * NOTHING — no announce, no join, no grant, no seglock, no TX socket. It is not a
+	 * value of `role` above because `enum reac_role` is the WIRE's two ends and a tap
+	 * presents neither; it rides beside it, gated by reac_role_intent_transmits. */
+	int tap;
 	uint8_t rival_mac[6];
 	int rival_mac_set;
 	const struct reac_box_model *pin_model;
@@ -703,6 +716,16 @@ struct listener {
 
 	struct reac_slave slave;
 	int slave_open;
+
+	/* THE TAP ENGINE — one passive receiver, one source node per heard stream. Its
+	 * own rings and feeders live inside `tap` (reac_tap.h), which is why none of the
+	 * single-stream fields above are used in this role: a tap serves N streams and
+	 * the listener's `ring`/`rx`/`src` trio can hold one. */
+	struct reac_tap tap;
+	int tap_open;
+	struct reac_source_node *tap_src[REAC_TAP_MAX_STREAMS];
+	struct reac_source_node_cfg tap_src_cfg[REAC_TAP_MAX_STREAMS];
+	char tap_inst[REAC_TAP_MAX_STREAMS][IFNAMSIZ + 16];
 
 	struct reac_seglock seglock;
 
@@ -783,9 +806,26 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			c->role = reac_role_from_intent(i);
 			c->role_pinned = (i != REAC_ROLE_INTENT_AUTO &&
 			                  c->role_layer == REAC_CONF_SEGMENT);
+			/* `tap` IS PER-SEGMENT ONLY. A bare REAC_ROLE describes every segment
+			 * on the host and cannot know that one of them is a mirror port; taking
+			 * it from the floor would silence every wire this host drives on the
+			 * strength of a key that was never about any of them. Refused loudly,
+			 * never downgraded to a role that transmits. */
+			c->tap = (i == REAC_ROLE_INTENT_TAP);
+			if (c->tap && c->role_layer != REAC_CONF_SEGMENT) {
+				fprintf(stderr, "reac-pw: [%s] REAC_ROLE=tap from %s is REFUSED — "
+				        "tap is a fact about ONE wire (a mirror port) and only "
+				        "REAC_ROLE_<segment> can say it. This segment keeps auto.\n",
+				        iface, reac_conf_layer_name(c->role_layer));
+				c->tap = 0;
+				c->role_intent = REAC_ROLE_INTENT_AUTO;
+				c->role = reac_role_from_intent(REAC_ROLE_INTENT_AUTO);
+				c->role_pinned = 0;
+				c->role_layer = REAC_CONF_NONE;
+			}
 		} else {
 			fprintf(stderr, "reac-pw: [%s] ignoring REAC_ROLE='%s' from %s "
-			        "(master|slave|auto)\n",
+			        "(master|slave|auto|tap)\n",
 			        iface, v, reac_conf_layer_name(c->role_layer));
 			c->role_layer = REAC_CONF_NONE;
 		}
@@ -992,6 +1032,165 @@ static void listener_publish_segment(struct listener *L)
  * (already reported on stderr, and everything this call opened is already
  * cleaned up). A refusal here does not necessarily end the daemon — see
  * main()'s single-vs-multi distinction at the call site. */
+/* --- THE TAP ROLE: serve what is heard, transmit nothing ---------------------
+ *
+ * openmixer master-arbitration, eighth amendment (2026-09-13). Everything the other
+ * roles do to the wire is ABSENT here and absent by construction, not by a flag that
+ * could be read the wrong way: no reac_tx, no reac_pacer, no reac_slave, no
+ * reac_seglock, no reac-playback sink. The whole receive path is reac_tap
+ * (<reac/transport/reac_tap.h>), which classifies the segment and hands back one ring
+ * and one feeder per heard stream.
+ *
+ * WHAT IT PUBLISHES. One reac-capture node per stream:
+ *
+ *   reac-capture.<segment>              the desk's 40-channel downstream
+ *   reac-capture.<segment>.<mac6>       one per box source MAC, at the box's own width
+ *
+ * and every one of them carries reac.segment = <segment>, because they are one
+ * segment's nodes and a console keys a stagebox off that identity. The NAME is an
+ * address, the SEGMENT is an identity (reac_source_node_cfg.segment).
+ *
+ * WHICH NODE ANSWERS FOR THE SEGMENT: the master stream's, and only it. Two nodes
+ * publishing the same segment's state would be two doors onto one fact.
+ */
+
+/* The short form of a box's MAC for a node name: the last three octets, which is what
+ * an operator reads off a Roland chassis and what distinguishes two boxes on one
+ * segment. Not an identity — reac.box-mac carries the whole address. */
+static void tap_mac_short(char *out, size_t cap, const uint8_t mac[6])
+{
+	snprintf(out, cap, "%02x%02x%02x", mac[3], mac[4], mac[5]);
+}
+
+/* Publish the segment's answer from the tap's own evidence. A tap has no engine and no
+ * handshake, so the two facts it has are the MASTER STREAM (its source MAC and that its
+ * frames are arriving) and the measured rate.
+ *
+ * `master_state` is DERIVED, not asserted. The amendment says a tap reads `foreign`, and
+ * it does — for as long as the master is being heard. Publishing the string
+ * unconditionally would leave a desk that was unplugged reading `foreign` forever, and
+ * absence is a fact this codebase publishes rather than hides (reac_segment_heard). */
+static void listener_publish_tap(struct listener *L)
+{
+	const struct reac_tap_stream *m = reac_tap_survey_master(&L->tap.survey);
+	struct reac_source_node *door = NULL;
+	for (unsigned i = 0; i < L->tap.n; i++)
+		if (L->tap.survey.stream[i].kind == REAC_TAP_STREAM_MASTER) {
+			door = L->tap_src[i];
+			break;
+		}
+	if (!door || !m)
+		return;
+
+	int heard = reac_segment_heard_step(
+		&L->heard,
+		atomic_load_explicit(&L->tap.rx[0].frames_ok, memory_order_relaxed),
+		REAC_SEGMENT_HEARD_QUIET_TICKS);
+
+	struct reac_segment_answer answer;
+	reac_segment_answer_slave(&answer, heard, reac_mac48_pack(m->src),
+	                          L->tap.sample_rate, m->channels);
+	char role_s[4];
+	snprintf(role_s, sizeof role_s, "%d", REAC_CFG_ROLE_VALUE_SLAVE);
+	reac_source_node_publish_segment(door, role_s, REAC_ROLE_STATE_TAP,
+	                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
+	                                 &answer);
+}
+
+static void listener_close_tap(struct listener *L)
+{
+	for (unsigned i = 0; i < REAC_TAP_MAX_STREAMS; i++) {
+		reac_source_node_destroy(L->tap_src[i]);
+		L->tap_src[i] = NULL;
+	}
+	if (L->tap_open) {
+		reac_tap_close(&L->tap);
+		L->tap_open = 0;
+	}
+}
+
+static int listener_open_tap(struct listener *L, struct pw_loop *loop)
+{
+	struct listener_cfg *c = &L->cfg;
+
+	uint8_t self[6];
+	int have_self = c->rxcfg.kind == REAC_RX_LIVE &&
+	                reac_mac_default_src(c->rxcfg.source, self) == 0;
+
+	struct reac_tap_cfg tcfg = {
+		.kind = c->rxcfg.kind,
+		.source = c->rxcfg.source,
+		/* A TAP NEVER FORCES THE RATE FROM A FILE. It locks to the master's cadence
+		 * the way a slave does; an explicit --rate still wins, because that is an
+		 * operator saying what the wire is. */
+		.forced_rate = c->rate_layer == REAC_CONF_ARGV ? c->rxcfg.forced_rate : 0,
+		.survey_ms = 1000,
+		.self_mac = have_self ? self : NULL,
+	};
+	if (reac_tap_open(&L->tap, &tcfg) != 0) {
+		fprintf(stderr, "reac-pw: %sTAP could not open '%s'\n", c->tag, c->rxcfg.source);
+		return -1;
+	}
+	L->tap_open = 1;
+	if (L->tap.n == 0) {
+		fprintf(stderr, "reac-pw: %sTAP heard NOTHING on '%s' in 1 s — no master, no "
+		        "box. A tap serves what is on the wire and there is nothing to serve; "
+		        "on a venue switch this is the mirror port not being configured.\n",
+		        c->tag, c->rxcfg.source);
+		listener_close_tap(L);
+		return -1;
+	}
+
+	for (unsigned i = 0; i < L->tap.n; i++) {
+		const struct reac_tap_stream *st = &L->tap.survey.stream[i];
+		const char *seg = c->inst_name && *c->inst_name ? c->inst_name : c->rxcfg.source;
+		if (st->kind == REAC_TAP_STREAM_MASTER) {
+			snprintf(L->tap_inst[i], sizeof L->tap_inst[i], "%s", seg);
+		} else {
+			char shortmac[8];
+			tap_mac_short(shortmac, sizeof shortmac, st->src);
+			snprintf(L->tap_inst[i], sizeof L->tap_inst[i], "%s.%s", seg, shortmac);
+		}
+		L->tap_src_cfg[i] = (struct reac_source_node_cfg){
+			.loop = loop, .ring = &L->tap.ring[i], .rx = &L->tap.rx[i],
+			.sample_rate = L->tap.sample_rate,
+			.inst = L->tap_inst[i],
+			.segment = seg,
+			/* NOT a master badge: a tap probes nothing, so the create-time
+			 * "probing" link-state a master stamps would be a claim about a
+			 * handshake it never runs. */
+			.master_role = 0,
+			.clock_ref = NULL,
+		};
+		if (reac_source_node_ensure(&L->tap_src[i], &L->tap_src_cfg[i],
+		                            (int)st->channels, NULL) != 0) {
+			fprintf(stderr, "reac-pw: %sTAP could not create reac-capture.%s\n",
+			        c->tag, L->tap_inst[i]);
+			listener_close_tap(L);
+			return -1;
+		}
+		fprintf(stderr, "reac-pw: %sTAP serving %s as reac-capture.%s (%u ch, "
+		        "%02x:%02x:%02x:%02x:%02x:%02x)\n", c->tag,
+		        st->kind == REAC_TAP_STREAM_MASTER ? "the master's downstream"
+		                                           : "a box's return",
+		        L->tap_inst[i], st->channels,
+		        st->src[0], st->src[1], st->src[2], st->src[3], st->src[4], st->src[5]);
+	}
+
+	if (reac_tap_start(&L->tap) != 0) {
+		fprintf(stderr, "reac-pw: %sTAP feeders would not start\n", c->tag);
+		listener_close_tap(L);
+		return -1;
+	}
+	reac_segment_heard_init(&L->heard, 0);
+	listener_publish_tap(L);
+	fprintf(stderr, "reac-pw: %sTAP up at %d Hz over %u stream(s) — NOTHING is "
+	        "transmitted on this segment: no announce, no join, no grant, no segment "
+	        "lock, and no TX socket was opened\n",
+	        c->tag, L->tap.sample_rate, L->tap.n);
+	return 0;
+}
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
@@ -1002,6 +1201,13 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	L->tx_ring_init = 0;
 	reac_seglock_init(&L->seglock);
 	L->ad_timer = NULL;
+
+	/* THE PASSIVE ROLE TAKES NONE OF THE PATH BELOW. Every line after this point
+	 * opens a socket, claims a lock or starts an engine, and a tap does none of the
+	 * three — so it branches here rather than threading an `if (!tap)` through the
+	 * whole function, where one missed arm would be a frame on a desk's wire. */
+	if (c->tap)
+		return listener_open_tap(L, loop);
 
 	/* SAMPLE RATE — the master chooses it; the box follows. See
 	 * docs/RATE-AND-CLOCK-CONFIG.md for the full law; this is its per-segment
@@ -1461,6 +1667,11 @@ static void listener_close(struct listener *L, struct pw_loop *loop)
 	 * dereference of nothing — reachable from the failed-start path since it was
 	 * written, and a NORMAL path since 0.5.1's door-only segment, which deliberately
 	 * runs no feeder at all. */
+	if (L->cfg.tap) {
+		listener_close_tap(L);
+		reac_role_swap_closed(&L->role_swap);
+		return;
+	}
 	if (L->rx_started)
 		reac_rx_stop(&L->rx);
 	if (L->ad_timer)
@@ -1724,6 +1935,14 @@ static int segment_role_pin(const char *iface, enum reac_role *out)
 	enum reac_role_intent i;
 	if (reac_role_intent_parse(v, &i) != 0 || i == REAC_ROLE_INTENT_AUTO)
 		return 0;
+	/* `tap` PINS NO WIRE ROLE, because it presents no end of the pairing. Answering
+	 * `master` here — which reac_role_from_intent would, the field holding one of two
+	 * values — would make the sniffer serve a mirror port as a driving master on its
+	 * first frame, which is the exact thing the eighth amendment forbids. A tap
+	 * segment falls through to the ordinary listen-first path and is bound as a tap
+	 * in listener_cfg_from_conf. */
+	if (i == REAC_ROLE_INTENT_TAP)
+		return 0;
 	*out = reac_role_from_intent(i);
 	return 1;
 }
@@ -1839,7 +2058,13 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	/* WHAT THE WIRE TURNED OUT TO BE, carried into this segment's configuration
 	 * (0.5.1). The hunt classified the peer by its frame geometry; re-deriving any of
 	 * that here would be a second classifier over the same evidence. */
-	if (hunt && hunt->verdict == REAC_HUNT_REFUSED) {
+	/* A TAP TAKES NO VERDICT FROM THE HUNT. The hunt answers "which end do we
+	 * present"; a tap presents none, so a refusal or a box-master join — both of
+	 * which are decisions about what WE do on the wire — describe a segment this one
+	 * is not. What it heard is re-read by reac_tap itself, off the same frames. */
+	if (L->cfg.tap) {
+		/* nothing to carry */
+	} else if (hunt && hunt->verdict == REAC_HUNT_REFUSED) {
 		L->cfg.door_only = 1;
 		L->cfg.wire_channels = hunt->arb.rival_channels;
 		L->cfg.rival_mac_set = hunt->arb.have_mac;
@@ -1878,7 +2103,9 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	int up = listener_open(L, h->loop) == 0;
 	/* A DOOR HAS NO FEEDER. Starting one would decode the very wire this segment
 	 * refused, and the refusal is total: nothing transmitted, nothing received. */
-	if (up && !L->cfg.door_only && reac_rx_start(&L->rx) != 0) {
+	/* A TAP'S FEEDERS ARE ALREADY RUNNING — one per stream, started inside
+	 * reac_tap_start. The listener's single `rx` is not used in this role at all. */
+	if (up && !L->cfg.door_only && !L->cfg.tap && reac_rx_start(&L->rx) != 0) {
 		listener_close(L, h->loop);
 		up = 0;
 	}
@@ -1890,7 +2117,7 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		return;
 	}
 	L->opened = 1;
-	L->rx_started = !L->cfg.door_only;
+	L->rx_started = !L->cfg.door_only && !L->cfg.tap;
 	h->served++;
 	if (L->cfg.door_only)
 		/* NOT "segment up": nothing is running here. It is a segment that EXISTS on
@@ -2775,6 +3002,14 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 		 * nothing about the segment and has no drains to take — so this segment is
 		 * polled exactly as any other slave: the capture node carries the write door
 		 * and the answer. */
+		if (L->cfg.tap) {
+			/* No write door: a tap's role is asserted by the console into
+			 * reac-pw.env and taken at open, and there is no engine here to
+			 * swap. What moves between ticks is whether the master is still
+			 * being heard, so the answer is re-derived and republished. */
+			listener_publish_tap(L);
+			continue;
+		}
 		if (!L->sink || L->cfg.join_box_master) {
 			int back = reac_source_node_take_reopen_role(L->src);
 			if (back >= 0) {
@@ -2832,6 +3067,9 @@ int main(int argc, char **argv)
 	                             .pcap_realtime = 1 };
 	const char *tx_if = NULL;
 	enum reac_role role = REAC_ROLE_MASTER;   /* default master: preserves current behaviour */
+	/* `--role tap` is not a value of `role` above — a tap presents no end of the
+	 * pairing — so it rides beside it, exactly as listener_cfg.tap does. */
+	int role_tap = 0;
 	uint8_t src_mac[6];
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
@@ -2924,9 +3162,14 @@ int main(int argc, char **argv)
 			}
 			src_mac_set = 1;
 		} else if (!strcmp(argv[i], "--role") && i + 1 < argc) {
-			if (reac_role_parse(argv[++i], &role) != 0) {
-				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave)\n", argv[i]);
+			if (!strcmp(argv[++i], "tap")) {
+				role_tap = 1;
+			} else if (reac_role_parse(argv[i], &role) != 0) {
+				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave|tap)\n",
+				        argv[i]);
 				return 2;
+			} else {
+				role_tap = 0;
 			}
 		} else if (!strcmp(argv[i], "--mixer") && i + 1 < argc) {
 			/* Master role: which desk GENERATION to speak as (console-model
@@ -3051,6 +3294,7 @@ int main(int argc, char **argv)
 		c->rxcfg = rxcfg;
 		c->tx_if = tx_if;
 		c->role = role;
+		c->tap = role_tap;
 		c->mixer = mixer;
 		c->inst_name = inst_name;
 		memcpy(c->src_mac, src_mac, 6);
@@ -3079,6 +3323,7 @@ int main(int argc, char **argv)
 				c->rxcfg.source = ifaces[0];
 				c->tx_if = tx_if;
 				c->role = role;
+				c->tap = role_tap;
 				c->mixer = mixer;
 				c->inst_name = inst_name;
 				memcpy(c->src_mac, src_mac, 6);
