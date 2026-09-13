@@ -58,14 +58,22 @@ permissions:
 env:
   # Same variable name, same fallback shape and same meaning as openmixer's
   # release-rpm.yml: the one shared tree, spelled once. An unset repository
-  # variable changes nothing -- both workflows fall back the same way.
-  OPENMIXER_REPO_BASEURL: ${{ vars.OPENMIXER_REPO_BASEURL || 'https://freemixer.github.io/rpm' }}
+  # variable changes nothing -- both workflows fall back the same way. The
+  # fallback is the PUBLIC tree (operator ruling 2026-09-13, "everything
+  # public now"): the private worker was the only target for months and
+  # this placeholder host went stale at 0.7.1 over that time. Setting the
+  # repository variable still points every one of these steps, including
+  # the builddep resolve below, at the private worker instead -- unchanged.
+  OPENMIXER_REPO_BASEURL: ${{ vars.OPENMIXER_REPO_BASEURL || 'https://freereac.github.io/rpm' }}
   # Same repo id and name as openmixer's own run, ON PURPOSE: this is not a
   # second repository beside openmixer's, it is packages joining ONE dnf repo
   # (one openmixer.repo, one GPG key, one repodata tree per releasever/arch).
   # A different id here would emit a second, colliding .repo file over the same
   # directory instead of adding entries to the one dnf already trusts.
   OPENMIXER_REPO_ID: openmixer
+  # The key file the tree serves next to its .repo: the public FreeREAC tree ships
+  # RPM-GPG-KEY-freereac; a private worker tree sets the variable to its own name.
+  OPENMIXER_REPO_KEYFILE: ${{ vars.OPENMIXER_REPO_KEYFILE || 'RPM-GPG-KEY-freereac' }}
   OPENMIXER_REPO_NAME: openmixer / FreeREAC
 
 jobs:
@@ -133,7 +141,7 @@ jobs:
             echo "enabled=1"
             echo "gpgcheck=1"
             echo "repo_gpgcheck=1"
-            echo "gpgkey=${OPENMIXER_REPO_BASEURL}/RPM-GPG-KEY-openmixer"
+            echo "gpgkey=${OPENMIXER_REPO_BASEURL}/${OPENMIXER_REPO_KEYFILE}"
             echo "metadata_expire=0"
             if [ -n "${OPENMIXER_REPO_READ_USERNAME}" ]; then
               echo "username=${OPENMIXER_REPO_READ_USERNAME}"
@@ -241,7 +249,10 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Install packaging tools
-        run: dnf install -y --setopt=install_weak_deps=False createrepo_c rpm-sign gnupg2 pinentry findutils
+        # git: this job's own checkout below works without it (actions/checkout falls back to a
+        # tarball), but the public-pages checkout further down has to commit and push, which the
+        # tarball fallback cannot do.
+        run: dnf install -y --setopt=install_weak_deps=False createrepo_c rpm-sign gnupg2 pinentry findutils git
 
       - uses: actions/download-artifact@v4
         with:
@@ -386,6 +397,65 @@ jobs:
             aws s3 cp "$f" "s3://$R2_BUCKET/${f#tree/}" --endpoint-url "$EP"
           done
           echo "pushed tree/rpm/ to s3://$R2_BUCKET/rpm/ (size-only, no --delete)"
+
+      # THE PACKAGES ARE PUBLIC, OR THEY ARE NOT PUBLISHED (operator ruling 2026-09-13,
+      # "everything public now") -- the private worker above was the only target for months and
+      # the public tree at freereac.github.io went stale at 0.7.1 over that time. This is the
+      # SAME publish-repo.sh call as the private tree above, run again over a git checkout
+      # instead of an S3 sync: it merges reac-pw's packages into the tree IN PLACE (NEVRA
+      # placement, createrepo_c --update -- see the script header), never wipes it. Sign-only,
+      # same as the private path: an unsigned tree is a smoke-test artefact and is never pushed
+      # anywhere. Two repositories (this one and libreac's) can both push this same branch; a
+      # concurrent push loses to git's own non-fast-forward refusal rather than corrupting
+      # anything -- the same "publish one, wait, publish the next" discipline the shared-tree
+      # race note above already asks for, now for git push instead of S3 sync.
+      - name: Require the public-pages token before touching the public tree
+        # Fails loud and BY NAME: a missing secret must never fall back to an unauthenticated
+        # checkout (read-only, so the later push would fail anonymously with no clue why) or,
+        # worse, skip the public publish without saying so.
+        if: env.SIGN == 'true'
+        env:
+          FREEREAC_PAGES_TOKEN: ${{ secrets.FREEREAC_PAGES_TOKEN }}
+        run: |
+          test -n "$FREEREAC_PAGES_TOKEN" || {
+            echo "::error::FREEREAC_PAGES_TOKEN is not set -- create a fine-grained PAT with"
+            echo "::error::contents:write on FreeREAC/freereac.github.io and add it as a repository secret."
+            exit 1
+          }
+
+      - name: Checkout the public pages tree (FreeREAC/freereac.github.io)
+        if: env.SIGN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: FreeREAC/freereac.github.io
+          ref: main
+          token: ${{ secrets.FREEREAC_PAGES_TOKEN }}
+          path: freereac-pages
+
+      - name: Publish into the public dnf tree, in place (never wiped)
+        # No --repo-id/--repo-name/--base-url override: the checkout already carries
+        # freereac.repo and RPM-GPG-KEY-freereac from its first hand publish, and the script's
+        # own built-in defaults are exactly those values, so this run merges into them instead
+        # of emitting a second, colliding .repo/key pair.
+        if: env.SIGN == 'true'
+        run: |
+          set -o pipefail
+          packaging/publish-repo.sh --rpm-dir collected --out freereac-pages --key-id "$OMX_GPG_KEY_ID"
+
+      - name: Commit and push the public tree
+        if: env.SIGN == 'true'
+        run: |
+          set -o pipefail
+          cd freereac-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- rpm/
+          if git diff --cached --quiet -- rpm/; then
+            echo "public tree already carries everything $RELEASE_TAG built -- nothing to commit"
+          else
+            git commit -m "reac-pw $RELEASE_TAG: publish to the public dnf tree" -- rpm/
+            git push origin main
+          fi
 
       - name: Report an unsigned or unpushed run honestly
         if: env.SIGN != 'true' || env.PULLED_TREE != '1'
