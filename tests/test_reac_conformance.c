@@ -8,10 +8,10 @@
  * golden-pinned by tests/reac_m200_golden.inc + tests/reac_grant_golden.inc
  * (test_reac_master.c / test_reac_s1608.c / test_reac_grant.c).
  *
- * THE FINDING: three real consoles (M-200, M-300 = V-Mixer; M-5000 = OHRCA)
+ * THE FINDING: three real consoles (M-200, M-300 at 48 kHz; M-5000 at 96 kHz)
  * differ on the wire in exactly TWO bytes — the source MAC and the cfea
- * console_field byte (0x00 V-Mixer / 0x01 OHRCA), which also drives the
- * ENROLL console-model byte (reac_master.c's gen_cfea / ENROLL_BLK comments,
+ * pace-code byte (0x00 at 48 kHz / 0x01 at 96 kHz), which also drives the
+ * ENROLL pace-code byte (reac_master.c's gen_cfea / ENROLL_BLK comments,
  * struct reac_mixer_profile's doc in reac_master.h). Every other downstream
  * template (chanmap/probe/SUB01/SUB02/ENROLL head/grant sweep/head-amp) is
  * ONE generator shared by all three profiles — this test proves that sharing
@@ -83,7 +83,7 @@ int main(void)
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
 		CHK(memcmp(f + 16, cc->cfea_idle, 34) == 0);        /* full byte-equality incl cksum */
 		CHK(f[16 + 17] == 0x28);                            /* fixed 40-slot total [17] */
-		CHK(f[16 + 19] == cc->console_field);               /* the OHRCA discriminator */
+		CHK(f[16 + 19] == cc->console_field);               /* the pace-code discriminator */
 		CHK(memcmp(f + 16 + CONF_MAC_IDX, cc->mac, 6) == 0); /* identity == the L2 source (never a cloned desk MAC) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
@@ -108,7 +108,7 @@ int main(void)
 		                                                      * REAC_ENROLL_CONSOLE_IDX, private) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
-		/* ---- (b) chanmap: the M-200 sweep, EXCEPT the marker's family byte ----
+		/* ---- (b) chanmap: the M-200 sweep, EXCEPT the marker's pace-code byte ----
 		 *
 		 * This arm used to assert a console-INDEPENDENT chanmap — every profile
 		 * byte-equal to GOLD_CHANMAP_SWEEP. That claim could not fail: the golden
@@ -123,11 +123,11 @@ int main(void)
 		 *   M-5000 -> S-1608 alltraffic  fe 01 00 x7     M-200i establish   fe 00 00 x35
 		 *   M-5000 -> S-0808             fe 01 00 x14
 		 *
-		 * 3 captures to 3: the section marker carries the CONSOLE FAMILY. So the
+		 * 3 captures to 3: the section marker carries the PACE CODE. So the
 		 * per-console difference is THREE bytes, not two — cfea[19], ENROLL_BLK[8]
-		 * and this one. V-Mixer profiles must still equal the golden exactly; the
-		 * OHRCA profile must differ in exactly the marker family byte and the block
-		 * checksum that covers it. */
+		 * and this one. The 48 kHz profiles must still equal the golden exactly;
+		 * the 96 kHz profile must differ in exactly the marker's pace-code byte
+		 * and the block checksum that covers it. */
 		CHK(m.chanmap_nframes == GOLD_CHANMAP_WINDOWS);
 		int marker_slots = 0;
 		for (int w = 0; w < GOLD_CHANMAP_WINDOWS; w++) {
@@ -136,7 +136,7 @@ int main(void)
 			for (int i = 0; i < 34; i++) {
 				if (got[i] == want[i])
 					continue;
-				/* Only an OHRCA console may differ, and only here. */
+				/* Only a 96 kHz profile may differ, and only here. */
 				CHK(cc->console_field == 0x01);
 				int is_marker_family = 0;
 				for (int sl = 0; sl < 8; sl++)

@@ -408,9 +408,10 @@ static void usage(const char *p)
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
 	  "                which no wire can tell us (even 2..40; 8=S-0808, 16=S-1608,\n"
 	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
-	  "  --mixer M     master role: which desk GENERATION to speak as (m200|m300|m5000;\n"
-	  "                default m200). Sets the console-model byte only; the grants are\n"
-	  "                box-defined so any box locks to any profile.\n"
+	  "  --mixer M     master role: which desk NAME reac-pw logs as (m200|m300|m5000;\n"
+	  "                default m200). Does not set the wire's pace-code byte — that comes\n"
+	  "                from --rate alone; grants are box-defined so any box locks to any\n"
+	  "                profile.\n"
 	  "  (no --box)    master role: the box on this segment is LEARNED FROM THE WIRE and\n"
 	  "                nothing else. reac-pw starts with no box, probes, and sizes +\n"
 	  "                labels reac:capture / reac:playback the moment a box declares\n"
@@ -3084,7 +3085,7 @@ int main(int argc, char **argv)
 	struct reac_headamp_setting headamps[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int n_headamps = 0;
 	const struct reac_mixer_profile *mixer =
-		reac_mixer_profile_by_name("m200");   /* master: which desk generation we speak as */
+		reac_mixer_profile_by_name("m200");   /* master: which desk name we log as */
 
 	/* auto-spine §5: EXTRA `--live` interfaces beyond the template's own (a
 	 * repeated flag, or a comma list in one flag). A stable copy is kept here
@@ -3172,8 +3173,9 @@ int main(int argc, char **argv)
 				role_tap = 0;
 			}
 		} else if (!strcmp(argv[i], "--mixer") && i + 1 < argc) {
-			/* Master role: which desk GENERATION to speak as (console-model
-			 * byte). The grants are box-defined, so a box locks to any profile. */
+			/* Master role: which desk name reac-pw logs as. Does not set the
+			 * wire's pace-code byte; grants are box-defined, so a box locks to
+			 * any profile. */
 			mixer = reac_mixer_profile_by_name(argv[++i]);
 			if (!mixer) {
 				fprintf(stderr, "reac-pw: unknown --mixer '%s'; known:", argv[i]);

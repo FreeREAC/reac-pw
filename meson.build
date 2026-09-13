@@ -522,8 +522,8 @@ master_no_enroll_test = executable('test_reac_master_no_enroll',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_master_no_enroll', master_no_enroll_test)
 
-# --- the chanmap section marker carries the console family (fe 01 vs fe 00) ----
-# Pins both halves: OHRCA emits the M-5000 form, V-Mixer stays byte-identical.
+# --- the chanmap section marker carries the pace code (fe 01 vs fe 00) ---------
+# Pins both halves: 96 kHz emits the fe-01 form, 48 kHz stays byte-identical.
 ohrca_chanmap_test = executable('test_reac_ohrca_chanmap',
   ['tests/test_reac_ohrca_chanmap.c',
    ],
@@ -993,8 +993,8 @@ test('reac_grant', grant_test)
 
 # --- acceptance test: byte conformance across ALL --mixer profiles ------------
 # The finding: m200/m300/m5000 differ on the wire in exactly TWO bytes — the
-# source MAC and the cfea console_field byte (V-Mixer 0x00 / OHRCA 0x01), which
-# also drives the ENROLL console byte. Drives the real reac_master_init/set_box/
+# source MAC and the cfea console_field byte (0x00 at 48 kHz / 0x01 at
+# 96 kHz), which also drives the ENROLL console byte. Drives the real reac_master_init/set_box/
 # stamp path for each profile and asserts the per-console cfea/ENROLL identity
 # bytes against a new golden (reac_conformance_golden.inc) AND that the shared
 # generator (chanmap/probe/grant sweep) still reproduces the existing M-200/
