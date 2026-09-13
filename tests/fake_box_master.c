@@ -42,6 +42,7 @@
 #include <reac/reac.h>
 #include <reac/reac_ctrlblk.h>
 #include <reac/reac_decode.h>
+#include <reac/reac_master.h>
 #include <reac/reac_sample.h>
 #include <reac/reac_upstream.h>
 
@@ -557,6 +558,33 @@ int main(int argc, char **argv)
 	}
 	uint8_t f[2048];
 	uint16_t counter = 0;
+	/* THE ANNOUNCE BLOCK COMES FROM libreac's GENERATOR, with the two fields a BOX
+	 * in master mode measurably differs from a desk in overwritten and cited.
+	 *
+	 * It used to be hand-written here — the cfea head, then `b[18]=0x08;
+	 * b[19]=0x01; b[20]=0x00; b[21]=0x01` — which is a second copy of the protocol
+	 * in a test, and two of those four bytes were wrong whatever the run:
+	 * reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base.md §2 reads
+	 * all 17 040 announces in the corpus and settles [19] as the PACE CODE (so a
+	 * hard 0x01 announces 96 kHz at every rate — a defect it names in our own
+	 * emitters) and [20:22] as the enrolled-box count, u2 big-endian (so a hard 1
+	 * announced an enrolment before anything had been granted).
+	 *
+	 * What the generator writes and we keep: the announce header, our MAC, the idle
+	 * 0x08 at [18] — the "upstream width IN FORCE", which is what an S-1608 in
+	 * master mode really announced while granting an S-4000S
+	 * (box-to-box-2026-09-13) — and reac_pace_code(fps) at [19].
+	 *
+	 * What we overwrite: [17]. A DESK writes the fixed 0x28 there (the 40-slot
+	 * downstream fabric); a box in master mode writes its OWN declared input width
+	 * — 0x10 measured on the S-1608, 0x20 on the S-4000S, same analysis §2. This
+	 * emulator is a box, so it declares n_ch. */
+	static struct reac_master ann;
+	struct reac_console_cfg ann_cfg = { .out_channels = 8,
+	                                    .console_field = reac_pace_code(fps) };
+	reac_master_init(&ann, src, &ann_cfg, fps);
+	ann.announce_blk[17] = (uint8_t)n_ch;
+
 	long sent = 0, announces = 0, granted = 0;
 	struct timespec period = { 0, 0 };
 	period.tv_nsec = 1000000000L / fps;
@@ -621,16 +649,14 @@ int main(int argc, char **argv)
 			}
 			if (!ear.scene_running && sent % fps == fps / 4) {
 				/* cfea: the master naming itself, its fabric and its width -
-				 * the shape a real S-1608 in master mode broadcasts. */
+				 * the shape a real S-1608 in master mode broadcasts. The
+				 * generated block, plus the one field that moves during a run:
+				 * the enrolled-box count rises when a grant has actually left
+				 * the wire, not when the peer was recognized (the M-200
+				 * timeline, m200-enrol-441k-2026-09-13/analysis.md). */
 				uint8_t *b = f + 16;
-				static const uint8_t H[11] = { 0xcf, 0xea, 0xff, 0xff, 0x01,
-				                               0x00, 0x01, 0x03, 0x0d, 0x01,
-				                               0x04 };
-				memcpy(b, H, sizeof H);
-				memcpy(b + 11, src, 6);
-				b[17] = (uint8_t)n_ch; b[18] = 0x08; b[19] = 0x01;
-				b[20] = 0x00; b[21] = 0x01;
-				memset(b + 22, 0, 12);
+				memcpy(b, ann.announce_blk, sizeof ann.announce_blk);
+				b[21] = granted > 0 ? 0x01 : 0x00;
 				reac_ctrl_checksum_apply(f);
 				announces++;
 				goto send;
