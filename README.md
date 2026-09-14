@@ -132,7 +132,11 @@ in the packet rate, never on the wire.
   realtime `process()` encodes each 12-sample group and hands it to a
   lock-free TX ring. A dedicated `SCHED_FIFO` pacer thread emits one frame per
   slot at a fixed rate and drives the JOIN/HOLD handshake onto the broadcast.
-  On underrun it emits silent filler to keep the link alive. It also exposes
+  On underrun it emits silent filler to keep the link alive. The frame's egress
+  instant is a `SO_TXTIME` launch time the kernel's ETF qdisc releases — the
+  default since 2026-09-14, ~10x tighter than the thread's own wake, with the
+  daemon installing and removing that qdisc itself (`REACPW_PACER=thread` opts
+  out; libreac's `docs/ETF-PACING.md` has the measurements). It also exposes
   standard `SPA_PARAM_Props` volume/mute/channelVolumes, so `wpctl
   set-volume`, the desktop mixer and WirePlumber attenuate the box outputs
   like any other PipeWire sink. It also states its own transmit health as node

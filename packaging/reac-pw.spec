@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.6}
+Version:        %{?version_override}%{!?version_override:1.0.7}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,18 +17,18 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.1.0
+BuildRequires:  pkgconfig(libreac) >= 1.1.3
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.1.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.1.3
 Requires:       pipewire
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.1.0
-Requires:       libreac-transport >= 1.1.0
+Requires:       libreac >= 1.1.3
+Requires:       libreac-transport >= 1.1.3
 
 %description
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
@@ -101,13 +101,59 @@ meson test -C _build
 %license LICENSE
 %doc README.md
 # File capabilities, applied by rpm itself (%%caps survives rpm -V / --restore;
-# no setcap scriptlet needed): raw 0x8819 capture/emit without root (cap_net_raw)
-# + SCHED_FIFO for the cadence pacer (cap_sys_nice). openmixer's packaged
-# reac-pw-master.service ExecStartPre getcap-guards on exactly these, and
-# scripts/deploy-live.sh refuses a live restart without them.
+# no setcap scriptlet needed):
+#
+#   cap_net_raw    raw 0x8819 capture/emit without root
+#   cap_sys_nice   SCHED_FIFO for the cadence pacer
+#   cap_net_admin  the VLAN sub-interfaces the daemon mints and marks -- AND, since
+#                  1.0.7, the launch-time pacer, which needs it TWICE. SO_TXTIME is
+#                  capability-gated in the kernel (measured: EPERM on both an
+#                  AF_PACKET and a UDP socket from uid 0 holding NET_RAW and not
+#                  NET_ADMIN), and the daemon installs its own ETF qdisc over
+#                  rtnetlink on the device it binds, which is an RTM_NEWQDISC.
+#                  Without it the ETF default falls back to the thread backend,
+#                  loudly, and publishes reac.pace.backend-refusal -- the desk still
+#                  carries audio, with a ~10x looser egress cadence.
+#
+# openmixer's packaged reac-pw-master.service ExecStartPre getcap-guards on exactly
+# these, and scripts/deploy-live.sh refuses a live restart without them. It stays a
+# USER unit: a file capability is what the daemon needs, not root.
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.7-1
+- ETF IS THE DEFAULT PACING BACKEND, AND THE DAEMON OWNS THE QDISC (operator ruling,
+  2026-09-14: "we must go with qdisc and etf"). Measured on the TX device, 60 s per arm,
+  one S-4000S-3208 per link: interval sd 28.5 -> 2.7 us on the PCI VLAN and 15.3 -> 1.9 us
+  on the USB link, p99.9 595 -> 136 and 308 -> 131 us, late slots 27-37/s -> 0.45/s, with
+  no rise in the daemon's own CPU. REACPW_PACER=thread opts out.
+- The daemon installs `etf clockid CLOCK_TAI delta 300000 skip_sock_check` as the root
+  qdisc of the device it binds, over rtnetlink from C -- no tc(8), no subprocess -- and
+  removes it again on exit. An app owns its own configuration; leaving the qdisc to an
+  operator's tc line is two doors on one setting, and the rig paid for it from both sides.
+  A THREAD-BACKEND START REMOVES A LEFTOVER ETF ROOT: with skip_sock_check that qdisc drops
+  every frame carrying no launch time, and on the rig it transmitted 0 packets in a 60 s
+  window while the box lost its master.
+- A precondition this machine cannot meet -- no sch_etf (ENOENT), no CAP_NET_ADMIN (EPERM),
+  an undisciplined TAI offset -- makes the DEFAULT log one loud line naming the errno and
+  its fix, run the thread backend, and PUBLISH the refusal (reac.pace.backend,
+  reac.pace.backend-refusal). An explicit REACPW_PACER=etf still refuses to open. A desk
+  that stopped carrying audio because a kernel cannot do ETF would be a worse answer than a
+  looser cadence; a fallback nobody can see would be worse than both.
+- cap_net_admin is now load-bearing for the pacer as well as for the VLAN sub-interfaces,
+  and the spec says so where it is granted.
+- The libreac floors rise to 1.1.3 in all four places and in meson.build: that is where
+  reac_etf_qdisc_* and reac_pacer_backend_refusal live, and where the pacer's default
+  became etf. A 1.1.2 satisfies the old >=1.1.0 and fails at link.
+- tests/etf-qdisc-owned.sh drives the real binary over a veth in a private user+net
+  namespace and COUNTS REAC FRAMES ARRIVING AT THE FAR END -- a qdisc eating the wire looks
+  exactly like a healthy daemon from the inside. Four arms: the default installs the qdisc
+  and carries ~24000 frames in 3 s at 8000 fps, the exit removes it, a thread start strips a
+  leftover etf and still carries them, and a capability-less start says so and carries them.
+  With libreac's fake_box on the far end a linked, silent S-4000S reaches ESTABLISHED
+  through the qdisc the daemon installed.
+- packaging/make-tarball.sh ships docs/, which %%check needs: test_reac_pacer_knob reads
+  docs/ENV-KNOBS.md, and without it every RPM build failed that assertion.
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.6-1
 - A PARENT'S TRUNK VERDICT NOW COUNTS ONLY FRAMES THAT ARRIVED ON THAT PARENT (#102).
   Measured on the rig 2026-09-14: the USB NIC enp128s20f0u2, on a direct cable to a cold
