@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.7',
+  version: '1.0.8',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -589,7 +589,9 @@ test('reac_headamp_refusal_is_visible',
 # nothing configured, and that a bare `reac-pw` gets PAST argument handling.
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
-  args : [reac_pw_exe, meson.current_source_dir() / 'packaging' / 'reac-pw.service'],
+  args : [reac_pw_exe,
+          meson.current_source_dir() / 'packaging' / 'reac-pw.service',
+          meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------

@@ -22,8 +22,9 @@
 # pins the daemon had in fact applied from the very same file. The daemon is that
 # file's reader; the unit must not be a second one.
 set -u
-BIN="${1:?usage: packaged-shape-starts.sh /path/to/reac-pw [/path/to/reac-pw.service]}"
+BIN="${1:?usage: packaged-shape-starts.sh /path/to/reac-pw [/path/to/reac-pw.service] [/path/to/90-reac-pw.preset]}"
 UNIT="${2:-}"
+PRESET="${3:-}"
 
 out=$(HOME=/nonexistent-reac-pw-test "$BIN" --help 2>&1); rc=$?
 if [ "$rc" -ne 0 ] || ! grep -q "usage:" <<<"$out"; then
@@ -52,6 +53,21 @@ if [ -n "$UNIT" ]; then
     echo "      per-segment key with a dot in it, and the daemon already reads that file."
     grep -nE '^EnvironmentFile=' "$UNIT"; exit 1
   fi
+fi
+
+# ---- the preset, if it was handed to us --------------------------------------
+# 1.0.8: the RPM ships /usr/lib/systemd/user-preset/90-reac-pw.preset so a fresh
+# install starts the unit for the console user. PRESENCE BEFORE ABSENCE again —
+# check the file parses as a preset (a bare `enable`/`disable` line) before
+# trusting which unit it names.
+if [ -n "$PRESET" ]; then
+  [ -r "$PRESET" ] || { echo "FAIL: cannot read the preset file '$PRESET'"; exit 1; }
+  grep -qE '^(enable|disable)[[:space:]]' "$PRESET" || {
+    echo "FAIL: '$PRESET' has no enable/disable line — this reader cannot see a preset"
+    echo "      directive at all, so its verdict on reac-pw.service below means nothing"; exit 1; }
+  grep -qE '^enable[[:space:]]+reac-pw\.service[[:space:]]*$' "$PRESET" || {
+    echo "FAIL: '$PRESET' does not 'enable reac-pw.service' — a fresh install would not"
+    echo "      start the daemon for the console user"; exit 1; }
 fi
 
 echo "OK: the packaged (no-argument) shape starts without a declaration"

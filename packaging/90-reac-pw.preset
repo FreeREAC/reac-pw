@@ -1,0 +1,15 @@
+# Installed by the reac-pw RPM as /usr/lib/systemd/user-preset/90-reac-pw.preset.
+#
+# A fresh install (the desk image, no prior state) starts the daemon for the console
+# user the moment that user's systemd --user instance reads presets -- normally at
+# first login, or immediately via the postinst systemd_user_post scriptlet on a host
+# where a user manager is already running. Numbered ahead of the distro's catch-all
+# 99-default-disable.preset (systemd presets are first-file-wins per unit), so this
+# line decides reac-pw.service and the disable-everything default never reaches it.
+#
+# This does not fight the packaged reac-pw-master.service: that unit and this one
+# `Conflicts=` each other in the unit file itself (packaging/reac-pw.service), and
+# openmixer's arbitration spec retired reac-pw-master.service on 2026-09-02 --
+# nothing installs it any more. See README.md and docs/design/specs (openmixer repo)
+# 2026-08-20-reac-master-arbitration.md, amendment 2026-09-02 (second), rule f.
+enable reac-pw.service

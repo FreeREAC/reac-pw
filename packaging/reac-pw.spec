@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.7}
+Version:        %{?version_override}%{!?version_override:1.0.8}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -22,6 +22,9 @@ BuildRequires:  pkgconfig(libreac) >= 1.1.3
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.1.3
+# systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
+# %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
+BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
@@ -29,6 +32,7 @@ Requires:       pipewire
 # recounts, one soname later. The version floor has to be written down.
 Requires:       libreac >= 1.1.3
 Requires:       libreac-transport >= 1.1.3
+%{?systemd_requires}
 
 %description
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
@@ -87,12 +91,21 @@ meson compile -C _build
 
 %install
 DESTDIR=%{buildroot} meson install -C _build
-# Deliberately NO unit and NO /etc/reac-pw here: the canonical integration is
-# openmixer-server's packaged USER unit (reac-pw-master.service, driven by
-# ~/.config/openmixer/reac.env from Setup -> Adapters). Shipping the legacy
-# SYSTEM unit too would put two daemons in contention for the REAC NIC.
-# packaging/reac-pw.service stays in-repo as the standalone/no-openmixer
-# reference; install it by hand if you run reac-pw without openmixer.
+# THE RPM OWNS THE UNIT (1.0.8). Earlier releases deliberately shipped no unit here,
+# reasoning that "the canonical integration is openmixer-server's packaged USER unit
+# (reac-pw-master.service, driven by ~/.config/openmixer/reac.env)" -- that unit is
+# RETIRED (openmixer's docs/design/specs/2026-08-20-reac-master-arbitration.md,
+# amendment 2026-09-02 (second), rule f: "~/.config/openmixer/reac.env is RETIRED,
+# with reac-pw-master.service. Its only reader goes; a file with no reader is not a
+# store."). The unit openmixer's own adapter drives today is THIS package's
+# reac-pw.service (REAC_UNIT = 'reac-pw' in packages/server/src/reac-adapter.ts),
+# reading the layered ~/.config/reac-pw/ conf -- and openmixer's own
+# docs/install/services.md already documents it as "owned by the reac-pw package,
+# not by openmixer". A package that drives a unit it does not ship was the gap; this
+# closes it. No /etc/reac-pw: nothing here is host-wide system config, every fact
+# reac_conf.h reads is per-user (%%h/.config/reac-pw/), by design (see reac-pw.conf).
+install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.service
+install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
 
 %check
 meson test -C _build
@@ -115,12 +128,58 @@ meson test -C _build
 #                  loudly, and publishes reac.pace.backend-refusal -- the desk still
 #                  carries audio, with a ~10x looser egress cadence.
 #
-# openmixer's packaged reac-pw-master.service ExecStartPre getcap-guards on exactly
-# these, and scripts/deploy-live.sh refuses a live restart without them. It stays a
+# The unit's own comments getcap-guard on nothing (systemd cannot read file caps
+# before exec), so it is the daemon's own preflight, and openmixer's
+# scripts/deploy-live.sh, that refuse a start/restart without them. This stays a
 # USER unit: a file capability is what the daemon needs, not root.
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
+%{_userunitdir}/reac-pw.service
+%{_userpresetdir}/90-reac-pw.preset
+
+%post
+%systemd_user_post reac-pw.service
+
+%preun
+%systemd_user_preun reac-pw.service
+
+%postun
+%systemd_user_postun reac-pw.service
 
 %changelog
+* Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.8-1
+- THE RPM NOW SHIPS ITS OWN USER UNIT (found by the desk-ISO lane 2026-09-15: `rpm -ql
+  reac-pw` shipped no systemd unit at all, and the rig's
+  ~/.config/systemd/user/reac-pw.service was a hand copy). packaging/reac-pw.service
+  installs as %{_userunitdir}/reac-pw.service (/usr/lib/systemd/user/), with
+  packaging/90-reac-pw.preset at %{_userpresetdir}/90-reac-pw.preset (`enable
+  reac-pw.service`, numbered ahead of the distro's 99-default-disable.preset) so a
+  fresh install starts it for the console user, and %post/%preun/%postun run
+  %%systemd_user_post/_preun/_postun. BuildRequires: systemd-rpm-macros.
+- This closes a gap the spec used to explain away: the %%install comment through 1.0.7
+  said the canonical unit was openmixer-server's packaged reac-pw-master.service,
+  driven by ~/.config/openmixer/reac.env. That integration is RETIRED (openmixer's
+  docs/design/specs/2026-08-20-reac-master-arbitration.md, amendment 2026-09-02
+  (second), rule f: "~/.config/openmixer/reac.env is RETIRED, with
+  reac-pw-master.service. Its only reader goes; a file with no reader is not a
+  store."). The unit openmixer's own adapter drives today is THIS package's
+  reac-pw.service (REAC_UNIT = 'reac-pw', packages/server/src/reac-adapter.ts,
+  reading the layered ~/.config/reac-pw/ conf), and openmixer's own
+  docs/install/services.md already called it "owned by the reac-pw package, not by
+  openmixer" -- a package driven by another package's adapter but shipping no unit of
+  its own is exactly the gap the desk-ISO lane found.
+- ON AN EXISTING DESK: a package upgrade alone does not start the new unit for an
+  already-provisioned user (the preset governs a FRESH install/first read only).
+  Run `systemctl --user enable --now reac-pw` once. And if
+  ~/.config/systemd/user/reac-pw.service exists (the old hand-copy path), it SHADOWS
+  the packaged unit and every future upgrade will appear to do nothing -- remove it
+  (`rm ~/.config/systemd/user/reac-pw.service && systemctl --user daemon-reload`)
+  before enabling the packaged one. A package never touches $HOME to fix this for
+  you; README.md and docs/install/services.md (openmixer repo) say so instead.
+- meson does not install the unit or preset (still no `install_data` for
+  packaging/*.service in meson.build) -- they are RPM-only, installed straight from
+  the source tree in %%install, same as before for the binary's %%caps. A source
+  build (`meson install`) still ships no unit, matching README's "From source"
+  section.
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.7-1
 - ETF IS THE DEFAULT PACING BACKEND, AND THE DAEMON OWNS THE QDISC (operator ruling,
   2026-09-14: "we must go with qdisc and etf"). Measured on the TX device, 60 s per arm,

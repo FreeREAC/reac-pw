@@ -43,6 +43,33 @@ install all three from the same release. The RPM sets the file capabilities
 the daemon needs (`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without
 root.
 
+**Enabling the service.** The RPM installs `reac-pw.service` as a systemd **user**
+unit (`/usr/lib/systemd/user/reac-pw.service` — a bare system unit has no `HOME`
+and cannot find `~/.config/reac-pw/` or the operator's PipeWire socket), with a
+preset that enables it. That preset only takes effect on a fresh install/first
+read (the desk image); on an already-provisioned host, upgrading the package does
+not by itself start the new unit — run this once, as the console user:
+
+```
+systemctl --user enable --now reac-pw
+```
+
+**A hand-installed copy shadows the packaged unit.** If `~/.config/systemd/user/
+reac-pw.service` exists (from before the RPM shipped one, or from following an
+older version of this doc), it takes priority over `/usr/lib/systemd/user/
+reac-pw.service` and every future `dnf upgrade` will appear to change nothing —
+remove it before enabling the packaged unit:
+
+```
+systemctl --user list-unit-files reac-pw.service       # should say /usr/lib/systemd/user
+rm -f ~/.config/systemd/user/reac-pw.service
+systemctl --user daemon-reload
+systemctl --user enable --now reac-pw
+```
+
+A package never writes into `$HOME` to fix this for you — removing a hand-written
+file has to be a deliberate, visible step, not a postinst side effect.
+
 **From source.**
 
 ```
