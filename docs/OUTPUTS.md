@@ -96,9 +96,8 @@ flag, not a different output.
 
 This is the canonical way to make REAC visible on an IP network. Route
 `reac:capture` into PipeWire's `module-rtp-sink`; it RTP-packetises and
-announces an SDP over SAP. No new code — it is the same hop
-`reac-aes67` does as a monolithic bridge, except here AES67 is one
-optional output of the graph rather than the hub.
+announces an SDP over SAP. No new code — AES67 is one optional output
+of the graph, routed like any other.
 
 Load an RTP sink that auto-links from the REAC source and announces on
 the **AES67 standard discovery group `239.255.255.255:9875`** (PipeWire
@@ -107,7 +106,7 @@ defaults SAP to `224.0.0.56:9875`, which is fine Linux-to-Linux but is
 
 ```
 pactl load-module module-rtp-sink \
-  source.props='{ node.name = "reac-aes67-out" }' \
+  source.props='{ node.name = "aes67-out" }' \
   stream.props='{
       sess.name        = "REAC 40ch"
       audio.format     = S24BE
@@ -122,7 +121,7 @@ pactl load-module module-rtp-sink \
 ```
 
 Then link the REAC ports onto the new RTP node's inputs (qpwgraph, or
-`pw-link reac:capture:capture_01 reac-aes67-out:input_1`, ...). AES67's
+`pw-link reac:capture:capture_01 aes67-out:input_1`, ...). AES67's
 common interop shape is L24 / 48 kHz / 8-channel @ 1 ms; for the full 40
 channels either raise `audio.channels` or load several rtp-sink modules
 fed from different `capture_NN` groups.
@@ -204,12 +203,10 @@ What Dante demands that casual AES67 does not:
 - On the Dante device, AES67 mode enabled and the flow subscribed in
   Dante Controller.
 
-`reac-aes67` already carries a `--profile dante` that sets exactly these
-(AES67 group, L24/48k, RFC 7273 clock line). In the routed model you
-reproduce it by pointing `module-rtp-sink` at the AES67 group with the
-`ts-refclk`/`media-clock` props above and running `ptp4l`. No extra
-hardware beyond the PTP source — but the PTP discipline is non-optional,
-and a misordering/offload-heavy NIC will fail Dante's tighter timing.
+Point `module-rtp-sink` at the AES67 group with the `ts-refclk`/
+`media-clock` props above and run `ptp4l`. No extra hardware beyond the
+PTP source — but the PTP discipline is non-optional, and a
+misordering/offload-heavy NIC will fail Dante's tighter timing.
 
 ---
 

@@ -48,8 +48,7 @@ RequiredForOnline=no
 ```
 Apply: `systemctl enable --now systemd-networkd && networkctl reload`, then
 `networkctl status reac0` should show it `carrier`/`up` with no IP. Point the
-service config at it: `REAC_IFACE=reac0` in `/etc/reac-pw/reac-pw.conf` (or
-`reac-aes67.conf`).
+service config at it: `REAC_IFACE=reac0` in `/etc/reac-pw/reac-pw.conf`.
 
 If the desk is on an **untagged** segment, skip the VLAN entirely and set
 `REAC_IFACE=enp1s0` (still leave that NIC address-less if it carries only REAC).
