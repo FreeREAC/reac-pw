@@ -76,7 +76,8 @@ wait_for() {   # wait_for <pattern> <secs>
 
 # THE GRAPH, as this daemon's own nodes: pw-dump resolved node -> client.id -> client, so
 # nothing else in this namespace can be mistaken for its work. One line per node:
-# <node.name> <reac.segment> <reac.master.state> <reac.cfg.role.state> <reac.master.refusal>
+# <node.name> <reac.segment> <reac.master.state> <reac.cfg.role.state>
+# <reac.master.refusal> <reac.pace.source>
 daemon_nodes() {
 	pw-dump | python3 -c '
 import json,sys
@@ -90,7 +91,7 @@ for o in d:
     if int(p.get("client.id",-1)) not in mine: continue
     print(p.get("node.name","?"), p.get("reac.segment","(none)"),
           p.get("reac.master.state","(none)"), p.get("reac.cfg.role.state","(none)"),
-          p.get("reac.master.refusal","(none)"))
+          p.get("reac.master.refusal","(none)"), p.get("reac.pace.source","(none)"))
 ' "$1"
 }
 # The line for the node that carries segment <seg>, or nothing.
@@ -166,6 +167,15 @@ TAPDOOR=$(door_of $PID tapdr0)
 	echo "      PERFORMED because there is nothing to perform it against: $TAPDOOR"; exit 1; }
 [ "$(echo "$TAPDOOR" | awk '{print $5}')" = "none" ] || {
 	echo "FAIL: the tap's door publishes a refusal on a wire it never refused: $TAPDOOR"; exit 1; }
+# AND IT SAYS WHO IS TIMING THIS WIRE: nobody. `free-run` is libreac's declared answer for
+# "we time it, disciplined by nothing" and is what reac_segment_answer_slave composes when
+# nothing has been heard — its header says so outright: "Unheard, nothing is timing it and
+# the honest answer is the reported fallback, never silence." `enum reac_pace_source` has
+# no `none` and reac-pw does not invent one; what a vacant door must never publish is
+# `foreign-master`, which would claim a peer is pacing a wire nobody heard.
+[ "$(echo "$TAPDOOR" | awk '{print $6}')" = "free-run" ] || {
+	echo "FAIL: the vacant door claims the pace of a wire it has heard nothing on:"
+	echo "      pace.source '$(echo "$TAPDOOR" | awk '{print $6}')' — $TAPDOOR"; exit 1; }
 # AND THE JOURNAL SAYS WHICH OF THE THREE IT IS DOING, said in the tap's own words rather
 # than in a wire role it does not present.
 grep -q "\[tapdr0\] pinned tap" "$LOG" || {
@@ -204,6 +214,13 @@ done
 [ "$(echo "$MSTDOOR" | awk '{print $3}')" = "us" ] || {
 	echo "FAIL: the master's door never published a master state; a row keyed on this"
 	echo "      door would render a segment with no arbitration at all: $MSTDOOR"; exit 1; }
+# AND ITS PACE TOO, in the same update. With nothing plugged in there is nothing to
+# discipline to, so `free-run` is the answer here as well — and the point is that the key
+# is PUBLISHED: it rode the sighting sequence's spam guard, which never moves on a wire
+# with no device on it.
+[ "$(echo "$MSTDOOR" | awk '{print $6}')" = "free-run" ] || {
+	echo "FAIL: the master's door publishes pace.source '$(echo "$MSTDOOR" | awk '{print $6}')'"
+	echo "      while driving a wire with nothing on it to discipline to: $MSTDOOR"; exit 1; }
 
 echo "OK: every pinned segment has a door before the wire says anything"
 echo "    tap    : $TAPDOOR"
