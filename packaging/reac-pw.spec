@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.2}
+Version:        %{?version_override}%{!?version_override:1.0.3}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -108,6 +108,20 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.3-1
+- A DOOR FOR EVERY PINNED OR HEARD SEGMENT (openmixer master-arbitration §6 Q5, option C):
+  a segment pinned `tap` with a silent wire, and a pinned master with no box, published no
+  node at all — so no console row, and no way to set the role of the segment that needed
+  it. Both publish one now, honestly empty, with zero ports until a geometry is known.
+- Beside a desk, a segment that resolves its own role is served as a TAP and never as a
+  courting slave (libreac bounded-ungranted-courtship, ruling 2026-09-14 option C).
+  `recorder` stays an explicit choice; a box mastering the wire is still joined.
+- A segment whose master leaves is re-decided instead of courting nobody (#97): a pin is
+  taken up again, `auto` re-hears the wire.
+- A NIC once heard as a trunk stops being one when the cable is re-purposed (#98), and the
+  topology tap no longer takes this daemon's own transmissions for a peer's.
+- The unit no longer passes reac-pw.env as EnvironmentFile= (#100): systemd cannot parse a
+  per-segment key with a dot in it, and the daemon reads that file itself.
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.2-1
 - The tap role (REAC_ROLE_<segment>=tap): listen, never transmit — a capture node for the
   desk's downstream and one per box, no playback, no clock claim (tests/tap-sends-nothing.sh).
