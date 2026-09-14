@@ -449,6 +449,17 @@ test('reac_tap_sends_nothing',
   args : [courtship_probe, tap_probe],
   timeout : 120)
 
+# --- whole-binary test: a re-purposed cable stops being a trunk (#98) --------------
+#
+# Measured on the rig 2026-09-13: a USB NIC classified a trunk on a switch mirror was moved
+# onto a stagebox directly, and its pinned master answered `untagged REAC on a trunk's
+# native VLAN is not served` until the daemon was restarted. The classification is about
+# what the link carries NOW.
+test('reac_trunk_classification_is_about_now',
+  find_program('tests/trunk-classification-is-about-now.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 240)
+
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment

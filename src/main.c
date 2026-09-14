@@ -1829,7 +1829,28 @@ struct topo_tap {
 	struct spa_source *io;
 	struct hearing *h;
 	int said_trunk;            /* "this parent is a trunk, not a segment", said once */
+	/* WHAT THIS CABLE CARRIES **NOW** (#98). The topology table is deliberately kept
+	 * across a link bounce — deleting it would destroy the segments the ifscan hold
+	 * exists to preserve — but the TRUNK VERDICT is a claim about the present, and
+	 * across a re-patch it was not. Measured on the rig 2026-09-13: a USB NIC spent an
+	 * hour on a switch mirror, was classified a trunk, was then moved onto an S-4000M
+	 * directly, and its pinned master answered `untagged REAC on a trunk's native VLAN
+	 * is not served` — the box got no master until the daemon was restarted. So the tap
+	 * stamps its own link-up and remembers whether a tag has been heard SINCE it; a
+	 * verdict with no tag behind it since this cable came up is stale and does not
+	 * refuse anything. Both are reset by topo_watch_iface's memset at every link-up. */
+	uint64_t linkup_ns;
+	int tagged_since_linkup;
+	int said_stale;            /* "no tag since link-up, serving it untagged", said once */
 };
+
+/* HOW LONG AFTER LINK-UP A TRUNK MUST PROVE ITSELF AGAIN (#98). Read off the cadence,
+ * like every other window here: anything mastering a VLAN on this parent transmits at
+ * the wire cadence — thousands of tagged frames a second — so a trunk that is still a
+ * trunk is heard almost immediately. Three master announce cadences (REAC_HUNT_WINDOW_NS)
+ * is the same bar the hunt uses for "nothing decides this wire", and it survives a PHY
+ * renegotiation and a switch port coming out of listening state. */
+#define REACPW_TRUNK_RECLASSIFY_NS REAC_HUNT_WINDOW_NS
 
 struct hearing {
 	int enabled;
@@ -2208,6 +2229,8 @@ static void on_topo_io(void *data, int fd, uint32_t mask)
 		uint16_t vid = 0;
 		if (reac_topo_tap_next(&tp->tap, &k, &vid) <= 0)
 			break;
+		if (k == REAC_TOPO_TAGGED)
+			tp->tagged_since_linkup = 1;   /* #98: this cable carries tags NOW */
 		reac_topo_saw(&tp->h->topo, tp->parent, k, vid, now);
 	}
 }
@@ -2281,7 +2304,29 @@ static void topo_watch_iface(struct hearing *h, const char *name)
 	}
 	memset(tp, 0, sizeof *tp);
 	snprintf(tp->parent, IFNAMSIZ, "%s", name);
+	tp->linkup_ns = monotonic_ns();   /* #98: the trunk verdict is re-proved from here */
 	tp->tap = tap;
+	/* OUR OWN FRAMES ARE NOT EVIDENCE ABOUT THIS PARENT, and on THIS socket they are
+	 * delivered: the tap is ETH_P_ALL, and ptype_all is the one place a locally
+	 * GENERATED frame turns up. Every frame this daemon puts on a `<parent>.<vid>`
+	 * netdev egresses the parent TAGGED, so a segment of ours on a VLAN was proving the
+	 * parent a trunk by talking — measured while writing the #98 test: a re-patched
+	 * cable stayed a trunk for ever because our own minted VLAN's master kept
+	 * re-proving it, and the same echo kept that VID alive in the table past its
+	 * withdrawal hold. Same law as the sniffer's own MAC filter (reac_mac.h) and
+	 * reac_disco's self-filter; the kernel just spells it as a sockopt here.
+	 *
+	 * BEST-EFFORT BY NATURE (Linux 4.20+), and reported rather than assumed: without it
+	 * the classification is merely conservative — a parent keeps reading as a trunk,
+	 * which refuses rather than double-delivers. */
+	{
+		int on = 1;
+		if (setsockopt(reac_topo_tap_fd(&tp->tap), SOL_PACKET, PACKET_IGNORE_OUTGOING,
+		               &on, sizeof on) != 0)
+			fprintf(stderr, "reac-pw: [%s] the topology tap cannot ignore our own "
+			        "transmissions (%s) — a VLAN of ours on this parent will keep it "
+			        "classified as a trunk\n", name, strerror(errno));
+	}
 	tp->h = h;
 	tp->io = pw_loop_add_io(h->loop, reac_topo_tap_fd(&tp->tap), SPA_IO_IN, false, on_topo_io, tp);
 	if (!tp->io) {
@@ -2397,6 +2442,32 @@ static void topo_release(struct hearing *h, const char *parent, uint16_t vid, in
 }
 
 /* Do what the topology table says. Main loop only, like hearing_apply. */
+/* IS THIS PARENT A TRUNK RIGHT NOW? (#98)
+ *
+ * `reac_topo_is_trunk` answers "has tagged REAC EVER been heard here", which is the right
+ * question for the table (a VLAN's netdev must outlive a box power-cycle) and the wrong
+ * one for a refusal. A refusal has to be about the cable as it is: the trunk verdict is
+ * believed while a tag has been heard since this link came up, and for one re-proof
+ * window after link-up so a freshly-linked trunk is not served untagged in the gap before
+ * its first tagged frame. Past that window with no tag, the parent is an ordinary segment
+ * again and is served as one — which is what a re-patched cable is.
+ *
+ * The window compare is written so it cannot wrap: unsigned time subtracts in the right
+ * order or not at all (the same trap reac_watch_decide's dwell documents). */
+static int topo_trunk_now(struct hearing *h, const char *parent, uint64_t now)
+{
+	if (!reac_topo_is_trunk(&h->topo, parent))
+		return 0;
+	struct topo_tap *tp = tap_find(h, parent);
+	if (!tp || tp->tagged_since_linkup)
+		return 1;
+	/* NO TAP OF OUR OWN means we cannot see tags at all, and absence of the fact is
+	 * not evidence against it: the table's answer stands (tap_find NULL, above). */
+	if (now <= tp->linkup_ns)
+		return 1;
+	return now - tp->linkup_ns < REACPW_TRUNK_RECLASSIFY_NS;
+}
+
 static void topo_apply(struct hearing *h, uint64_t now)
 {
 	/* THE PARENT OF A TRUNK IS NOT A SEGMENT (§3, fact B). Said once, and acted on: a
@@ -2406,6 +2477,19 @@ static void topo_apply(struct hearing *h, uint64_t now)
 		struct topo_tap *tp = &h->tap[i];
 		if (!tp->parent[0] || !reac_topo_is_trunk(&h->topo, tp->parent))
 			continue;
+		/* #98: the verdict is stale — this cable has carried no tag since it came up,
+		 * so it is not a trunk any more and nothing on it is refused for being one. */
+		if (!topo_trunk_now(h, tp->parent, now)) {
+			if (!tp->said_stale) {
+				tp->said_stale = 1;
+				fprintf(stderr, "reac-pw: [%s] tagged REAC was heard on this parent "
+				        "before, and NOT ONCE since it came up %llu ms ago — the "
+				        "cable has been re-purposed, so it is an ordinary segment "
+				        "again and untagged REAC on it is served\n", tp->parent,
+				        (unsigned long long)(REACPW_TRUNK_RECLASSIFY_NS / 1000000ULL));
+			}
+			continue;
+		}
 		if (!tp->said_trunk) {
 			tp->said_trunk = 1;
 			fprintf(stderr, "reac-pw: [%s] this parent carries tagged REAC, so it is "
@@ -2563,7 +2647,10 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		 * already queued on both sockets, and nothing at all where no tap exists (a
 		 * sub-interface, or a tap that could not open — both said in the journal). */
 		const struct reac_topo_parent *tp = reac_topo_find(&h->topo, sn->name);
-		if (tp && tp->tagged > 0)
+		/* #98: `tagged > 0` is "a tag was EVER heard here", and a re-patched cable
+		 * made that a permanent refusal. The hunt asks about the wire as it is now,
+		 * so it reads the same freshness topo_apply does. */
+		if (tp && tp->tagged > 0 && topo_trunk_now(h, sn->name, now))
 			continue;
 		if (tp && tp->untagged == 0 && reac_hunt_heard_anything(&sn->hunt))
 			continue;
