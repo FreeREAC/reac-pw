@@ -159,20 +159,29 @@ rule above exists to avoid.
 ## Releasing
 
 `.github/workflows/release-rpm.yml` builds the reac-pw RPM in a `fedora:44`
-container from `packaging/reac-pw.spec` and publishes it into the same shared
-dnf tree FreeMixer/openmixer's own release publishes into (one repo, one
-`openmixer.repo`, one GPG key). It is `workflow_dispatch` only, never on push:
+container from `packaging/reac-pw.spec` and publishes it into the public dnf
+tree at [freereac.github.io/rpm](https://freereac.github.io/rpm) (one repo,
+`freereac.repo`, one GPG key) — the same tree libreac's own release-rpm.yml
+publishes into beside it. It is `workflow_dispatch` only, never on push:
 
 ```
 gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=false   # dry run, publishes nothing
-gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=true    # signs and pushes to the shared R2 bucket
+gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=true    # signs and publishes to the public dnf tree
 ```
 
 `tag` must already exist and match `v[0-9]*`. `sign` defaults to `false`,
-which stops before the push step — the assembled tree is still attached to the
-run as an artifact for inspection. Building needs `pkgconfig(libreac) >=
-1.0.1` and `pkgconfig(libreac-transport) >= 1.0.1` resolvable from the same
-shared tree, so libreac's own equivalent publish must have landed there first.
+which stops before the tree is touched — the assembled unsigned tree is still
+attached to the run as an artifact for inspection. Building needs
+`pkgconfig(libreac) >= 1.0.1` and `pkgconfig(libreac-transport) >= 1.0.1`,
+resolved from the same public tree by installing its `freereac.repo` before
+`dnf builddep` runs — so **libreac's own equivalent workflow must have
+published there first**, or the build fails loudly and by name.
+
+**Hand-publish fallback**, if the workflow cannot run (no runner, a secret
+missing): build locally and run `packaging/publish-repo.sh --rpm-dir DIR
+--out <checkout of freereac.github.io> --key-id A14B3E1E1F69EBF4`, then
+commit and push `rpm/` from that checkout — the same script the workflow
+calls, run by hand over the same tree.
 
 ## Licence
 
