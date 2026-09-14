@@ -233,6 +233,15 @@ struct reac_sink_node {
 	 * published state ("listening, nothing seen yet"), which a reader must be able to
 	 * tell apart from reac-pw publishing no discovery keys at all. */
 	uint32_t disco_seq_last;
+	/* THE AGGREGATE'S OWN SHADOW, beside the sighting sequence. The disco seq is the
+	 * right spam guard for the DEVICE LIST and the wrong one for the arbitration that
+	 * travels with it: on a wire with nothing on it the seq never moves, so a master
+	 * segment with no box published no reac.master.state AT ALL — the create-time seeds
+	 * below carry the link/box/discovery keys and not these. A console keying a row on
+	 * this door then read an arbitration of `(none)` for as long as the stage was cold
+	 * (measured with the Q5 door, 2026-09-14). -1 is "nothing published yet" and is not
+	 * a value of the enum. */
+	int arb_state_last;
 	const char *disco_ifname;               /* the segment we can honestly speak for */
 
 	/* ProcessLatency smoother (task #152): EMA of the drain-observed ring depth +
@@ -1136,7 +1145,12 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 {
 	if (!n->stream)
 		return;
-	if (n->pacer.disco.seq == n->disco_seq_last)
+	/* THE AGGREGATE IS DECIDED FIRST, because it is half of what this publish is for and
+	 * the guard has to be able to see it move. */
+	struct reac_arbitration arb;
+	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
+	               reac_pacer_pace_source(&n->pacer), reac_pacer_mono_ns(), &arb);
+	if (n->pacer.disco.seq == n->disco_seq_last && (int)arb.state == n->arb_state_last)
 		return;   /* unchanged: do not spam pw_filter_update_properties */
 
 	char devices[REAC_DISCO_JSON_MAX];
@@ -1160,10 +1174,6 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 	 * clock (api.alsa.0)` while this row read `free-run`. It is ASKED of the pacer now,
 	 * which is the only thing that knows what the DLL is steering to — and only a LOCKED
 	 * discipline names a reference, so a claim is never dressed up as a lock. */
-	struct reac_arbitration arb;
-	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
-	               reac_pacer_pace_source(&n->pacer), reac_pacer_mono_ns(), &arb);
-
 	char master_mac[24];
 	if (arb.have_mac)
 		snprintf(master_mac, sizeof master_mac, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -1198,6 +1208,7 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		pw_stream_update_properties(n->stream, &props->dict);
 		pw_properties_free(props);
 		n->disco_seq_last = n->pacer.disco.seq;
+		n->arb_state_last = (int)arb.state;
 	}
 }
 
@@ -1458,6 +1469,12 @@ static void on_log_timer(void *data, uint64_t expirations)
  * the role-default text). Single formatter used at (re)build AND relabel. */
 static void sink_build_desc(char *desc, size_t sz, const char *label, int channels)
 {
+	if (channels == 0) {
+		/* THE DOOR BEFORE THE BOX. Not "REAC 0ch playback": a width of zero is not a
+		 * narrow node, it is the absence of a recognized box said out loud. */
+		snprintf(desc, sz, "REAC segment door (no box recognized yet)");
+		return;
+	}
 	if (label && *label)
 		snprintf(desc, sz, "%s — %d ch (REAC box outputs)", label, channels);
 	else
@@ -1556,6 +1573,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	n->box_model_last = NULL;
 	n->box_mac_last = 0;
 	n->disco_seq_last = 0;
+	n->arb_state_last = -1;
 	n->link_drops_seen = 0;
 	for (int i = 0; i < 8; i++)
 		n->link_drops_seen += atomic_load_explicit(&n->pacer.drops[i],
@@ -1731,6 +1749,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->box_model_last = NULL;
 	n->box_mac_last = 0;
 	n->disco_seq_last = 0;
+	n->arb_state_last = -1;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
 
@@ -1797,7 +1816,21 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	if (!n)
 		return -1;
 	int want = channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : channels;
-	if (want < 1)
+	/* ZERO IS A WIDTH, AND IT IS THE DOOR'S (arbitration §6 Q5, ANSWERED 2026-09-14,
+	 * option C). A master with no box recognized had NO NODE AT ALL — the graph filter
+	 * is deferred until a box declares its geometry — and this node is the master
+	 * segment's DOOR: the one that carries reac.segment and accepts reac.cfg.role.
+	 * So a pinned master on a cold stage published nothing, the console had no
+	 * `/reac/segment` row, and the operator could not change the role of the segment
+	 * that most needed changing (measured on the rig, 2026-09-14).
+	 *
+	 * ZERO PORTS, NOT A PLACEHOLDER WIDTH. The deferral's own rule — nothing plugged is
+	 * nothing in the graph — is about the AUDIO, and it is kept exactly: a door with no
+	 * ports is a door nobody can patch into, so no signal can be routed to a box that
+	 * is not there and then silently re-routed away by the rebuild when one appears.
+	 * Sizing it to 40 instead would offer the operator forty sends into nothing.
+	 * Negative is still a refusal — it is a caller's arithmetic error, never a width. */
+	if (want < 0)
 		return -1;
 	char want_label[64];
 	snprintf(want_label, sizeof want_label, "%s", label ? label : "");

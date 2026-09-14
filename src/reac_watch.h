@@ -67,8 +67,23 @@ const char *reac_watch_act_name(enum reac_watch_act a);
  * one does whether or not it is pinned, because a refusal with no engine behind it has
  * nothing else that could ever notice the rival leaving (0.5.1's door). A pinned master
  * does not — a pin is an answer, and the one thing a rival can do to it is the 0.5.1
- * refusal, which is decided by that segment's own engine. A wire we JOINED was never
- * ours to lose, and an undecided one is not served at all.
+ * refusal, which is decided by that segment's own engine.
+ *
+ * A SEGMENT WE JOINED STILL DOES NOT, AND #97 IS NOT AN EXCEPTION TO THAT — MEASURED.
+ * The issue is real (a slave whose master left courted an empty wire for ever), but the
+ * sniffer's discovery table is the wrong evidence for it: a box master's stream is mostly
+ * FILLER, which the peer lock deliberately refuses to treat as a sighting, so the wire
+ * LOOKS empty while an enrolment is in progress. Keeping the sniffer on a SLAVE serve
+ * made the daemon retake the wire 6 s into a live box-master join and destroy it
+ * (tests/box-master-slave-join.sh, red on exactly that). The answer to #97 is the
+ * SEGMENT'S OWN evidence — reac_segment_heard, the latch that says whether the master's
+ * frames are still arriving and decoding — read by main.c's hearing_reevaluate. It lives
+ * there and not here because it is not a verdict about the wire; it is a fact about the
+ * engine that is running on it.
+ *
+ * An UNDECIDED segment IS served since the Q5 door ruling (a VACANT DOOR: the segment
+ * exists, nothing is behind it) and it keeps its sniffer — that door's whole purpose is
+ * to be replaced by the first verdict that does decide the wire.
  */
 int reac_watch_keep(enum reac_hunt_verdict served, int pinned);
 
@@ -80,6 +95,11 @@ struct reac_watch_in {
 	int we_master;
 	/** `REAC_ROLE_<segment>` answered for this wire. */
 	int pinned;
+	/** This door has nothing behind it because nothing has been heard yet, as opposed
+	 *  to because a rival was refused (main.c's `door_vacant`). A vacant door waits
+	 *  out no dwell: it was put up in the ABSENCE of evidence, so the first evidence
+	 *  that arrives is what it was waiting for. */
+	int vacant;
 	/** What the kept sniffer's hunt says about the wire NOW. */
 	enum reac_hunt_verdict verdict;
 	/** The poll's clock, read once at the top of the poll. */

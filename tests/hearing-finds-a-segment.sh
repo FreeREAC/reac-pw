@@ -284,13 +284,29 @@ if grep -q "\[hear0\] no REAC heard in" "$LOG"; then
 	echo "FAIL: a desk was streaming on hear0 and the daemon called the wire silent"
 	cat "$LOG"; exit 1
 fi
-# AND ON THE RIGHT END OF THE PAIRING. A desk masters this wire, so the daemon joins it as
-# a SLAVE and follows its pace. Nothing was configured to say so; the verdict came from
-# the frames.
+# AND ON THE RIGHT END OF THE PAIRING. A desk masters this wire, so the daemon DEFERS to
+# it: served as a TAP, which transmits nothing at all. Nothing was configured to say so;
+# the verdict came from the frames.
+#
+# IT WAS A COURTING SLAVE UNTIL 2026-09-14, and the operator's ruling on libreac's
+# bounded-ungranted-courtship spec (option C) is why it is not. Beside a real M-200 our
+# courting slave kept that desk's own S-1608 from enrolling for 180 s, and once the desk
+# had granted our slave it blocked the box outright — four trials, 2026-09-12. `recorder`
+# (REAC_ROLE_<segment>=slave) is still available and still courts; nothing RESOLVES to it
+# beside a desk any more.
 grep -q "\[hear0\] a desk masters this segment" "$LOG" || {
 	echo "FAIL: a desk was mastering the wire and the hunt did not say so"; cat "$LOG"; exit 1; }
-grep -q "\[hear0\] segment up (slave, chosen by hearing the wire)" "$LOG" || {
-	echo "FAIL: served, but not as the slave the wire called for"; cat "$LOG"; exit 1; }
+grep -q "\[hear0\] segment up (tap, deferring to the master it heard)" "$LOG" || {
+	echo "FAIL: served, but not as the tap the ruling calls for beside a desk"; cat "$LOG"; exit 1; }
+# AND THE SENTENCE IS THE ACT. The hunt's own line said "joining it as SLAVE" over a
+# segment that went on to be served as a tap; one predicate answers both now.
+grep -q "\[hear0\] a desk masters this segment .* — TAPPING it" "$LOG" || {
+	echo "FAIL: the journal announced a role the daemon did not take"; cat "$LOG"; exit 1; }
+# NOT ONE FRAME FROM US on a desk's wire is the whole point of the role; the absence is
+# measured with its own positive control in tests/tap-sends-nothing.sh, and asserted here
+# as the JOURNAL's claim that no TX socket was opened at all.
+grep -q "\[hear0\] TAP up at .* NOTHING is transmitted on this segment" "$LOG" || {
+	echo "FAIL: served as a tap and never said it opened no TX side"; cat "$LOG"; exit 1; }
 # THE PROBE'S OWN POSITIVE CONTROL. Everything below asks the graph what is NOT there, and
 # a graph query that silently matches nothing answers exactly like a missing node — which
 # is how the first version of this check passed while listing nothing at all. Prove it can
@@ -544,8 +560,12 @@ KDESKPID=$!
 wait_for "\[cold1\] a desk masters this segment .* yielding the master role" 25 || {
 	echo "FAIL: a desk took the wire we were driving and we did not yield"
 	tail -25 "$LOG"; tail -5 "$PEER"; exit 1; }
-wait_for "\[cold1\] segment up (slave, chosen by hearing the wire)" 15 || {
-	echo "FAIL: yielded, but never came back up as the slave"; tail -25 "$LOG"; exit 1; }
+# AND IT COMES BACK AS A TAP, not as a courting slave (courtship ruling 2026-09-14,
+# option C). A yield to a desk is the same deferral the first phase makes on a wire a desk
+# already held; the two must not be two different answers to one fact.
+wait_for "\[cold1\] segment up (tap, deferring to the master it heard)" 15 || {
+	echo "FAIL: yielded, but never came back up as the tap the ruling calls for"
+	tail -25 "$LOG"; exit 1; }
 # AND WE STOPPED DRIVING. A yield that leaves our pacer on the wire is two masters with a
 # polite log line.
 #
@@ -616,9 +636,21 @@ $in_peer "$BIN" --live vbox0 --tx vbox0 --role slave --box-channels 16 --name vb
 VBOXPID=$!
 # AND THE BOX IS OURS: granted, enrolled, established. "The box is no longer granted by
 # us" below is an ABSENCE claim, so it is worth nothing until this presence is on record.
+VLINE0=$(LINE0)
 wait_for "\[venue0\] autodetected" 25 || {
 	echo "FAIL: driving venue0 never enrolled the box that answered"
 	tail -25 "$LOG"; tail -5 "$RT/venue-box.log"; exit 1; }
+# ESTABLISHED, NOT MERELY RECOGNIZED, AND THAT IS NOT A DETAIL. `autodetected` is printed
+# when the box's CONFIG-ANNOUNCE is read, which happens in GRANTING -- before the grant
+# has been accepted and the pair is streaming. This phase's last assertion (further down)
+# requires the box to have ESTABLISHED at some point, so gating on the weaker line let the
+# desk be switched on INSIDE the handshake: the grant was re-sent to a box that was still
+# cold-connecting, we yielded mid-grant, and the phase failed at its own end over a
+# condition it had never actually waited for. The bar is the master's own FSM, anchored to
+# this phase so an earlier segment's ESTABLISHED cannot answer for it.
+wait_for_since "$VLINE0" "reac-master: .* -> ESTABLISHED" 25 || {
+	echo "FAIL: venue0 recognized the box and the pair never established"
+	tail -30 "$LOG"; tail -5 "$RT/venue-box.log"; exit 1; }
 sleep 1
 daemon_nodes $PID | grep -q "^reac-playback.venue0 " || {
 	echo "FAIL: venue0 is master and has no playback door -- the graph probe would then"
@@ -664,8 +696,10 @@ VDESKPID=$!
 wait_for "\[venue0\] a desk masters this segment .* yielding the master role" 5 || {
 	echo "FAIL: a desk took a wire we had won by hearing a box, and we did not yield"
 	tail -30 "$LOG"; tail -5 "$RT/venue-desk.log"; exit 1; }
-wait_for "\[venue0\] segment up (slave, chosen by hearing the wire)" 15 || {
-	echo "FAIL: yielded, but never came back up as the desk's slave"; tail -30 "$LOG"; exit 1; }
+# AS A TAP, since the courtship ruling of 2026-09-14 (option C): a desk's own boxes are
+# what a courting slave of ours blocks, and this segment has a box on it.
+wait_for "\[venue0\] segment up (tap, deferring to the master it heard)" 15 || {
+	echo "FAIL: yielded, but never came back up as the desk's tap"; tail -30 "$LOG"; exit 1; }
 # AND THE BOX IS NO LONGER GRANTED BY US. Two independent facts, because one of them
 # alone is a shape: the master DOOR is off the graph (a slave publishes no
 # reac-playback.<segment> -- reac_source_node.c's "what is not here is not an omission"),
