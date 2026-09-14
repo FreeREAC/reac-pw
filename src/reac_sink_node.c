@@ -233,15 +233,27 @@ struct reac_sink_node {
 	 * published state ("listening, nothing seen yet"), which a reader must be able to
 	 * tell apart from reac-pw publishing no discovery keys at all. */
 	uint32_t disco_seq_last;
-	/* THE AGGREGATE'S OWN SHADOW, beside the sighting sequence. The disco seq is the
-	 * right spam guard for the DEVICE LIST and the wrong one for the arbitration that
-	 * travels with it: on a wire with nothing on it the seq never moves, so a master
-	 * segment with no box published no reac.master.state AT ALL — the create-time seeds
-	 * below carry the link/box/discovery keys and not these. A console keying a row on
-	 * this door then read an arbitration of `(none)` for as long as the stage was cold
-	 * (measured with the Q5 door, 2026-09-14). -1 is "nothing published yet" and is not
-	 * a value of the enum. */
+	/* THE AGGREGATE'S OWN SHADOW, beside the sighting sequence.
+	 *
+	 * THE SEQ IS THE RIGHT SPAM GUARD FOR THE DEVICE LIST AND THE WRONG ONE FOR THE
+	 * ARBITRATION THAT TRAVELS WITH IT, and both halves of that were measured. On a wire
+	 * with nothing on it the seq never moves, so a master segment with no box published
+	 * no reac.master.state at all — the create-time seeds carry the link/box/discovery
+	 * keys and not these (Q5 door, 2026-09-14). And on a wire with a box on it the seq
+	 * stops moving once the roster settles, while the PACE goes on changing: the DLL
+	 * locks to the box's counter slope minutes into a session, which is neither a new
+	 * sighting nor a new master state. The row then keeps whatever it last stamped, for
+	 * ever. Measured in the 1.0.3 RPM's %check: the door read `free-run` beside
+	 * `reac-clock: locked to box counter slope (S-1608)` in the very same journal —
+	 * which is the 2026-09-08 rig defect this key exists to make impossible.
+	 *
+	 * So the guard watches EVERYTHING this publish carries, not a proxy for it. -1 /
+	 * UINT64_MAX are "nothing published yet" and are not values of their fields. */
 	int arb_state_last;
+	int arb_pace_last;
+	int arb_rival_last;
+	int arb_conflict_last;
+	uint64_t arb_mac_last;
 	const char *disco_ifname;               /* the segment we can honestly speak for */
 
 	/* ProcessLatency smoother (task #152): EMA of the drain-observed ring depth +
@@ -1150,7 +1162,13 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 	struct reac_arbitration arb;
 	reac_arbitrate(&n->pacer.disco, n->pacer.master.src, n->pacer.master.state,
 	               reac_pacer_pace_source(&n->pacer), reac_pacer_mono_ns(), &arb);
-	if (n->pacer.disco.seq == n->disco_seq_last && (int)arb.state == n->arb_state_last)
+	uint64_t arb_mac = arb.have_mac ? reac_mac48_pack(arb.mac) : 0;
+	if (n->pacer.disco.seq == n->disco_seq_last &&
+	    (int)arb.state == n->arb_state_last &&
+	    (int)arb.pace == n->arb_pace_last &&
+	    (int)arb.rival == n->arb_rival_last &&
+	    arb.conflict == n->arb_conflict_last &&
+	    arb_mac == n->arb_mac_last)
 		return;   /* unchanged: do not spam pw_filter_update_properties */
 
 	char devices[REAC_DISCO_JSON_MAX];
@@ -1209,6 +1227,10 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		pw_properties_free(props);
 		n->disco_seq_last = n->pacer.disco.seq;
 		n->arb_state_last = (int)arb.state;
+		n->arb_pace_last = (int)arb.pace;
+		n->arb_rival_last = (int)arb.rival;
+		n->arb_conflict_last = arb.conflict;
+		n->arb_mac_last = arb_mac;
 	}
 }
 
@@ -1574,6 +1596,10 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	n->box_mac_last = 0;
 	n->disco_seq_last = 0;
 	n->arb_state_last = -1;
+	n->arb_pace_last = -1;
+	n->arb_rival_last = -1;
+	n->arb_conflict_last = -1;
+	n->arb_mac_last = UINT64_MAX;
 	n->link_drops_seen = 0;
 	for (int i = 0; i < 8; i++)
 		n->link_drops_seen += atomic_load_explicit(&n->pacer.drops[i],
@@ -1750,6 +1776,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->box_mac_last = 0;
 	n->disco_seq_last = 0;
 	n->arb_state_last = -1;
+	n->arb_pace_last = -1;
+	n->arb_rival_last = -1;
+	n->arb_conflict_last = -1;
+	n->arb_mac_last = UINT64_MAX;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
 

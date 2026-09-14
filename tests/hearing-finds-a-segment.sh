@@ -661,7 +661,27 @@ daemon_nodes $PID | grep -q "^reac-playback.venue0 " || {
 # built its arbitration with the constant. The row is asserted against the journal rather
 # than against a value this namespace happens to produce -- what a private PipeWire with no
 # hardware offers as a reference is not the rig's business, but AGREEING is.
-VPACE=$(fld "$(daemon_node_props $PID reac-playback.venue0)" 12)
+# READ TOGETHER, AND GIVEN TIME TO AGREE. The pace CHANGES while a segment runs — the DLL
+# locks to the box's counter slope some seconds into the session — so reading the two once
+# asks whether they happened to be in step at one instant. What the key is for is that the
+# row CONVERGES on what the daemon is keeping, so both are re-read until they do. Without
+# that convergence the row never catches up at all: measured in the 1.0.3 RPM's %check,
+# the door read `free-run` beside `locked to box counter slope (S-1608)` in the same
+# journal, because the props publish was guarded on the SIGHTING SEQUENCE and a pace
+# change is not a sighting. 15 s is ~75 publish ticks and cannot pass by waiting.
+for ((i = 0; i < 30; i++)); do
+	VPACE=$(fld "$(daemon_node_props $PID reac-playback.venue0)" 12)
+	CLK=$(grep "reac-clock:" "$LOG" | tail -1)
+	case "$CLK" in
+		*"locked to graph clock"*)       W=graph-ref ;;
+		*"locked to NIC/external PHC"*)  W=phc ;;
+		*"locked to box counter slope"*) W=box-slope ;;
+		*"locked to master cadence"*)    W=foreign-master ;;
+		*)                               W=free-run ;;
+	esac
+	[ "$VPACE" = "$W" ] && break
+	sleep 0.5
+done
 # The transcript is the daemon's other publication of the same fact, and the last line of
 # it is the state it is in. Only "locked to X" names a reference: "acquiring" is a claim
 # about the future and "holdover" is a frozen period nothing is steering, and both run on
