@@ -8,8 +8,14 @@
  * libreac-transport and are tested there (`test_reac_etf`, `make test`). What is
  * reac-pw's own contract is the part an OPERATOR touches: the knob's NAME, the fact
  * that it rides the same layered precedence as every other knob — so a segment can
- * be put on one arm and its neighbour on the other for a comparison — and that
- * silence means the thread backend, which is what has always run.
+ * be put on one arm and its neighbour on the other for a comparison — and WHAT
+ * SILENCE MEANS.
+ *
+ * SILENCE MEANS ETF since the operator's ruling of 2026-09-14 ("we must go with
+ * qdisc and etf"), and that is asserted here through reac_pacer_backend_resolve
+ * rather than through the raw lookup, because the default is not a value any layer
+ * carries: it is what the resolver answers when every layer is quiet. A test that
+ * only checked "no layer answered" was green on both sides of the ruling.
  *
  * That last one is the reason this file exists. The comparative run puts one
  * segment on `etf` and one on `thread`; if the per-segment layer did not work for
@@ -20,6 +26,7 @@
  * and CAP_NET_RAW, and neither belongs in a unit test. */
 
 #include <reac/transport/reac_conf.h>
+#include <reac/transport/reac_pacer.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -73,19 +80,66 @@ int main(void)
 	char v[64];
 	enum reac_conf_layer l;
 
-	/* ---- 1. SILENCE IS THE THREAD BACKEND ---------------------------------- *
-	 * Not "etf", not "whatever was last set". A daemon that changed how it paces
-	 * because a file appeared somewhere would be a daemon nobody could reason
-	 * about; the caller's built-in default is reached only when every layer is
-	 * quiet, and that default is the pacer that has always run. */
+	/* ---- 0. SILENCE IS ETF (operator ruling, 2026-09-14) -------------------- *
+	 * The measurement behind the ruling, on the TX device: interval sd 28.5 -> 2.7
+	 * us on the PCI VLAN and 15.3 -> 1.9 us on the USB link, late slots 27-37/s ->
+	 * 0.45/s. This asserts the RESOLVER's answer, not the lookup's layer: the
+	 * default is not a value any layer carries, so a test that only checked "no
+	 * layer answered" is green whichever way the default points — and was.
+	 *
+	 * `layer` is the other half and it is load-bearing. REAC_CONF_NONE is how the
+	 * pacer knows that NOBODY ASKED, which is what lets a missing precondition fall
+	 * back to the thread backend instead of refusing to open. An explicit "etf"
+	 * must never reach the pacer looking like a default. */
+	{
+		enum reac_conf_layer blay = (enum reac_conf_layer)-1;
+		int understood = 0;
+		unsetenv(KEY);
+		enum reac_pacer_backend be =
+			reac_pacer_backend_resolve("enp131s0.11", home, &blay, &understood);
+		CHECK(be == REAC_PACER_BACKEND_ETF,
+		      "with nothing set the backend resolved to '%s'; the default is etf",
+		      reac_pacer_backend_name(be));
+		CHECK(blay == REAC_CONF_NONE,
+		      "an unset knob claimed layer %s — the pacer reads this to know that "
+		      "nobody asked", reac_conf_layer_name(blay));
+		CHECK(understood == 1, "an unset knob was reported as not understood");
+
+		/* THE OPT-OUT STILL WORKS, and it arrives as a CHOICE (a layer answered),
+		 * which is what makes an ETF refusal fatal for an explicit ask and
+		 * survivable for the default. */
+		setenv(KEY, "thread", 1);
+		be = reac_pacer_backend_resolve("enp131s0.11", home, &blay, &understood);
+		CHECK(be == REAC_PACER_BACKEND_THREAD,
+		      "REACPW_PACER=thread resolved to '%s'", reac_pacer_backend_name(be));
+		CHECK(blay != REAC_CONF_NONE, "an explicit 'thread' claimed no layer");
+
+		setenv(KEY, "etf", 1);
+		be = reac_pacer_backend_resolve("enp131s0.11", home, &blay, &understood);
+		CHECK(be == REAC_PACER_BACKEND_ETF,
+		      "REACPW_PACER=etf resolved to '%s'", reac_pacer_backend_name(be));
+		CHECK(blay != REAC_CONF_NONE, "an explicit 'etf' claimed no layer — the "
+		      "pacer would then treat a refusal as survivable");
+
+		/* A word nobody can parse is not consent: the default is taken AND the
+		 * caller is told, so the journal can say so. */
+		setenv(KEY, "qdisc", 1);
+		be = reac_pacer_backend_resolve("enp131s0.11", home, &blay, &understood);
+		CHECK(understood == 0, "an unparseable backend name was accepted silently");
+		CHECK(be == REAC_PACER_BACKEND_ETF,
+		      "an unparseable backend name did not fall to the default");
+		unsetenv(KEY);
+	}
+
+	/* ---- 1. AND NO LAYER ANSWERS WHEN NOTHING IS SET ------------------------ *
+	 * The lookup's own half of the above. An EMPTY value is a key someone turned
+	 * off, not a key set to "": it must fall through, never be taken as a backend
+	 * name. */
 	unsetenv(KEY);
 	l = reac_conf_lookup(KEY, "enp131s0.11", home, v, sizeof v);
 	CHECK(l == REAC_CONF_NONE, "an unset %s answered from layer %d (%s)", KEY,
 	      (int)l, reac_conf_layer_name(l));
 
-	/* An EMPTY value is a key someone turned off, not a key set to "" — the same
-	 * rule every other knob follows. It must fall through to the default, never be
-	 * taken as a backend name. */
 	setenv(KEY, "", 1);
 	l = reac_conf_lookup(KEY, "enp131s0.11", home, v, sizeof v);
 	CHECK(l == REAC_CONF_NONE, "an EMPTY %s answered from layer %d (%s)", KEY,
@@ -172,6 +226,7 @@ int main(void)
 		return 1;
 	}
 	printf("test_reac_pacer_knob: REACPW_PACER is per-segment, environment over "
-	       "files, silent means thread, and both knobs are documented\n");
+	       "files, SILENT MEANS ETF, an explicit value always carries a layer, and "
+	       "both knobs are documented\n");
 	return 0;
 }

@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.6',
+  version: '1.0.7',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -63,7 +63,11 @@ m_dep        = cc.find_library('m', required : false)
 # libreac satisfies '>=1.0.1' and then fails at link on the missing symbol --
 # or, worse, links against a 30-byte identity and is written 38 bytes of. The
 # floor is what makes the wrong library fail at CONFIGURE.
-libreac_dep = dependency('libreac', version : '>=1.1.0',
+# >=1.1.3 SINCE 1.0.7: <reac/reac_link_state.h> declares REAC_PROP_PACE_BACKEND and
+# REAC_PROP_PACE_REFUSAL, which reac_sink_node.c publishes. A 1.1.2 satisfies '>=1.1.0'
+# and fails at COMPILE on the missing macro -- which is a cheap failure, but the floor
+# should still say what is actually needed rather than what used to be.
+libreac_dep = dependency('libreac', version : '>=1.1.3',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -75,7 +79,12 @@ libreac_dep = dependency('libreac', version : '>=1.1.0',
 # >=1.1.0: struct reac_pacer embeds libreac 1.1.0's grown reac_identity, so it went
 # 24304 -> 24312 bytes and its soname moved to libreac-transport.so.4. This build
 # allocates a reac_pacer, so an older transport is the same size mismatch as above.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.1.0', required : true)
+# >=1.1.3 SINCE 1.0.7: reac_etf_qdisc_install/_remove/_state/_fix (the qdisc the daemon
+# owns) and reac_pacer_backend_refusal are 1.1.3 symbols, and 1.1.3 is also where the
+# pacer's default became etf. A 1.1.2 satisfies '>=1.1.0', links against nothing that is
+# missing at configure time, and fails at LINK -- which is exactly the shape of failure
+# these floors are hand-raised to turn into a configure-time refusal.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.1.3', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
@@ -125,6 +134,7 @@ reac_pw_src = [
   'src/reac_sink_node.c',
   'src/reac_lat.c',
   'src/reac_gain.c',
+  'src/reac_qdisc.c',
 ]
 
 # include_directories('src') is new here: it used to resolve implicitly (a quoted
@@ -405,6 +415,27 @@ fake_box_master = executable('fake-box-master',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, libreac_transport_dep, m_dep],
   install : false)
+
+# --- whole-binary test: the daemon OWNS the qdisc on the device it binds ------
+#
+# ETF is the default backend (2026-09-14). The qdisc and the backend are ONE setting, and
+# with skip_sock_check an etf qdisc DROPS every frame carrying no launch time -- so the
+# rig has already met both failures: an etf daemon with no qdisc stamping launch times
+# nobody honours, and a thread daemon under a leftover etf qdisc transmitting 0 packets in
+# a 60 s window. This drives the real binary over a veth in a private namespace and counts
+# REAC frames ARRIVING AT THE FAR END, because a qdisc eating the wire looks exactly like a
+# healthy daemon from the inside. Its own instrument (tests/etf_wire_probe.c) reads the
+# qdisc through the library's public netlink door, never by scraping `tc`.
+etf_wire_probe = executable('etf-wire-probe',
+  ['tests/etf_wire_probe.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep],
+  install : false)
+
+test('reac_etf_qdisc_owned',
+  find_program('tests/etf-qdisc-owned.sh'),
+  args : [reac_pw_exe, etf_wire_probe],
+  timeout : 300)
 
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),

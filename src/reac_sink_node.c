@@ -42,6 +42,7 @@
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
+#include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
 #include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
 #include <reac/transport/reac_mac.h>
 #include <reac/transport/reac_rx.h>      /* the BOX clock reference measurement source (#75) */
@@ -100,6 +101,9 @@ struct reac_sink_node {
 	struct pw_stream *stream;
 	struct reac_pacer pacer;
 	int pacer_open;
+	/* The qdisc this node put on its TX device, so the destroy takes away
+	 * exactly what the create put there and nothing else. */
+	struct reac_qdisc qdisc;
 	int channels;             /* current filter port count; 0 = no filter yet */
 	int sample_rate;
 	_Atomic int reopen_role;  /* accepted reac.cfg.role change awaiting main's clean
@@ -1417,7 +1421,24 @@ static void sink_publish_health(struct reac_sink_node *n)
 	else
 		snprintf(rmatch, sizeof rmatch, "n/a");
 
+	/* WHICH BACKEND IS REALLY ON THE WIRE, AND WHY. Read off the pacer's handle,
+	 * never off the knob: a pacer whose ETF arming was refused must not be able to
+	 * report the backend that was asked for. ETF is the default since 2026-09-14,
+	 * so `thread` here is either the operator's choice or a refusal, and the second
+	 * row is the difference. A fallback the operator cannot see is the silent no-op
+	 * the whole backend exists to avoid. */
+	const char *backend = reac_pacer_backend_name(reac_pacer_backend(&n->pacer));
+	const char *refusal = reac_pacer_backend_refusal(&n->pacer);
+	char pacer_line[192];
+	if (refusal)
+		snprintf(pacer_line, sizeof pacer_line, "%s (ETF refused: %s)",
+		         backend, refusal);
+	else
+		snprintf(pacer_line, sizeof pacer_line, "%s", backend);
+
 	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_PACE_BACKEND,       backend,
+		REAC_PROP_PACE_REFUSAL,       refusal ? refusal : "none",
 		REAC_PROP_HEALTH_DRIFT_PPM,   drift,
 		REAC_PROP_HEALTH_DISCARD_FPS, dfps,
 		REAC_PROP_HEALTH_DISCARD_MS,  dms,
@@ -1441,11 +1462,12 @@ static void sink_publish_health(struct reac_sink_node *n)
 	fprintf(stderr,
 	        "reac-health: drift %+.1f ppm | discard %.3f frames/s (%.3f ms/s) | "
 	        "ring %u frames (%.2f ms) | late %.2f/s (catchup %.2f/s, dropped %.2f/s, "
-	        "worst debt %u slots) | tx_errors %llu | rate-match %s ppm\n",
+	        "worst debt %u slots) | tx_errors %llu | rate-match %s ppm | "
+	        "pacer %s\n",
 	        h->drift_ppm, h->discard_fps, h->discard_ms_per_s,
 	        h->ring_frames, h->ring_ms, h->late_wakes_ps,
 	        h->slots_catchup_ps, h->slots_dropped_ps, h->slot_debt_max,
-	        (unsigned long long)h->tx_errors, rmatch);
+	        (unsigned long long)h->tx_errors, rmatch, pacer_line);
 }
 
 /* MAIN LOOP: advertise the node's graph->wire delay as SPA_PARAM_ProcessLatency
@@ -1906,12 +1928,39 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	if (n->upstream_ring) {
 		fprintf(stderr, "reac-pw: reac-playback (upstream carrier) — no pacer, no "
 		        "socket: the slave engine puts these channels on the wire\n");
+		/* NO PACER MEANS NO LAUNCH TIMES, WHICH MEANS A LEFTOVER ETF QDISC HERE
+		 * EATS THE SLAVE'S UPSTREAM TOO. The backend is a master-role choice, but
+		 * the hazard is the qdisc's and it does not care which role is sending:
+		 * skip_sock_check drops every unstamped frame. Same sweep as the thread
+		 * backend's, on the device this role binds. */
+		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, 0);
 		return n;
 	}
+	/* THE QDISC, BEFORE THE PACER — because the pacer's ETF arming REFUSES when the
+	 * device carries no etf qdisc, and because the backend and the qdisc are one
+	 * setting whose app owns it (reac_qdisc.h). The daemon resolves the backend
+	 * itself here for exactly that reason: it has to know what to install before
+	 * the pacer opens, and reac_pacer_open then reads the same knob through the
+	 * same layers and gets the same answer.
+	 *
+	 * A failure here is logged with its errno and stepped over: the pacer probes
+	 * the device for itself, and an ETF DEFAULT that finds no qdisc falls back to
+	 * the thread backend and publishes the refusal. Refusing to carry audio because
+	 * a kernel has no sch_etf would be a worse answer than a looser cadence. */
+	{
+		enum reac_conf_layer qlay = REAC_CONF_NONE;
+		int qunderstood = 1;
+		enum reac_pacer_backend want =
+			reac_pacer_backend_resolve(cfg->ifname, NULL, &qlay, &qunderstood);
+		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname,
+		                     want == REAC_PACER_BACKEND_ETF);
+	}
+
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
 		pw_log_warn("reac:playback — cannot open AF_PACKET TX on '%s' "
 		            "(needs CAP_NET_RAW + a valid interface); sink not created",
 		            cfg->ifname);
+		reac_qdisc_release(&n->qdisc);
 		free(n);
 		return NULL;
 	}
@@ -1956,6 +2005,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	if (reac_pacer_start(&n->pacer) != 0) {
 		pw_log_warn("reac:playback — cannot start cadence pacer thread");
 		reac_pacer_close(&n->pacer);
+		reac_qdisc_release(&n->qdisc);
 		free(n);
 		return NULL;
 	}
@@ -2154,5 +2204,8 @@ void reac_sink_node_destroy(struct reac_sink_node *n)
 		        (unsigned long long)n->pacer.ev_drops);
 		reac_pacer_close(&n->pacer);    /* close socket + free ring */
 	}
+	/* AND THE DEVICE GOES BACK AS WE FOUND IT. A qdisc left behind by an exiting
+	 * daemon drops every frame the NEXT one sends on the thread backend. */
+	reac_qdisc_release(&n->qdisc);
 	free(n);
 }
