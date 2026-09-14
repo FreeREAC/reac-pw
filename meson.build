@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.3',
+  version: '1.0.4',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -55,7 +55,15 @@ m_dep        = cc.find_library('m', required : false)
 # and the mismatch surfaced only when the installed binary hit `undefined
 # symbol` at exec. A floor that accepts both sides of an API break is not a
 # floor. Raising it to 0.7.0 makes the wrong library fail at CONFIGURE.
-libreac_dep = dependency('libreac', version : '>=1.0.1',
+#
+# >=1.1.0 IS THE FLOOR THAT MATTERS NOW, raised by hand for the same reason and
+# to the same rule. src/reac_sink_node.c calls reac_box_identity_publish(),
+# which libreac 1.1.0 adds; and struct reac_identity, which this build
+# allocates through struct reac_pacer, went 30 -> 38 bytes there. A 1.0.x
+# libreac satisfies '>=1.0.1' and then fails at link on the missing symbol --
+# or, worse, links against a 30-byte identity and is written 38 bytes of. The
+# floor is what makes the wrong library fail at CONFIGURE.
+libreac_dep = dependency('libreac', version : '>=1.1.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -64,7 +72,10 @@ libreac_dep = dependency('libreac', version : '>=1.0.1',
 # compiled here as src/*.c now live in this library, unchanged. No fallback subproject yet
 # -- a checkout without pkgconfig(libreac-transport) simply fails to configure, same as any
 # other required system dependency.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.0.1', required : true)
+# >=1.1.0: struct reac_pacer embeds libreac 1.1.0's grown reac_identity, so it went
+# 24304 -> 24312 bytes and its soname moved to libreac-transport.so.4. This build
+# allocates a reac_pacer, so an older transport is the same size mismatch as above.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.1.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,

@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.3}
+Version:        %{?version_override}%{!?version_override:1.0.4}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -17,18 +17,18 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.0.3
+BuildRequires:  pkgconfig(libreac) >= 1.1.0
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.0.3
+BuildRequires:  pkgconfig(libreac-transport) >= 1.1.0
 Requires:       pipewire
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.0.3
-Requires:       libreac-transport >= 1.0.3
+Requires:       libreac >= 1.1.0
+Requires:       libreac-transport >= 1.1.0
 
 %description
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
@@ -108,6 +108,24 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.4-1
+- A box's node publishes reac.box.reac_version: the REAC PROTOCOL version it speaks, read
+  off identity address 0x0600 and printed the way the console prints it -- "2.302" on the
+  S-1608, "2.102" on the S-4000S-3208. It is a DIFFERENT number from reac.box-firmware
+  (2.200 and 2.500 for those two boxes) and a consumer must not substitute one for the
+  other. reac.box-hw keeps the same record as raw hex, because its first u16 is still
+  undecoded.
+- All three keys are stamped in one act by libreac's reac_box_identity_publish(), so the
+  node never spells either version a second time -- which is exactly where the firmware
+  and the REAC version would get swapped.
+- Needs libreac and libreac-transport 1.1.0, and the floors say so in meson.build as well
+  as here. 1.1.0 is an ABI break on both: struct reac_identity grew 30 -> 38 bytes to hold
+  the decoded version, and struct reac_pacer, which embeds one and which this build
+  allocates, grew 24304 -> 24312. A 1.0.x libreac satisfies the old '>=1.0.1' floor and
+  then fails at link on reac_box_identity_publish, or links and is handed eight bytes it
+  has no room for.
+- The segment door publishes the pace it is actually keeping, not the one it last had a
+  sighting for.
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.3-1
 - A DOOR FOR EVERY PINNED OR HEARD SEGMENT (openmixer master-arbitration §6 Q5, option C):
   a segment pinned `tap` with a silent wire, and a pinned master with no box, published no
