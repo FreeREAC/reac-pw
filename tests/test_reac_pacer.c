@@ -315,7 +315,7 @@ int main(void)
 
 		struct reac_identity id0;
 		reac_pacer_read_identity(&p4, &id0);
-		CHK(id0.has_fw == 0 && id0.has_hw_block == 0);   /* nothing answered yet */
+		CHK(id0.has_fw == 0 && id0.has_reac_version == 0);   /* nothing answered yet */
 
 		/* Lay a DT1 identity reply into a frame: 88 19 / type cd ea / control block
 		 * whose SysEx is f0 41 0a 00 00 12 12 <tag> <addr_lo> <payload> <ck> f7. */
@@ -339,16 +339,26 @@ int main(void)
 		/* firmware addr 0x0000: 01 00 00 03 -> 1.003 */
 		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_FIRMWARE, 0x01, 0x00, 0x00, 0x03);
 		reac_pacer_rx_ingest(&p4, frame, REAC_FRAME_BYTES);
-		/* hw block addr 0x0600: the S-0808's eight bytes */
-		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_HW_BLOCK, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00);
+		/* REAC version addr 0x0600: the S-0808's eight bytes, (0,1,0,0) */
+		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_REAC_VERSION, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00);
 		reac_pacer_rx_ingest(&p4, frame, REAC_FRAME_BYTES);
 
 		struct reac_identity id1;
 		reac_pacer_read_identity(&p4, &id1);
 		CHK(id1.has_fw == 1 && id1.fw_milli == 1003);
-		CHK(id1.has_hw_block == 1);
+		CHK(id1.has_reac_version == 1);
+		CHK(id1.reac_version_major == 1 && id1.reac_version_minor == 0 &&
+		    id1.reac_version_patch == 0);
 		char fw[REAC_IDENTITY_FW_STR_CAP];
 		CHK(reac_identity_fw_str(id1.fw_milli, fw, sizeof fw) == 5 && strcmp(fw, "1.003") == 0);
+		/* The firmware and the REAC version are DIFFERENT numbers off DIFFERENT
+		 * addresses: this box runs firmware 1.003 and speaks REAC 1.000. (The
+		 * S-0808's REAC string is PREDICTED — the console displays read on
+		 * 2026-09-14 were an S-1608 and an S-4000S-3208.) */
+		char ver[REAC_IDENTITY_REAC_VER_STR_CAP];
+		CHK(reac_identity_reac_ver_str(id1.reac_version_major, id1.reac_version_minor,
+		                               id1.reac_version_patch, ver, sizeof ver) == 5);
+		CHK(strcmp(ver, "1.000") == 0 && strcmp(ver, fw) != 0);
 
 		#undef BUILD_ID_REPLY
 		reac_frame_ring_free(&p4.ring);

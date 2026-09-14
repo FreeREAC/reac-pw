@@ -725,6 +725,18 @@ box_badge_test = executable('test_reac_box_badge',
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_badge', box_badge_test)
 
+# --- unit test: reac.box.reac_version, from an identity reply to the property --
+# The box answers two versions that look alike and are not -- the system firmware
+# at DT1 addr 0x0000 and the REAC protocol version at 0x0600 (an M-200i displays
+# `REAC 2.302` beside `Firmware 2.200` on an S-1608). Real identity replies go
+# through reac_pacer_rx_ingest and the REAL composer into a recording fake, so
+# "which key got which number, and is it written at all" is what is proven.
+box_identity_test = executable('test_reac_box_identity',
+  ['tests/test_reac_box_identity.c', ],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
+test('reac_box_identity', box_identity_test)
+
 link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', ],
   include_directories : [include_directories('src')],
