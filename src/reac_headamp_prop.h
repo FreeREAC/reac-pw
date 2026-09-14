@@ -23,6 +23,7 @@
 #define REAC_HEADAMP_PROP_H
 
 #include <reac/reac_headamp_tx.h>   /* struct reac_headamp_setting */
+#include "reac_headamp_state.h"   /* enum reac_headamp_refuse — the answer a refusal gets */
 
 struct spa_pod;
 
@@ -58,12 +59,39 @@ struct spa_pod;
  * model's preamp genuinely differs. */
 #define REAC_HEADAMP_CAPS_DEFAULT  "phantom,pad,sens"
 
+/* WHAT A PARSE SAW, beyond what it accepted.
+ *
+ * `n` alone cannot tell "this Props object carried no head-amp key at all" from
+ * "it carried one and the parse dropped it" — both are 0, and that indistinction
+ * IS the silent-refusal gap spec §2 names. `keys` counts every key under the
+ * head-amp prefix, good or bad, so the caller knows a write was attempted at all;
+ * `refusal` is the FIRST thing wrong with one of them (a later good cell does not
+ * erase an earlier bad one — a caller that reported "none" after dropping a cell
+ * would be reporting the blind pass this exists to stop).
+ *
+ * The two write refusals, and the line between them: BAD_KEY means the key does
+ * not address a cell (a non-numeric channel, no '.' after it, an unknown param
+ * name); OUT_OF_RANGE means it addresses a cell but the channel is past
+ * REAC_HEADAMP_MAX_CH or the value is not one the range admits — which includes a
+ * value pod that is not a usable number at all, because there is no number
+ * outside the range and no number in it either. */
+struct reac_headamp_prop_result {
+	int n;                              /* cells written to `out`                    */
+	int keys;                           /* head-amp keys seen, accepted or refused   */
+	enum reac_headamp_refuse refusal;   /* the FIRST refusal; NONE if every key stood */
+};
+
 /* Parse every "reac.headamp.<ch>.<param>" entry carried in `props` (a
- * SPA_PARAM_Props object pod)'s SPA_PROP_params list into `out` (capacity `max`).
- * Silently skips keys that are not head-amp keys, malformed channel/param names,
- * and out-of-range channels/values (so a mixed Props object with volume + a
- * head-amp change is fine). Returns the number of settings written (0..max), or
- * -1 if `props` is NULL / not an Object pod. Never writes past `max`. */
+ * SPA_PARAM_Props object pod)'s SPA_PROP_params list into `out` (capacity `max`),
+ * and report what it saw in `res` (may be NULL). Keys that are not head-amp keys
+ * are skipped without comment, so a mixed Props object with volume + a head-amp
+ * change is fine. Returns the number of settings written (0..max), or -1 if
+ * `props` is NULL / not an Object pod. Never writes past `max`. */
+int reac_headamp_prop_parse_result(const struct spa_pod *props,
+                                   struct reac_headamp_setting *out, int max,
+                                   struct reac_headamp_prop_result *res);
+
+/* The same parse, discarding what it saw. */
 int reac_headamp_prop_parse(const struct spa_pod *props,
                             struct reac_headamp_setting *out, int max);
 

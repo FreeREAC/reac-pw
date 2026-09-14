@@ -55,23 +55,29 @@ static int param_name_to_id(const char *name)
 	return -1;
 }
 
-/* Parse "reac.headamp.<ch>.<param>" into ch + param id. Returns 0 on success.
- * The prefix is already known to match; `rest` points just past it. */
-static int parse_key(const char *rest, uint8_t *ch, uint8_t *param)
+/* Parse "reac.headamp.<ch>.<param>" into ch + param id. Returns REFUSE_NONE on
+ * success, else the code that says what is wrong with it. The prefix is already
+ * known to match; `rest` points just past it.
+ *
+ * A channel number that parses but is past the head-amp channel space is
+ * OUT_OF_RANGE, not BAD_KEY: the key is shaped like a cell address and only its
+ * value falls outside what the wire has. A channel that does not parse at all is
+ * not an address. */
+static enum reac_headamp_refuse parse_key(const char *rest, uint8_t *ch, uint8_t *param)
 {
 	/* <ch> is a decimal channel index terminated by '.'. */
 	char *dot = NULL;
 	long c = strtol(rest, &dot, 10);
 	if (dot == rest || *dot != '.')
-		return -1;                       /* no digits, or no '.' after them */
-	if (c < 0 || c >= REAC_HEADAMP_MAX_CH)
-		return -1;
+		return REAC_HEADAMP_REFUSE_BAD_KEY;   /* no digits, or no '.' after them */
 	int p = param_name_to_id(dot + 1);
 	if (p < 0)
-		return -1;
+		return REAC_HEADAMP_REFUSE_BAD_KEY;
+	if (c < 0 || c >= REAC_HEADAMP_MAX_CH)
+		return REAC_HEADAMP_REFUSE_OUT_OF_RANGE;
 	*ch = (uint8_t)c;
 	*param = (uint8_t)p;
-	return 0;
+	return REAC_HEADAMP_REFUSE_NONE;
 }
 
 /* Per-param absolute-value range gate (mirrors reac_headamp_tx_set's own check,
@@ -92,6 +98,21 @@ static int value_in_range(uint8_t param, uint8_t value)
 int reac_headamp_prop_parse(const struct spa_pod *props,
                             struct reac_headamp_setting *out, int max)
 {
+	return reac_headamp_prop_parse_result(props, out, max, NULL);
+}
+
+int reac_headamp_prop_parse_result(const struct spa_pod *props,
+                                   struct reac_headamp_setting *out, int max,
+                                   struct reac_headamp_prop_result *res)
+{
+	enum reac_headamp_refuse refusal = REAC_HEADAMP_REFUSE_NONE;
+	int keys = 0;
+
+	if (res) {
+		res->n = 0;
+		res->keys = 0;
+		res->refusal = REAC_HEADAMP_REFUSE_NONE;
+	}
 	if (!props || !spa_pod_is_object_type(props, SPA_TYPE_OBJECT_Props))
 		return -1;
 
@@ -123,13 +144,23 @@ int reac_headamp_prop_parse(const struct spa_pod *props,
 		if (strncmp(k, REAC_HEADAMP_PROP_PREFIX, prefix_len) != 0)
 			continue;                    /* some other params entry */
 
+		/* From here the caller WROTE a head-amp cell, whatever becomes of it.
+		 * That is the fact a refusal has to be able to report. */
+		keys++;
+
 		uint8_t ch, param, value;
-		if (parse_key(k + prefix_len, &ch, &param) != 0)
+		enum reac_headamp_refuse bad = parse_key(k + prefix_len, &ch, &param);
+		if (bad == REAC_HEADAMP_REFUSE_NONE) {
+			if (value_pod_to_byte(child, &value) != 0 ||
+			    !value_in_range(param, value))
+				bad = REAC_HEADAMP_REFUSE_OUT_OF_RANGE;
+		}
+		if (bad != REAC_HEADAMP_REFUSE_NONE) {
+			/* FIRST refusal wins: a later good cell must not erase it. */
+			if (refusal == REAC_HEADAMP_REFUSE_NONE)
+				refusal = bad;
 			continue;
-		if (value_pod_to_byte(child, &value) != 0)
-			continue;
-		if (!value_in_range(param, value))
-			continue;
+		}
 
 		if (n >= max)
 			break;                       /* out is full: stop, never overrun */
@@ -137,6 +168,11 @@ int reac_headamp_prop_parse(const struct spa_pod *props,
 		out[n].param = param;
 		out[n].value = value;
 		n++;
+	}
+	if (res) {
+		res->n = n;
+		res->keys = keys;
+		res->refusal = refusal;
 	}
 	return n;
 }
