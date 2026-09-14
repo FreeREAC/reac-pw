@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.5}
+Version:        %{?version_override}%{!?version_override:1.0.6}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -108,6 +108,31 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.6-1
+- A PARENT'S TRUNK VERDICT NOW COUNTS ONLY FRAMES THAT ARRIVED ON THAT PARENT (#102).
+  Measured on the rig 2026-09-14: the USB NIC enp128s20f0u2, on a direct cable to a cold
+  S-4000S-3208, was told `tagged REAC heard -- vid 11 (1 frame(s))` and the same for vid 12
+  at EVERY daemon start, within 0.4 s of "pinned master -- driving on link" -- exactly one
+  frame per VLAN this daemon masters on ANOTHER parent -- while tcpdump on that NIC saw no
+  tagged frame at all over 25 s. The direct link was then refused as a trunk for ever and
+  the box got no master. The topology tap is socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))
+  and binds to its parent's ifindex a few syscalls later; an AF_PACKET socket opened with a
+  non-zero protocol is live on EVERY interface until bind(), so the queue filled with other
+  links' frames and they were read back as this parent's. PACKET_IGNORE_OUTGOING (1.0.3,
+  #98) cannot cover it: it is set after the open, it drops frames as they arrive rather
+  than the ones already queued, and half of what a wide-open tap queues is somebody else's
+  INBOUND traffic. Every frame is now attributed by the kernel's own sll_ifindex and
+  anything else -- another interface's, or one of ours -- decides nothing.
+- THE VERDICT EXPIRES ON THE START PATH TOO (#102). "Tagged since link-up" was a latch, so
+  one frame pinned the refusal for the life of the process and #98's re-proof window could
+  only ever be reached by a parent that had heard nothing at all. It is now a rolling
+  window: a trunk that is still a trunk re-proves itself thousands of times a second, and a
+  verdict with no tag behind it inside the window lapses with no link bounce and comes back
+  the moment a tag does.
+- Every "tagged REAC heard" line now names the SOURCE MAC and the IFINDEX the frame was
+  attributed to, and a frame that reaches a tap from elsewhere says so once, so the next
+  report of this shape is answered from the journal alone.
+
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.5-1
 - The head-amp door answers. A refused per-channel write used to return nothing at all:
   set-param exited 0, the parse dropped the cell, and the caller had a successful write
