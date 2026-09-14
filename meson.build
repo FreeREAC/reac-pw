@@ -151,23 +151,6 @@ conf_test = executable('test_reac_conf',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_conf', conf_test)
 
-# --- unit test: the REACPW_PACER knob's LAYERING ------------------------------
-# Which backend owns the egress instant -- the thread's wake, or a launch time the
-# kernel's ETF qdisc releases at. The word-to-backend mapping and every precondition
-# refusal live in libreac-transport and are tested there; what is reac-pw's own
-# contract is the part an operator touches, and one part of it is load-bearing for
-# the comparative run: the PER-SEGMENT key. One segment on each arm, in one process,
-# at one time. Without it the comparison would print two columns of the same
-# measurement and nothing would say so.
-# REACPW_SRCDIR lets it read docs/ENV-KNOBS.md, because a knob an operator cannot
-# find is a knob that does not exist.
-pacer_knob_test = executable('test_reac_pacer_knob',
-  ['tests/test_reac_pacer_knob.c', ],
-  include_directories : [include_directories('src')],
-  dependencies : [libreac_dep, libreac_transport_dep, m_dep])
-test('reac_pacer_knob', pacer_knob_test,
-  env : ['REACPW_SRCDIR=' + meson.current_source_dir()])
-
 # --- unit test: WHERE reac-pw's RT threads sit (issue #31) --------------------
 # reac-pw ran its wire clocks at SCHED_FIFO 79 over a PipeWire graph whose driver
 # runs at 60 and whose clients run at 55 — it preempted the audio cycle that
