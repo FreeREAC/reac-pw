@@ -850,19 +850,6 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	else
 		snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
 
-	/* The identity page (DT1 tag 0x0500): firmware as "D.DDD", the hw block as
-	 * hex. STAMPED EVEN WHEN EMPTY so a box drop (which resets the accumulator)
-	 * CLEARS a stale value — update_properties merges, so an unstamped key would
-	 * keep the departed box's firmware. "" reads as "not answered" to a consumer. */
-	char firmware[REAC_IDENTITY_FW_STR_CAP] = "";
-	if (id.has_fw)
-		reac_identity_fw_str(id.fw_milli, firmware, sizeof firmware);
-	char hwblock[24] = "";
-	if (id.has_hw_block)
-		snprintf(hwblock, sizeof hwblock, "%02x%02x%02x%02x %02x%02x%02x%02x",
-		         id.hw_block[0], id.hw_block[1], id.hw_block[2], id.hw_block[3],
-		         id.hw_block[4], id.hw_block[5], id.hw_block[6], id.hw_block[7]);
-
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
 		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
@@ -870,8 +857,6 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
 		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
 		REAC_PROP_HEADAMP_BASE,    ha_base,
-		REAC_PROP_BOX_FIRMWARE,    firmware,
-		REAC_PROP_BOX_HW,          hwblock,
 		NULL);
 	if (props) {
 		/* reac.box.mac goes on through the shared composer rather than a second
@@ -879,6 +864,12 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		 * then cannot format the same fact two ways, and the stamp itself is what
 		 * the unit test drives (tests/test_reac_box_badge.c). */
 		reac_box_mac_publish(box_mac, sink_prop_set, props);
+		/* The identity page (DT1 tag 0x0500) through the same kind of composer:
+		 * reac.box-firmware, reac.box.reac_version and reac.box-hw, all three
+		 * STAMPED EVEN WHEN EMPTY so a box drop (which resets the accumulator)
+		 * CLEARS a stale value — update_properties merges, so an unstamped key
+		 * would keep the departed box's version. */
+		reac_box_identity_publish(&id, sink_prop_set, props);
 		pw_stream_update_properties(n->stream, &props->dict);
 		pw_properties_free(props);
 	}
