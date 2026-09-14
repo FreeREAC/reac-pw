@@ -31,6 +31,7 @@
 #include "reac_gain.h"
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
+#include "reac_headamp_state.h"  /* the head-amp door's READ side: asserted + refusal */
 #include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
 #include "reac_sink_format.h"    /* the Format pod + renegotiate decision (#4.3) */
 #include <reac/reac_role.h>           /* enum reac_role — this node is MASTER-only */
@@ -177,6 +178,30 @@ struct reac_sink_node {
 	int rate_asserted_last;
 	int rate_reestablishing_last;
 	enum reac_rate_refuse rate_refused_last;
+
+	/* THE HEAD-AMP DOOR'S READ SIDE (2026-09-14-headamp-as-node-params.md §3a):
+	 * reac.headamp.asserted / .state / .refused. MAIN-LOOP-only, like the role
+	 * trio and for the same reason — on_param_changed decides the answer and
+	 * sink_publish_headamp_props stamps it, both on the loop thread, so plain
+	 * fields are enough and no second copy of the send table crosses to RT.
+	 *
+	 * ha_asserted mirrors the cells the door ACCEPTED and handed to the pacer.
+	 * One writer: every cell in it went to reac_pacer_headamp_set in the same
+	 * statement, so it cannot drift from the table the pacer re-pushes at
+	 * establishment. It survives a box drop deliberately — that table is exactly
+	 * what a re-establishment replays, so clearing it would erase the thing the
+	 * replay is for.
+	 *
+	 * ha_write_refused is the LAST WRITE's outcome and only ever carries
+	 * NONE / BAD_KEY / OUT_OF_RANGE; the capability codes (no-box, box-master,
+	 * no-base) are recomputed on every publish from the segment's live facts,
+	 * because they are true whether or not anybody has written.
+	 * *_last are the shadows, seeded to values no real answer equals. */
+	struct reac_headamp_asserted ha_asserted;
+	enum reac_headamp_refuse ha_write_refused;
+	enum reac_headamp_refuse ha_refused_last;
+	const char *ha_state_last;
+	char ha_asserted_last[REAC_HEADAMP_ASSERTED_MAX];
 
 	/* Set around sink_reconnect_rate's pw_stream_disconnect/connect pair
 	 * (increment 4). MAIN-LOOP-only write; on_process (RT, a different
@@ -584,6 +609,36 @@ static void sink_publish(struct reac_sink_node *n)
 	pw_stream_update_params(n->stream, params, np);
 }
 
+/* THE SEGMENT'S HEAD-AMP CAPABILITY, as this node can see it right now. One place,
+ * read by both the write door (on_param_changed, to decide whether a cell may go to
+ * the wire) and the publisher (sink_publish_headamp_props, to compose the standing
+ * answer), so the control and the property it answers with can never disagree.
+ *
+ * The three inputs, and where each comes from:
+ *   - box_master: this node carries an upstream ring, which is set only on a segment
+ *     a stagebox masters. There is no pacer behind it and no head-amp record exists
+ *     on that wire in either direction.
+ *   - channels:   the recognised model's INPUT width. A node whose pacer never opened
+ *     has no recogniser either, so it reports none rather than reading a zeroed
+ *     atomic and calling it a measurement.
+ *   - base:       the box's announced chassis strap, or -1. Never derived from the
+ *     width: a chassis whose strap and width are not collinear has no such function.
+ *
+ * MAIN LOOP only — it reads the pacer's cross-thread atomics, never the RT path. */
+static enum reac_headamp_refuse sink_headamp_capability(const struct reac_sink_node *n)
+{
+	if (n->upstream_ring)
+		return REAC_HEADAMP_REFUSE_BOX_MASTER;
+	if (!n->pacer_open)
+		return REAC_HEADAMP_REFUSE_NO_BOX;
+
+	const struct reac_box_model *bm =
+		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	int base = atomic_load_explicit(&n->pacer.recognized_headamp_base,
+	                                memory_order_acquire);
+	return reac_headamp_cfg_decide(0, bm ? bm->in_ch : 0, base);
+}
+
 /* MAIN LOOP: a controller changed our node params. We only care about node-global
  * Props (port_data == NULL). Parse volume / mute / channelVolumes and re-publish.
  * channelVolumes is authoritative per-channel; a bare `volume` scalar sets all
@@ -644,16 +699,37 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 	 * phantom/pad/sens changes under SPA_PROP_params ("reac.headamp.<ch>.<param>").
 	 * Parse them (pure, no state touched here) and hand each to the pacer's lock-free
 	 * command ring — the RT pacer thread applies them to the head-amp DMX send table,
-	 * so a mixer knob reaches the real box preamp live. This is the master node (the
-	 * sink owns the pacer), so it is master-role by construction; a slave has no
-	 * pacer/head-amp send path. Independent of the volume/mute `changed` re-publish
-	 * above — head-amp state is not echoed back in Props (it is write-through control,
-	 * re-asserted on the wire by the DMX scheduler, not a node property). */
+	 * so a mixer knob reaches the real box preamp live.
+	 *
+	 * THE ANSWER IS PUBLISHED, NOT SWALLOWED (2026-09-14-headamp-as-node-params.md
+	 * §3a). Until this ruling a dropped cell and a cell written to a segment with no
+	 * preamps at all both returned nothing and the caller saw a successful set-param.
+	 * Now the CAPABILITY is decided first — a box on M, no box, no announced strap —
+	 * and on a refusal NOTHING reaches the pacer, which is also what keeps a
+	 * box-master node (no pacer at all, reac_sink_node_new returns before opening
+	 * one) from being handed a cell it has no thread to apply. Otherwise the parse's
+	 * own refusal stands as the last write's answer, and every ACCEPTED cell is
+	 * mirrored into ha_asserted in the same statement that sends it, so the readback
+	 * cannot claim a cell the wire never carried. sink_publish_headamp_props stamps
+	 * all of it on the next 200 ms tick. */
 	struct reac_headamp_setting ha[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
-	int nha = reac_headamp_prop_parse(param, ha,
-	                                  (int)(sizeof ha / sizeof ha[0]));
-	for (int i = 0; i < nha; i++)
-		reac_pacer_headamp_set(&n->pacer, ha[i].ch, ha[i].param, ha[i].value);
+	struct reac_headamp_prop_result hres;
+	int nha = reac_headamp_prop_parse_result(param, ha,
+	                                         (int)(sizeof ha / sizeof ha[0]), &hres);
+	if (hres.keys > 0) {
+		if (sink_headamp_capability(n) == REAC_HEADAMP_REFUSE_NONE) {
+			n->ha_write_refused = hres.refusal;
+			for (int i = 0; i < nha; i++) {
+				reac_pacer_headamp_set(&n->pacer, ha[i].ch, ha[i].param,
+				                       ha[i].value);
+				reac_headamp_asserted_set(&n->ha_asserted, ha[i].ch,
+				                          ha[i].param, ha[i].value);
+			}
+		}
+		/* A capability refusal needs no record here: it is a standing fact of
+		 * the segment that the publisher re-derives, and it must not be cleared
+		 * by a later well-formed write that is refused for the same reason. */
+	}
 
 	/* LIVE rate control (2026-08-26-reac-runtime-config.md): the same Props
 	 * object may carry a `reac.cfg.rate` assertion under SPA_PROP_params. The
@@ -1123,6 +1199,58 @@ static void sink_publish_role_props(struct reac_sink_node *n)
 	}
 }
 
+/* MAIN LOOP: stamp reac.headamp.asserted / .state / .refused
+ * (2026-09-14-headamp-as-node-params.md §3a) — the read side of the
+ * `reac.headamp.<ch>.<param>` write door. Shadow-and-compare on the same 200 ms
+ * tick as the rate and role pairs, so a knob turn costs one property update and a
+ * quiet desk costs a string compare.
+ *
+ * THE REFUSAL IS COMPOSED, NOT REMEMBERED. The capability half is re-derived from
+ * the segment's live facts on every publish, because a box enrolling or dropping
+ * changes the honest answer with nobody having written anything; the write half is
+ * the last write's own outcome, and it is reported ONLY where the capability
+ * stands, since a bad key on a segment that has no preamps is not the thing a
+ * surface needs to be told about. `reac.headamp.sens.max` and `reac.headamp.caps`
+ * are constants seeded at node creation and are not re-stamped here
+ * (update_properties merges — an untouched key persists).
+ *
+ * WHAT IT DOES NOT DO: clear `asserted` when a box drops. That table is precisely
+ * what the pacer replays at the next establishment, so it outlives the box, and
+ * `state` going `unavailable` beside it is what says the cells are not currently
+ * reaching anything. */
+static void sink_publish_headamp_props(struct reac_sink_node *n)
+{
+	if (!n->stream)
+		return;
+
+	enum reac_headamp_refuse cap = sink_headamp_capability(n);
+	enum reac_headamp_refuse refused =
+		cap != REAC_HEADAMP_REFUSE_NONE ? cap : n->ha_write_refused;
+	const char *state = cap == REAC_HEADAMP_REFUSE_NONE
+		? REAC_HEADAMP_STATE_APPLIED
+		: REAC_HEADAMP_STATE_UNAVAILABLE;
+
+	char asserted[REAC_HEADAMP_ASSERTED_MAX];
+	reac_headamp_asserted_render(&n->ha_asserted, asserted, sizeof asserted);
+
+	if (refused == n->ha_refused_last && state == n->ha_state_last &&
+	    strcmp(asserted, n->ha_asserted_last) == 0)
+		return;                          /* unchanged: do not spam the update */
+	n->ha_refused_last = refused;
+	n->ha_state_last = state;
+	snprintf(n->ha_asserted_last, sizeof n->ha_asserted_last, "%s", asserted);
+
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_HEADAMP_ASSERTED, asserted,
+		REAC_PROP_HEADAMP_STATE,    state,
+		REAC_PROP_HEADAMP_REFUSED,  reac_headamp_refuse_code(refused),
+		NULL);
+	if (props) {
+		pw_stream_update_properties(n->stream, &props->dict);
+		pw_properties_free(props);
+	}
+}
+
 /* MAIN LOOP: stamp reac.discovery.* — WHAT IS ON THIS SEGMENT, as opposed to what this
  * master joined (task #178). The engine cannot do this itself: openmixer runs as a
  * `systemctl --user` unit whose node has no CAP_NET_RAW (measured: CapEff 0), a user
@@ -1473,6 +1601,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	sink_publish_link_props(n);
 	sink_publish_rate_props(n);
 	sink_publish_role_props(n);
+	sink_publish_headamp_props(n);
 	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
 	sink_publish_latency(n);
 	sink_publish_health(n);
@@ -1529,6 +1658,19 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	char ha_seed_channels[16] = "0";
 	char ha_seed_base[16] = REAC_BOX_SOURCE_NONE;
 
+	/* The head-amp door's read side, correct from the node's first instant rather
+	 * than from the first 200 ms tick — a box-master node has no log timer at all
+	 * (reac_sink_node_new returns before starting one), so for that role these
+	 * seeds are the whole of the answer and `box-master` has to be right here.
+	 * The travel is published rather than compiled into a client: a model with a
+	 * different range then needs no new client (spec §4 ruling 1). */
+	char ha_sens_max[8];
+	snprintf(ha_sens_max, sizeof ha_sens_max, "%d", REAC_HEADAMP_SENS_MAX);
+	enum reac_headamp_refuse ha_seed_cap = sink_headamp_capability(n);
+	char ha_seed_asserted[REAC_HEADAMP_ASSERTED_MAX];
+	reac_headamp_asserted_render(&n->ha_asserted, ha_seed_asserted,
+	                             sizeof ha_seed_asserted);
+
 
 	n->stream = pw_stream_new_simple(
 		n->loop,
@@ -1566,6 +1708,16 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			 * recognition; `caps` is the constant phantom/pad/sens trio. */
 			REAC_PROP_HEADAMP_CHANNELS, ha_seed_channels,
 			REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
+			/* The head-amp READ side (2026-09-14-headamp-as-node-params.md §3a):
+			 * the travel, what this daemon is asserting, and whether a write can
+			 * reach the wire at all. Kept live by sink_publish_headamp_props. */
+			REAC_PROP_HEADAMP_SENS_MAX, ha_sens_max,
+			REAC_PROP_HEADAMP_ASSERTED, ha_seed_asserted,
+			REAC_PROP_HEADAMP_STATE,
+				ha_seed_cap == REAC_HEADAMP_REFUSE_NONE
+					? REAC_HEADAMP_STATE_APPLIED
+					: REAC_HEADAMP_STATE_UNAVAILABLE,
+			REAC_PROP_HEADAMP_REFUSED, reac_headamp_refuse_code(ha_seed_cap),
 			/* Correct-at-(re)build discovery (task #178): from this node's t=0 we are
 			 * listening on this NIC; seq "0"/"[]" is re-stamped from the pacer's disco
 			 * table below. Kept live by sink_publish_disco_props on the log-timer. */
@@ -1585,6 +1737,11 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
 	n->box_mac_last = 0;
+	/* Seeded to answers no real one equals, so the first publish always fires
+	 * rather than reading a coincidental match (the role pair's pattern). */
+	n->ha_refused_last = (enum reac_headamp_refuse)-1;
+	n->ha_state_last = NULL;
+	n->ha_asserted_last[0] = '\0';
 	n->disco_seq_last = 0;
 	n->arb_state_last = -1;
 	n->arb_pace_last = -1;
@@ -1635,6 +1792,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	sink_publish_link_props(n);
 	sink_publish_rate_props(n);
 	sink_publish_role_props(n);
+	sink_publish_headamp_props(n);
 	sink_publish_disco_props(n);
 	sink_publish_latency(n);
 	return 0;
@@ -1759,12 +1917,28 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	}
 	n->pacer_open = 1;
 
+	/* AND THE READBACK STARTS WHERE THE SEND TABLE DOES. The CLI/conf table
+	 * (--headamp, REAC_HEADAMP) went into the pacer's send table in the open
+	 * above, without passing the Props door, so a reac.headamp.asserted built
+	 * only from later writes would under-report exactly the cells that are on the
+	 * wire from the first establishment — a readback silent about a lit 48 V pin.
+	 * Below the early return, so it mirrors only a table that actually has a pacer
+	 * to put it on the wire. */
+	for (int i = 0; i < cfg->n_headamps; i++)
+		reac_headamp_asserted_set(&n->ha_asserted, cfg->headamps[i].ch,
+		                          cfg->headamps[i].param, cfg->headamps[i].value);
+
 
 	/* Badge-prop shadows for the (yet-to-exist) filter. Seeded to the baseline so the
 	 * first sink_open_filter re-stamps to the live pacer state. */
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
 	n->box_mac_last = 0;
+	/* Seeded to answers no real one equals, so the first publish always fires
+	 * rather than reading a coincidental match (the role pair's pattern). */
+	n->ha_refused_last = (enum reac_headamp_refuse)-1;
+	n->ha_state_last = NULL;
+	n->ha_asserted_last[0] = '\0';
 	n->disco_seq_last = 0;
 	n->arb_state_last = -1;
 	n->arb_pace_last = -1;

@@ -116,6 +116,7 @@ reac_pw_src = [
   'src/reac_knock.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
+  'src/reac_headamp_state.c',
   'src/reac_rate_cfg.c',
   'src/reac_role_cfg.c',
   'src/reac_sink_format.c',
@@ -491,6 +492,20 @@ test('reac_master_gone_is_re_decided',
 # private PipeWire, and pw-dump as the reader.
 test('reac_doors_open_before_the_wire',
   find_program('tests/doors-open-before-the-wire.sh'),
+  args : [reac_pw_exe],
+  timeout : 180)
+
+# --- whole-binary test: a REFUSED head-amp write is VISIBLE to a second client -
+# (2026-09-14-headamp-as-node-params.md §3a). A cell written to a segment with no
+# preamps used to return nothing at all: set-param exited 0, the parse dropped the
+# cell, and the caller had a successful write and no audio. On a private PipeWire,
+# a pinned master with a silent wire: pw-cli writes, pw-dump reads back
+# state=unavailable / refused=no-box, and asserted is still empty — the refused
+# write entered no send table. The ACCEPTED path needs a box enrolled with us and
+# is proven offline against libreac's golden (test_reac_headamp_state) and on the
+# rig by a measured gain change.
+test('reac_headamp_refusal_is_visible',
+  find_program('tests/headamp-refusal-is-visible.sh'),
   args : [reac_pw_exe],
   timeout : 180)
 
@@ -895,10 +910,29 @@ test('reac_headamp_tx', headamp_tx_test)
 # SPA_PROP_params keyed "reac.headamp.<ch>.<param>" and asserts the decode, the
 # per-param range gate, the Bool/Int/Float encodings, and (key,value) resync.
 headamp_prop_test = executable('test_reac_headamp_prop',
-  ['tests/test_reac_headamp_prop.c', 'src/reac_headamp_prop.c'],
+  ['tests/test_reac_headamp_prop.c', 'src/reac_headamp_prop.c',
+   'src/reac_headamp_state.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, libreac_transport_dep, spa_dep])
 test('reac_headamp_prop', headamp_prop_test)
+
+# --- unit test: the head-amp door's READ side (2026-09-14-headamp-as-node- -----
+# params.md §3a) — reac.headamp.asserted / .state / .refused / .sens.max.
+# Two halves, both offline. (1) THE WIRE: a Props pod carrying
+# reac.headamp.32.phantom = 1 driven through reac_headamp_prop_parse ->
+# reac_pacer_headamp_set -> the pacer drain -> reac_headamp_tx_next ->
+# reac_ctrl_stamp_headamp, and the emitted frame's control block byte-compared to
+# libreac's captured golden (FX_L4_HEADAMP, an M-200 commanding an S-1608). The
+# golden bytes are the oracle: a check that the parse returned what the builder
+# built would prove nothing. (2) THE ANSWER: each refusal code produced and read
+# back, the capability decision, and the asserted cell list a second client
+# renders from.
+headamp_state_test = executable('test_reac_headamp_state',
+  ['tests/test_reac_headamp_state.c', 'src/reac_headamp_prop.c',
+   'src/reac_headamp_state.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep, spa_dep])
+test('reac_headamp_state', headamp_state_test)
 
 # --- unit test: the LIVE head-amp control handoff (#203) -----------------------
 # The lock-free SPSC command ring + drain that carries a per-channel change from
