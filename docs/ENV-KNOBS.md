@@ -4,6 +4,10 @@ Every `REACPW_*` / `REAC_*` environment variable reac-pw reads, one line each â€
 same list `reac-pw --help` prints. The contract for all of them: **unset = default
 behavior, byte-identical on the wire.**
 
+These configure a segment at start-up. What drives it while it runs is the node
+properties and params in [NODE-PROPERTIES.md](NODE-PROPERTIES.md) â€” the rate, the role
+and the stagebox head-amp door.
+
 Per-segment keys (`REAC_ROLE_<segment>`, `REAC_SRC_MAC_<segment>`, ...) live in
 `~/.config/reac-pw/reac-pw.env` and take precedence over the bare key, which is only
 a floor. `--role`, `--rate`, `--src-mac` and the other command-line flags still win
