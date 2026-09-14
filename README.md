@@ -138,6 +138,13 @@ in the packet rate, never on the wire.
   like any other PipeWire sink. It also states its own transmit health as node
   properties — see [docs/HEALTH-TELEMETRY.md](docs/HEALTH-TELEMETRY.md).
 
+Both nodes are also the whole control surface: a client reads node properties
+and writes node params, with PipeWire session access as the only gate. The
+segment's rate and role, the box badge, and the stagebox head-amp door — its
+per-channel phantom/pad/sens params, the travel, what reac-pw is asserting and
+why a write was refused — are one table in
+[docs/NODE-PROPERTIES.md](docs/NODE-PROPERTIES.md).
+
 ## Tools and tests
 
 `meson test -C build` runs the full unit suite; it needs no PipeWire and no

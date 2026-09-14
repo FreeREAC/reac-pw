@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.4}
+Version:        %{?version_override}%{!?version_override:1.0.5}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -108,6 +108,33 @@ meson test -C _build
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 
 %changelog
+* Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.5-1
+- The head-amp door answers. A refused per-channel write used to return nothing at all:
+  set-param exited 0, the parse dropped the cell, and the caller had a successful write
+  and no audio. reac-playback now publishes reac.headamp.state (applied | unavailable) and
+  reac.headamp.refused (none | no-box | box-master | no-base | bad-key | out-of-range),
+  the counterparts of the reac.cfg.rate pair. box-master is the code that turns a silence
+  into a sentence a surface can render: the box's Mode switch is on M, its preamps are
+  configured through its serial port, and no head-amp record exists on that wire in either
+  direction.
+- A refusal now MOVES NOTHING. A cell refused for any of those reasons reaches no send
+  table, so nothing is left waiting to be pushed at a box that arrives later -- and a
+  box-master node, which has no pacer thread at all, is no longer handed cells.
+- READBACK: reac.headamp.asserted carries the cells this daemon is putting on the wire as
+  one compact "ch:param=value,..." list, so a second client renders a switch without
+  inventing its own copy. It is never a report from the box -- the protocol has no
+  head-amp readback in that direction -- and it outlives a box drop, because it is exactly
+  the table replayed at the next establishment.
+- reac.headamp.sens.max publishes the sens travel (55 = 0x37), so a client renders the
+  range it receives and a model with a different travel needs no new client.
+- Proven: a Props write of reac.headamp.32.phantom = 1 driven through the real chain --
+  parse, the pacer command ring, the drain, the send scheduler, reac_ctrl_stamp_headamp --
+  emits a control block BYTE-IDENTICAL to libreac's captured golden (FX_L4_HEADAMP, an
+  M-200 commanding an S-1608), which also pins the base law: wire channel 32 is box input
+  1. And on a live private graph, one client's refused write is read back by another,
+  with the asserted list still empty.
+- The graph vocabulary -- every param a client writes and every property it reads -- is
+  one table in docs/NODE-PROPERTIES.md.
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.4-1
 - A box's node publishes reac.box.reac_version: the REAC PROTOCOL version it speaks, read
   off identity address 0x0600 and printed the way the console prints it -- "2.302" on the
