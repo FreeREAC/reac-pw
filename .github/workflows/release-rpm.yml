@@ -1,37 +1,51 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# Publish reac-pw into the SAME shared dnf tree FreeMixer/openmixer's own
-# release-rpm.yml publishes into. That workflow only ever builds "the openmixer
-# RPM family" (scripts/build-rpm.sh) -- it has never built libreac or reac-pw --
-# so `dnf install openmixer-full` fails with "nothing provides reac-pw >= 0.5.0"
-# even on a healthy tree: the transport was simply never placed there. This
-# workflow is reac-pw's own half of that same publish, shaped after openmixer's
-# (read alongside packaging/publish-repo.sh there, which this calls unmodified --
-# a second copy of its placement/sign/createrepo logic would be a build whose
-# drift nobody sees).
+# Publish reac-pw into the SAME public dnf tree libreac's own equivalent
+# workflow publishes into: FreeREAC/freereac.github.io, dir `rpm/` (operator
+# ruling 2026-09-13, "everything public now" -- the private R2 worker this
+# workflow used to pull/push through is RETIRED; there is one target, the
+# public Pages tree, or the run is a dry run that publishes nothing). This
+# workflow is reac-pw's own half of that publish, shaped after libreac's
+# (read alongside packaging/publish-repo.sh, which this calls unmodified --
+# a second copy of its placement/sign/createrepo logic would be a build
+# whose drift nobody sees). publish-repo.sh's own defaults (repo id
+# `freereac`, base URL `https://freereac.github.io/rpm`) ARE this tree's
+# identity, so nothing here overrides them.
 #
-# workflow_dispatch ONLY, same reasons as openmixer's: no push trigger, ever --
-# publishing a package is a human decision, not a side effect of a commit.
+# ORDER: libreac's own release-rpm.yml MUST run and land BEFORE this one.
+# reac-pw's BuildRequires includes pkgconfig(libreac) >= 0.7.1 (packaging/
+# reac-pw.spec), a library Fedora does not carry -- it is resolved from the
+# same public tree this workflow publishes into. The build job below installs
+# that public tree (`dnf config-manager addrepo --from-repofile=` its
+# `freereac.repo`, then imports its key) BEFORE `dnf builddep` runs, so
+# libreac-devel resolves from it. If libreac has not yet been published
+# there at the required version, `dnf builddep` fails loudly and by name
+# ("nothing provides pkgconfig(libreac) >= X") -- that is a correct,
+# informative failure of a missing publish, not a bug in this file, and not
+# this lane's job to fix.
 #
-# THE SHARED-TREE RACE: openmixer's publisher and this one write into the SAME
-# R2 bucket from TWO DIFFERENT REPOSITORIES. GitHub's `concurrency:` groups are
-# scoped per-repository, so no group name here can serialise against the other
-# repo's run -- a `sync --delete` racing the other publisher could drop packages
-# neither run meant to remove. The mitigation is structural, not locking: every
-# sync in this workflow, both directions, OMITS --delete, and packaging/
-# publish-repo.sh places files by NEVRA (identical package = no-op, a new one is
-# ADDED, nothing already in the tree is ever removed). A true concurrent
-# createrepo_c --update on the same directory from both runs is still possible
-# and is not solved here -- publish a release, wait for it to land, then publish
-# the next; the tag input already forces one dispatch to name one version.
+# workflow_dispatch ONLY: no push trigger, ever -- publishing a package is a
+# human decision, not a side effect of a commit. The `tag` input names the
+# release on the human's word, not on a tag push.
 #
-# reac-pw's own BuildRequires includes pkgconfig(libreac) >= 0.7.1 (packaging/
-# reac-pw.spec), a library Fedora does not carry. It is resolved the same way
-# reac-pw itself is meant to be resolved by a console: from this same shared
-# tree. If libreac has not yet been published there by its own equivalent
-# workflow, `dnf builddep` below fails loudly and by name -- that is a correct,
-# informative failure, not a bug in this file, and not this lane's job to fix.
+# THE SHARED-TREE RACE: libreac's publisher and this one push commits to the
+# SAME branch of FreeREAC/freereac.github.io from TWO DIFFERENT REPOSITORIES.
+# GitHub's `concurrency:` groups are scoped per-repository, so no group name
+# here can serialise against the other repo's run. The mitigation is
+# structural, not locking: `git push` itself refuses a non-fast-forward, so a
+# genuine race loses to that refusal rather than corrupting the tree, and
+# packaging/publish-repo.sh places files by NEVRA (identical package = no-op,
+# a new one is ADDED, nothing already in the tree is ever removed) so a
+# retried push after a refusal is safe to re-run. Publish a release, wait for
+# it to land, then publish the next; the tag input already forces one
+# dispatch to name one version.
+#
+# KEY HONESTY: before signing, the imported RPM_GPG_KEY's fingerprint is
+# checked against the fingerprint of the key the public tree already
+# publishes (rpm/RPM-GPG-KEY-freereac). A mismatch refuses the run rather
+# than sign with a key repo_gpgcheck=1 clients would then fail to verify
+# against the key line their .repo file actually carries.
 
 name: Release reac-pw RPM to the dnf repo
 
@@ -54,27 +68,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  # Same variable name, same fallback shape and same meaning as openmixer's
-  # release-rpm.yml: the one shared tree, spelled once. An unset repository
-  # variable changes nothing -- both workflows fall back the same way. The
-  # fallback is the PUBLIC tree (operator ruling 2026-09-13, "everything
-  # public now"): the private worker was the only target for months and
-  # this placeholder host went stale at 0.7.1 over that time. Setting the
-  # repository variable still points every one of these steps, including
-  # the builddep resolve below, at the private worker instead -- unchanged.
-  OPENMIXER_REPO_BASEURL: ${{ vars.OPENMIXER_REPO_BASEURL || 'https://freereac.github.io/rpm' }}
-  # Same repo id and name as openmixer's own run, ON PURPOSE: this is not a
-  # second repository beside openmixer's, it is packages joining ONE dnf repo
-  # (one openmixer.repo, one GPG key, one repodata tree per releasever/arch).
-  # A different id here would emit a second, colliding .repo file over the same
-  # directory instead of adding entries to the one dnf already trusts.
-  OPENMIXER_REPO_ID: openmixer
-  # The key file the tree serves next to its .repo: the public FreeREAC tree ships
-  # RPM-GPG-KEY-freereac; a private worker tree sets the variable to its own name.
-  OPENMIXER_REPO_KEYFILE: ${{ vars.OPENMIXER_REPO_KEYFILE || 'RPM-GPG-KEY-freereac' }}
-  OPENMIXER_REPO_NAME: openmixer / FreeREAC
 
 jobs:
   build:
@@ -111,43 +104,27 @@ jobs:
           fetch-tags: true
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Configure the shared repo (for pkgconfig(libreac) etc.)
-        # `dnf builddep` resolves reac-pw.spec's BuildRequires against whatever
-        # repos are configured -- Fedora's own for meson/ninja/pipewire-devel,
-        # and THIS one for pkgconfig(libreac), which only this tree carries.
-        # libreac's own equivalent workflow must have published >= 0.7.1 into
-        # this same bucket/repo-id BEFORE this one runs; if it has not,
-        # `dnf builddep` below fails loud and by name ("nothing provides
-        # pkgconfig(libreac) >= 0.7.1") -- that is a correct failure of a
-        # missing publish, not a bug in this file.
-        # $releasever/$basearch, not a hardcoded fedora/44/x86_64, so the repo
-        # keeps resolving if the matrix ever grows (design §1 note above).
-        # Signed metadata: gpgcheck=1/repo_gpgcheck=1 against the SAME key
-        # this workflow's own publish step signs with, and the key itself is
-        # fetched over plain HTTP -- RPM-GPG-KEY-openmixer is one of the two
-        # paths publish-repo.sh's WHY note says the Worker serves
-        # unauthenticated, precisely so a bootstrapping client can fetch it
-        # before it has read credentials. metadata_expire=0 -- a build must
-        # never resolve against a cached "libreac not published yet" answer.
-        env:
-          OPENMIXER_REPO_READ_USERNAME: ${{ secrets.OPENMIXER_REPO_READ_USERNAME }}
-          OPENMIXER_REPO_READ_PASSWORD: ${{ secrets.OPENMIXER_REPO_READ_PASSWORD }}
+      - name: Install the public dnf tree (for pkgconfig(libreac) etc.)
+        # `dnf builddep` below resolves reac-pw.spec's BuildRequires against
+        # whatever repos are configured -- Fedora's own for meson/ninja/
+        # pipewire-devel, and THIS one for pkgconfig(libreac), which only the
+        # public FreeREAC tree carries. libreac's own equivalent workflow
+        # must have published the required version into
+        # https://freereac.github.io/rpm BEFORE this one runs (see the file
+        # header, ORDER); if it has not, `dnf builddep` fails loud and by
+        # name ("nothing provides pkgconfig(libreac) >= X") -- that is a
+        # correct failure of a missing publish, not a bug in this file.
+        # `--from-repofile` reads the tree's own freereac.repo unmodified --
+        # $releasever/$basearch baseurl, gpgcheck=1/repo_gpgcheck=1 -- so
+        # this step can never drift from what the tree actually declares
+        # about itself. `rpm --import` makes the key trusted before
+        # `dnf builddep -y` runs unattended (an unimported key would
+        # otherwise stall on an interactive confirmation prompt).
         run: |
           set -eu
-          {
-            echo "[openmixer]"
-            echo "name=$OPENMIXER_REPO_NAME"
-            echo "baseurl=${OPENMIXER_REPO_BASEURL}/fedora/\$releasever/\$basearch/"
-            echo "enabled=1"
-            echo "gpgcheck=1"
-            echo "repo_gpgcheck=1"
-            echo "gpgkey=${OPENMIXER_REPO_BASEURL}/${OPENMIXER_REPO_KEYFILE}"
-            echo "metadata_expire=0"
-            if [ -n "${OPENMIXER_REPO_READ_USERNAME}" ]; then
-              echo "username=${OPENMIXER_REPO_READ_USERNAME}"
-              echo "password=${OPENMIXER_REPO_READ_PASSWORD}"
-            fi
-          } > /etc/yum.repos.d/openmixer.repo
+          dnf install -y --setopt=install_weak_deps=False dnf5-plugins
+          dnf config-manager addrepo --from-repofile=https://freereac.github.io/rpm/freereac.repo
+          rpm --import https://freereac.github.io/rpm/RPM-GPG-KEY-freereac
 
       - name: Install build dependencies (dnf builddep against the spec)
         run: |
@@ -229,7 +206,7 @@ jobs:
           retention-days: 30
 
   publish:
-    name: Sign and publish into the shared dnf repo tree
+    name: Sign and publish into the public dnf repo tree
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -251,8 +228,9 @@ jobs:
       - name: Install packaging tools
         # git: this job's own checkout below works without it (actions/checkout falls back to a
         # tarball), but the public-pages checkout further down has to commit and push, which the
-        # tarball fallback cannot do.
-        run: dnf install -y --setopt=install_weak_deps=False createrepo_c rpm-sign gnupg2 pinentry findutils git
+        # tarball fallback cannot do. curl: fetches the public tree's own key, to check it before
+        # signing with it (see "Verify the signing key" below).
+        run: dnf install -y --setopt=install_weak_deps=False createrepo_c rpm-sign gnupg2 pinentry findutils git curl
 
       - uses: actions/download-artifact@v4
         with:
@@ -269,7 +247,7 @@ jobs:
       - name: Import the signing key
         if: env.SIGN == 'true'
         env:
-          # Named, never valued -- the SAME key openmixer's own publisher signs
+          # Named, never valued -- the SAME key libreac's own publisher signs
           # with; two different signing keys over one repo's metadata would
           # make repo_gpgcheck=1 fail for whichever half a client fetches
           # second, since only one gpgkey= line is baked into the .repo file.
@@ -290,125 +268,29 @@ jobs:
           echo "passphrase-file $HOME/.gnupg/passphrase" >> ~/.gnupg/gpg.conf
           gpgconf --kill gpg-agent || true
 
-      - name: Pull the current shared tree
-        # Fedora ships no pip and no aws on PATH -- awscli2 is a package
-        # (learned building openmixer's own version of this step). Only
-        # rpm/ is pulled: it is the whole tree publish-repo.sh's --out
-        # produces and the only prefix this job writes back to.
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET }}
+      - name: Verify the signing key matches the public tree's published key
+        # KEY HONESTY (see the file header): RPM_GPG_KEY is a secret nobody here
+        # can read directly, so its identity is proved the only honest way --
+        # by fingerprint, against the key the tree it will sign INTO already
+        # publishes. A mismatch means this run would sign packages with a key
+        # repo_gpgcheck=1 clients cannot verify (the .repo's gpgkey= line still
+        # points at the OLD key) -- refuse before a single package is signed,
+        # not after a push nobody can undo.
+        if: env.SIGN == 'true'
         run: |
           set -o pipefail
-          command -v aws >/dev/null || dnf install -y -q awscli2
-          mkdir -p tree/rpm
-          if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET" ]; then
-            AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
-              aws s3 sync "s3://$R2_BUCKET/rpm/" tree/rpm/ \
-              --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-            # The pulled metadata is discarded: the assembly below regenerates it from the
-            # package bytes actually in the tree, so a checksum can never describe a package
-            # this run did not push (createrepo_c --update would trust a same-size, same-mtime
-            # entry it has no reason to doubt).
-            find tree/rpm -type d -name repodata -prune -exec rm -rf {} +
-            echo "PULLED_TREE=1" >> "$GITHUB_ENV"
-          else
-            echo "::warning::R2 write credentials are not set -- publishing into an EMPTY local tree."
-            echo "The result below adds reac-pw to a tree with nothing else in it, and the push"
-            echo "step further down will not run (SIGN=$SIGN, and it never runs unsigned anyway)."
-            echo "PULLED_TREE=0" >> "$GITHUB_ENV"
+          PUB_FPR=$(curl -fsSL https://freereac.github.io/rpm/RPM-GPG-KEY-freereac \
+            | gpg --batch --with-colons --dry-run --import-options import-show --import 2>/dev/null \
+            | awk -F: '/^fpr:/ {print $10; exit}')
+          test -n "$PUB_FPR" || { echo "::error::could not read a fingerprint from https://freereac.github.io/rpm/RPM-GPG-KEY-freereac"; exit 1; }
+          if [ "$PUB_FPR" != "$OMX_GPG_KEY_ID" ]; then
+            echo "::error::RPM_GPG_KEY (imported fingerprint $OMX_GPG_KEY_ID) does not match the public"
+            echo "::error::tree's published key (fingerprint $PUB_FPR) -- refusing to sign. Either the wrong"
+            echo "::error::secret is set, or the public tree's key has rotated and RPM_GPG_KEY has not."
+            exit 1
           fi
+          echo "signing key matches the public tree's key: $OMX_GPG_KEY_ID"
 
-      - name: Assemble the tree (merge reac-pw in, never clobber what is there)
-        env:
-          OPENMIXER_REPO_READ_USERNAME: ${{ secrets.OPENMIXER_REPO_READ_USERNAME }}
-          OPENMIXER_REPO_READ_PASSWORD: ${{ secrets.OPENMIXER_REPO_READ_PASSWORD }}
-        run: |
-          set -o pipefail
-          args=(--rpm-dir collected --out tree
-                --repo-id "$OPENMIXER_REPO_ID"
-                --repo-name "$OPENMIXER_REPO_NAME"
-                --base-url "$OPENMIXER_REPO_BASEURL")
-          if [ "$SIGN" = "true" ]; then
-            args+=(--key-id "$OMX_GPG_KEY_ID")
-          else
-            args+=(--no-sign)
-          fi
-          if [ -n "$OPENMIXER_REPO_READ_USERNAME" ]; then
-            args+=(--repo-username "$OPENMIXER_REPO_READ_USERNAME" --repo-password "$OPENMIXER_REPO_READ_PASSWORD")
-          fi
-          # This is openmixer's own script, called unmodified (see the file
-          # header): it places by NEVRA (an unchanged package is a no-op),
-          # signs only what is new, and runs createrepo_c --update over any
-          # directory it touches -- so a tree that already carries openmixer's
-          # packages keeps them, and the repodata that comes out DESCRIBES
-          # BOTH.
-          packaging/publish-repo.sh "${args[@]}"
-
-      - name: Show what was published
-        run: |
-          set -o pipefail
-          echo "reac-pw packages in the tree:"
-          find tree/rpm -name 'reac-pw-*.rpm' -o -name 'reac-pw-*.src.rpm' | sort
-          echo
-          echo "every package now in the tree (reac-pw's addition should be new here):"
-          find tree/rpm/fedora -name '*.rpm' | sort
-          echo
-          echo "repodata timestamps:"
-          find tree/rpm -name repomd.xml -newer packaging/publish-repo.sh -o -name repomd.xml | sort | xargs -r ls -l
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: reac-pw-dnf-tree
-          path: tree/**
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Push only the changed files back (never --delete)
-        # Deletion belongs to nobody's automated sync here: a stray --delete
-        # would be able to remove openmixer's own packages the instant this
-        # tree diverges from what this job happened to pull a few minutes
-        # earlier (see the race note at the top of the file). --size-only
-        # avoids re-uploading every byte-identical package this run did not
-        # touch (their local mtime is "now", from the pull, so a plain sync
-        # would otherwise treat all of them as changed) while still catching
-        # the files that DID change: repomd.xml, its .asc, and the .repo/key.
-        if: env.SIGN == 'true' && env.PULLED_TREE == '1'
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET }}
-        run: |
-          set -o pipefail
-          export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-          EP="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws s3 sync tree/rpm/ "s3://$R2_BUCKET/rpm/" --size-only --endpoint-url "$EP"
-          # --size-only cannot see a re-signed repomd.xml.asc (same byte count, new bytes) or a
-          # same-size repomd.xml, and a stale signature over new metadata is "Bad PGP signature"
-          # for every consumer (measured 2026-09-09). Metadata and the tree's top-level files are
-          # therefore always overwritten; package files are never re-uploaded.
-          find tree/rpm -type d -name repodata | while read -r d; do
-            aws s3 cp --recursive "$d" "s3://$R2_BUCKET/${d#tree/}" --endpoint-url "$EP"
-          done
-          find tree/rpm -maxdepth 1 -type f \( -name '*.repo' -o -name 'RPM-GPG-KEY-*' \) | while read -r f; do
-            aws s3 cp "$f" "s3://$R2_BUCKET/${f#tree/}" --endpoint-url "$EP"
-          done
-          echo "pushed tree/rpm/ to s3://$R2_BUCKET/rpm/ (size-only, no --delete)"
-
-      # THE PACKAGES ARE PUBLIC, OR THEY ARE NOT PUBLISHED (operator ruling 2026-09-13,
-      # "everything public now") -- the private worker above was the only target for months and
-      # the public tree at freereac.github.io went stale at 0.7.1 over that time. This is the
-      # SAME publish-repo.sh call as the private tree above, run again over a git checkout
-      # instead of an S3 sync: it merges reac-pw's packages into the tree IN PLACE (NEVRA
-      # placement, createrepo_c --update -- see the script header), never wipes it. Sign-only,
-      # same as the private path: an unsigned tree is a smoke-test artefact and is never pushed
-      # anywhere. Two repositories (this one and libreac's) can both push this same branch; a
-      # concurrent push loses to git's own non-fast-forward refusal rather than corrupting
-      # anything -- the same "publish one, wait, publish the next" discipline the shared-tree
-      # race note above already asks for, now for git push instead of S3 sync.
       - name: Require the public-pages token before touching the public tree
         # Fails loud and BY NAME: a missing secret must never fall back to an unauthenticated
         # checkout (read-only, so the later push would fail anonymously with no clue why) or,
@@ -442,6 +324,19 @@ jobs:
           set -o pipefail
           packaging/publish-repo.sh --rpm-dir collected --out freereac-pages --key-id "$OMX_GPG_KEY_ID"
 
+      - name: Show what was published
+        if: env.SIGN == 'true'
+        run: |
+          set -o pipefail
+          echo "reac-pw packages in the public tree:"
+          find freereac-pages/rpm -name 'reac-pw-*.rpm' -o -name 'reac-pw-*.src.rpm' | sort
+          echo
+          echo "every package now in the tree (reac-pw's addition should be new here):"
+          find freereac-pages/rpm/fedora -name '*.rpm' | sort
+          echo
+          echo "repodata timestamps:"
+          find freereac-pages/rpm -name repomd.xml | sort | xargs -r ls -l
+
       - name: Commit and push the public tree
         if: env.SIGN == 'true'
         run: |
@@ -457,20 +352,31 @@ jobs:
             git push origin main
           fi
 
-      - name: Report an unsigned or unpushed run honestly
-        if: env.SIGN != 'true' || env.PULLED_TREE != '1'
-        # WARNS and exits 0, same reasoning as openmixer's own equivalent step:
-        # the build and the tree assembly both did real work (the artifact
-        # above is the proof), and this step exists so the run never CLAIMS to
-        # have published when it did not.
+      - name: Assemble an UNSIGNED smoke tree (dry run only, never published)
+        # sign=false never touches freereac-pages at all (no checkout above ran) -- this
+        # gives the dry run something to inspect anyway, same shape as before: an
+        # unsigned local tree, uploaded as an artifact, that proves the build+collect
+        # halves worked without publishing or writing to the shared repo.
+        if: env.SIGN != 'true'
         run: |
-          echo "::warning::nothing was pushed to the shared tree."
-          if [ "$SIGN" != "true" ]; then
-            echo "sign=false (the default): this is a dry run. publish-repo.sh --no-sign emits"
-            echo "repo_gpgcheck=0, and pushing that tree would make a client trust unverified metadata."
-          fi
-          if [ "$PULLED_TREE" != "1" ]; then
-            echo "R2 write credentials were not set, so the local tree assembled above has nothing"
-            echo "of openmixer's in it either -- pushing it would have clobbered the real one."
-          fi
-          echo "the assembled tree is attached to this run as 'reac-pw-dnf-tree' for inspection."
+          set -o pipefail
+          packaging/publish-repo.sh --rpm-dir collected --out tree --no-sign
+
+      - uses: actions/upload-artifact@v4
+        if: env.SIGN != 'true'
+        with:
+          name: reac-pw-dnf-tree
+          path: tree/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report a dry run honestly
+        if: env.SIGN != 'true'
+        # WARNS and exits 0: the build and the unsigned tree assembly both did real work
+        # (the artifact above is the proof), and this step exists so the run never
+        # CLAIMS to have published when it did not.
+        run: |
+          echo "::warning::sign=false (the default): this is a dry run, nothing was published."
+          echo "publish-repo.sh --no-sign emits repo_gpgcheck=0, and pushing that tree would make"
+          echo "a client trust unverified metadata -- so it stays local to this run."
+          echo "the assembled unsigned tree is attached to this run as 'reac-pw-dnf-tree' for inspection."
