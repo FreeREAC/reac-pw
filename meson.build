@@ -460,6 +460,29 @@ test('reac_trunk_classification_is_about_now',
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
+# --- whole-binary test: a segment whose master left is re-decided (#97) ------------
+#
+# Measured on the rig 2026-09-13: a segment joined to a box master that then went away
+# courted the empty wire for ever (ESTABLISHED -> DROP -> FLOOD_ANNOUNCE), and only a
+# restart fixed it. The link is left UP throughout, because the cable case already worked.
+test('reac_master_gone_is_re_decided',
+  find_program('tests/master-gone-is-re-decided.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 240)
+
+# --- whole-binary test: a pinned segment has a DOOR before the wire says anything ---
+#
+# openmixer's master-arbitration §6 Q5, ANSWERED 2026-09-14 (operator): option C. The
+# console invents no row; the DAEMON opens a door for every segment a pin names, whatever
+# is on the wire — so a role can be set on a segment before anything enrols. Measured on
+# the rig that day: a VLAN pinned `tap` with a silent wire and a pinned master with no box
+# both published NO NODE AT ALL. Two veths whose peer ends live in a nested namespace, a
+# private PipeWire, and pw-dump as the reader.
+test('reac_doors_open_before_the_wire',
+  find_program('tests/doors-open-before-the-wire.sh'),
+  args : [reac_pw_exe],
+  timeout : 180)
+
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment

@@ -45,10 +45,47 @@ static void test_keep(void)
 	CHECK(reac_watch_keep(REAC_HUNT_REFUSED, 0) == 1, "a refusal must be able to end");
 	CHECK(reac_watch_keep(REAC_HUNT_REFUSED, 1) == 1, "a pinned wire's refusal must be able "
 	      "to end too -- that is the 0.5.1 door");
-	CHECK(reac_watch_keep(REAC_HUNT_SLAVE, 0) == 0, "we never had this wire; there is "
-	      "nothing of ours to yield");
-	CHECK(reac_watch_keep(REAC_HUNT_HUNTING, 0) == 0, "an undecided wire is not served at all");
+	/* #97 IS NOT ANSWERED HERE, AND THE MEASUREMENT SAYS WHY. Keeping the sniffer on a
+	 * SLAVE serve looks like the fix and is not: a box master's stream is mostly FILLER,
+	 * which the discovery peer lock refuses as a sighting, so the wire looks EMPTY while
+	 * an enrolment is in progress — with this at 1, tests/box-master-slave-join.sh
+	 * measured the daemon retaking the wire 6 s into a live join and destroying it. The
+	 * segment's own decoded-frame latch answers #97 instead (main.c, hearing_reevaluate). */
+	CHECK(reac_watch_keep(REAC_HUNT_SLAVE, 0) == 0, "the sniffer cannot tell an absent "
+	      "master from an enrolment in progress; #97 is answered from the segment");
+	CHECK(reac_watch_keep(REAC_HUNT_SLAVE, 1) == 0, "and a pin does not change that");
+	/* And an undecided wire IS served since the Q5 door ruling — as a vacant door, which
+	 * exists precisely to be replaced by the first verdict that decides the wire. */
+	CHECK(reac_watch_keep(REAC_HUNT_HUNTING, 0) == 1, "a vacant door must be able to end");
 }
+
+/* THE VACANT DOOR (arbitration §6 Q5, ANSWERED 2026-09-14, option C). A segment that has
+ * been heard or pinned is PUBLISHED whatever is on the wire, with no engine behind it, so
+ * the console has a row and the operator can set a role. It waits out no dwell: the
+ * refusal's dwell asks "is the rival really gone", and this door never had a rival. */
+static void test_vacant_door(void)
+{
+	struct reac_watch_in in;
+	memset(&in, 0, sizeof in);
+	in.door = 1;
+	in.vacant = 1;
+	in.now_ns = 100;          /* nothing like the refusal's REAC_DISCO_STALE_NS dwell */
+	in.verdict = REAC_HUNT_HUNTING;
+	CHECK(reac_watch_decide(&in) == REAC_WATCH_STAND,
+	      "still nothing on the wire: the vacant door stands");
+	in.verdict = REAC_HUNT_MASTER;
+	CHECK(reac_watch_decide(&in) == REAC_WATCH_UNREFUSE,
+	      "the wire spoke and it is ours to drive: down with the door, at once");
+	in.verdict = REAC_HUNT_SLAVE;
+	CHECK(reac_watch_decide(&in) == REAC_WATCH_UNREFUSE,
+	      "a master appeared on the mirror: the real tap replaces the door, at once");
+	in.verdict = REAC_HUNT_REFUSED;
+	CHECK(reac_watch_decide(&in) == REAC_WATCH_UNREFUSE,
+	      "even a refusal replaces a vacant door — a refusal is something to say, and "
+	      "an empty door says nothing");
+}
+
+
 
 /* THE YIELD. A desk (or a box on M) starts mastering a wire we are driving, and we get
  * out of its way -- whichever way we came to be driving it. */
@@ -108,6 +145,7 @@ int main(void)
 	test_yield();
 	test_retake();
 	test_door();
+	test_vacant_door();
 	if (fails) {
 		fprintf(stderr, "%d check(s) failed\n", fails);
 		return 1;

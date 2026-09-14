@@ -680,6 +680,16 @@ struct listener_cfg {
 	unsigned wire_channels;
 	int join_box_master;
 	int door_only;
+	/* WHY THERE IS NOTHING BEHIND THE DOOR: a REFUSAL (above), or simply that this
+	 * segment has NOTHING TO SERVE YET (arbitration §6 Q5, ANSWERED 2026-09-14,
+	 * option C; plug-and-play §2/§4, lane 1). A VLAN pinned `tap` with a silent wire
+	 * and a pinned master with no box both published NO NODE AT ALL, so the console
+	 * had no `/reac/segment` row and the operator could not change the role of the
+	 * very segment that needed one — measured on the rig 2026-09-14. The mechanism is
+	 * `door_only`'s, not a second one; this field only says which sentence the door
+	 * tells and which answer set it publishes (`reac.master.state=none` — nothing is
+	 * mastering it as far as we can hear — against the refusal's `foreign`). */
+	int door_vacant;
 	/* THE PASSIVE ROLE (openmixer master-arbitration, eighth amendment, 2026-09-13).
 	 * `REAC_ROLE_<segment>=tap` or `--role tap`: serve what is heard and TRANSMIT
 	 * NOTHING — no announce, no join, no grant, no seglock, no TX socket. It is not a
@@ -744,6 +754,15 @@ struct listener {
 	 * 200 ms poll that publishes, so the claim decays when a desk is unplugged
 	 * instead of standing on a counter that never goes back down. */
 	struct reac_segment_heard heard;
+
+	/* HOW LONG THIS SEGMENT HAS FOLLOWED NOBODY (#97). `heard` above says whether the
+	 * master's frames are still arriving and decoding; this counts the 200 ms publish
+	 * ticks since it last did. It is the SEGMENT's own evidence, and it is the only
+	 * evidence that answers the question: the sniffer's discovery table cannot tell an
+	 * absent master from an enrolment in progress (a box master's stream is mostly
+	 * filler, which the peer lock refuses as a sighting), and deciding from it destroyed
+	 * a live box-master join — measured, tests/box-master-slave-join.sh. */
+	int follows_nobody_ticks;
 
 	struct autodetect_ctx adc;
 	struct spa_source *ad_timer;
@@ -960,6 +979,23 @@ static void listener_publish_segment(struct listener *L)
 		 * path below, which derives its own from the engine it actually has. */
 		const char *state = reac_role_swap_state(
 			&L->role_swap, reac_role_engine_of_slave(L->slave_open, established));
+		/* A VACANT DOOR PUBLISHES AN ABSENCE, AND ABSENCE IS A FACT (Q5, option C).
+		 * Nothing has been heard mastering this wire, so the slave composer's own
+		 * `heard = 0` arm is exactly the answer: master.state `none`, master.mac
+		 * `none`, rival.kind `none`, refusal `none`, pace `free-run`. No new
+		 * vocabulary — the honest reading of every field this segment already has.
+		 *
+		 * THE ROLE STATE IS `role_hunting`, NOT `role_reestablish_pending`. Nothing
+		 * is owed here and no swap has failed: this is a segment whose role cannot
+		 * be PERFORMED because there is nothing on the wire to perform it against,
+		 * which is precisely what reac_role_swap.h defines that word for. */
+		if (L->cfg.door_vacant) {
+			reac_segment_answer_slave(&answer, 0, 0, L->rx.sample_rate, 0);
+			reac_source_node_publish_segment(L->src, role_s, REAC_ROLE_STATE_HUNTING,
+			                                 reac_role_refuse_code(REAC_ROLE_REFUSE_NONE),
+			                                 &answer);
+			return;
+		}
 		/* A REFUSED SEGMENT PUBLISHES THE REFUSAL AND NOTHING ELSE (0.5.1). No engine
 		 * runs here, so there is no frame count to latch on and no MAC we learned from
 		 * a handshake — the rival's address comes from the sighting that caused the
@@ -1110,6 +1146,11 @@ static void listener_close_tap(struct listener *L)
 	}
 }
 
+/* listener_open_tap's third answer, beside 0 and -1: the source opened and carried no
+ * REAC at all, so there is nothing to serve YET. Not a failure — the segment exists and
+ * gets its door (see listener_open). */
+#define LISTENER_TAP_VACANT 1
+
 static int listener_open_tap(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
@@ -1136,10 +1177,12 @@ static int listener_open_tap(struct listener *L, struct pw_loop *loop)
 	if (L->tap.n == 0) {
 		fprintf(stderr, "reac-pw: %sTAP heard NOTHING on '%s' in 1 s — no master, no "
 		        "box. A tap serves what is on the wire and there is nothing to serve; "
-		        "on a venue switch this is the mirror port not being configured.\n",
+		        "on a venue switch this is the mirror port not being configured. The "
+		        "segment is published as a VACANT DOOR so it can be seen and its role "
+		        "set, and the tap opens for real on the first frame heard.\n",
 		        c->tag, c->rxcfg.source);
 		listener_close_tap(L);
-		return -1;
+		return LISTENER_TAP_VACANT;
 	}
 
 	for (unsigned i = 0; i < L->tap.n; i++) {
@@ -1207,8 +1250,22 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * opens a socket, claims a lock or starts an engine, and a tap does none of the
 	 * three — so it branches here rather than threading an `if (!tap)` through the
 	 * whole function, where one missed arm would be a frame on a desk's wire. */
-	if (c->tap)
-		return listener_open_tap(L, loop);
+	if (c->tap) {
+		int r = listener_open_tap(L, loop);
+		if (r != LISTENER_TAP_VACANT)
+			return r;
+		/* NOTHING ON THE MIRROR YET, AND THE SEGMENT STILL EXISTS (Q5, option C).
+		 * Until now a tap that heard nothing FAILED to open, the listener was wiped,
+		 * and a VLAN pinned `tap` on a quiet wire published no node — so the console
+		 * had no row for it and its role could not be changed back (measured
+		 * 2026-09-14). A tap is pinned by an operator who knows the mirror is coming;
+		 * the door is what carries that intent until it does. It falls through into
+		 * the SAME door the 0.5.1 refusal uses — one door in this daemon, not two —
+		 * and the kept sniffer replaces it with the real tap on the first verdict. */
+		c->door_only = 1;
+		c->door_vacant = 1;
+		c->wire_channels = 0;
+	}
 
 	/* SAMPLE RATE — the master chooses it; the box follows. See
 	 * docs/RATE-AND-CLOCK-CONFIG.md for the full law; this is its per-segment
@@ -1608,9 +1665,22 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			        "outranks the pin if a different box declares itself.\n",
 			        c->tag, c->pin_model->token, c->pin_model->in_ch, c->pin_model->out_ch,
 			        c->pin_label);
+		} else if (reac_sink_node_ensure(L->sink, 0, NULL) != 0) {
+			fprintf(stderr, "reac-pw: %sMASTER, and the segment's DOOR could not be "
+			        "created — this segment will drive the wire and the console will "
+			        "have no row for it until a box is recognized\n", c->tag);
 		} else {
-			fprintf(stderr, "reac-pw: %sMASTER autodetect — reac-capture / reac-playback "
-			        "appear sized to the box once it is recognized on the wire\n", c->tag);
+			/* THE DOOR IS UP BEFORE THE BOX (Q5, option C). reac-playback carries
+			 * reac.segment and accepts reac.cfg.role, so deferring it deferred the
+			 * SEGMENT — a pinned master on a cold stage published no node at all and
+			 * the operator could not change its role. It exists now with ZERO ports,
+			 * which keeps the deferral's actual rule (nothing plugged is nothing to
+			 * patch) while the identity is published; the autodetect watcher rebuilds
+			 * it at the box's own width the moment one declares itself. */
+			fprintf(stderr, "reac-pw: %sMASTER autodetect — the segment's door is on "
+			        "the graph now (reac-playback, no ports yet); reac-capture / "
+			        "reac-playback are sized to the box once it is recognized on the "
+			        "wire\n", c->tag);
 		}
 	} else {
 		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
@@ -1807,6 +1877,12 @@ struct sniffer {
 	 * A PINNED interface does not need it: it is already driving. */
 	struct reac_knock knock;
 	int watch_silence;          /* 0 = pinned, so the observation does not apply */
+	/* THIS SEGMENT IS PINNED `tap` (segment_tap_pin). Kept here because the hunt's
+	 * clock needs it for two things it cannot get from reac_hunt: a tap is SERVED ON
+	 * LINK like any other pin (the door ruling), and a tap's wire is NEVER driven —
+	 * the masterless licence below must not be armed on a mirror port. */
+	int tap_pinned;
+	int tap_served;             /* the serve was queued once; not queued again */
 	/* EVERY WIRE WE TOOK AND NOBODY PINNED KEEPS ITS SNIFFER (0.5.4, reac_watch.h).
 	 * The wire is ours only while nobody else claims it, so it goes on being
 	 * classified and hearing_yield acts on what it hears: a desk that turns up second
@@ -1974,6 +2050,59 @@ static int segment_role_pin(const char *iface, enum reac_role *out)
  * readable. It is NOT when a refused segment re-opens a sniffer to watch its own rival —
  * that wire's story was just told, and repeating "pinned master — driving on link" under a
  * door would describe the opposite of what is happening. */
+/* WHAT THE CONF ASKED THIS SEGMENT TO BE, as an INTENT — the one fact the hunt's own
+ * clock needs before any listener_cfg exists. listener_cfg_from_conf resolves the same
+ * key for the listener; this is the same lookup with the same two rules, read where
+ * there is no listener yet. */
+static enum reac_role_intent segment_role_intent(const char *iface)
+{
+	char v[256];
+	enum reac_role_intent i;
+	enum reac_conf_layer layer = reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v);
+	if (layer == REAC_CONF_NONE || reac_role_intent_parse(v, &i) != 0)
+		return REAC_ROLE_INTENT_AUTO;
+	/* `tap` IS PER-SEGMENT ONLY, for listener_cfg_from_conf's reason: a bare REAC_ROLE
+	 * describes every segment on the host and cannot know that one of them is a mirror
+	 * port. A floor that says `tap` is not an answer about this wire. */
+	if (i == REAC_ROLE_INTENT_TAP && layer != REAC_CONF_SEGMENT)
+		return REAC_ROLE_INTENT_AUTO;
+	return i;
+}
+
+/* IS THIS SEGMENT PINNED `tap`? The question segment_role_pin above cannot answer,
+ * because `tap` deliberately pins no WIRE role — there is no end of the pairing to pin.
+ * It is still a PIN, the operator answered for this wire, and since the Q5 ruling a pin
+ * is what opens a door, so the hunt's clock has to be able to see one. */
+static int segment_tap_pin(const char *iface)
+{
+	return segment_role_intent(iface) == REAC_ROLE_INTENT_TAP;
+}
+
+/* A FOREIGN DESK IS DEFERRED TO, NOT COURTED (libreac's bounded-ungranted-courtship
+ * spec, "Ruling 2026-09-14: option C"; plug-and-play §4).
+ *
+ * Measured four times beside a real M-200 on 2026-09-12: with our COURTING slave on the
+ * segment the desk's own S-1608 did not enrol in 180 s, and once the desk had granted
+ * our slave it blocked that box outright while it rebooted. So a segment that hears a
+ * DESK and was not told to be a recorder does not court it — it TAPS it: serve what is
+ * heard, transmit nothing at all. The role that never transmits is a different role, not
+ * a quieter one.
+ *
+ * A BOX mastering the wire is NOT this case and is joined exactly as before (seventh
+ * amendment; operator 2026-09-09, "a box that wants to be master gets the clock"). A box
+ * runs no handshake and grants nothing, so there is no courtship of ours to block it.
+ *
+ * `recorder` — REAC_ROLE_<segment>=slave — stays an EXPLICIT choice and still courts;
+ * the bounded courtship exists for it. A PINNED MASTER defers too: beside a desk it is
+ * the only thing it can do that is not a fight, and reac_watch re-evaluates it back to
+ * its pin the moment that desk is gone (#97). */
+static int segment_defers_as_tap(enum reac_role_intent intent, const struct reac_hunt *hunt)
+{
+	if (!hunt || intent == REAC_ROLE_INTENT_SLAVE || intent == REAC_ROLE_INTENT_TAP)
+		return 0;
+	return hunt->arb.state == REAC_SEGMENT_FOREIGN && hunt->arb.rival == REAC_RIVAL_DESK;
+}
+
 static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 {
 	if (sniffer_find(h, name))
@@ -2002,6 +2131,7 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 	int pinned = segment_role_pin(name, &pin);
 	if (pinned)
 		reac_hunt_pin(&sn->hunt, pin);
+	sn->tap_pinned = segment_tap_pin(name);
 	snprintf(sn->name, IFNAMSIZ, "%s", name);
 	sn->io = pw_loop_add_io(h->loop, sn->cap.fd, SPA_IO_IN, false, on_sniff_io, sn);
 	if (!sn->io) {
@@ -2013,7 +2143,12 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 	 * to open its real listener on link anyway (reac_hunt: a pin is served on link), so
 	 * it has nothing to observe. An unpinned one is watched, and taken if it stays
 	 * silent — reac_knock.h has the measurement and the safety argument. */
-	if (!pinned && !reac_ifscan_is_wireless(NULL, name)) {
+	/* AND NEVER ON A WIRE PINNED `tap`. The licence's whole content is TAKE THE WIRE —
+	 * the master role starts on that port and drives it — and a tap is the one role
+	 * defined by putting nothing on the wire at all (eighth amendment). A tap pin
+	 * answers for this segment, so it is served on link like any other pin and has
+	 * nothing to observe. */
+	if (!pinned && !sn->tap_pinned && !reac_ifscan_is_wireless(NULL, name)) {
 		sn->watch_silence = 1;
 		reac_knock_init(&sn->knock, now);
 	}
@@ -2028,7 +2163,10 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 	 * we are waiting on, and that is what made the 2026-09-08 outage unreadable. */
 	if (!announce)
 		return 0;
-	if (pinned && pin == REAC_ROLE_MASTER)
+	if (sn->tap_pinned)
+		fprintf(stderr, "reac-pw: [%s] pinned tap — serving what is heard on link and "
+		        "transmitting NOTHING: no announce, no join, no grant, no seglock\n", name);
+	else if (pinned && pin == REAC_ROLE_MASTER)
 		fprintf(stderr, "reac-pw: [%s] pinned master — driving on link\n", name);
 	else if (pinned)
 		fprintf(stderr, "reac-pw: [%s] pinned slave — cold-connect flood, then listening "
@@ -2084,8 +2222,29 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	 * present"; a tap presents none, so a refusal or a box-master join — both of
 	 * which are decisions about what WE do on the wire — describe a segment this one
 	 * is not. What it heard is re-read by reac_tap itself, off the same frames. */
+	/* A DESK ON THE WIRE IS DEFERRED TO (courtship ruling 2026-09-14, option C). The
+	 * segment becomes a TAP here rather than a courting slave — the predicate is the one
+	 * the hunt's journal line already read, so the sentence and the act agree. */
+	if (!L->cfg.tap && segment_defers_as_tap(L->cfg.role_intent, hunt)) {
+		L->cfg.tap = 1;
+		fprintf(stderr, "reac-pw: [%s] a desk masters this segment, so it is served as a "
+		        "TAP%s — never as a courting slave: with our slave present a real desk's "
+		        "own S-1608 did not enrol in 180 s (2026-09-12). REAC_ROLE_%s=slave asks "
+		        "for the recorder explicitly if that is what you want.\n", name,
+		        L->cfg.role_pinned ? " (deferring its REAC_ROLE_<segment> pin until this "
+		                             "master is gone)" : "", name);
+	}
 	if (L->cfg.tap) {
 		/* nothing to carry */
+	} else if (hunt && hunt->verdict == REAC_HUNT_HUNTING) {
+		/* NOTHING DECIDES THIS WIRE YET, AND THE SEGMENT STILL EXISTS (Q5, option C).
+		 * A door with no engine behind it and no refusal to report: it publishes the
+		 * segment's identity and the honest `none` — nothing is mastering this wire as
+		 * far as we can hear. The mechanism is the 0.5.1 door's, so there is one
+		 * door in this daemon and not two. */
+		L->cfg.door_only = 1;
+		L->cfg.door_vacant = 1;
+		L->cfg.wire_channels = 0;
 	} else if (hunt && hunt->verdict == REAC_HUNT_REFUSED) {
 		L->cfg.door_only = 1;
 		L->cfg.wire_channels = hunt->arb.rival_channels;
@@ -2141,18 +2300,34 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	L->opened = 1;
 	L->rx_started = !L->cfg.door_only && !L->cfg.tap;
 	h->served++;
-	if (L->cfg.door_only)
+	if (L->cfg.door_vacant)
+		/* NOT "segment up" either: nothing is running here and nothing was refused.
+		 * The wire has told us nothing yet, and that is what the door says. */
+		fprintf(stderr, "reac-pw: [%s] segment PUBLISHED as a VACANT DOOR — nothing is "
+		        "mastering this wire that we can hear, so there is no engine behind "
+		        "the node; the segment exists, its role can be set, and the first "
+		        "verdict on this wire replaces the door — %lu served so far\n",
+		        name, h->served);
+	else if (L->cfg.door_only)
 		/* NOT "segment up": nothing is running here. It is a segment that EXISTS on
 		 * the graph so the refusal can be read, and the line says which. */
 		fprintf(stderr, "reac-pw: [%s] segment REFUSED and PUBLISHED (door only, "
 		        "%u-ch rival) — %lu served so far\n", name, L->cfg.wire_channels,
 		        h->served);
 	else
+		/* THE ROLE THIS LINE NAMES IS THE ROLE THAT IS RUNNING. `reac_role_name` knows
+		 * only the wire's two ends, so a TAP read "master" here — the role that
+		 * transmits, printed over the one role that never does. `tap` is spelled by
+		 * reac_role_intent_name, the vocabulary that has it. */
 		fprintf(stderr, "reac-pw: [%s] segment up (%s%s, %s) — %lu served so far\n", name,
-		        reac_role_name(L->cfg.role),
+		        L->cfg.tap ? reac_role_intent_name(REAC_ROLE_INTENT_TAP)
+		                   : reac_role_name(L->cfg.role),
 		        L->cfg.join_box_master ? ", enrolling with the box that masters it" : "",
-		        L->cfg.role_pinned ? "pinned by REAC_ROLE_<segment>"
-		                           : "chosen by hearing the wire",
+		        L->cfg.role_pinned && !(L->cfg.tap && L->cfg.role_intent != REAC_ROLE_INTENT_TAP)
+		            ? "pinned by REAC_ROLE_<segment>"
+		        : L->cfg.tap && L->cfg.role_intent != REAC_ROLE_INTENT_TAP
+		            ? "deferring to the master it heard"
+		            : "chosen by hearing the wire",
 		        h->served);
 }
 
@@ -2657,6 +2832,25 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		if (e->retry_after_ns != 0 && now < e->retry_after_ns)
 			continue;
 
+		/* A TAP PIN IS A PIN, AND A PIN IS SERVED ON LINK (arbitration §6 Q5,
+		 * ANSWERED 2026-09-14, option C). It waits for no frame, for the same reason
+		 * reac_hunt's own pin does not: the operator answered for this wire, and a
+		 * mirror port with nothing on it yet is the case the ruling is ABOUT. Nothing
+		 * is transmitted by taking it — that is what the role means — so there is no
+		 * evidence to require before acting on it. The listener then serves whatever
+		 * the survey hears, and a VACANT DOOR when it hears nothing. */
+		if (sn->tap_pinned) {
+			if (!sn->tap_served) {
+				sn->tap_served = 1;
+				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as "
+				        "TAP — serving on link with no frame waited for: a tap "
+				        "asserts nothing, so there is nothing for the wire to "
+				        "agree with\n", sn->name, sn->name);
+			}
+			reac_ifscan_heard(&h->scan, sn->name, now);
+			continue;
+		}
+
 		/* THE MASTERLESS OBSERVATION, then the decision. A wire nobody pinned that has
 		 * carried not one frame for REAC_KNOCK_LISTEN_NS has no master on it, so it may
 		 * be DRIVEN — the hunt's own licence, granted here and ruled on below like any
@@ -2692,11 +2886,21 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        "opening the slave side on link, without waiting to be heard\n",
 				        sn->name, sn->name);
 			else if (changed)
+				/* AND THE SENTENCE IS THE ACT. This line said "joining it as SLAVE"
+				 * over a segment that goes on to be served as a TAP — the two were
+				 * decided in different functions and drifted apart. One predicate
+				 * answers both now (segment_defers_as_tap), read here and at the
+				 * serve, so the journal cannot describe a role the daemon does not
+				 * take. */
 				fprintf(stderr, "reac-pw: [%s] a desk masters this segment "
-				        "(%02x:%02x:%02x:%02x:%02x:%02x) — joining it as SLAVE and "
-				        "following its pace\n", sn->name,
+				        "(%02x:%02x:%02x:%02x:%02x:%02x) — %s\n", sn->name,
 				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
-				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5]);
+				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
+				        segment_defers_as_tap(segment_role_intent(sn->name), &sn->hunt)
+				          ? "TAPPING it: serving what it broadcasts and transmitting "
+				            "nothing at all, because a courting slave of ours keeps a "
+				            "desk's own boxes from enrolling"
+				          : "joining it as SLAVE and following its pace");
 			reac_ifscan_heard(&h->scan, sn->name, now);
 			break;
 		case REAC_HUNT_MASTER:
@@ -2757,6 +2961,16 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        "listening, transmitting nothing\n", sn->name,
 				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL));
 				sn->undecided_said = 1;
+				/* AND IT GETS ITS DOOR ANYWAY (Q5, option C). REAC has been HEARD
+				 * here — a vid seen on a trunk, or a frame on this wire — so the
+				 * segment exists whatever we can make of it, and a segment with no
+				 * node is one the console cannot render and the operator cannot set
+				 * a role on. Served as a VACANT DOOR: one node carrying the
+				 * segment's identity and `reac.master.state=none`, no engine of any
+				 * kind. Its sniffer is KEPT (reac_watch_keep), so the first verdict
+				 * that does decide this wire takes the door down and brings the real
+				 * segment up in its place. */
+				reac_ifscan_heard(&h->scan, sn->name, now);
 			}
 			break;
 		}
@@ -2801,7 +3015,13 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 			continue;   /* the segment went away; nothing to yield */
 		struct reac_watch_in in = {
 			.door       = L->cfg.door_only,
-			.we_master  = !L->cfg.door_only && L->cfg.role == REAC_ROLE_MASTER,
+			.vacant     = L->cfg.door_vacant,
+			/* A TAP IS NOT MASTERING ANYTHING. cfg.role holds one of the wire's two
+			 * ends and a deferred tap leaves it at the default MASTER, which would
+			 * read here as "we are driving this segment" — the one thing the role
+			 * is defined by never doing. */
+			.we_master  = !L->cfg.door_only && !L->cfg.tap &&
+			              L->cfg.role == REAC_ROLE_MASTER,
 			.pinned     = L->cfg.role_pinned,
 			.verdict    = sn->hunt.verdict,
 			.now_ns     = now,
@@ -2830,14 +3050,20 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 			continue;
 		}
 		case REAC_WATCH_YIELD: {
+			/* AND THE SENTENCE IS THE ACT HERE TOO. What the segment becomes is
+			 * decided by the same predicate the serve reads, so a yield to a DESK
+			 * says tap and a yield to a box on M says slave. */
 			fprintf(stderr, "reac-pw: [%s] a %s masters this segment "
 			        "(%02x:%02x:%02x:%02x:%02x:%02x) — we took this wire %s and it is "
-			        "not ours to keep: yielding the master role and joining as SLAVE\n",
+			        "not ours to keep: yielding the master role and %s\n",
 			        sn->name, reac_rival_kind_name(sn->hunt.arb.rival),
 			        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
 			        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
 			        sn->driven_on_silence ? "because it was SILENT"
-			                              : "because nothing was mastering it");
+			                              : "because nothing was mastering it",
+			        segment_defers_as_tap(segment_role_intent(sn->name), &sn->hunt)
+			          ? "TAPPING it instead — nothing of ours goes back on this wire"
+			          : "joining as SLAVE");
 			/* Drop first, then serve: the two engines are exclusive (one AF_PACKET
 			 * TX, one segment lock, one node pair) and the swap passes through a
 			 * window in which nothing owns the segment — reac_role_swap.h says so
@@ -2934,6 +3160,79 @@ static void hearing_refuse_pinned_master(struct hearing *h, uint64_t now)
 	}
 }
 
+/* A SEGMENT THAT FOLLOWS NOBODY GOES BACK TO THE HUNT (#97).
+ *
+ * Measured on the rig 2026-09-13, reac-pw 1.0.1: VLAN 12 was pinned master, an S-1608 in
+ * M mode was mastering it, and the daemon deferred to it — correctly. The box was set
+ * back to S and power-cycled, so the foreign master left. Our slave went `ESTABLISHED ->
+ * DROP -> FLOOD_ANNOUNCE` and STAYED there, courting a segment that no longer had a
+ * master, while the cold box waited for one that was never going to announce. Neither
+ * side could move for as long as it was left. `systemctl --user restart` brought the
+ * segment up as master and enrolled the box in two seconds.
+ *
+ * THE EVIDENCE IS THE SEGMENT'S, NOT THE SNIFFER'S, AND THAT IS A MEASUREMENT AND NOT A
+ * PREFERENCE. Keeping the hunt's sniffer alive on a joined segment (reac_watch_keep) is
+ * the obvious shape and it is wrong: a box master's stream is mostly FILLER, which the
+ * discovery peer lock deliberately refuses to treat as a sighting, so the wire looks
+ * EMPTY to that table while an enrolment is in progress — with it enabled the daemon
+ * retook the wire 6 s into a live box-master join and destroyed it. `reac_segment_heard`
+ * asks the other question: are the master's frames still arriving AND DECODING through
+ * this segment's own RX gate? That cannot be confused with our own courtship, because our
+ * frames are ours and never reach it.
+ *
+ * BOUNDED, AND GENEROUSLY. The latch itself costs REAC_SEGMENT_HEARD_QUIET_TICKS (5 s)
+ * before it clears — reac_disco's own "it is really gone" bar — and this waits the same
+ * again on top, so nothing is re-decided until a master has been silent for ten seconds.
+ * A REAC master fills every audio slot and cannot be present and silent for one of them,
+ * let alone forty thousand.
+ *
+ * A PINNED RECORDER IS EXEMPT. `REAC_ROLE_<segment>=slave` says BE THE BOX END HERE; a
+ * wire with nobody on it does not change that, and re-serving it would reset the bounded
+ * courtship's own backoff every ten seconds — which is the opposite of what that backoff
+ * is for. Everything else re-hears the wire: a pin takes itself up again (the hunt serves
+ * a pin on link), and `auto` takes whatever the wire now leaves open.
+ *
+ * IT RE-HEARS RATHER THAN RE-OPENS, through the same seam a role swap uses: drop, close
+ * the sniffer, open a fresh one, ask for a serve. A segment re-opened on the OLD verdict
+ * would slave to the master it just lost. */
+#define REACPW_FOLLOWS_NOBODY_TICKS (2 * REAC_SEGMENT_HEARD_QUIET_TICKS)
+
+static void hearing_reevaluate(struct hearing *h, uint64_t now)
+{
+	for (int i = 0; i < h->n_slots; i++) {
+		struct listener *L = &h->listeners[i];
+		if (!L->opened || L->cfg.door_only)
+			continue;   /* a door follows nobody by construction */
+		if (!L->cfg.tap && L->cfg.role != REAC_ROLE_SLAVE)
+			continue;   /* only a segment that FOLLOWS can be left following nobody */
+		if (L->cfg.role_intent == REAC_ROLE_INTENT_SLAVE)
+			continue;   /* the recorder was asked for; an empty wire is its own case */
+		if (L->heard.heard) {
+			L->follows_nobody_ticks = 0;
+			continue;
+		}
+		if (++L->follows_nobody_ticks < REACPW_FOLLOWS_NOBODY_TICKS)
+			continue;
+		char name[IFNAMSIZ];
+		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source ? L->cfg.rxcfg.source : "");
+		if (!name[0])
+			continue;
+		fprintf(stderr, "reac-pw: [%s] the master this segment was following has been "
+		        "silent for %d s — it is gone, and %s is not a state to sit in: "
+		        "re-hearing the wire so the segment is CLASSIFIED afresh%s\n", name,
+		        (int)((REACPW_FOLLOWS_NOBODY_TICKS + REAC_SEGMENT_HEARD_QUIET_TICKS) / 5),
+		        L->cfg.tap ? "a tap with nothing to serve" : "courting nobody",
+		        L->cfg.role_pinned ? " and REAC_ROLE_<segment> is taken up again" : "");
+		hearing_drop(h, name, "the master it was following is gone — re-hearing the wire");
+		/* The sniffer's hunt is stale for the same reason a role swap's is: it was
+		 * decided against a master that is no longer there. A fresh one reads the pin
+		 * as it now is and classifies the wire as it now is. */
+		sniffer_close(h, name);
+		sniffer_open_ex(h, name, 0);
+		reac_ifscan_serve_failed(&h->scan, name, now);
+	}
+}
+
 static void hearing_poll(struct hearing *h)
 {
 	if (!h->enabled)
@@ -2947,6 +3246,7 @@ static void hearing_poll(struct hearing *h)
 	}
 	hearing_hunt(h, now);
 	hearing_refuse_pinned_master(h, now);
+	hearing_reevaluate(h, now);
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	hearing_apply(h);
