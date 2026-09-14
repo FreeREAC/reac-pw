@@ -1905,6 +1905,11 @@ struct topo_tap {
 	struct spa_source *io;
 	struct hearing *h;
 	int said_trunk;            /* "this parent is a trunk, not a segment", said once */
+	/* WHAT THE TAP IS BOUND TO (#102). Only a frame the kernel says arrived on THIS
+	 * ifindex is evidence about this parent; the reader above has the measurement. */
+	unsigned ifindex;
+	int said_foreign;          /* "a frame from elsewhere reached this tap", said once */
+	uint8_t last_tagged_src[6];/* who sent the last tag counted here, for the log line */
 	/* WHAT THIS CABLE CARRIES **NOW** (#98). The topology table is deliberately kept
 	 * across a link bounce — deleting it would destroy the segments the ifscan hold
 	 * exists to preserve — but the TRUNK VERDICT is a claim about the present, and
@@ -1914,9 +1919,16 @@ struct topo_tap {
 	 * is not served` — the box got no master until the daemon was restarted. So the tap
 	 * stamps its own link-up and remembers whether a tag has been heard SINCE it; a
 	 * verdict with no tag behind it since this cable came up is stale and does not
-	 * refuse anything. Both are reset by topo_watch_iface's memset at every link-up. */
+	 * refuse anything. Both are reset by topo_watch_iface's memset at every link-up.
+	 *
+	 * AND IT IS A ROLLING WINDOW, NOT A LATCH (#102). `tagged_since_linkup` was a
+	 * sticky flag, so ONE frame — on the rig, one of our own, misattributed by the
+	 * unbound tap the reader above documents — made the verdict permanent and #98's
+	 * re-proof could never run on the start path. A trunk that is still a trunk puts
+	 * thousands of tagged frames a second on the wire, so the honest question is when
+	 * the LAST tag was heard, not whether one ever was. */
 	uint64_t linkup_ns;
-	int tagged_since_linkup;
+	uint64_t last_tagged_ns;   /* 0 = not one tag since this link came up */
 	int said_stale;            /* "no tag since link-up, serving it untagged", said once */
 };
 
@@ -2392,6 +2404,92 @@ static struct topo_tap *tap_find(struct hearing *h, const char *parent)
 	return NULL;
 }
 
+/* ---- WHAT COUNTS AS EVIDENCE ABOUT THIS PARENT (#102) ------------------------------
+ *
+ * MEASURED ON THE RIG 2026-09-14, reac-pw 1.0.5. The USB NIC `enp128s20f0u2` was on a
+ * DIRECT cable to a cold S-4000S-3208, its other port unplugged, and tcpdump on it saw no
+ * tagged frame — no frame at all — over 25 s. Yet EVERY daemon start logged
+ * `[enp128s20f0u2] tagged REAC heard — vid 11 (1 frame(s))` and the same for vid 12,
+ * within 0.4 s of "pinned master — driving on link": exactly ONE frame per VLAN this
+ * daemon itself masters on ANOTHER parent (`enp131s0.11/.12/.13`). The parent was then
+ * refused as a trunk for ever and the cold box got no master.
+ *
+ * THE MECHANISM IS THE SOCKET'S FIRST MICROSECONDS. `reac_topo_tap_open()` creates the tap
+ * as `socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))` and binds it to the parent's ifindex
+ * a few syscalls later — the BPF filter, PACKET_AUXDATA and `if_nametoindex()` sit between.
+ * An AF_PACKET socket opened with a NON-ZERO protocol is live on EVERY interface from
+ * `socket()` until `bind()`, so in that window the queue fills with frames from other
+ * links, and the 0x8819 filter attached first makes sure the ones that survive are exactly
+ * the frames this classifier treats as evidence. On the rig they are our own VLAN masters
+ * tagged on enp131s0, three sources at the wire cadence across a window a couple of
+ * hundred microseconds wide: one frame per VLAN, every start, and ~10 per VLAN across a
+ * link bounce because a bounce re-opens the tap several times.
+ *
+ * PACKET_IGNORE_OUTGOING CANNOT SAVE THIS, and reading its presence as protection is what
+ * kept the bug alive after #98: the flag is set after `open()` returns, it drops frames as
+ * they ARRIVE and never the ones already queued, and half of what a wide-open tap queues is
+ * somebody else's INBOUND traffic, which the flag is not about at all.
+ *
+ * So the frame's own ifindex is the only honest answer, and the kernel puts it in
+ * `sockaddr_ll.sll_ifindex` on every packet-socket read. This reads the tap directly to get
+ * it — libreac's `reac_topo_tap_next()` passes no `msg_name`, so it cannot — and hands the
+ * bytes to the SAME pure classifier libreac exports (`reac_topo_classify`), so no part of
+ * the wire format is re-implemented here. It keeps the source MAC too: the next report of
+ * this shape answers itself, because the "tagged REAC heard" line names who sent the frame
+ * and which ifindex it arrived on. */
+struct topo_frame {
+	enum reac_topo_kind kind;
+	uint16_t vid;
+	uint8_t src[6];
+	unsigned ifindex;       /* the kernel's answer: where this frame really came from */
+	int outgoing;           /* sll_pkttype == PACKET_OUTGOING: our own transmission */
+};
+
+/* One frame off the tap. 1 = a frame, 0 = the socket is dry, -1 = error. */
+static int topo_tap_read(struct reac_topo_tap *tap, struct topo_frame *f)
+{
+	uint8_t frame[2048];
+	uint8_t control[CMSG_SPACE(sizeof(struct tpacket_auxdata))];
+	struct sockaddr_ll from;
+	struct iovec iov = { .iov_base = frame, .iov_len = sizeof frame };
+	struct msghdr msg;
+	memset(&from, 0, sizeof from);
+	memset(&msg, 0, sizeof msg);
+	msg.msg_name = &from;
+	msg.msg_namelen = sizeof from;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = control;
+	msg.msg_controllen = sizeof control;
+
+	ssize_t n = recvmsg(reac_topo_tap_fd(tap), &msg, MSG_DONTWAIT);
+	if (n < 0)
+		return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? 0 : -1;
+
+	int tci_valid = 0;
+	uint16_t tci = 0;
+	for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
+		if (cm->cmsg_level != SOL_PACKET || cm->cmsg_type != PACKET_AUXDATA)
+			continue;
+		struct tpacket_auxdata aux;
+		memcpy(&aux, CMSG_DATA(cm), sizeof aux);
+		/* TP_STATUS_VLAN_VALID is what separates "vid 0" from "no tag" — the kernel
+		 * zeroes tp_vlan_tci for an untagged frame and a priority-tagged one alike
+		 * (reac_topo.h carries the measurement). */
+		if (aux.tp_status & TP_STATUS_VLAN_VALID) {
+			tci_valid = 1;
+			tci = aux.tp_vlan_tci;
+		}
+	}
+	memset(f, 0, sizeof *f);
+	f->ifindex = (unsigned)from.sll_ifindex;
+	f->outgoing = (from.sll_pkttype == PACKET_OUTGOING);
+	if ((size_t)n >= 12)
+		memcpy(f->src, frame + 6, 6);   /* the source MAC, for the line that names it */
+	f->kind = reac_topo_classify(frame, (size_t)n, tci_valid, tci, &f->vid);
+	return 1;
+}
+
 static void on_topo_io(void *data, int fd, uint32_t mask)
 {
 	struct topo_tap *tp = data;
@@ -2400,13 +2498,36 @@ static void on_topo_io(void *data, int fd, uint32_t mask)
 		return;
 	uint64_t now = monotonic_ns();
 	for (int i = 0; i < 256; i++) {
-		enum reac_topo_kind k = REAC_TOPO_NOT_REAC;
-		uint16_t vid = 0;
-		if (reac_topo_tap_next(&tp->tap, &k, &vid) <= 0)
+		struct topo_frame f;
+		if (topo_tap_read(&tp->tap, &f) <= 0)
 			break;
-		if (k == REAC_TOPO_TAGGED)
-			tp->tagged_since_linkup = 1;   /* #98: this cable carries tags NOW */
-		reac_topo_saw(&tp->h->topo, tp->parent, k, vid, now);
+		/* #102: EVIDENCE ABOUT THIS PARENT IS WHAT ARRIVED INBOUND ON THIS PARENT.
+		 * Anything else — another interface's frame queued before the tap was bound,
+		 * or one of our own transmissions — decides nothing here. Said once per tap,
+		 * with the sender, the VLAN and the real ifindex, so a repeat of this report
+		 * is diagnosed from the journal alone. */
+		if (f.ifindex != tp->ifindex || f.outgoing) {
+			if (!tp->said_foreign) {
+				tp->said_foreign = 1;
+				fprintf(stderr, "reac-pw: [%s] a %s REAC frame from "
+				        "%02x:%02x:%02x:%02x:%02x:%02x (vid %u, ifindex %u) reached "
+				        "this parent's tap %s — it is not evidence about this "
+				        "parent and decides nothing\n", tp->parent,
+				        reac_topo_kind_name(f.kind),
+				        f.src[0], f.src[1], f.src[2], f.src[3], f.src[4], f.src[5],
+				        (unsigned)f.vid, f.ifindex,
+				        f.outgoing ? "as our own transmission"
+				                   : "from another interface");
+			}
+			continue;
+		}
+		if (f.kind == REAC_TOPO_TAGGED) {
+			/* #98/#102: this cable carries tags NOW, and who sent the last one. */
+			tp->last_tagged_ns = now;
+			tp->said_stale = 0;
+			memcpy(tp->last_tagged_src, f.src, sizeof tp->last_tagged_src);
+		}
+		reac_topo_saw(&tp->h->topo, tp->parent, f.kind, f.vid, now);
 	}
 }
 
@@ -2477,9 +2598,23 @@ static void topo_watch_iface(struct hearing *h, const char *name)
 		reac_topo_tap_close(&tap);
 		return;
 	}
+	/* THE IFINDEX THE TAP IS BOUND TO (#102), read the same way libreac read it one
+	 * call ago. Without it no frame can be attributed, so a tap that cannot be named is
+	 * not opened at all: the netdev went away between the open and here, and a tap
+	 * counting frames it cannot attribute is exactly the defect this closes. */
+	unsigned idx = if_nametoindex(name);
+	if (idx == 0) {
+		fprintf(stderr, "reac-pw: [%s] the topology tap opened and the interface is "
+		        "already gone (%s) — no tap, so tagged REAC on this parent cannot be "
+		        "seen\n", name, strerror(errno));
+		reac_topo_tap_close(&tap);
+		reac_topo_unwatch(&h->topo, name, monotonic_ns());
+		return;
+	}
 	memset(tp, 0, sizeof *tp);
 	snprintf(tp->parent, IFNAMSIZ, "%s", name);
 	tp->linkup_ns = monotonic_ns();   /* #98: the trunk verdict is re-proved from here */
+	tp->ifindex = idx;
 	tp->tap = tap;
 	/* OUR OWN FRAMES ARE NOT EVIDENCE ABOUT THIS PARENT, and on THIS socket they are
 	 * delivered: the tap is ETH_P_ALL, and ptype_all is the one place a locally
@@ -2493,7 +2628,13 @@ static void topo_watch_iface(struct hearing *h, const char *name)
 	 *
 	 * BEST-EFFORT BY NATURE (Linux 4.20+), and reported rather than assumed: without it
 	 * the classification is merely conservative — a parent keeps reading as a trunk,
-	 * which refuses rather than double-delivers. */
+	 * which refuses rather than double-delivers.
+	 *
+	 * IT IS SET BEFORE THE FIRST READ and it is NOT THE WHOLE ANSWER (#102). The loop
+	 * source below is what makes anything read this socket, so this flag is always in
+	 * place first — and it still only drops frames as they ARRIVE, never the ones the
+	 * socket already queued while it was unbound, and never another interface's
+	 * INBOUND traffic. on_topo_io's ifindex test is what covers both. */
 	{
 		int on = 1;
 		if (setsockopt(reac_topo_tap_fd(&tp->tap), SOL_PACKET, PACKET_IGNORE_OUTGOING,
@@ -2548,9 +2689,18 @@ static void topo_forget_iface(struct hearing *h, const char *name, uint64_t now)
 static void topo_ensure(struct hearing *h, const char *parent, uint16_t vid, uint64_t now)
 {
 	const struct reac_topo_vlan *v = reac_topo_vlan_find(&h->topo, parent, vid);
-	fprintf(stderr, "reac-pw: [%s] tagged REAC heard — vid %u (%lu frame(s)): this parent "
-	        "is a TRUNK, its VLANs are the segments\n", parent, (unsigned)vid,
-	        v ? v->frames : 0UL);
+	/* WHO SENT IT AND WHERE IT ARRIVED (#102). A verdict of one frame on a cable
+	 * tcpdump says is silent cost a night; the line now carries the sender's MAC and
+	 * the ifindex the frame was attributed to, so the next such report is answered from
+	 * the journal. No tap (a parent past the tap bound) prints zeros, which is itself
+	 * the answer: nothing attributed it. */
+	const struct topo_tap *tp = tap_find(h, parent);
+	static const uint8_t NOMAC[6];
+	const uint8_t *src = tp ? tp->last_tagged_src : NOMAC;
+	fprintf(stderr, "reac-pw: [%s] tagged REAC heard — vid %u (%lu frame(s)) from "
+	        "%02x:%02x:%02x:%02x:%02x:%02x on ifindex %u: this parent is a TRUNK, its "
+	        "VLANs are the segments\n", parent, (unsigned)vid, v ? v->frames : 0UL,
+	        src[0], src[1], src[2], src[3], src[4], src[5], tp ? tp->ifindex : 0u);
 
 	char name[IFNAMSIZ];
 	if (reac_vlan_name(parent, vid, name, sizeof name) != 0) {
@@ -2634,10 +2784,26 @@ static int topo_trunk_now(struct hearing *h, const char *parent, uint64_t now)
 	if (!reac_topo_is_trunk(&h->topo, parent))
 		return 0;
 	struct topo_tap *tp = tap_find(h, parent);
-	if (!tp || tp->tagged_since_linkup)
-		return 1;
 	/* NO TAP OF OUR OWN means we cannot see tags at all, and absence of the fact is
-	 * not evidence against it: the table's answer stands (tap_find NULL, above). */
+	 * not evidence against it: the table's answer stands. */
+	if (!tp)
+		return 1;
+	/* A TAG HEARD RECENTLY, NOT A TAG HEARD ONCE (#102). This was `tagged_since_linkup`,
+	 * a latch, and one misattributed frame at start-up therefore pinned the verdict for
+	 * the life of the process — #98's re-proof could never run on the start path, which
+	 * is the half of #102 that survives even with the attribution fixed. A real trunk
+	 * re-proves itself thousands of times a second, so the rolling window costs it
+	 * nothing. */
+	if (tp->last_tagged_ns) {
+		if (now <= tp->last_tagged_ns)
+			return 1;
+		if (now - tp->last_tagged_ns < REACPW_TRUNK_RECLASSIFY_NS)
+			return 1;
+		return 0;
+	}
+	/* NOT ONE TAG YET: the grace after this cable came up (and after start, which is
+	 * the same stamp), so a freshly-linked trunk is not served untagged in the gap
+	 * before its first tagged frame. */
 	if (now <= tp->linkup_ns)
 		return 1;
 	return now - tp->linkup_ns < REACPW_TRUNK_RECLASSIFY_NS;
@@ -2657,10 +2823,15 @@ static void topo_apply(struct hearing *h, uint64_t now)
 		if (!topo_trunk_now(h, tp->parent, now)) {
 			if (!tp->said_stale) {
 				tp->said_stale = 1;
+				/* SAYABLE AGAIN AFTERWARDS (#102): a tag heard later clears this and
+				 * re-arms said_trunk, so the journal alternates honestly instead of
+				 * printing one verdict for the life of the process. */
+				tp->said_trunk = 0;
 				fprintf(stderr, "reac-pw: [%s] tagged REAC was heard on this parent "
-				        "before, and NOT ONCE since it came up %llu ms ago — the "
-				        "cable has been re-purposed, so it is an ordinary segment "
-				        "again and untagged REAC on it is served\n", tp->parent,
+				        "before, and NOT ONCE since — nothing tagged in the last "
+				        "%llu ms, so the cable has been re-purposed: it is an "
+				        "ordinary segment again and untagged REAC on it is served\n",
+				        tp->parent,
 				        (unsigned long long)(REACPW_TRUNK_RECLASSIFY_NS / 1000000ULL));
 			}
 			continue;

@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.5',
+  version: '1.0.6',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -471,6 +471,28 @@ test('reac_trunk_classification_is_about_now',
   find_program('tests/trunk-classification-is-about-now.sh'),
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
+
+# --- whole-binary test: one parent's tags are not another parent's verdict (#102) --
+#
+# Measured on the rig 2026-09-14: a USB NIC on a DIRECT cable to a cold box was told
+# `tagged REAC heard — vid 11 (1 frame(s))` at every start — one frame per VLAN the daemon
+# masters on ANOTHER parent — while tcpdump on it saw no tagged frame at all. The tap is
+# live on every interface between socket() and bind(), so it read other links' frames as
+# this parent's. Three tagged sources on one veth, a silent pinned-master veth beside it.
+test('reac_trunk_verdict_is_inbound_only',
+  find_program('tests/trunk-verdict-is-inbound-only.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 300)
+
+# --- whole-binary test: the trunk verdict expires with no link bounce (#102) -------
+#
+# #98's re-proof window could only be reached by a parent that had heard NOTHING: the
+# "tagged since link-up" flag was a latch, so one frame at start-up pinned the refusal for
+# the life of the process. Here the tags simply stop and the link is never touched.
+test('reac_trunk_verdict_expires_on_the_start_path',
+  find_program('tests/trunk-verdict-expires-on-the-start-path.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 300)
 
 # --- whole-binary test: a segment whose master left is re-decided (#97) ------------
 #
