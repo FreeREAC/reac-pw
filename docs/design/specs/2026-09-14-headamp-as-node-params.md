@@ -2,11 +2,12 @@
 <!-- Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com> -->
 # Head-amp as node parameters — a stagebox preamp app on reac-pw alone
 
-Status: DRAFT for the operator, not normative
+Status: RULED by the operator 2026-09-14; normative for the reac-pw head-amp-door lane, the
+openmixer proxy lane and the REAC Stageboxes app
 
 The question this answers: *could a GNOME settings application drive a stagebox's preamps through
-libreac, so that installing reac-pw alone is enough to manage every channel — and is that a
-protocol reac-pw would have to offer, or one it already offers?*
+libreac, so that installing reac-pw alone is enough to manage every channel — and is that a protocol
+reac-pw would have to offer, or one it already offers?*
 
 ## 1. What exists today
 
@@ -91,10 +92,14 @@ it on a node that exists when we cannot send. The door stays where it is.
 
 ## 3. The design
 
-### 3a. The door: nothing moves, two properties are added
+### 3a. The door: nothing moves, four properties are added
 
 The head-amp door **is** the parameter interface the question asks for. It needs no rename, no new
-transport and no protocol of its own. It needs the two properties that make it honest.
+transport and no protocol of its own. It needs the properties that make it honest.
+
+**The travel.** `reac.headamp.sens.max` — today `55` (0x37), a flat 1 dB per step under
+`dBu = -10 - value + (pad ? 20 : 0)`. Published beside `reac.headamp.caps`, so a client renders the
+range it receives and a model with a different travel needs no new client.
 
 **Asserted state.** One node property on the sink, carrying reac-pw's shadow table as a compact
 list of cells:
@@ -114,11 +119,11 @@ reac.headamp.state    = "applied" | "unavailable"
 reac.headamp.refused  = "none" | "no-box" | "box-master" | "no-base" | "bad-key" | "out-of-range"
 ```
 
-`box-master` is the code that turns today's silence into a sentence a surface can render: *the box
-is master, its preamps are preconfigured*. Not an error — the contract of that mode.
+`box-master` turns today's silence into a sentence a surface can render — *the box is master, its
+preamps are preconfigured* — which is the contract of that mode, not an error.
 
-Both ride the existing `sink_publish_link_props` timer and the existing prop composer. No new
-thread, no new file, no change to the record path that is already byte-verified against a capture.
+All four ride the existing `sink_publish_link_props` timer and the existing prop composer: no new
+thread, no new file, and no change to the record path already byte-verified against a capture.
 
 ### 3b. One writer
 
@@ -166,57 +171,80 @@ reac-pw's own dependency set and the house rule that native audio code is plain 
   a `.desktop` file and an AppStream metainfo so GNOME Software lists it. It builds in the same
   meson tree behind an option, so a headless install carries none of it.
 - **A gnome-control-center panel is a later step, and an honest one.** GNOME Settings has no
-  third-party panel API: a panel means either carrying a patched control-center or proposing the
-  panel upstream. The standalone application is the deliverable; the panel is a conversation to
-  have after it exists and works.
+  third-party panel API: a panel means a patched control-center or an upstream proposal. The
+  standalone application is the deliverable; the panel is a conversation for after it works.
 
-### 3d. Proof
+### 3d. The three lanes, and what each must show to be done
 
-- **Unit, reac-pw.** Extend `tests/test_reac_headamp_prop.c`: build a `Props` pod carrying
-  `reac.headamp.32.phantom = 1`, drive it through `reac_headamp_prop_parse` →
-  `reac_pacer_headamp_set` → the pacer drain → `reac_ctrl_stamp_headamp`, and **byte-compare the
-  emitted frame to libreac's golden** — `tests/ctrl_fixtures.inc`, `FX_L4_HEADAMP`, a TAG 0x0101
-  record captured off an M-200 commanding an S-1608
-  (`m200i-none-48k-clean__m200-s1608-realbox-establish-2026-07-11.pcap`), whose record bytes are
-  exactly `CH 0x20, PARAM 0x00, VALUE 0x01` — plus
-  `reac_ctrl_headamp_record_verify(frame) == 0`. That fixture is an S-1608 at base 32, so the same
-  test also pins the base law. A self-consistent assertion that the parse returned what the builder
-  built proves nothing; the golden bytes are the oracle.
-- **Unit, refusals.** For each code, write the cell and then **read `reac.headamp.refused` back**
-  and require the code. Presence-verify the write; never count round-trips. A door that refused the
-  write reports a blind pass.
-- **Rig.** S-1608 enrolled as our slave, console mastering. Establish a baseline that is a signal —
-  a tone on box input 1 reading at least 40 dB above the floor — then set sens 32 → 52 and require
-  the measured delta. A −90 dBFS pair is digital silence and refutes nothing. Prove the injection
-  landed first: move a control known to be in that path and require the reading to follow it.
-- **Phantom is never claimed from a switch.** 48 V is confirmed with a meter at the XLR pins.
-- **Pad** is confirmed as the box's own 20 dB: set sens, engage pad, require the level to move 20 dB
-  with no sens record on the wire.
+The work splits three ways. Each lane's acceptance line is what it must MEASURE — not what it must
+build — and no lane is done on a green suite alone.
 
-## 4. Questions for the operator
+**Lane A — the reac-pw head-amp door** (`src/reac_headamp_prop.c`, `src/reac_sink_node.c`):
+publishes `reac.headamp.sens.max`, `reac.headamp.asserted`, `reac.headamp.state` and
+`reac.headamp.refused`.
+
+*Accepts when:* a `Props` pod carrying `reac.headamp.32.phantom = 1`, driven through
+`reac_headamp_prop_parse` → `reac_pacer_headamp_set` → the pacer drain → `reac_ctrl_stamp_headamp`,
+emits a frame **byte-identical to libreac's golden** — `tests/ctrl_fixtures.inc`, `FX_L4_HEADAMP`,
+a TAG 0x0101 record captured off an M-200 commanding an S-1608
+(`m200i-none-48k-clean__m200-s1608-realbox-establish-2026-07-11.pcap`), record bytes
+`CH 0x20, PARAM 0x00, VALUE 0x01` — and `reac_ctrl_headamp_record_verify(frame) == 0`. That fixture
+is an S-1608 at base 32, so the same assertion pins the base law. A self-consistent check that the
+parse returned what the builder built proves nothing; the golden bytes are the oracle.
+*And when:* each refusal code is proved by **reading `reac.headamp.refused` back** after the write —
+`no-box`, `box-master`, `no-base`, `bad-key`, `out-of-range` — never by counting a round-trip. A
+door that refused the write reports a blind pass.
+*And when:* after a set, `reac.headamp.asserted` carries that cell, and still does after an
+establishment re-push.
+
+**Lane B — the openmixer proxy** (`packages/audio-engine/src/reac-head-amp.ts`,
+`packages/server/src/stagebox-registry.ts`, `stagebox-name-row.ts`, `server.ts:5841`): the rows read
+`reac.headamp.asserted` as the truth; the remembered-base fallback and `StageboxEntry.headAmpBase`
+go.
+
+*Accepts when:* a head-amp value written by any OTHER client — one `pw-cli set-param` from a shell —
+appears on the console's row without the console having written it. That is the whole of "proxy",
+and a suite that only reads back the console's own write cannot see the difference.
+*And when:* on a box in M the row answers the `box-master` code from the node and no write is
+attempted, with nothing remembered and nothing guessed.
+
+**Lane C — the REAC Stageboxes app** (its own tree, packaged from `packaging/reac-pw.spec`).
+
+*Accepts when:* on a rig with an enrolled S-1608 and an **enrolled S-1608 only** — no openmixer
+running, no console process on the wire — the application lists the box from the graph and a sens
+move made in it is **measured on the box's audio**: a tone on box input 1 at a baseline at least
+40 dB above the floor, sens 32 → 52, and the measured delta required. A −90 dBFS pair is digital
+silence and refutes nothing; prove the injection landed first by moving a control known to be in
+that path and requiring the reading to follow it.
+*And when:* pad is confirmed as the box's own 20 dB — set sens, engage pad, require the level to
+move 20 dB with **no** sens record on the wire.
+*And when:* 48 V is confirmed with a meter at the XLR pins. No hardware claim from a switch, a lamp
+or a soft meter, ever.
+
+## 4. The rulings (operator, 2026-09-14)
 
 1. **The sens travel — published or assumed?** The law is `dBu = -10 - value + (pad ? 20 : 0)`,
    0x00..0x37, a flat 1 dB per step, and it holds on every model decoded so far.
-   *Recommended:* publish it rather than compile it into the app — add `reac.headamp.sens.max` to
-   the caps properties and let the application render the travel it receives, so a model with a
-   different range needs no new client.
+   **ANSWERED: publish the travel as a property — `reac.headamp.sens.max`.** The application renders
+   the travel it receives; a model with a different range needs no new client.
 2. **Do the console's head-amp rows retire or proxy?**
-   *Recommended:* proxy. openmixer keeps its rows — they are the desk's door for the desk's strips
-   and carry the capability gating and the defaults — but they read `reac.headamp.asserted` as the
-   truth instead of echoing the last value they wrote. One writer, one store, two surfaces.
+   **ANSWERED: the console's head-amp rows PROXY the node's truth.** openmixer keeps its rows — they
+   are the desk's door for the desk's strips and carry the capability gating and the defaults — and
+   they read `reac.headamp.asserted` instead of echoing the last value they wrote. One writer, one
+   store, two surfaces.
 3. **Does the remembered-base fallback retire?** It was built so a box that had once announced
-   base 32 could still be addressed after switching to M. §9 now says a box on M has no head-amp on
-   the wire in either direction.
-   *Recommended:* retire the fallback in `reac-head-amp.ts` and the `headAmpBase` field in the
-   registry; keep the refusal, and let the surface say `box-master` instead of writing into
-   silence. This is a behaviour change on a live path, so it is the operator's call, not this
-   document's.
-4. **Who may write?** reac-pw is a user unit on the user's PipeWire socket, so today the answer is
-   "anyone in the operator's session", which is the same answer as for volume on any device.
-   *Recommended:* leave it there and add no polkit rule. A permission model becomes meaningful only
-   if reac-pw ever runs as a system service, and that is a separate decision.
+   base 32 could still be addressed after switching to M. §9 says a box on M has no head-amp on the
+   wire in either direction.
+   **ANSWERED: retire it.** The fallback in `reac-head-amp.ts` and the `headAmpBase` field in the
+   registry go; the refusal stays, and the surface says `box-master` rather than writing into
+   silence.
+4. **Who may write?** reac-pw is a user unit on the user's PipeWire socket, so the answer is "anyone
+   in the operator's session", the same answer as for volume on any device.
+   **ANSWERED: no polkit. PipeWire session access is the boundary.** A permission model becomes
+   meaningful only if reac-pw ever runs as a system service, and that is a separate decision.
 5. **The readback shape.** One compact `reac.headamp.asserted` cell list, or 144 individual
    `reac.headamp.<ch>.<param>` properties?
-   *Recommended:* the compact list. Per-cell properties would put the control keys and the readback
-   keys in the same namespace under the same names — the one confusion the current header is
-   careful to avoid — and would churn the property dict on every knob turn.
+   **ANSWERED: one compact asserted-cells property, `reac.headamp.asserted`.** Per-cell properties
+   would put the control keys and the readback keys in the same namespace under the same names — the
+   one confusion the current header is careful to avoid — and would churn the property dict on every
+   knob turn.
