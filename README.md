@@ -143,7 +143,9 @@ and writes node params, with PipeWire session access as the only gate. The
 segment's rate and role, the box badge, and the stagebox head-amp door — its
 per-channel phantom/pad/sens params, the travel, what reac-pw is asserting and
 why a write was refused — are one table in
-[docs/NODE-PROPERTIES.md](docs/NODE-PROPERTIES.md).
+[docs/NODE-PROPERTIES.md](docs/NODE-PROPERTIES.md). A GUI over exactly that
+door: [reac-stageboxes](https://github.com/FreeREAC/reac-stageboxes), a
+desktop app for the preamps.
 
 ## Tools and tests
 
