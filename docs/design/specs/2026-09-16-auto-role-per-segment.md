@@ -1,0 +1,84 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com> -->
+# Auto role per segment — what the daemon may detect about who masters a wire, and what it adopts
+
+Status: RULED by the operator 2026-09-16 ("we should autodetect master/slave/SP mode and adapt to
+it"); normative for `reac_hunt`'s callers in this daemon and for the console that writes its conf.
+Companion to openmixer's `2026-08-20-reac-master-arbitration.md` §8 (the intent/observation law),
+`2026-09-13-reac-plug-and-play.md` §4 (the role vocabulary, option C) and this repo's DESIGN.md.
+
+## 0. The live case this answers
+
+2026-09-16, plain PCI NIC `enp131s0`, an S-1608 with its REAC Mode switch on **M**. The console's
+generated `~/.config/reac-pw/reac-pw.env` carried `REAC_ROLE_enp131s0=master`. The daemon refused
+the segment (`rival-master-box`, the box `00:40:ab:c4:80:41` mastering at 16 ch), published a
+door-only node, and moved no audio. The operator saw "not detected".
+
+**The daemon was right and the file was wrong.** A wire pinned `master` with a box already
+mastering it is the one case `reac_hunt` refuses, and it refuses it on purpose (2026-09-09): the
+console never fights for a wire it forced itself onto, and the remedy is at the box's own switch.
+The defect is that nothing asked for that pin tonight — a stored intent from a bring-up session
+became a launch-time decision taken with no observation to make it against.
+
+## 1. THE FOUR CASES, and which of them the frames can actually decide
+
+A segment in `auto` decides from GEOMETRY and CAPTURED control signatures only — never from a role
+byte, never from a signature nobody has captured (arbitration §4).
+
+| # | the wire | detected by | adopted | proven |
+|---|---|---|---|---|
+| a | nobody masters | `reac_knock` silence licence (no frame for the listening window), or a box heard with no master for `REAC_HUNT_WINDOW_NS` | we master | `tests/test_reac_hunt.c`, `tests/test_reac_knock.c` |
+| b | a DESK masters | a foreign master whose frames carry the 40-channel downstream geometry (`REAC_RIVAL_DESK`) | defer — `auto` TAPS (courtship option C, 2026-09-14); an explicit `recorder` slaves | `tests/test_reac_hunt_captures.c` arm `desk`, real M-200 bytes |
+| c | a BOX in M masters | a foreign master whose frames carry a BOX width (`REAC_RIVAL_BOX`, `rival_channels` = the box's own width) | slave-join it; the segment is sized from `rival_channels` and the capture node carries the box's identity (`reac.box.mac`, DESIGN.md 0.5.2) | `tests/test_reac_hunt_captures.c` arms `box-master-auto` / `box-master-pinned`, real S-1608-on-M bytes |
+| d | a box in SP | **NOT DETECTABLE TODAY — see §3** | nothing; say so | §3 |
+
+`rival_channels` is the evidence the verdict was made from and is never re-derived by the caller
+(`reac_arbitration.h`). A box on M offers **no head-amp**: it is a preconfigured box with no mixer
+behind it, by design, so the console's head-amp cells for that box are dead and must say why.
+
+## 2. What a refusal still owes
+
+A refused segment is PUBLISHED as a door-only node carrying the refusal props (DESIGN.md 0.5.1) —
+a refusal nobody can see is indistinguishable from a daemon that is not running. `auto` refuses
+only case (d)-shaped evidence: a foreign master whose geometry does not read.
+
+## 3. SP (split) mode — what the wire shows, and it is nothing
+
+The split device's own frame is `SPLIT_ANNOUNCE` (`0xceea` at the control type word), which
+libreac parses as `REAC_CTRL_SPLIT_ANNOUNCE` and **deliberately classifies as role UNKNOWN**:
+never captured. The corpus audit of 2026-09-13
+(`reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base.md` §4b) counted **zero**
+`0xceea` and zero `0xc2ea` at the type word across 6 450 414 REAC frames in 111 files, against
+17 040 `0xcfea` found by the same scan — a positive control in the same pass. The five-step split
+handshake is source-derived (a GPL macOS driver by way of reac-aes67), not measured.
+
+Two consequences, and they are rulings:
+
+1. **No SP classifier ships on zero frames.** A frame kind nobody has captured must not flip a
+   segment's topology (arbitration §4). The daemon's conservatism already covers it: a
+   `SPLIT_ANNOUNCE` is a visible sighting with no role, so it cannot make us slave, master or
+   refuse by itself. `tests/test_reac_hunt_captures.c` pins that: a synthetic `0xceea` frame
+   changes no verdict.
+2. **What SP looks like from our side is already two known cases.** The mode switch is read at
+   boot and never re-read; SP splits the box's I/O across two REAC ports so two consoles share one
+   stagebox, and **M is the splitter's clock role** — clock-slave on the uplink, master on the
+   split outputs (`reac-protocol` wire-format.md:306-330). So on the UPLINK segment an SP box is a
+   slave box (silent until mastered, case a); on a SPLIT port it presents exactly as case (c). The
+   2026-09-10 trial against a plain master — box silent, sync lamp on — is consistent with both
+   and distinguishes neither.
+
+Owed, and named rather than guessed: `sp-unsupported` as a segment refusal code, to be minted in
+libreac beside `rival-master-{box,unknown}` **when, and only when, a capture of a real split device
+exists**. The rig that would take it is in
+`reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base.md` §4c.
+
+## 4. What the console must write (the other half of the fix)
+
+The per-segment key `REAC_ROLE_<segment>` is read at launch, when there is no observation to
+decide against. `master` is the one value that can collide with a master already holding the wire.
+So a console projects `auto` for an intent of `mixer` and lets the hunt decide, then asserts the
+intent live over `reac.cfg.role` once the segment has announced. Stated and gated on the console
+side in openmixer's `2026-08-20-reac-master-arbitration.md`, ninth amendment (2026-09-16).
+
+Writing `auto` still DECLARES the segment: `reac_declared_vlan.h` reads the KEY's name, never its
+value, so a declared VLAN is still minted at start.
