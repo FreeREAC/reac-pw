@@ -135,6 +135,7 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_declared_vlan.c',
 ]
 
 # include_directories('src') is new here: it used to resolve implicitly (a quoted
@@ -435,6 +436,30 @@ etf_wire_probe = executable('etf-wire-probe',
 test('reac_etf_qdisc_owned',
   find_program('tests/etf-qdisc-owned.sh'),
   args : [reac_pw_exe, etf_wire_probe],
+  timeout : 300)
+
+# --- unit test: what counts as a DECLARED VLAN segment ------------------------
+# Pure text: the key/filename forms an operator writes, the two that look like VLANs and
+# are not (`reac-pw.env`, `enp131s0.env`), and the bounds. No netlink, no netdev.
+declared_vlan_test = executable('test_reac_declared_vlan',
+  ['tests/test_reac_declared_vlan.c', 'src/reac_declared_vlan.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_declared_vlan', declared_vlan_test)
+
+# --- whole-binary test: a DECLARED VLAN segment is minted before anything is heard ---
+#
+# reac_topo mints `<parent>.<vid>` when it HEARS a tagged REAC frame; on a cold boot no
+# such frame can arrive, because every box on the trunk is a slave and a slave says
+# nothing until a master speaks -- which needs the netdev that is not there. The desk met
+# exactly that after a reboot on 2026-09-15: every declared segment dead, every box
+# unenrolled, no error anywhere. This drives the real binary in a private user+net+pid
+# namespace with a declared segment whose netdev does NOT exist, and requires it to be
+# there and up with no frame ever sent; then with the PARENT missing at start, appearing
+# later; then requires the exit to take away exactly what it minted.
+test('reac_declared_vlan_is_minted',
+  find_program('tests/declared-vlan-is-minted.sh'),
+  args : [reac_pw_exe],
   timeout : 300)
 
 # --- unit test: the ETF catch-up budget, and "unreadable is not zero" --------
