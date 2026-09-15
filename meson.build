@@ -949,8 +949,10 @@ test('reac_node_recover', recover_test)
 # Which end of the pairing a HEARD segment takes when nobody configured one. Frames come
 # from the reac_ctrl builders (the bytes the wire carries, checksum and all), so the four
 # outcomes are driven by real geometry: a desk masters -> we slave; a stagebox on M
-# masters -> refused and never fought; a silent wire with a box on it -> we master, but
-# only after the 3 s window; nothing heard -> never a segment. Pure; no socket.
+# masters -> we slave-join it too and are sized from ITS width (2026-09-09; only a wire
+# the operator PINNED master refuses one, and never fights it); a silent wire with a box
+# on it -> we master, but only after the 3 s window; nothing heard -> never a segment.
+# Pure; no socket.
 hunt_test = executable('test_reac_hunt',
   ['tests/test_reac_hunt.c',],
   include_directories : [include_directories('src')],
