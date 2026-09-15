@@ -957,6 +957,19 @@ hunt_test = executable('test_reac_hunt',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt', hunt_test)
 
+# --- dev-only: the auto-role detection against REAL captured frames -----------
+# tests/test_reac_hunt.c drives the four outcomes from the libreac builders; this replays
+# reac-captures pcaps and requires the verdict, the rival KIND, its WIDTH and its MAC to
+# come out of bytes a Roland device actually sent — including the 2026-09-16 live case
+# (an S-1608 on M, pinned master -> refused; unpinned -> slave-joined at 16 ch) and the
+# zero-SPLIT_ANNOUNCE measurement behind the spec's "SP is not detectable today".
+# The corpus is not in this repo: with none present the test exits 77 (SKIP) and says so.
+hunt_captures_test = executable('test_reac_hunt_captures',
+  ['tests/test_reac_hunt_captures.c',],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_hunt_captures', hunt_captures_test, timeout : 120)
+
 # --- unit test: the KNOCK, which wakes a cold stagebox on a wire nobody pinned -----
 # A box in slave mode transmits nothing until a master announces to it, so hearing alone
 # can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes
