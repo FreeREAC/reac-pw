@@ -46,6 +46,13 @@ unshare -r -n -p -f --mount-proc --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net+pid namespaces unavailable"; exit $SKIP; }
 
 export REACPW_BOX_MASTER_FRAME="${REACPW_BOX_MASTER_FRAME:-mixer}"
+# THE OPERATOR'S SESSION-MANAGER STATE, BEFORE. Stamped here and required to be identical
+# afterwards: a test's WirePlumber writing into ~/.local/state/wireplumber is a leak into
+# the live desk, and it is also what made this test depend on the speed of the operator's
+# filesystem (the full account is beside the wireplumber launch, inside).
+WPSTATE="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber"
+WP_BEFORE=$(find "$WPSTATE" -maxdepth 1 -type f -printf '%f %s %T@\n' 2>/dev/null | sort)
+
 OUT=$(unshare -r -n -p -f --mount-proc --map-root-user bash -s -- "$BIN" "$FAKE" <<'INNER'
 set -u
 BIN="$1"
@@ -87,7 +94,31 @@ wireplumber.profiles = {
   }
 }
 WPEOF
-XDG_CONFIG_HOME="$RT/cfg" wireplumber >"$RT/wp.log" 2>&1 &
+# AND ITS STATE DIRECTORY IS THIS RUN'S, NOT THE OPERATOR'S. XDG_CONFIG_HOME alone was
+# redirected here until 2026-09-15, so the session manager inside this "isolated" namespace
+# read AND WROTE ~/.local/state/wireplumber — the live desk's own file. Two costs, both
+# paid:
+#
+#   IT IS A LEAK. A test's session manager saving stream properties into the operator's
+#   state is the same fault as a test daemon appearing on the live graph, one directory
+#   over. That file was 135 KB on this rig and every run rewrote it.
+#
+#   AND IT MADE THIS TEST DEPEND ON THE HOST'S FILESYSTEM. On 2026-09-14/15 /home sat at
+#   btrfs metadata ENOSPC: writes ran at 1.3 MB/s and every rename() returned ENOSPC. The
+#   save that WirePlumber makes when a new stream appears is exactly the moment the second
+#   pw-cat below needs linking, so the link arrived after the probe's 2.5 s window and the
+#   test read "the second tone never linked" — red on main for a day, identically red at
+#   the previous release's own commit, and green again the moment the disk was freed. The
+#   leftovers are still visible: ~/.local/state/wireplumber/stream-properties.XXXXXX temp
+#   files from that night, written and never renamed.
+#
+# So the session manager gets a HOME of its own and every XDG directory that follows from
+# it. pipewire is deliberately NOT moved: the operator's ~/.config/pipewire drop-ins are
+# part of what this graph is meant to behave like, and pipewire saves no state.
+mkdir -p "$RT/wphome" "$RT/wpstate" "$RT/wpcache" "$RT/wpdata"
+HOME="$RT/wphome" XDG_CONFIG_HOME="$RT/cfg" XDG_STATE_HOME="$RT/wpstate" \
+XDG_CACHE_HOME="$RT/wpcache" XDG_DATA_HOME="$RT/wpdata" \
+	wireplumber >"$RT/wp.log" 2>&1 &
 sleep 2
 
 wait_for() {
@@ -333,20 +364,47 @@ print(n)' "$PLAY")
 # Played TWICE, 20 dB apart: a graph has gain staging this proof does not own (the session
 # manager alone puts 8 dB between a player's full scale and a node's input, measured), so
 # what is asserted is the DELTA. A ratio survives a constant nobody declared.
+# HOW LONG THE LINK MAY TAKE, in 0.2 s ticks. 4 s is an order of magnitude over the ~0.2 s
+# a healthy graph needs and still well inside the tone, so crossing it means something is
+# wrong rather than busy. The tone is 10 s for exactly that reason: the bound, the 1 s
+# settle and the measurement all have to fit inside one playback.
+REACPW_LINK_WAIT_TICKS=${REACPW_LINK_WAIT_TICKS:-20}
 play_tone() {   # play_tone <amplitude> -> "<ch0-rms> <ch1-rms> <ch0-peak> <ch5-rms>"
 	python3 - "$RT/tone.wav" "$1" <<'PYEOF'
 import math, struct, sys, wave
 amp = float(sys.argv[2])
 w = wave.open(sys.argv[1], "wb"); w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
 w.writeframes(b"".join(struct.pack("<hh", *(2 * (int(amp * 32767 * math.sin(2 * math.pi * 1000 * n / 48000)),)))
-                       for n in range(48000 * 6)))
+                       for n in range(48000 * 10)))
 w.close()
 PYEOF
 	pw-cat --playback --volume 1.0 --target reac-playback.bmx0 "$RT/tone.wav" \
 	       >"$RT/cat.log" 2>&1 &
 	CATPID=$!
-	sleep 2.5
+	# WAIT FOR THE LINK, DO NOT ASSUME A DURATION. A fixed sleep here is a tolerance
+	# against how fast the session manager happens to be on this host, and it failed as
+	# one: 2.5 s was enough on a healthy box and not enough when WirePlumber's own state
+	# save was crawling (see the state-directory note above). Polling is also FASTER in
+	# the ordinary case -- the link lands in ~0.2 s -- and the time it took is printed,
+	# so a host that is drifting toward the bound says so before it crosses it.
+	local waited=0
+	while [ "$waited" -lt $((REACPW_LINK_WAIT_TICKS)) ]; do
+		[ "$(pw-link -l 2>/dev/null | grep -c reac-playback.bmx0)" -gt 0 ] && break
+		# A DEAD PLAYER IS A DIFFERENT FAULT and must not be reported as a slow one.
+		kill -0 $CATPID 2>/dev/null || break
+		sleep 0.2
+		waited=$((waited + 1))
+	done
+	echo "  link: reac-playback.bmx0 linked after $(python3 -c "print('%.1f' % ($waited * 0.2))") s (bound $(python3 -c "print('%.1f' % ($((REACPW_LINK_WAIT_TICKS)) * 0.2))") s)" >&2
 	if [ "$(pw-link -l 2>/dev/null | grep -c reac-playback.bmx0)" -eq 0 ]; then
+		# WHY, NOT JUST THAT. An unlinked player, a dead player and a vanished node
+		# all read the same from the line above, and they have different fixes.
+		{ echo "--- pw-link -l"; pw-link -l 2>&1
+		  echo "--- nodes"; pw-cli ls Node 2>&1 | grep -a 'node.name'
+		  echo "--- pw-cat alive: $(kill -0 $CATPID 2>/dev/null && echo yes || echo NO)"
+		  echo "--- daemon alive: $(kill -0 $PID 2>/dev/null && echo yes || echo NO)"
+		  echo "--- pw-cat log"; tail -5 "$RT/cat.log" 2>&1
+		  echo "--- wireplumber"; tail -10 "$RT/wp.log" 2>&1; } >&2
 		echo "UNLINKED"; kill -TERM $CATPID 2>/dev/null; return
 	fi
 	sleep 1
@@ -359,12 +417,15 @@ PYEOF
 }
 LOUD=$(play_tone 0.5)
 [ "$LOUD" != "UNLINKED" ] || {
-	echo "FAIL: the tone player never linked to reac-playback.bmx0, so no audio was ever"
-	echo "      offered and its silence would prove nothing"
-	pw-link -l; tail -5 "$RT/cat.log"; tail -5 "$RT/wp.log"; exit 1; }
+	echo "FAIL: the tone player never linked to reac-playback.bmx0 inside the wait bound,"
+	echo "      so no audio was ever offered and its silence would prove nothing"
+	exit 1; }
 set -- $LOUD; L0="$1"; L1="$2"; LPK="$3"; LQ="$4"
 SOFT=$(play_tone 0.05)
-[ "$SOFT" != "UNLINKED" ] || { echo "FAIL: the second tone never linked"; exit 1; }
+[ "$SOFT" != "UNLINKED" ] || {
+	echo "FAIL: the second tone never linked inside the wait bound — the first one did,"
+	echo "      so this is about what the graph did BETWEEN them"
+	exit 1; }
 set -- $SOFT; S0="$1"
 [ -n "$L0" ] && [ -n "$S0" ] && [ -n "$LQ" ] || {
 	echo "FAIL: the emulator reported no per-slot energy on the upstream"
@@ -545,6 +606,11 @@ ip link set bmx2 down
 
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 kill -TERM $PID 2>/dev/null; wait $PID 2>/dev/null
+# THE POSITIVE HALF OF THE STATE-ISOLATION PROOF. The session manager really does save
+# state during this run, and it saved it HERE. Without this line the outer check that the
+# operator's state was untouched would pass just as well for a WirePlumber that never
+# wrote anything at all, which is the absence-looks-like-silence shape.
+echo "wp-state-files $(find "$RT/wpstate" -type f 2>/dev/null | wc -l)"
 echo "PASS: a box master is ENROLLED WITH, its way — flood, announce, burst, grant, and its outputs carry our audio"
 INNER
 )
@@ -553,4 +619,31 @@ echo "$OUT"
 [ $rc -eq 77 ] && exit 77
 [ $rc -ne 0 ] && exit $rc
 echo "$OUT" | grep -q "^PASS:" || { echo "FAIL: the inner namespace produced no verdict"; exit 1; }
+
+# THE STATE ISOLATION, AND THE ASSERTION IS THE POSITIVE ONE ON PURPOSE.
+#
+# WirePlumber saves its stream properties exactly once per run, into $XDG_STATE_HOME. If
+# the redirection above ever stops working — an env line dropped, a WirePlumber that reads
+# $HOME directly — that save lands in the OPERATOR'S directory and OURS IS EMPTY. So "our
+# own state directory has a file in it" is the leak detector, and it is one the live desk
+# cannot move: the operator mixing during a run changes their file whenever they like and
+# can never put a file in ours.
+#
+# The operator-side comparison is reported and NOT asserted, for that same reason. A gate
+# that a fader move can turn red would be the very fault this fix is about.
+WPN=$(echo "$OUT" | sed -n 's/^wp-state-files \([0-9]*\)$/\1/p' | head -1)
+[ -n "$WPN" ] && [ "$WPN" -ge 1 ] 2>/dev/null || {
+	echo "FAIL: this run's WirePlumber wrote no state file into its OWN state directory"
+	echo "      ($WPN) — the redirection is not in effect and the save went to the"
+	echo "      operator's ~/.local/state/wireplumber, which is the leak this guards"
+	exit 1; }
+WP_AFTER=$(find "$WPSTATE" -maxdepth 1 -type f -printf '%f %s %T@\n' 2>/dev/null | sort)
+if [ "$WP_BEFORE" = "$WP_AFTER" ]; then
+	echo "  isolation: this run wrote $WPN state file(s) of its own; the operator's WirePlumber state is untouched"
+else
+	echo "  isolation: this run wrote $WPN state file(s) of its own. The operator's state also"
+	echo "             moved during the run — the live desk saves on its own, so this is"
+	echo "             reported, not asserted:"
+	diff <(echo "$WP_BEFORE") <(echo "$WP_AFTER") | head -6 | sed 's/^/             /'
+fi
 exit 0
