@@ -4,7 +4,7 @@ Name:           reac-pw
 # Overridable at build time -- the tarball/CI wrapper passes
 #   --define "version_override $(git describe --tags ...)"
 # so releases version from git tags; the fallback tracks meson.build's version.
-Version:        %{?version_override}%{!?version_override:1.0.8}
+Version:        %{?version_override}%{!?version_override:1.0.9}
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -146,6 +146,60 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Tue Sep 15 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.9-1
+- A DECLARED VLAN SEGMENT IS MINTED AT START, not when it is first heard. Found at the
+  desk's 2026-09-15 reboot: every declared segment dead and every box unenrolled, with no
+  error anywhere. reac-pw minted `<parent>.<vid>` only when it HEARD a tagged REAC frame
+  on the trunk, and on a cold boot no such frame can arrive -- every box on the trunk is a
+  SLAVE, a slave says nothing until a master speaks, and the master cannot speak until its
+  segment's netdev exists. Now any configuration key naming a segment that splits as
+  `<parent>.<vid>` (in the environment, in reac-pw.env, in openmixer's reac.env), and any
+  `~/.config/reac-pw/<parent>.<vid>.env` file, DECLARES that segment: its netdev is
+  created, brought up and marked `reac-pw:minted` at start and again on every RTM_NEWLINK,
+  because the daemon can start before NetworkManager has brought the trunk up. The value
+  is never read -- naming the segment is the declaration. A heard-but-undeclared VLAN
+  keeps today's behaviour exactly, and a netdev the host made is adopted, never marked and
+  never removed.
+- The declared set is a SEPARATE ledger from reac_topo's on purpose: that one releases a
+  VID silent past 30 s, which is right for a box unplugged from a trunk and fatal for a
+  declared segment on a cold rig, where silence is the starting condition. The heard table
+  is told a declared netdev is adopted, which is the flag that makes it leave it alone.
+- UNDER ETF THE HEALTH LINE REPORTS LAUNCH MISSES, and the wake lateness beside them with
+  the budget it is spent against. Since ETF became the default the line has read 19-41
+  late/s on a desk whose wire was exact to 1.1 us of stddev. Both were true and they are
+  not the same measurement: the thread sleeps to `launch - lead` (2500 us), stamps an
+  absolute launch time and the KERNEL releases the frame, so `late_wakes` counts the
+  thread's wake and everything inside the lead is invisible to the wire. Measured in one
+  namespace under one load, the thread arm's wire carried sd 10.9 us and 208 intervals
+  over 1.5x nominal and the etf arm's sd 1.4 us and 6 -- while both reported 10-13 late/s.
+  The ETF line is now `launch-miss N/s (qdisc drops N) | wake-late N/s (worst N slots,
+  under N us of a N us lead; re-base N/s)`, with the misses read from the etf qdisc's own
+  drop counter over RTM_GETQDISC -- the kernel is the only party that knows a launch time
+  had already passed. The thread backend's line is untouched, because there the wake IS
+  the egress instant. New node properties: reac.health.launch-miss-per-s,
+  reac.health.qdisc-drops, reac.health.wake-late-us, reac.health.wake-lead-us, all `n/a`
+  on the thread backend and on a dump that could not be made -- never 0.
+- THE ETF CATCH-UP BUDGET IS THE LEAD, not the thread's wake tail. libreac's 1000 us
+  default is measured against the thread's deadline, which ETF moved: everything up to
+  lead-minus-delta is repayable by construction, so a wake 1250 us late was re-basing a
+  launch grid that still had 20 slots of lead in hand. On the etf backend an unset
+  REACPW_CATCHUP_MAX_SLOTS now resolves to the lead less the qdisc's 300 us delta -- 17
+  slots at 8000 fps against the 8 that were in force. An operator who sets it keeps what
+  they set, on either backend.
+- Tests: tests/declared-vlan-is-minted.sh drives the real binary in a private user+net+pid
+  namespace and asks the KERNEL what netdevs exist (declared-and-absent becomes present,
+  up and marked with no frame ever sent; a host-made netdev is served and never touched; a
+  parent arriving late is minted when it does; the exit removes exactly its own mints),
+  sabotage-verified. tests/etf-late-is-the-wake.sh measures the wire at the far end with
+  libreac's pace_hist over three arms and carries the positive control that makes it a
+  proof: with the lead cut to 400 us the qdisc's drop rate rises and the wire's late>=1.5x
+  count goes 6 -> 182, while the wake figure falls. Plus unit tests for the declaration
+  rules (tests/test_reac_declared_vlan.c) and the ETF budget arithmetic
+  (tests/test_reac_qdisc.c).
+- Docs: docs/ENV-KNOBS.md (the declared-segment section, the backend-dependent catch-up
+  default, the lead as a budget) and docs/HEALTH-TELEMETRY.md (the four new rows and why
+  `late-wakes` under ETF is the thread's wake and not the wire).
+
 * Mon Sep 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.8-1
 - THE RPM NOW SHIPS ITS OWN USER UNIT (found by the desk-ISO lane 2026-09-15: `rpm -ql
   reac-pw` shipped no systemd unit at all, and the rig's
