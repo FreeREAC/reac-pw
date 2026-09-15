@@ -29,6 +29,7 @@
 #define _GNU_SOURCE
 #endif
 #include <reac/transport/reac_etf_qdisc.h>
+#include "reac_qdisc.h"
 
 #include <errno.h>
 #include <arpa/inet.h>
@@ -112,12 +113,37 @@ static int do_count(const char *ifname, int secs)
 	return reac ? 0 : 1;
 }
 
+/* stats <ifname> — what the etf qdisc DID: the drop counter the health line reports
+ * as launch misses, read through the daemon's OWN door (reac_qdisc_stats_read), never
+ * by scraping `tc -s qdisc show`. Same rule as the kind probe above: a formatting
+ * change in iproute2 must not be able to decide a test. */
+static int do_stats(const char *ifname)
+{
+	unsigned idx = if_nametoindex(ifname);
+	if (!idx) {
+		printf("stats no-such-device %s\n", ifname);
+		return 3;
+	}
+	struct reac_qdisc_stats st;
+	int rc = reac_qdisc_stats_read((int)idx, &st);
+	if (rc != 0) {
+		printf("stats unreadable errno=%d\n", -rc);
+		return 4;
+	}
+	printf("stats qdiscs=%u packets=%llu drops=%llu overlimits=%llu\n",
+	       st.qdiscs, st.packets, st.drops, st.overlimits);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc >= 3 && !strcmp(argv[1], "qdisc"))
 		return do_qdisc(argv[2]);
+	if (argc >= 3 && !strcmp(argv[1], "stats"))
+		return do_stats(argv[2]);
 	if (argc >= 4 && !strcmp(argv[1], "count"))
 		return do_count(argv[2], atoi(argv[3]));
-	fprintf(stderr, "usage: %s qdisc <ifname> | count <ifname> <secs>\n", argv[0]);
+	fprintf(stderr, "usage: %s qdisc <ifname> | stats <ifname> | count <ifname> <secs>\n",
+	        argv[0]);
 	return 64;
 }
