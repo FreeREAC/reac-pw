@@ -427,7 +427,7 @@ fake_box_master = executable('fake-box-master',
 # healthy daemon from the inside. Its own instrument (tests/etf_wire_probe.c) reads the
 # qdisc through the library's public netlink door, never by scraping `tc`.
 etf_wire_probe = executable('etf-wire-probe',
-  ['tests/etf_wire_probe.c'],
+  ['tests/etf_wire_probe.c', 'src/reac_qdisc.c'],
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, libreac_transport_dep],
   install : false)
@@ -436,6 +436,37 @@ test('reac_etf_qdisc_owned',
   find_program('tests/etf-qdisc-owned.sh'),
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 300)
+
+# --- unit test: the ETF catch-up budget, and "unreadable is not zero" --------
+# Pure arithmetic plus one rtnetlink dump of the host's own qdisc table (a read).
+qdisc_test = executable('test_reac_qdisc',
+  ['tests/test_reac_qdisc.c', 'src/reac_qdisc.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_qdisc', qdisc_test)
+
+# --- whole-binary test: under ETF, `late` is the THREAD'S WAKE, not the wire --
+#
+# Since ETF became the default the health line read 19-41 late/s on a desk whose WIRE
+# was exact to 1.1 us of stddev. Both are true and they are not the same measurement:
+# the pacer thread sleeps to `launch - lead` and the KERNEL releases the frame, so a
+# wake up to lead-minus-delta late costs nothing. This drives the real binary over a
+# veth in a private namespace, three arms under one load, and measures the wire with
+# libreac's own pace_hist over a tcpdump taken at the FAR END — the daemon's own
+# figure is the thing on trial, so it cannot also be the evidence.
+#
+# The arm that makes it a proof is the POSITIVE CONTROL: the same daemon with the
+# lead shrunk under the thread's wake tail, where launch times really are missed. The
+# qdisc's drop counter moves an order of magnitude; `late` does not move at all. A
+# counter that reads the same when the wire is exact and when it is broken is not the
+# counter to put in front of an operator.
+#
+# Needs libreac's pace_hist (REACPW_PACE_HIST) for the wire arm; without it the wire
+# assertions are announced as NOT RUN rather than skipped quietly.
+test('reac_etf_late_is_the_wake',
+  find_program('tests/etf-late-is-the-wake.sh'),
+  args : [reac_pw_exe, etf_wire_probe],
+  timeout : 600)
 
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),

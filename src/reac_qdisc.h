@@ -59,4 +59,65 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf);
  * VLAN un-minted) is not an error: there is no qdisc left to own. */
 void reac_qdisc_release(struct reac_qdisc *q);
 
+/* ---- what the qdisc DID, not what it is ----------------------------------- *
+ *
+ * THE ONE NUMBER THAT SAYS A FRAME DID NOT LEAVE. Under ETF the pacer thread only
+ * has to be EARLY: it hands the kernel a launch time a lead ahead (2500 us by
+ * default) and the qdisc releases the frame at that instant. So the thread being
+ * late is not a transmission fault — the LAUNCH TIME BEING IN THE PAST when the
+ * frame reaches the qdisc is, and sch_etf answers that by dropping the packet and
+ * counting it. Measured in tests/etf-late-is-the-wake.sh, one namespace, one load:
+ *
+ *   lead 2500 us   qdisc drops 11 in 25 s (0.44/s)   wire sd 3.2 us   8000.0 pps
+ *   lead  400 us   qdisc drops 153 in 21 s (7.3/s)   wire sd 13.5 us  7992.9 pps
+ *
+ * and the pacer's own `late_wakes` read 12-46/s in BOTH — it does not move when the
+ * wire breaks, and this does. That is why the health line reports this figure for
+ * the ETF backend and why the wake lateness is reported beside it as a separate,
+ * budgeted number rather than as "late".
+ *
+ * WHY THE READ IS HERE AND NOT IN THE LIBRARY. libreac-transport's public door
+ * (reac_etf_qdisc_state) answers WHICH qdisc is on a device — the question the
+ * pacer asks at open. The counters are a different question, asked every health
+ * window by the daemon that owns the qdisc, so the daemon reads them. Same
+ * rtnetlink socket shape, one RTM_GETQDISC dump, no tc(8) and no subprocess.
+ *
+ * UNREADABLE IS NOT ZERO. A dump that could not be made returns -errno and leaves
+ * `out` untouched; a health line then says so rather than printing a 0 that would
+ * read as "nothing was dropped". */
+struct reac_qdisc_stats {
+	unsigned long long packets;     /* summed over every etf qdisc on the device */
+	unsigned long long bytes;
+	unsigned long long drops;       /* THE figure: frames sch_etf would not launch */
+	unsigned long long overlimits;
+	unsigned int       qdiscs;      /* how many etf qdiscs the sum covers (0 = none) */
+};
+
+/* Read `ifindex`'s etf qdisc counters. Returns 0 on a dump that completed (with
+ * `qdiscs` 0 when the device carries no etf), or -errno. */
+int reac_qdisc_stats_read(int ifindex, struct reac_qdisc_stats *out);
+
+/* ---- the catch-up budget under ETF ---------------------------------------- *
+ *
+ * The pacer repays overslept slots by staying on its grid, up to a budget, and
+ * re-bases past it. libreac's default budget is 1000 us of MEASURED WAKE TAIL —
+ * the right number for the thread backend, where an overslept slot is an egress
+ * instant already lost.
+ *
+ * ETF MOVED THE REFERENCE THAT BUDGET IS MEASURED AGAINST. The thread now sleeps to
+ * `launch - lead` and everything up to `lead - delta` of lateness still hands the
+ * qdisc a launch time in the future: nothing is lost, and the debt is repayable by
+ * definition. With the shipped defaults that is 2500 - 300 = 2200 us, more than
+ * twice the budget in force — so a wake 1250 us late (worst debt 10 slots at 8000
+ * fps, seen in the namespace run) re-based a launch grid that had 20 slots of lead
+ * still in hand, and booked every one of those slots as abandoned. The budget was
+ * right and its yardstick was stale.
+ *
+ * So under ETF the budget IS the lead the operator is running, minus the qdisc's
+ * own delta, in slots. 2500 us at 8000 fps -> 17 slots; at 4000 fps -> 8. Rounds
+ * down, and never below 1. An operator who SET REACPW_CATCHUP_MAX_SLOTS keeps
+ * exactly what they set (and -1 still means "never repay"); this resolves only the
+ * 0 that means "the default". */
+int reac_qdisc_etf_catchup_slots(unsigned lead_us, int fps);
+
 #endif /* REAC_QDISC_H */

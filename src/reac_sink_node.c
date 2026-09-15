@@ -43,6 +43,7 @@
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
+#include <reac/transport/reac_etf_qdisc.h> /* REAC_ETF_QDISC_DELTA_NS — the lead's other term */
 #include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
 #include <reac/transport/reac_mac.h>
 #include <reac/transport/reac_rx.h>      /* the BOX clock reference measurement source (#75) */
@@ -58,6 +59,7 @@
 #include <spa/param/audio/raw.h>
 #include <spa/pod/builder.h>
 #include <spa/pod/iter.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -307,6 +309,17 @@ struct reac_sink_node {
 	/* Health window snapshot, refreshed by the 200 ms poll and published as node
 	 * properties when a window closes. */
 	struct reac_pacer_health health;
+	/* ETF: the lead this segment is running (0 = not on the ETF backend). It is the
+	 * BUDGET the wake lateness is measured against, so the health line carries it
+	 * beside the figure — a number with no budget beside it is a number an operator
+	 * has to guess at, and guessing at this one is what put 19-41 "late"/s in front
+	 * of a wire whose release instant was exact to 1.1 us. */
+	unsigned etf_lead_us;
+	/* Previous window's etf qdisc counters, so the line can report a RATE. `ok` is
+	 * 0 until a dump has succeeded once: an unreadable dump prints "n/a", never a 0
+	 * that would read as "nothing was dropped". */
+	struct reac_qdisc_stats health_qd;
+	int health_qd_ok;
 };
 
 /* REALTIME. Pull this quantum's PCM from the input ports, accumulate into the
@@ -1390,6 +1403,15 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
  * over that window, so a consumer that skips updates loses resolution and nothing
  * else. That is what openmixer's telemetry contract asks for: its own SSE,
  * latest-wins, skip when late, never accumulate. */
+/* reac-pw's own health keys, beside libreac's REAC_PROP_HEALTH_* (reac_link_state.h).
+ * The library owns the figures every backend has; these four exist because the ETF
+ * backend split `late` into a wire fault and a thread figure, and a consumer reading
+ * either one needs the budget that decides whether it matters. */
+#define REACPW_PROP_HEALTH_LAUNCH_MISS_PS "reac.health.launch-miss-per-s"
+#define REACPW_PROP_HEALTH_QDISC_DROPS    "reac.health.qdisc-drops"
+#define REACPW_PROP_HEALTH_WAKE_LATE_US   "reac.health.wake-late-us"
+#define REACPW_PROP_HEALTH_WAKE_LEAD_US   "reac.health.wake-lead-us"
+
 static void sink_publish_health(struct reac_sink_node *n)
 {
 	if (!n->stream || !n->pacer_open)
@@ -1400,6 +1422,7 @@ static void sink_publish_health(struct reac_sink_node *n)
 	const struct reac_pacer_health *h = &n->health;
 	char drift[24], dfps[24], dms[24], txe[24], lw[24], lwps[24];
 	char cups[24], drps[24], rfr[24], rms[24], rmatch[24], dmax[24];
+	char lmiss[32], qdrp[32], wlus[24], wlead[24];
 	snprintf(drift,  sizeof drift,  "%.1f", h->drift_ppm);
 	snprintf(dfps,   sizeof dfps,   "%.3f", h->discard_fps);
 	snprintf(dms,    sizeof dms,    "%.3f", h->discard_ms_per_s);
@@ -1436,6 +1459,73 @@ static void sink_publish_health(struct reac_sink_node *n)
 	else
 		snprintf(pacer_line, sizeof pacer_line, "%s", backend);
 
+	/* THE ETF SPLIT. `late_wakes` counts one thing — the pacer THREAD waking more
+	 * than a slot period after its target — and under the two backends that one
+	 * thing means opposite things.
+	 *
+	 *   thread   the wake IS the egress instant. A late wake is a late frame, and
+	 *            `late/s (catchup/s, dropped/s, worst debt)` is the honest line. It
+	 *            is left exactly as it was.
+	 *
+	 *   etf      the thread wakes a LEAD (2500 us) before the launch time it stamps,
+	 *            and the kernel releases the frame at that instant. A wake up to
+	 *            lead-minus-delta late changes nothing on the wire. Measured in the
+	 *            namespace, same load, same 25 s: the thread arm's wire carried
+	 *            sd 12.1 us and the etf arm's 3.2 us while BOTH reported 10-20
+	 *            late/s. So under ETF this line reports the thing that did move —
+	 *            the frames sch_etf refused to launch — and reports the wake
+	 *            lateness beside it as what it is, with the budget it is spent
+	 *            against.
+	 *
+	 * The launch misses are read from the QDISC, not inferred from the pacer: the
+	 * kernel is the only party that knows a launch time had already passed when the
+	 * frame reached it, and it counts them. Proven to move: shrinking the lead to
+	 * 400 us took the drops from 11/25 s to 153/21 s while `late/s` did not budge
+	 * (tests/etf-late-is-the-wake.sh). */
+	char etf_line[224] = { 0 };
+	if (reac_pacer_backend(&n->pacer) == REAC_PACER_BACKEND_ETF) {
+		struct reac_qdisc_stats qd;
+		int qrc = n->qdisc.ifindex > 0
+			? reac_qdisc_stats_read(n->qdisc.ifindex, &qd)
+			: -ENODEV;
+		char miss[32], qdrops[32];
+		if (qrc == 0 && qd.qdiscs > 0) {
+			double dt_s = h->window_s > 0.0 ? h->window_s : 1.0;
+			if (n->health_qd_ok && qd.drops >= n->health_qd.drops)
+				snprintf(miss, sizeof miss, "%.2f",
+				         (double)(qd.drops - n->health_qd.drops) / dt_s);
+			else
+				snprintf(miss, sizeof miss, "%.2f", 0.0);
+			snprintf(qdrops, sizeof qdrops, "%llu", qd.drops);
+			n->health_qd    = qd;
+			n->health_qd_ok = 1;
+		} else {
+			/* UNREADABLE IS NOT ZERO. */
+			snprintf(miss, sizeof miss, "n/a");
+			snprintf(qdrops, sizeof qdrops, "unreadable");
+			n->health_qd_ok = 0;
+		}
+		/* A debt of D slots means the wake landed in [(D-1), D) periods late, so
+		 * the honest statement is an UPPER BOUND, spelled as one. */
+		double us_per_slot = n->sample_rate > 0
+			? 1e6 / ((double)n->sample_rate / REAC_SAMPLES_PER_PKT) : 0.0;
+		snprintf(etf_line, sizeof etf_line,
+		         "launch-miss %s/s (qdisc drops %s) | wake-late %.2f/s "
+		         "(worst %u slots, under %.0f us of a %u us lead; re-base %.2f/s)",
+		         miss, qdrops, h->late_wakes_ps,
+		         h->slot_debt_max, h->slot_debt_max * us_per_slot,
+		         n->etf_lead_us, h->slots_dropped_ps);
+		snprintf(lmiss, sizeof lmiss, "%s", miss);
+		snprintf(qdrp,  sizeof qdrp,  "%s", qdrops);
+		snprintf(wlus,  sizeof wlus,  "%.0f", h->slot_debt_max * us_per_slot);
+		snprintf(wlead, sizeof wlead, "%u", n->etf_lead_us);
+	} else {
+		snprintf(lmiss, sizeof lmiss, "n/a");
+		snprintf(qdrp,  sizeof qdrp,  "n/a");
+		snprintf(wlus,  sizeof wlus,  "n/a");
+		snprintf(wlead, sizeof wlead, "n/a");
+	}
+
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_PACE_BACKEND,       backend,
 		REAC_PROP_PACE_REFUSAL,       refusal ? refusal : "none",
@@ -1451,6 +1541,15 @@ static void sink_publish_health(struct reac_sink_node *n)
 		REAC_PROP_HEALTH_RING_FRAMES, rfr,
 		REAC_PROP_HEALTH_RING_MS,     rms,
 		REAC_PROP_HEALTH_RATE_MATCH,  rmatch,
+		/* reac-pw's OWN keys, beside libreac's. They exist only because the ETF
+		 * backend split one figure into two, and they carry the budget with the
+		 * measurement so a consumer never has to know the default to read it.
+		 * "n/a" on the thread backend, which has neither a qdisc nor a lead —
+		 * the same refusal-to-invent as rate-match above. */
+		REACPW_PROP_HEALTH_LAUNCH_MISS_PS, lmiss,
+		REACPW_PROP_HEALTH_QDISC_DROPS,    qdrp,
+		REACPW_PROP_HEALTH_WAKE_LATE_US,   wlus,
+		REACPW_PROP_HEALTH_WAKE_LEAD_US,   wlead,
 		NULL);
 	if (props) {
 		pw_stream_update_properties(n->stream, &props->dict);
@@ -1459,15 +1558,24 @@ static void sink_publish_health(struct reac_sink_node *n)
 
 	/* The same window on stderr, because the journal is where a fault is read
 	 * after the fact and a property only ever shows the latest value. */
-	fprintf(stderr,
-	        "reac-health: drift %+.1f ppm | discard %.3f frames/s (%.3f ms/s) | "
-	        "ring %u frames (%.2f ms) | late %.2f/s (catchup %.2f/s, dropped %.2f/s, "
-	        "worst debt %u slots) | tx_errors %llu | rate-match %s ppm | "
-	        "pacer %s\n",
-	        h->drift_ppm, h->discard_fps, h->discard_ms_per_s,
-	        h->ring_frames, h->ring_ms, h->late_wakes_ps,
-	        h->slots_catchup_ps, h->slots_dropped_ps, h->slot_debt_max,
-	        (unsigned long long)h->tx_errors, rmatch, pacer_line);
+	if (etf_line[0])
+		fprintf(stderr,
+		        "reac-health: drift %+.1f ppm | discard %.3f frames/s (%.3f ms/s) | "
+		        "ring %u frames (%.2f ms) | %s | tx_errors %llu | "
+		        "rate-match %s ppm | pacer %s\n",
+		        h->drift_ppm, h->discard_fps, h->discard_ms_per_s,
+		        h->ring_frames, h->ring_ms, etf_line,
+		        (unsigned long long)h->tx_errors, rmatch, pacer_line);
+	else
+		fprintf(stderr,
+		        "reac-health: drift %+.1f ppm | discard %.3f frames/s (%.3f ms/s) | "
+		        "ring %u frames (%.2f ms) | late %.2f/s (catchup %.2f/s, dropped %.2f/s, "
+		        "worst debt %u slots) | tx_errors %llu | rate-match %s ppm | "
+		        "pacer %s\n",
+		        h->drift_ppm, h->discard_fps, h->discard_ms_per_s,
+		        h->ring_frames, h->ring_ms, h->late_wakes_ps,
+		        h->slots_catchup_ps, h->slots_dropped_ps, h->slot_debt_max,
+		        (unsigned long long)h->tx_errors, rmatch, pacer_line);
 }
 
 /* MAIN LOOP: advertise the node's graph->wire delay as SPA_PARAM_ProcessLatency
@@ -1954,6 +2062,36 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 			reac_pacer_backend_resolve(cfg->ifname, NULL, &qlay, &qunderstood);
 		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname,
 		                     want == REAC_PACER_BACKEND_ETF);
+
+		/* THE CATCH-UP BUDGET IS MEASURED AGAINST A REFERENCE THE BACKEND MOVED.
+		 * libreac's default is 1000 us of measured worst wake tail, which is the
+		 * right budget for the thread backend, where an overslept slot is an
+		 * egress instant already gone. Under ETF the thread sleeps to
+		 * `launch - lead` and every microsecond of lateness up to lead-minus-delta
+		 * still hands the qdisc a launch time in the future — nothing is lost, and
+		 * the debt is repayable BY CONSTRUCTION. Running the thread's budget there
+		 * re-bases the launch grid for hiccups the lead was bought to absorb: in
+		 * the namespace run a worst debt of 10 slots (1250 us) against a 2500 us
+		 * lead booked a grid re-base and counted the slots as abandoned.
+		 *
+		 * So the ETF budget is the LEAD, less the qdisc's delta, in slots. An
+		 * operator who set REACPW_CATCHUP_MAX_SLOTS keeps what they set — this
+		 * resolves only the 0 that means "the default". */
+		if (want == REAC_PACER_BACKEND_ETF) {
+			enum reac_conf_layer llay = REAC_CONF_NONE;
+			int lunderstood = 1;
+			n->etf_lead_us = reac_pacer_lead_us_resolve(cfg->ifname, NULL,
+			                                            &llay, &lunderstood);
+			if (pcfg.catchup_max_slots == 0) {
+				pcfg.catchup_max_slots =
+					reac_qdisc_etf_catchup_slots(n->etf_lead_us, pcfg.fps);
+				fprintf(stderr, "reac-qdisc: ETF catch-up budget is the LEAD, "
+				        "not the thread's wake tail — %d slots from a %u us "
+				        "lead less the %u us qdisc delta at %d fps\n",
+				        pcfg.catchup_max_slots, n->etf_lead_us,
+				        REAC_ETF_QDISC_DELTA_NS / 1000u, pcfg.fps);
+			}
+		}
 	}
 
 	if (reac_pacer_open(&n->pacer, &pcfg) != 0) {
