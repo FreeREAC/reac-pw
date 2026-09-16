@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.10',
+  version: '1.0.11',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -67,7 +67,10 @@ m_dep        = cc.find_library('m', required : false)
 # REAC_PROP_PACE_REFUSAL, which reac_sink_node.c publishes. A 1.1.2 satisfies '>=1.1.0'
 # and fails at COMPILE on the missing macro -- which is a cheap failure, but the floor
 # should still say what is actually needed rather than what used to be.
-libreac_dep = dependency('libreac', version : '>=1.1.3',
+# 1.1.5 is the floor: reac_link_admin() — the PHY edge reac_wake asks for — arrives there,
+# and a 1.1.4 would configure clean and fail at LINK, which is the shape of failure these
+# hand-raised floors exist to turn into a configure-time refusal.
+libreac_dep = dependency('libreac', version : '>=1.1.5',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -84,7 +87,7 @@ libreac_dep = dependency('libreac', version : '>=1.1.3',
 # pacer's default became etf. A 1.1.2 satisfies '>=1.1.0', links against nothing that is
 # missing at configure time, and fails at LINK -- which is exactly the shape of failure
 # these floors are hand-raised to turn into a configure-time refusal.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.1.3', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.1.5', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,

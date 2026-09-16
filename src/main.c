@@ -87,6 +87,8 @@
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */
+#include "reac_wake.h"       /* waking a box that DROPPED, which no frame can do */
+#include <reac/transport/reac_carrier.h>    /* is there a cable in this interface */
 #include "reac_node_recover.h" /* what to do about a node we built that is not there */
 
 #include <pipewire/pipewire.h>
@@ -543,7 +545,22 @@ struct autodetect_ctx {
 	struct reac_node_recover     recover;
 	int                          restamp; /* a rebuilt peer needs the sink's badges again */
 	const struct reac_box_model *announced;  /* the model the "autodetected" line named */
+	/* THE WAKE LADDER (reac_wake.h, spec 2026-09-16-a-dropped-box-wakes-on-a-phy-edge).
+	 * It lives on THIS timer because a master segment already has exactly one 200 ms
+	 * main-loop poll and a second one would be a second opinion about the same wire.
+	 * `ifname` is the device this master drives — the only one it may ever bounce — and
+	 * an edge in flight is `up_at_ns`, so the down and the up are two turns of this
+	 * timer and nothing ever sleeps in the loop. */
+	const char             *ifname;
+	struct reac_wake        wake;
+	uint64_t                up_at_ns;   /* the link is down until here (0 = no edge) */
+	int                     wake_open;  /* the ladder is open for this PROBING spell */
 };
+
+/* Other segments served over the same physical port — a bounce takes them all down with
+ * it. Defined after the listener table it walks; declared here because the wake step is
+ * on this timer and the table is a page further down. */
+static int port_siblings_served(const char *ifname);
 
 /* THE SEGMENT IS READY, SAID ONCE PER BOX AND ONLY WHEN IT IS TRUE. This line is what an
  * operator reads as "the nodes are there"; the node is CONNECTING for a moment after it
@@ -558,12 +575,108 @@ static void autodetect_announce(struct autodetect_ctx *c, const struct reac_box_
 	        "%d out\n", c->tag, bm->display, bm->in_ch, bm->out_ch);
 }
 
+/* The ladder's clock. CLOCK_MONOTONIC, like every other deadline in this daemon; declared
+ * here because main's own monotonic_ns() lives a page below the timer that needs it. */
+static uint64_t wake_now_ns(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* ONE TURN OF THE WAKE LADDER. Everything it reads is already published by the pacer; the
+ * only thing it can DO is one rtnetlink write on the device this master drives. The
+ * decision itself is reac_wake and is not re-litigated here — this function is the eyes and
+ * the hands, and it keeps no policy of its own. */
+static void wake_step(struct autodetect_ctx *c)
+{
+	if (!c->sink || !c->ifname || !c->ifname[0])
+		return;
+	const uint64_t now = wake_now_ns();
+
+	/* AN EDGE IN FLIGHT IS FINISHED BEFORE ANYTHING ELSE IS ASKED. A link left down
+	 * because a later step decided something else would be the daemon breaking its own
+	 * segment and calling it a remedy. */
+	if (c->up_at_ns) {
+		if (now < c->up_at_ns)
+			return;
+		c->up_at_ns = 0;
+		if (reac_link_admin(c->ifname, 1) != 0)
+			fprintf(stderr, "reac-pw: %sCOULD NOT BRING '%s' BACK UP after the wake "
+			        "edge (errno %d). The segment is down until it is: "
+			        "`ip link set %s up`.\n", c->tag, c->ifname, errno, c->ifname);
+		else
+			fprintf(stderr, "reac-pw: %s'%s' is back up — a box that had dropped sees "
+			        "this as PHY LINK-UP and has %.0f s to flood, cold-connect and be "
+			        "granted.\n", c->tag, c->ifname,
+			        (double)REAC_WAKE_SETTLE_NS / 1e9);
+		return;
+	}
+
+	struct reac_wake_obs o = { 0 };
+	if (!reac_sink_node_wake_obs(c->sink, &o))
+		return;                          /* no master engine on this segment */
+	const int probing = o.probing;
+	if (!c->wake_open) {
+		reac_wake_init(&c->wake, now);
+		c->wake_open = 1;
+	} else if (probing && !c->wake.opened_ns) {
+		reac_wake_reopen(&c->wake, now);
+	}
+
+	/* The two facts the ENGINE cannot know: what the kernel says about this cable, and
+	 * what else this daemon is serving over the same port. */
+	o.carrier = reac_link_carrier(c->ifname);
+	o.siblings_served = port_siblings_served(c->ifname);
+	/* A master that is granting or established re-opens the ladder's GRACE, so a box
+	 * that enrols and drops again is pushed to before it is ever bounced again. The
+	 * bounce COUNT deliberately survives it (reac_wake_reopen). */
+	if (!probing)
+		c->wake.opened_ns = 0;
+
+	switch (reac_wake_step(&c->wake, now, &o)) {
+	case REAC_WAKE_ACT_NONE:
+		return;
+	case REAC_WAKE_ACT_BOUNCE:
+		fprintf(stderr, "reac-pw: %sthe box on '%s' has answered nothing through %llu "
+		        "COMPLETED scene pushes with the carrier up. A box that has DROPPED "
+		        "leaves that state on a PHY link-up and on nothing else, so this "
+		        "master makes the edge itself: '%s' goes down for %u ms and back up "
+		        "(edge %u of %u).\n",
+		        c->tag, c->ifname, (unsigned long long)o.scene_pushes, c->ifname,
+		        REAC_WAKE_DOWN_MS, c->wake.bounces, REAC_WAKE_MAX_BOUNCES);
+		if (reac_link_admin(c->ifname, 0) != 0) {
+			fprintf(stderr, "reac-pw: %sthe wake edge on '%s' was REFUSED (errno "
+			        "%d)%s — nothing was touched and the box is still silent.\n",
+			        c->tag, c->ifname, errno,
+			        errno == EPERM ? ": this daemon has no CAP_NET_ADMIN, which the "
+			                         "reac-pw RPM grants by file capability and a "
+			                         "hand-started binary does not" : "");
+			return;
+		}
+		c->up_at_ns = now + (uint64_t)REAC_WAKE_DOWN_MS * 1000000ULL;
+		return;
+	case REAC_WAKE_ACT_EXHAUSTED:
+		fprintf(stderr, "reac-pw: %sthe box on '%s' did not answer %u PHY edges and is "
+		        "still silent with the carrier up. This master has nothing left to try "
+		        "and will not flap the port again. What is left is physical: unplug and "
+		        "replug the box's REAC cable, or power-cycle the box. (A box that is "
+		        "simply not on this segment looks exactly the same from here.)\n",
+		        c->tag, c->ifname, REAC_WAKE_MAX_BOUNCES);
+		return;
+	}
+}
+
 static void on_autodetect_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct autodetect_ctx *c = data;
 	/* Whatever the RT callback queued for us — it never prints for itself. */
 	reac_source_node_drain_log(*c->src, stderr);
+	/* BEFORE the recognition gate, and that is the whole point: the silence this
+	 * answers is a segment with NO box recognized, which is exactly the state the
+	 * early return below leaves unattended. */
+	wake_step(c);
 	const struct reac_box_model *bm = reac_sink_node_recognized_box(c->sink);
 	if (!bm)
 		return;                      /* nothing recognized yet */
@@ -1726,6 +1839,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		L->adc.scfg = L->src_cfg;
 		L->adc.pin  = c->box_pin_spec;      /* reported once, if the wire disagrees */
 		L->adc.tag  = c->tag;
+		L->adc.ifname = L->cfg.tx_if;       /* the device the wake ladder may bounce */
 		/* #208: let the sink's badge timer keep the reac-capture node's link-state /
 		 * box-model / box-width in sync (it has no pacer handle of its own). Same source
 		 * slot the autodetect watcher rebuilds, so a live box-width change is followed. */
@@ -2083,6 +2197,44 @@ static uint64_t link_used_kbit(const struct listener *self)
 		                            REAC_FRAME_BYTES);
 	}
 	return used;
+}
+
+/* SAME PHYSICAL PORT, AND ACTUALLY CARRYING SOMETHING. `link_port_of` strips the VLAN
+ * suffix, so a parent and its `.11`/`.12`/`.13` children all answer to one port — and a
+ * bounce of the parent takes every one of them down with it.
+ *
+ * WHAT COUNTS IS THE TRAFFIC, NOT THE ROSTER, and the difference is the whole usefulness of
+ * the remedy: the desk this defect was found on serves its master on a parent with three
+ * declared VLAN children, all of them VACANT DOORS that have never heard a frame. Counting
+ * those as siblings would refuse every edge for ever on exactly the machine that needs one.
+ * A segment that FOLLOWS proves it by `heard` (the RX latch main.c steps on its own 200 ms
+ * poll); a segment that MASTERS proves it by being past PROBING. Nothing else is evidence
+ * that a bounce would cost anybody anything. */
+static int port_siblings_served(const char *ifname)
+{
+	if (!ifname || !ifname[0])
+		return 0;
+	char mine[IFNAMSIZ];
+	link_port_of(ifname, mine, sizeof mine);
+	int n = 0;
+	for (int i = 0; i < g_hear.n_slots; i++) {
+		const struct listener *L = &g_hear.listeners[i];
+		if (!L->opened || !L->cfg.tx_if)
+			continue;
+		if (strcmp(L->cfg.tx_if, ifname) == 0)
+			continue;                /* ourselves */
+		char theirs[IFNAMSIZ];
+		link_port_of(L->cfg.tx_if, theirs, sizeof theirs);
+		if (strcmp(mine, theirs) != 0)
+			continue;
+		if (L->heard.heard) {
+			n++;                     /* a tap or a slave with frames arriving */
+			continue;
+		}
+		if (reac_sink_node_past_probing(L->sink))
+			n++;                     /* another master, granting or established */
+	}
+	return n;
 }
 
 static uint64_t monotonic_ns(void)

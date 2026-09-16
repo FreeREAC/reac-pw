@@ -17,11 +17,11 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.1.3
+BuildRequires:  pkgconfig(libreac) >= 1.1.5
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.1.3
+BuildRequires:  pkgconfig(libreac-transport) >= 1.1.5
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -30,8 +30,8 @@ Requires:       pipewire
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.1.3
-Requires:       libreac-transport >= 1.1.3
+Requires:       libreac >= 1.1.5
+Requires:       libreac-transport >= 1.1.5
 %{?systemd_requires}
 
 %description
@@ -146,6 +146,21 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.11-1
+- A MASTER MAY NOW MAKE THE PHY EDGE ITS BOX NEEDS. Found on the desk the same day: after a
+  77-minute s2idle the daemon re-took the wire and probed correctly for 73 MINUTES across two
+  processes -- ~1620 completed scene pushes, 8003 frames a second leaving the NIC, zero coming
+  back -- while an S-1608 that had dropped during the suspend stayed silent. No frame could
+  have ended it: the box's own firmware leaves that state on "PHY LINK-UP (the only establish
+  trigger; a data gap does NOT)". src/reac_wake.c is the ladder -- push first (that is what
+  captures a linked, silent S-4000S), then, with the carrier up and rx_box_frames still
+  exactly 0 after three COMPLETED transfers, take this master's own interface down for 1.2 s
+  and back up; at most twice, then stop and name the physical remedy. Eight refusals guard it,
+  each with a control in tests/test_reac_wake.c -- among them that another segment carrying
+  traffic over the same physical port vetoes the edge outright.
+- The PROBING watchdog stops saying "do not bounce it yet" and prints the COMPLETED push
+  count instead (libreac 1.1.5) -- the only number that separates "our own transfer never
+  finished" from "the far end ignored a whole one".
 * Tue Sep 15 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.9-1
 - A DECLARED VLAN SEGMENT IS MINTED AT START, not when it is first heard. Found at the
   desk's 2026-09-15 reboot: every declared segment dead and every box unenrolled, with no
