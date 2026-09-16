@@ -114,10 +114,17 @@ nsenter -t $NSPID -n true 2>/dev/null || {
 ip link add ha0 type veth peer name pha0 || exit 90
 ip link set pha0 netns $NSPID || exit 90
 
+# THE NODES EXIST BECAUSE A BOX IS PINNED, not because the wire has one — and since
+# 2026-09-16 that is the ONLY way this test can have a cold master's door to read. A
+# segment with no recognised box publishes no node at all now (spec
+# 2026-09-16-segments-and-roles-are-autodetected.md, amendment), which is the whole point
+# of that ruling; `--box` is the case it deliberately keeps, because a pin is the operator
+# saying this box belongs on this wire and a patch must survive it being unpowered. So the
+# subject of this test is unchanged: a door, no box on the wire, and a head-amp write that
+# must refuse `no-box` out loud.
 mkdir -p "$CONF/.config/reac-pw"
-printf '[segment ha0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
-HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$LOG" 2>&1 &
+HOME="$CONF" REAC_DEBUG=1 "$BIN" --live ha0 --tx ha0 --name ha0 --box s1608 >"$LOG" 2>&1 &
 PID=$!
 sleep 2
 kill -0 $PID 2>/dev/null || { echo "FAIL: the daemon never got running"; tail -5 "$LOG"; exit 1; }

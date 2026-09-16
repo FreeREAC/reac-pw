@@ -108,6 +108,8 @@ arm() {
 	fi
 	sleep "$SECS"
 	echo "$label-$("$PROBE" stats etfa)"
+	# Kept as INFORMATION, not as the control: since 2026-09-16 a master with no box
+	# recognized publishes NO NODE AT ALL, so this reads 0 on a healthy run.
 	echo "$label-privatenodes $(pw-dump 2>/dev/null | grep -ac 'reac-playback\|reac-capture')"
 	kill -TERM $pid 2>/dev/null
 	for i in $(seq 40); do kill -0 $pid 2>/dev/null || break; sleep 0.2; done
@@ -166,8 +168,14 @@ done
 
 # 0. THE GRAPH WAS ISOLATED, PROVEN IN BOTH DIRECTIONS (the positive first: a
 #    negative alone passes for a daemon that published nothing anywhere).
-[ "$(line etfdefault-privatenodes | awk '{print $2}')" -ge 1 ] 2>/dev/null \
-	|| fail "the daemon published no REAC node on the PRIVATE graph — the isolation cannot be read off an empty graph"
+# THE POSITIVE HALF IS THE HEALTH WINDOW, NOT A NODE. It used to count reac-* nodes on the
+# private graph; a master with no box recognized publishes none since 2026-09-16 (spec
+# 2026-09-16-segments-and-roles-are-autodetected.md, "no recognised box, no node"), so that
+# control now reads 0 on a perfectly healthy daemon. The daemon's own health window —
+# closed by ITS pacer, inside THIS namespace, on the netdev this namespace owns — is the
+# positive that remains, and the arms below are built on it anyway.
+echo "$OUT" | grep -aq '^etfdefault-health reac-health:' \
+	|| fail "the daemon closed no health window at all — it did nothing HERE, so the negative below cannot mean it did nothing THERE either"
 if pw-dump >/dev/null 2>&1; then
 	pw-dump 2>/dev/null | grep -aq -- "$BIN" \
 		&& fail "a process from $BIN is on the OPERATOR'S live PipeWire graph — this test leaked out of its namespace"
