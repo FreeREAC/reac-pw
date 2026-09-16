@@ -21,6 +21,8 @@
 #ifndef REAC_SINK_NODE_H
 #define REAC_SINK_NODE_H
 
+#include "reac_wake.h"   /* struct reac_wake_obs — what the wake ladder reads from here */
+
 #include <reac/transport/reac_ring.h>
 
 struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */
@@ -228,6 +230,21 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
  * touched. Never wired -> the box tier is simply never available, and with clock
  * following disabled the forward is not even attempted. */
 void reac_sink_node_set_rate_source(struct reac_sink_node *n, struct reac_rx *rx);
+
+/* WHAT THE WAKE LADDER SEES, filled from the pacer this node owns. main.c asks the
+ * question; this is the only place that can read the answer, because `struct reac_pacer`
+ * is opaque outside the two node files and a segment's engine is not main's to reach into.
+ *
+ * Fills `o->probing`, `o->rx_box_frames` and `o->scene_pushes` and leaves every other
+ * field alone — the carrier and the siblings are facts about the WIRE and the daemon's
+ * roster, not about this engine, and the caller owns both. Returns 0 and touches nothing
+ * for a node with no master engine. Main-loop only. */
+int reac_sink_node_wake_obs(struct reac_sink_node *n, struct reac_wake_obs *o);
+
+/* Is this master past PROBING — granting or established? The one thing a NEIGHBOUR needs
+ * to know about a segment before its port is bounced: a master that has a box is carrying
+ * something, and nothing is broken to wake something else. 0 for a node with no engine. */
+int reac_sink_node_past_probing(struct reac_sink_node *n);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 

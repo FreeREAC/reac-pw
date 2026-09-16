@@ -2290,6 +2290,31 @@ void reac_sink_node_restamp_peer(struct reac_sink_node *n)
 	                              bm ? bm->token : "none", width, n->box_mac_last);
 }
 
+int reac_sink_node_wake_obs(struct reac_sink_node *n, struct reac_wake_obs *o)
+{
+	if (!n || !o || !n->pacer_open)
+		return 0;
+	o->probing = atomic_load_explicit(&n->pacer.fsm_state, memory_order_acquire)
+	             == REAC_M_PROBING;
+	o->rx_box_frames = atomic_load_explicit(&n->pacer.rx_box_frames,
+	                                        memory_order_relaxed);
+	/* THE COUNT OF WHOLE TRANSFERS, read plainly and on purpose. It is written by the
+	 * pacer thread and it is a public member of a public struct: giving it an atomic
+	 * mirror would move every member behind it, which is the 1.1.1 ABI break that put 99
+	 * SEGVs on this rig (libreac spec 2026-09-14 §5). A relaxed load of a counter that
+	 * only ever grows is all the ladder needs — it compares against 3. */
+	o->scene_pushes = __atomic_load_n(&n->pacer.master.scene_complete, __ATOMIC_RELAXED);
+	return 1;
+}
+
+int reac_sink_node_past_probing(struct reac_sink_node *n)
+{
+	if (!n || !n->pacer_open)
+		return 0;
+	return atomic_load_explicit(&n->pacer.fsm_state, memory_order_acquire)
+	       > REAC_M_PROBING;
+}
+
 struct reac_pacer *reac_sink_node_pacer(struct reac_sink_node *n)
 {
 	return n ? &n->pacer : NULL;
