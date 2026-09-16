@@ -165,6 +165,8 @@ host-wide keys the console does own.
 | §3a: the grammar — comments, quotes, case, refusals by name | `tests/test_reac_segconf.c` |
 | §1: a tagged VID with no sub-interface is announced by its id | `tests/segments-autodetect.sh` arm D |
 | §1: hot-plug adds a segment with no restart | `tests/segments-autodetect.sh` arm E |
+| §3c: a conf written while the daemon runs is seen at the next resolution | `tests/hearing-finds-a-segment.sh` (the pin phase) |
+| amendment: no recognised box, no node; a box arriving and leaving | `tests/no-box-no-node.sh`, `tests/pins-need-no-door.sh` |
 | §2: the box-master and silent-box elections still hold per segment | `tests/test_reac_hunt_captures.c`, `tests/box-master-slave-join.sh`, `tests/hearing-finds-a-segment.sh` |
 
 ## 7. Not proven here
