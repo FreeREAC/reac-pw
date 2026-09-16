@@ -412,3 +412,24 @@ geometry it CAN read. The box enrols at that width.
 What is still refused, and stays refused: **naming** a model from anything but a byte-exact
 declaration, and deriving a width from a frame LENGTH. Enrolling any box is a statement about
 GEOMETRY, never about identity.
+
+## Amendment 2026-09-17 (third) — the chassis numbering, and what the port table's ORDER is not
+
+**Operator, 2026-09-17:** *"inputs are tagged 1-8 and outputs 9-17 and so on in 4 groups"* — the
+S-4000H numbers its 8 inputs 1–8 and its 32 outputs from 9 upward, in groups of four.
+
+So the fabric placement is INPUTS FIRST, rows 1–8, outputs from row 9 — which is exactly what the
+allocator already grants (`0x41` per input group front-packed from the base, `0xc3` per non-input
+group back-packed). Nothing in the grant changes.
+
+**It does correct the first amendment's wording.** The twelve-slot table's ORDER is the order this
+chassis WRITES ITS DECLARATION in, and not the fabric placement — the S-4000H writes its output
+groups first and numbers its inputs first, so the two are demonstrably not the same thing.
+`reac_box_port_layout` is therefore a declaration-order fact and is named and documented as one.
+Nothing was decided from the order; the widths come from COUNTING codes, which is order-free.
+
+**And it names the upstream slots.** With the chassis numbering plus the braid's ascending channel
+order (`reac_upstream.h`: input N is wire channel N−1), the 8 inputs are channels 0–7 of the
+box's 32-channel return. The capture is consistent with a group structure — the 1204 B frames
+repeat one 8-channel pattern four times — but consistency is not proof, so §9 step 4 stands as
+written: inject a tone into input 1 and require the level to follow it.
