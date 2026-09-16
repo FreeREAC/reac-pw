@@ -24,7 +24,9 @@ segment; boxes follow it.
 
 One daemon can run several segments (auto-spine); each reads its own settings
 from `~/.config/reac-pw/reac-pw.env`, keyed by its interface name
-(`REAC_RATE_<segment>`, `REAC_ROLE_<segment>`, ...).
+(`REAC_RATE_<segment>`, `REAC_SRC_MAC_<segment>`, ...). The ROLE is not one of them since
+2026-09-16: it is autodetected per segment, and the one override is `reac-pw.conf` (see
+[ENV-KNOBS.md](ENV-KNOBS.md)).
 
 ## Precedence, highest first
 
