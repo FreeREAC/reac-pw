@@ -4,6 +4,10 @@
 
 Status: RULED by the operator 2026-09-16 ("we should autodetect master/slave/SP mode and adapt to
 it"); normative for `reac_hunt`'s callers in this daemon and for the console that writes its conf.
+**§4 is SUPERSEDED, same day, by
+[`2026-09-16-segments-and-roles-are-autodetected.md`](2026-09-16-segments-and-roles-are-autodetected.md)**:
+`REAC_ROLE_<segment>` is retired as a role source and as a segment declaration, the console writes
+no role key at all, and the one override is `reac-pw.conf`. §0, §1, §2, §3 and §5 stand.
 Companion to openmixer's `2026-08-20-reac-master-arbitration.md` §8 (the intent/observation law),
 `2026-09-13-reac-plug-and-play.md` §4 (the role vocabulary, option C) and this repo's DESIGN.md.
 
