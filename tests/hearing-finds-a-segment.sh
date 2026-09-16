@@ -292,7 +292,7 @@ fi
 # bounded-ungranted-courtship spec (option C) is why it is not. Beside a real M-200 our
 # courting slave kept that desk's own S-1608 from enrolling for 180 s, and once the desk
 # had granted our slave it blocked the box outright — four trials, 2026-09-12. `recorder`
-# (REAC_ROLE_<segment>=slave) is still available and still courts; nothing RESOLVES to it
+# (reac-pw.conf [segment <name>] role=slave) is still available and still courts; nothing RESOLVES to it
 # beside a desk any more.
 grep -q "\[hear0\] a desk masters this segment" "$LOG" || {
 	echo "FAIL: a desk was mastering the wire and the hunt did not say so"; cat "$LOG"; exit 1; }
@@ -447,22 +447,22 @@ NODES=$(daemon_nodes $PID)
 # a reference that used to depend on somebody patching the playback side — is visible only
 # on a rig with real hardware in the graph, and is checked there.
 
-# ---- A PIN IS SERVED WITHOUT A HUNT. `REAC_ROLE_<segment>` is an answer about this
+# ---- A PIN IS SERVED WITHOUT A HUNT. `reac-pw.conf` is an answer about this
 # wire -- a setting, not a guess -- so it waits only for the wire to BE a segment. The box
 # stays where it is; only the conf changes, and the segment is bounced so the sniffer
 # re-reads it.
 mkdir -p "$CONF/.config/reac-pw"
-echo "REAC_ROLE_hear0=master" > "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment hear0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 peer ip link set desk0 down; sleep 4.5
 peer ip link set desk0 up;   sleep 1
 $in_peer "$BIN" --live desk0 --tx desk0 --role slave --box-channels 16 --name box \
        --src-mac 00:40:ab:c4:80:41 >"$PEER" 2>&1 &
 BOXPID=$!
-wait_for "\[hear0\] REAC_ROLE_hear0 pins this segment as MASTER — driving on link" 15 || {
+wait_for "\[hear0\] reac-pw.conf \[segment hear0\] role pins this segment as MASTER — driving on link" 15 || {
 	echo "FAIL: the per-segment pin was not honoured on the first classifying frame"
 	tail -20 "$LOG"; exit 1; }
-wait_for "\[hear0\] segment up (master, pinned by REAC_ROLE_<segment>)" 10 || {
+wait_for "\[hear0\] segment up (master, pinned by reac-pw.conf)" 10 || {
 	echo "FAIL: served, but not reported as pinned"; tail -20 "$LOG"; exit 1; }
 kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 
@@ -473,7 +473,7 @@ kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 # announce is on the wire within 2 s of LINK. The peer's capture is what proves it left
 # this host; a journal line would only prove we decided to.
 mkdir -p "$CONF/.config/reac-pw"
-echo "REAC_ROLE_pin0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment pin0]\nrole = master\n' >> "$CONF/.config/reac-pw/reac-pw.conf"
 up_pair pin0 pbox0
 $in_peer python3 "$RT/sniff.py" pbox0 "$RT/pin0.cnt" & SNIFF1=$!
 wait_for "\[pin0\] pinned master — driving on link" 10 || {
@@ -487,7 +487,7 @@ for i in $(seq 20); do [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] && break; sleep 0
 $in_peer "$BIN" --live pbox0 --tx pbox0 --role slave --box-channels 16 --name pbox \
        --src-mac 00:40:ab:c4:80:42 >"$PEER" 2>&1 &
 PBOXPID=$!
-wait_for "\[pin0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
+wait_for "\[pin0\] segment up (master, pinned by reac-pw.conf)" 15 || {
 	echo "FAIL: pinned master never served pin0"; tail -20 "$LOG"; exit 1; }
 kill -TERM $SNIFF1 2>/dev/null; wait $SNIFF1 2>/dev/null
 kill -TERM $PBOXPID 2>/dev/null; wait $PBOXPID 2>/dev/null
@@ -953,13 +953,13 @@ down_pair boxm0 mbox0
 # every frame on that wire -- is what tells it, about a second later. The phase asserts the
 # END STATE: the segment comes down as a master and goes back up as that box's slave, at the
 # box's own width, carrying the box's identity.
-echo "REAC_ROLE_pinm0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment pinm0]\nrole = master\n' >> "$CONF/.config/reac-pw/reac-pw.conf"
 $in_peer "$FAKE" mbox1 "$BOXMAC" 8 2000 >"$RT/boxm1.log" 2>&1 &
 FAKEPID2=$!
 sleep 0.5
 up_pair pinm0 mbox1
 $in_peer python3 "$RT/sniff.py" mbox1 "$RT/pinm0.cnt" & SNIFF5=$!
-wait_for "\[pinm0\] REAC_ROLE_pinm0 pins this segment MASTER and .* JOINING it as its slave" 20 || {
+wait_for "\[pinm0\] reac-pw.conf \[segment pinm0\] role pins this segment MASTER and .* JOINING it as its slave" 20 || {
 	echo "FAIL: a pinned master beside a box on M did not join it"
 	grep -n "pinm0" "$LOG" | tail -20; tail -3 "$RT/boxm1.log"
 	echo "--- conf:"; cat "$CONF/.config/reac-pw/reac-pw.env"; exit 1; }
@@ -1021,7 +1021,7 @@ BOXA=$(seen x "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
 # join must survive a role write, in both directions, and the desk-slave engine must never
 # appear on a wire carrying a box's own geometry.
 PINM_FLOOR=$(LINE0)
-sed -i 's/^REAC_ROLE_pinm0=master$/REAC_ROLE_pinm0=auto/' "$CONF/.config/reac-pw/reac-pw.env"
+sed -i 's/^role = master$/role = auto/' "$CONF/.config/reac-pw/reac-pw.conf"
 # The role assertion reaches the daemon the way the console sends it: a write on the door's
 # own reac.cfg.role param. The conf above is what a re-open reads on the way back up.
 # EVERY DOOR THIS SEGMENT HAS, because which node carries the cfg door depends on which
@@ -1060,13 +1060,13 @@ echo "OK: a runtime role write leaves the box-master join standing"
 # with no box mastering it — the swap's own re-classification is exercised by the desk phases
 # above. OWED: a swap-path arm for the joined-box case, once a box can be made to change mode
 # under a running daemon (a fake box master cannot: the switch is read at boot).
-sed -i 's/^REAC_ROLE_pinm0=auto$/REAC_ROLE_pinm0=master/' "$CONF/.config/reac-pw/reac-pw.env"
+sed -i 's/^role = auto$/role = master/' "$CONF/.config/reac-pw/reac-pw.conf"
 
 # ---- AND THE JOIN IS NOT A LATCH EITHER. The switch is moved to slave: the box stops
 # mastering, its sighting ages out, and the wire the operator pinned is driven after all --
 # without a restart, which is what a latched verdict would have cost.
 kill -TERM $FAKEPID2 2>/dev/null; wait $FAKEPID2 2>/dev/null
-wait_for "\[pinm0\] segment up (master, pinned by REAC_ROLE_<segment>)" 40 || {
+wait_for "\[pinm0\] segment up (master, pinned by reac-pw.conf)" 40 || {
 	echo "FAIL: the box stopped mastering and the pinned segment never took the wire"
 	grep pinm0 "$LOG" | tail -20; exit 1; }
 kill -TERM $SNIFF5 2>/dev/null; wait $SNIFF5 2>/dev/null

@@ -110,7 +110,7 @@ peer ip link add link tpeer0 name tpeer0.21 type vlan id 21 || exit 90
 # THE COLD BOX'S CABLE IS PINNED MASTER — the issue's own configuration, and the thing the
 # stale verdict refused.
 mkdir -p "$CONF/.config/reac-pw"
-echo "REAC_ROLE_direct0=master" > "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment direct0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
 ip link set noise0 up;  peer ip link set npeer0 up
 ip link set taint0 up;  peer ip link set tpeer0 up
@@ -165,7 +165,7 @@ if grep -q "\[direct0\] untagged REAC on a trunk's native VLAN is not served" "$
 	echo "FAIL (#102): the direct cable was refused as a trunk — this is the rig report"
 	grep "direct0" "$LOG" | head -20; exit 1
 fi
-wait_for "\[direct0\] segment up (master, pinned by REAC_ROLE_<segment>)" 40 || {
+wait_for "\[direct0\] segment up (master, pinned by reac-pw.conf)" 40 || {
 	echo "FAIL: the direct cable was never driven by its pinned master"
 	grep "direct0" "$LOG" | tail -20; exit 1; }
 

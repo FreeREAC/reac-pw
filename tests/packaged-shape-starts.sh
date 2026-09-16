@@ -20,7 +20,10 @@
 # environment variable name: with `EnvironmentFile=` present it logged
 # `Ignoring invalid environment assignment` once per VLAN on every start, over
 # pins the daemon had in fact applied from the very same file. The daemon is that
-# file's reader; the unit must not be a second one.
+# file's reader; the unit must not be a second one. The role keys that carried the dot
+# are retired (spec 2026-09-16) and the ONE override is reac-pw.conf, which systemd could
+# not parse at all — so the rule holds for every remaining per-segment key and now also
+# for a file that is not an environment file in the first place.
 set -u
 BIN="${1:?usage: packaged-shape-starts.sh /path/to/reac-pw [/path/to/reac-pw.service] [/path/to/90-reac-pw.preset]}"
 UNIT="${2:-}"

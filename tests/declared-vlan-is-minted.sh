@@ -98,12 +98,17 @@ ip link set trunkA up; ip link set farA up
 ip link add link trunkA name trunkA.22 type vlan id 22 || exit 90
 ip link set trunkA.22 up
 
-cat > "$CONF/.config/reac-pw/reac-pw.env" <<EOF
-REAC_ROLE_trunkA.11=master
-REAC_ROLE_trunkA.22=master
+cat > "$CONF/.config/reac-pw/reac-pw.conf" <<EOF
+[segment trunkA.11]
+role = master
+
+[segment trunkA.22]
+role = master
+
+# A SECTION THAT SAYS NOTHING IS STILL A DECLARATION. Naming the segment is the whole act;
+# role and ignore are separate questions about it.
+[segment trunkA.33]
 EOF
-# And the OTHER declaration form, a per-segment file that need say nothing at all.
-echo "# declared by existing" > "$CONF/.config/reac-pw/trunkA.33.env"
 
 echo "a-before-11 $(netdev trunkA.11)"
 echo "a-before-22 $(netdev trunkA.22)"
@@ -127,9 +132,9 @@ echo "a-after-33 $(netdev trunkA.33)"
 grep -aE 'declared' "$RT/a.log" | tr -d '\r' | sed 's/^/  a: /' | head -8
 
 # ---- 2. THE PARENT IS NOT THERE YET (the NetworkManager race) -----------------------
-rm -f "$CONF/.config/reac-pw/trunkA.33.env"
-cat > "$CONF/.config/reac-pw/reac-pw.env" <<EOF
-REAC_ROLE_trunkB.11=master
+cat > "$CONF/.config/reac-pw/reac-pw.conf" <<EOF
+[segment trunkB.11]
+role = master
 EOF
 echo "b-before-parent $(netdev trunkB)"
 echo "b-before-11 $(netdev trunkB.11)"
@@ -185,10 +190,10 @@ echo "$OUT" | grep -aq '^b-daemon-died' && fail "the late-parent arm's daemon di
 [ "$(alias_of a-running-11)" = "reac-pw:minted" ] \
 	|| fail "trunkA.11 carries no mint alias, so the next start would inherit it as the host's: $(line a-running-11)"
 
-# 1b. THE OTHER DECLARATION FORM. A `<parent>.<vid>.env` file declares by existing.
+# 1b. A SECTION WITH NO KEYS IS STILL A DECLARATION.
 [ "$(st a-before-33)" = "absent" ] || fail "trunkA.33 existed before the daemon ran"
 [ "$(st a-running-33)" = "present" ] \
-	|| fail "trunkA.33 is declared by its own .env file and was never minted: $(line a-running-33)"
+	|| fail "trunkA.33 is declared by a bare [segment] section and was never minted: $(line a-running-33)"
 
 # 2. THE ADOPTED CONTROL. The host made trunkA.22; the daemon serves it and never owns it.
 [ "$(st a-before-22)" = "present" ] || fail "the adopted control was not set up"
