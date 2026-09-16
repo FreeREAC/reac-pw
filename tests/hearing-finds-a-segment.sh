@@ -349,8 +349,10 @@ BOXPID=$!
 # win: the box floods broadcast FILLER on ITS PHY-up, so if that flood lands inside the
 # daemon's 500 ms masterless observation the licence is cancelled and the ordinary
 # vacant-wire path takes over ("no master heard in 3 s and a box is present"); if the box
-# is slower to start, the wire is proven silent and taken on the licence. The phase's real
-# assertion is the next one -- the segment comes up as MASTER -- and everything after it.
+# is slower, the same verdict is reached on PROVEN SILENCE and the line says so instead
+# (2026-09-16: the sentence used to claim a box either way). The grep below matches both,
+# because it asks for the verdict and not for the reason. The wire is then taken on the
+# licence. The phase's real assertion is the next one -- the segment comes up as MASTER -- and everything after it.
 for i in $(seq 75); do
 	grep -qE "\[hear0\] (no master heard in|no REAC heard in .* taking it as MASTER)" "$LOG" && break
 	sleep 0.2
