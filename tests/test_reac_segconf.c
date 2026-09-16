@@ -277,6 +277,79 @@ int main(void)
 	CHECK(reac_segconf_refresh(&c) == 1, "a drop-in rewritten in the same second was not seen");
 	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_MASTER, "the rewritten drop-in was not applied");
 
+	/* ---- THE BOX ROLE AND ITS MODEL ROW (2026-09-17 spec §4) ----
+	 * A box declares a MODEL, and a box that declares the wrong width to a mixer
+	 * is a patch that silently lands on the wrong channels. So there is no
+	 * default model, an unknown token is refused BY NAME with the table's own
+	 * tokens listed, and `model` on any other role is refused too — a key read
+	 * on one role and ignored on another is a trap with no upside. */
+	{
+		struct reac_segconf b;
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nrole = box\nmodel = s1608\n");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_BOX, "role = box did not parse");
+		CHECK(reac_segconf_model(&b, "e0") &&
+		      strcmp(reac_segconf_model(&b, "e0"), "s1608") == 0,
+		      "model = s1608 was not carried");
+		CHECK(b.refused == 0, "a well-formed box section was refused");
+
+		/* THE VALUE FOLDS, the segment name does not — the same rule role has. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nROLE = BOX\nMODEL = FR4000\n");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_BOX, "ROLE = BOX did not fold");
+		CHECK(reac_segconf_model(&b, "e0") &&
+		      strcmp(reac_segconf_model(&b, "e0"), "fr4000") == 0,
+		      "MODEL = FR4000 did not fold to the table's token");
+
+		/* A ROW NOBODY HAS SEEN IS STILL A ROW: the operator's experiment. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nrole = box\nmodel = fr0040\n");
+		CHECK(reac_segconf_model(&b, "e0") &&
+		      strcmp(reac_segconf_model(&b, "e0"), "fr0040") == 0,
+		      "the 40-channel experiment row was not accepted");
+
+		/* box WITHOUT a model: refused by name, and the segment falls back to
+		 * auto rather than presenting an arbitrary width to a mixer. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nrole = box\n");
+		CHECK(b.refused == 1, "role = box with no model was not refused");
+		CHECK(refusal_names(&b, "model"), "the refusal does not name the missing key");
+		CHECK(refusal_names(&b, "e0"), "the refusal does not name the segment");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_AUTO,
+		      "a box with no model did not fall back to auto");
+
+		/* An unknown token names itself AND the tokens that exist. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nrole = box\nmodel = s9999\n");
+		CHECK(b.refused >= 1, "an unknown model token was not refused");
+		CHECK(refusal_names(&b, "s9999"), "the refusal does not name the token");
+		CHECK(refusal_names(&b, "s1608"), "the refusal does not list the table's tokens");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_AUTO,
+		      "a box whose model was refused did not fall back to auto");
+		CHECK(reac_segconf_model(&b, "e0") == NULL,
+		      "a refused model was kept anyway");
+
+		/* `model` on any other role is refused, and that role SURVIVES it. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nrole = tap\nmodel = s1608\n");
+		CHECK(b.refused == 1, "model under role = tap was not refused");
+		CHECK(refusal_names(&b, "model"), "the refusal does not name the key");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_TAP, "the tap pin was lost");
+		CHECK(reac_segconf_model(&b, "e0") == NULL, "a model was kept on a tap");
+
+		/* LAST WINS PER KEY, across files, for `model` exactly as for `role`. */
+		reac_segconf_init(&b);
+		reac_segconf_parse_file(&b, "[segment e0]\nrole = box\nmodel = s1608\n",
+		                        "reac-pw.conf");
+		reac_segconf_parse_file(&b, "[segment e0]\nmodel = s4000s\n",
+		                        "reac-pw.conf.d/50-openmixer.conf");
+		CHECK(reac_segconf_model(&b, "e0") &&
+		      strcmp(reac_segconf_model(&b, "e0"), "s4000s") == 0,
+		      "a later file did not override the model");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_BOX,
+		      "the role a later file was silent about did not survive");
+	}
+
 	unlink(path);
 	snprintf(cmd, sizeof cmd, "rm -rf '%s'", home);
 	if (system(cmd) != 0)

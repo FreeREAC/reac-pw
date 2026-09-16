@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_segconf.h"
+
+#include <reac/reac_ctrlblk.h>   /* the box-model table: a model token is a ROW, never a width */
 #include "reac_declared_vlan.h"
 
 #include <dirent.h>
@@ -216,12 +218,36 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			low[li] = '\0';
 			if (reac_role_intent_parse(low, &i) != 0) {
 				refuse(c, lineno, "[segment %s] role = '%s' is not one of "
-				       "auto|master|slave|tap", cur_name, val);
+				       "auto|master|slave|tap|box", cur_name, val);
 				continue;
 			}
 			cur->role = i;
 			cur->role_set = 1;
 			snprintf(cur->role_file, sizeof cur->role_file, "%s", c->reading);
+		} else if (!strcasecmp(key, "model")) {
+			/* Folded like `role`'s value and for the same reason: this is a file
+			 * a human types. The token is looked up in libreac's table NOW, so an
+			 * unknown model is named at the line that holds it and never becomes
+			 * a width nobody declared. */
+			char low[REAC_SEGCONF_MODEL_LEN];
+			size_t li = 0;
+			for (const char *q = val; *q && li + 1 < sizeof low; q++, li++)
+				low[li] = (*q >= 'A' && *q <= 'Z') ? (char)(*q - 'A' + 'a') : *q;
+			low[li] = '\0';
+			if (!reac_box_model_by_token(low)) {
+				char known[240];
+				size_t kn = 0, ntok = 0;
+				const struct reac_box_model *tab = reac_box_model_table(&ntok);
+				for (size_t ti = 0; ti < ntok && kn + 2 < sizeof known; ti++)
+					kn += (size_t)snprintf(known + kn, sizeof known - kn, "%s%s",
+					                       ti ? "|" : "", tab[ti].token);
+				refuse(c, lineno, "[segment %s] model = '%s' is not a box model — "
+				       "%s", cur_name, val, known);
+				continue;
+			}
+			snprintf(cur->model, sizeof cur->model, "%s", low);
+			cur->model_set = 1;
+			snprintf(cur->model_file, sizeof cur->model_file, "%s", c->reading);
 		} else if (!strcasecmp(key, "ignore")) {
 			int b;
 			if (parse_bool(val, &b) != 0) {
@@ -233,16 +259,47 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			cur->ignore_set = 1;
 			snprintf(cur->ignore_file, sizeof cur->ignore_file, "%s", c->reading);
 		} else {
-			refuse(c, lineno, "[segment %s] has no key '%s' — role, ignore",
+			refuse(c, lineno, "[segment %s] has no key '%s' — role, model, ignore",
 			       cur_name, key);
 		}
 	}
 	return c->n;
 }
 
+/* WHAT ONE KEY MEANS DEPENDS ON ANOTHER, so it is checked once EVERY FILE HAS BEEN READ
+ * and never at the line. `model` may be written above `role`, and a drop-in may supply the
+ * role for a model the hand-written file declared — checking at the line would refuse a
+ * file that is correct by the time the last one has been read (spec amendment §A: last
+ * wins per key). Both refusals name the segment, and neither is fatal. */
+static void cross_check(struct reac_segconf *c)
+{
+	for (int i = 0; i < c->n; i++) {
+		struct reac_segconf_seg *s = &c->seg[i];
+		int is_box = s->role_set && s->role == REAC_ROLE_INTENT_BOX;
+		if (s->model_set && !is_box) {
+			refuse(c, 0, "[segment %s] model = '%s' is meaningful only under "
+			       "role = box; the role stands and the model is dropped",
+			       s->name, s->model);
+			s->model_set = 0;
+			s->model[0] = '\0';
+		} else if (is_box && !s->model_set) {
+			/* NO DEFAULT MODEL, on purpose: presenting an arbitrary width to a
+			 * mixer patches somebody's inputs onto the wrong channels, and an
+			 * absence is a fact. The segment falls back to auto, which is what it
+			 * would have been with nothing said. */
+			refuse(c, 0, "[segment %s] role = box needs a model — none was given, "
+			       "so the segment falls back to auto", s->name);
+			s->role_set = 0;
+			s->role = REAC_ROLE_INTENT_AUTO;
+		}
+	}
+}
+
 int reac_segconf_parse(struct reac_segconf *c, const char *text)
 {
-	return reac_segconf_parse_file(c, text, REAC_SEGCONF_FILE);
+	int n = reac_segconf_parse_file(c, text, REAC_SEGCONF_FILE);
+	cross_check(c);
+	return n;
 }
 
 /* One file's whole text, parsed as `label`. Returns 1 if it was read, 0 if it was not
@@ -384,6 +441,10 @@ int reac_segconf_load(struct reac_segconf *c, const char *home)
 	if (read_one(c, REAC_SEGCONF_FILE, &c->stamp[0]) > 0)
 		c->present = 1;
 	load_dropins(c);
+	/* EVERY FILE HAS BEEN READ NOW, which is the only moment the cross-key rules can
+	 * be judged: a drop-in may supply the role for a model the hand-written file
+	 * declared, or the other way round. */
+	cross_check(c);
 	return c->n;
 }
 
@@ -460,6 +521,12 @@ const char *reac_segconf_ignore_file(const struct reac_segconf *c, const char *n
 {
 	const struct reac_segconf_seg *s = reac_segconf_find(c, name);
 	return s && s->ignore_set && s->ignore_file[0] ? s->ignore_file : NULL;
+}
+
+const char *reac_segconf_model(const struct reac_segconf *c, const char *name)
+{
+	const struct reac_segconf_seg *s = reac_segconf_find(c, name);
+	return s && s->model_set ? s->model : NULL;
 }
 
 int reac_segconf_declared(const struct reac_segconf *c, struct reac_declared_vlan *tab,
