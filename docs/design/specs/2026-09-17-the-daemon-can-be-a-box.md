@@ -379,3 +379,36 @@ entry for that MAC — the corroborated verdict, where facts only sharpen — so
    group-B poll. The row's `fw_milli` / `reac_*` / `name` stay zero until it lands.
 6. **Whether `0x00` marks a head-amp-less input.** Send a head-amp record at strap base 0x00 and
    look at the preamp, physically — never at a soft meter.
+
+## Amendment 2026-09-17 (second) — RULING: any stagebox enrols, on what it declares
+
+**Operator, 2026-09-17, verbatim:** *"With the knowledge we have of the protocol, we should be
+able to enrol any stage box."*
+
+The sizing path already intends this — `reac_master_set_box` takes the width the box DECLARED and
+the model table only NAMES it, so an unnamed box is sized and granted. One line broke it for every
+box we have not captured: `reac_ports_parse` refused the WHOLE twelve-slot table on the first byte
+outside `{01,02,03}`, and a refusal there means no `set_box`, no grant, and a roster stuck at
+`probing`. The S-4000H is the proof — one unfamiliar byte, and a fully declaring Roland box could
+not join for minutes.
+
+**A SLOT CODE SPEAKS FOR ITS OWN FOUR CHANNELS AND NO OTHERS.** The decoder now counts an unknown
+code as an UNKNOWN group — reported as `unknown_ch` and the first code seen — and answers with the
+geometry it CAN read. The box enrols at that width.
+
+- This is not the guess the old refusal existed to stop. That guess was an OVER-claim: naming a
+  box, or sizing it, from something other than its declaration, so the grant claims slots the box
+  does not own and the head-amp lands 32 slots off with every gate green. An unknown group is an
+  UNDER-claim: we enrol the groups we can read, the box's own frame width still carries its audio
+  (`reac_rx` takes the width off the frame, never off the grant), and nothing is addressed that
+  was not declared.
+- **It must be loud.** `REAC_PEV_RECOGNIZED` carries the unknown group count and the first unknown
+  code, and the master's log names them, so an unknown code reads as "capture this byte", never as
+  a silent narrowing. Recoverable and loud beats plausible and wrong.
+- A declaration that is not a declaration is still refused outright: wrong link, wrong segment
+  bits, wrong opcode. Those say "this block is not a box declaring itself", which is a different
+  fact from "this box has a group I do not recognise".
+
+What is still refused, and stays refused: **naming** a model from anything but a byte-exact
+declaration, and deriving a width from a frame LENGTH. Enrolling any box is a statement about
+GEOMETRY, never about identity.
