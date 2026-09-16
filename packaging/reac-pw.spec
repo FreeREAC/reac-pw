@@ -146,6 +146,31 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.12-1
+- A DROP-IN DIRECTORY, ~/.config/reac-pw/reac-pw.conf.d/*.conf, in the same grammar as the
+  hand-written file. reac-pw.conf is read FIRST, then every *.conf in byte order of its
+  name, and a later file overrides the same key of the same segment -- the order systemd,
+  sysctl.d and udev already train every operator on this host to expect. That is the door
+  another program writes through: openmixer writes exactly one file,
+  reac-pw.conf.d/50-openmixer.conf, and never touches the operator's. The operator takes the
+  last word back with a name that sorts later (99-local.conf). Every refusal now names
+  <file>:<line>, every override names the file that set it (at start, and on the roster
+  below), and the re-read is the same one-stat rule with the directory's own mtime in it.
+  A drop-in the directory listed and the daemon cannot read is named and skipped; the files
+  it can read still apply. No /etc: every layer this daemon reads is per-user, by design.
+- THE SEGMENT ROSTER IS ON THE GRAPH, so an EMPTY segment is visible again. 1.0.11 removed
+  the per-segment zero-port door -- a node for a wire with no box is a device the console
+  renders as `none / 0 in` -- and that took the console's only view of a probing segment
+  with it, because its roster is a graph scan. The daemon now publishes ONE node for
+  ITSELF: `reac-pw`, no ports, media.class Reac/Roster (a class no session manager has a
+  rule for, so nothing links or routes it), found by the property reac.roster=1. Its props
+  are the roster, one index-keyed group per segment: .name, .state
+  (probing|established|slave|tap|refused|ignored), .model (reac.box-model's own vocabulary,
+  or `none`), .role as RESOLVED, .source (autodetected | conf:<file>) and .width (in/out,
+  0/0 where there is no pair). It is derived every 500 ms from the tables that already hold
+  each fact and published as a DELTA: an unchanged rig moves no property, and a state change
+  never moves a node id. "Not autodetecting is an error" is now a sentence a console can say.
+
 * Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.11-1
 - SEGMENTS AND ROLES ARE AUTODETECTED; NO ENVIRONMENT VARIABLE DECIDES A ROLE. The rig
   moved from one box on a 100 Mbit/s USB NIC to three boxes on a 1 Gbit trunk and the
