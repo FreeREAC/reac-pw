@@ -82,6 +82,8 @@
 #include <reac/transport/reac_ifscan.h>     /* which interfaces to sniff, which are segments */
 #include "reac_declared_vlan.h"   /* the VLAN segments the operator DECLARED, minted at start */
 #include "reac_segconf.h"         /* the ONE override file: per-segment role and ignore */
+#include "reac_roster.h"          /* every segment as one node's props (amendment §B) */
+#include "reac_roster_node.h"     /* ...and the port-less node that carries them */
 #include "reac_link_budget.h"     /* what a master costs its physical port, and whether it fits */
 #include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */
 #include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
@@ -117,6 +119,12 @@
  * audio with every node up. A LIVE role change is `reac.cfg.role` on the segment's door,
  * not a re-read of this. */
 static struct reac_segconf g_segconf;
+
+/* THE DAEMON'S OWN ROW ON THE GRAPH (spec amendment 2026-09-16 third, §B). One node, no
+ * ports, every segment in its props — derived from the tables below on a 500 ms tick and
+ * published as a DELTA, so a state change moves properties and never a node id. */
+static struct reac_roster g_roster;
+static struct reac_roster_node *g_roster_node;
 
 /* Bounded, per docs/design/specs/2026-08-20-reac-auto-spine.md ("a segment
  * beyond the bound is reported, never silently ignored") — this rig needs 2;
@@ -4083,6 +4091,190 @@ static void hearing_stop(struct hearing *h)
 	h->enabled = 0;
 }
 
+/* ---- THE ROSTER TICK (spec 2026-09-16-segments-and-roles-are-autodetected.md, amendment
+ * 2026-09-16 third, §B) ------------------------------------------------------------------
+ *
+ * READ, NEVER WRITTEN. Every field below is derived, on the tick, from the table that
+ * already owns it: the conf for `ignored`, the listener's own engine for tap / slave /
+ * refused, the master's recognized box for `established`, and the sniffer table for the
+ * segments this daemon is hearing and has decided nothing about. A roster FIELD anywhere
+ * would be a second answer to a question that already has one, and the second answer is
+ * the one that goes stale.
+ *
+ * WHY THIS NODE AND NOT THE SEGMENT'S OWN. The amendment one level up removed the
+ * zero-port per-segment door, and said in its own words what that cost: the console's
+ * roster is a graph scan, so a segment with no node has no row at all — not even one
+ * saying `probing`. That is the row. */
+struct roster_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
+
+/* The interface name this listener serves. rxcfg.source is what every other reader here
+ * uses; iface_buf is where a HEARD segment's name lives and is what rxcfg.source points
+ * at, so the fallbacks are the same string by two routes and never a second identity. */
+static const char *roster_seg_name(const struct listener *L)
+{
+	if (L->cfg.rxcfg.source && *L->cfg.rxcfg.source)
+		return L->cfg.rxcfg.source;
+	if (L->cfg.iface_buf[0])
+		return L->cfg.iface_buf;
+	return L->cfg.inst_name;
+}
+
+/* `conf:<file>` when a file pinned this segment's role, `autodetected` otherwise — the
+ * FILE and not the layer, because with a drop-in directory behind the conf "the config
+ * said so" names nothing an operator can open. */
+static void roster_source(const char *seg, char *out, size_t len)
+{
+	const char *f = reac_segconf_role_file(&g_segconf, seg);
+	if (!f)
+		f = reac_segconf_ignore_file(&g_segconf, seg);
+	if (f)
+		snprintf(out, len, "conf:%s", f);
+	else
+		snprintf(out, len, "autodetected");
+}
+
+static void roster_add_listener(struct listener *L, int *dup)
+{
+	const char *seg = roster_seg_name(L);
+	if (!seg || !*seg)
+		return;
+	enum reac_roster_state st;
+	const char *role;
+	const struct reac_box_model *bm = L->sink ? reac_sink_node_recognized_box(L->sink) : NULL;
+	if (L->cfg.tap) {
+		st = REAC_ROSTER_TAP;
+		role = "tap";
+	} else if (L->cfg.door_only && !L->cfg.door_vacant) {
+		/* A REFUSAL IS A STATE, not an absence: a wire pinned master with a box
+		 * mastering it is the one case the daemon will not serve, and it is exactly
+		 * the case an operator must be able to SEE from the console. */
+		st = REAC_ROSTER_REFUSED;
+		role = reac_role_name(L->cfg.role);
+	} else if (L->cfg.role == REAC_ROLE_SLAVE || L->cfg.join_box_master) {
+		st = REAC_ROSTER_SLAVE;
+		role = "slave";
+	} else {
+		st = bm ? REAC_ROSTER_ESTABLISHED : REAC_ROSTER_PROBING;
+		role = "master";
+	}
+	/* THE MODEL IS WHAT IS RECOGNISED, or what the operator PINNED — a `--box` pin is
+	 * the one declaration the no-node ruling keeps, so the roster must carry it too.
+	 * `none` otherwise, said out loud: an absent box must SAY absent. */
+	/* THE TOKEN, because `reac.box-model` on the segment's own node already publishes
+	 * `bm->token` and `none` — the console keys off that vocabulary, and a roster that
+	 * spelled the same box a second way would be a second vocabulary for one fact. The
+	 * display string also carries the width, which `.width` already owns. */
+	const char *model = bm ? bm->token
+	                       : (L->cfg.pin_model ? L->cfg.pin_model->token : NULL);
+	/* THE WIDTH IS THE PAIR'S, and the pair exists only where a box does. A slave's
+	 * capture is the width of the stream it receives, which the hunt already carried
+	 * into wire_channels; nothing else invents a number. */
+	int in = 0, out = 0;
+	if (bm) {
+		in = bm->in_ch;
+		out = bm->out_ch;
+	} else if (L->cfg.pin_model) {
+		in = L->cfg.pin_model->in_ch;
+		out = L->cfg.pin_model->out_ch;
+	} else if (st == REAC_ROSTER_SLAVE || st == REAC_ROSTER_TAP) {
+		in = (int)L->cfg.wire_channels;
+	}
+	char src[112];
+	roster_source(seg, src, sizeof src);
+	if (reac_roster_add(&g_roster, seg, st, model, role, src, in, out) != 0)
+		(*dup)++;
+}
+
+static void roster_collect(struct roster_ctx *rc)
+{
+	int dup = 0;
+	reac_roster_begin(&g_roster);
+	/* 1. THE SEGMENTS THE CONF SWITCHED OFF. They are never sniffed and never served, so
+	 *    no other table holds them — and a segment the operator silenced is precisely
+	 *    one a console must be able to explain, rather than one that is merely missing. */
+	for (int i = 0; i < g_segconf.n; i++) {
+		if (!g_segconf.seg[i].ignore)
+			continue;
+		char src[112];
+		roster_source(g_segconf.seg[i].name, src, sizeof src);
+		enum reac_role_intent want = REAC_ROLE_INTENT_AUTO;
+		reac_segconf_role(&g_segconf, g_segconf.seg[i].name, &want);
+		if (reac_roster_add(&g_roster, g_segconf.seg[i].name, REAC_ROSTER_IGNORED,
+		                    NULL, reac_role_intent_name(want), src, 0, 0) != 0)
+			dup++;
+	}
+	/* 2. EVERY SEGMENT WITH AN ENGINE. */
+	for (int i = 0; i < rc->n; i++)
+		if (rc->listeners[i].opened)
+			roster_add_listener(&rc->listeners[i], &dup);
+	/* 3. AND EVERY WIRE WE ARE LISTENING TO THAT HAS NOT DECIDED ANYTHING YET — the
+	 *    `probing` row this whole node exists for. A sniffer whose segment is served is
+	 *    already row 2's; hearing_listener is the same lookup that owns that fact. */
+	for (int i = 0; g_hear.enabled && i < REAC_IFSCAN_MAX; i++) {
+		const char *nm = g_hear.sniff[i].name;
+		if (!nm[0] || hearing_listener(&g_hear, nm))
+			continue;
+		char src[112];
+		roster_source(nm, src, sizeof src);
+		enum reac_role_intent want = segment_role_intent(nm);
+		if (reac_roster_add(&g_roster, nm, REAC_ROSTER_PROBING, NULL,
+		                    reac_role_intent_name(want), src, 0, 0) != 0)
+			dup++;
+	}
+	if (dup) {
+		/* Two tables claiming one wire, or more segments than the roster holds.
+		 * Neither is survivable in silence: a console would read a rig that is not
+		 * there. Said once — a tick repeats 120 times a minute. */
+		static int said;
+		if (!said++)
+			fprintf(stderr, "reac-pw: the segment roster refused %d entr%s this tick "
+			        "(bound %d, or one segment claimed twice) — the roster node is "
+			        "INCOMPLETE and this is said once\n",
+			        dup, dup == 1 ? "y" : "ies", REAC_ROSTER_MAX);
+	}
+}
+
+static void on_roster_timer(void *data, uint64_t expirations)
+{
+	(void)expirations;
+	struct roster_ctx *rc = data;
+	if (!g_roster_node) {
+		/* LAZY AND RETRIED, because a daemon can be up before PipeWire is. Every
+		 * tenth tick so a graph-less run costs one connect attempt every 5 s, and the
+		 * refusal is said ONCE — a line per tick would bury the journal that is an
+		 * empty segment's other home. */
+		static int ticks;
+		if (ticks++ % 10)
+			return;
+		g_roster_node = reac_roster_node_new(rc->loop);
+		if (!g_roster_node) {
+			static int said;
+			if (!said++)
+				fprintf(stderr, "reac-pw: the segment roster node could not be "
+				        "created (no PipeWire?) — the segments are in this journal "
+				        "and nowhere else until it can be; retrying\n");
+			return;
+		}
+		fprintf(stderr, "reac-pw: the segment roster is on the graph: node `reac-pw`, "
+		        "no ports, reac.roster=1 — every segment this daemon runs, probing ones "
+		        "included\n");
+	}
+	roster_collect(rc);
+	struct reac_roster_kv kv[REAC_ROSTER_KV_MAX];
+	int n = reac_roster_delta(&g_roster, kv, REAC_ROSTER_KV_MAX);
+	if (n < 0) {
+		static int said;
+		if (!said++)
+			fprintf(stderr, "reac-pw: the roster delta did not fit its own bound and "
+			        "was NOT published — the roster node is STALE (said once)\n");
+		return;
+	}
+	if (n == 0)
+		return;   /* nothing moved: the whole point — no property storm, no node churn */
+	reac_roster_node_publish(g_roster_node, kv, n);
+	reac_roster_commit(&g_roster);
+}
+
 struct rate_reopen_ctx { struct listener *listeners; int n; struct pw_loop *loop; };
 
 /* Set when a segment's capture socket lost its interface (see reac_rx.h's
@@ -4637,6 +4829,17 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	/* THE ROSTER TICK. 500 ms: it walks at most 32 segments and publishes only what
+	 * moved, and the thing it answers — "which wires is this daemon on, and what is
+	 * each one doing" — changes on a human's timescale, not a frame's. */
+	struct roster_ctx roctx = { listeners, n_listeners, loop };
+	struct spa_source *roster_timer = pw_loop_add_timer(loop, on_roster_timer, &roctx);
+	if (roster_timer) {
+		struct timespec rfirst = { 0, 500 * 1000000L };
+		struct timespec rint = { 0, 500 * 1000000L };
+		pw_loop_update_timer(loop, roster_timer, &rfirst, &rint, false);
+	}
+
 	struct rate_reopen_ctx rrctx = { listeners, n_listeners, loop };
 	struct spa_source *rate_timer = pw_loop_add_timer(loop, on_rate_reopen_timer, &rrctx);
 	if (rate_timer) {
@@ -4648,6 +4851,8 @@ int main(int argc, char **argv)
 	pw_main_loop_run(g_loop);
 
 	hearing_stop(&g_hear);
+	reac_roster_node_destroy(g_roster_node);
+	g_roster_node = NULL;
 	for (int i = 0; i < n_listeners; i++)
 		if (listeners[i].opened)
 			listener_close(&listeners[i], loop);
