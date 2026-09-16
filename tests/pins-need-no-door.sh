@@ -88,6 +88,12 @@ for o in d:
     if o.get("type")!="PipeWire:Interface:Node": continue
     p=o["info"]["props"]
     if int(p.get("client.id",-1)) not in mine: continue
+    # THE ROSTER NODE IS NOT A SEGMENT DOOR and is deliberately skipped here. Since
+    # 2026-09-16 (spec amendment third, section B) this daemon always publishes ONE node for
+    # ITSELF -- `reac-pw`, no ports, reac.roster=1 -- listing every segment it runs,
+    # probing ones included. This probe is about the doors a SEGMENT has, and counting that
+    # row as one of them would read as a ghost door on every empty wire.
+    if p.get("reac.roster") is not None: continue
     print(p.get("node.name","?"), p.get("reac.segment","(none)"),
           p.get("reac.master.state","(none)"), p.get("reac.cfg.role.state","(none)"),
           p.get("reac.master.refusal","(none)"), p.get("reac.pace.source","(none)"))
