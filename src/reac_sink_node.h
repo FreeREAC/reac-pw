@@ -157,6 +157,16 @@ void reac_sink_node_publish_box_master(struct reac_sink_node *n,
  * snapshot. Returns 0, or -1 on a failed (re)build. */
 int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *label);
 
+/* TAKE THE reac-playback GRAPH NODE OFF THE GRAPH, leaving the pacer, the master engine
+ * and the recognizer running. The counterpart to _ensure, for the one case that needs it:
+ * the box that this segment was serving has LEFT (the FSM cleared recognized_box), and a
+ * node that outlives its box is a device the console keeps patching into
+ * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment). The
+ * engine keeps driving the wire — that is how the next box is found — and the next
+ * _ensure builds a fresh filter at its width. Idempotent; a node that is not there is
+ * not an error. */
+void reac_sink_node_unpublish(struct reac_sink_node *n);
+
 /* The box model the pacer last recognized on the wire (its config-announce matched
  * a fixed-matrix row), or NULL if none yet. Cross-thread-safe (an atomic load of
  * the pacer's recognized_box) — the main-loop autodetect watcher polls this to

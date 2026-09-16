@@ -659,18 +659,33 @@ test('reac_master_gone_is_re_decided',
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
-# --- whole-binary test: a pinned segment has a DOOR before the wire says anything ---
+# --- whole-binary test: a segment with NO recognised box has NO node ---------
 #
-# openmixer's master-arbitration §6 Q5, ANSWERED 2026-09-14 (operator): option C. The
-# console invents no row; the DAEMON opens a door for every segment a pin names, whatever
-# is on the wire — so a role can be set on a segment before anything enrols. Measured on
-# the rig that day: a VLAN pinned `tap` with a silent wire and a pinned master with no box
-# both published NO NODE AT ALL. Two veths whose peer ends live in a nested namespace, a
-# private PipeWire, and pw-dump as the reader.
-test('reac_doors_open_before_the_wire',
-  find_program('tests/doors-open-before-the-wire.sh'),
+# Operator, 2026-09-16: "a segment with NO recognised box must not appear in the PipeWire
+# graph at all." The desk's empty untagged trunk VLAN logged "the segment's door is on the
+# graph now (reac-playback, no ports yet)" and the console rendered a device reading
+# `none / 0 in`. An empty wire yields zero nodes, a box that enrols yields the sized pair,
+# and a box that goes takes them away again -- the middle arm is the positive control for
+# the other two. Needs libreac's fake_box (the same knob box-wakes-on-a-phy-edge uses);
+# without it the test SKIPS rather than passing while proving nothing.
+test('reac_no_box_no_node',
+  find_program('tests/no-box-no-node.sh'),
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 300)
+
+# --- whole-binary test: a PIN needs no door ----------------------------------
+#
+# The inverse of what this file used to assert, and that is the honest form of a
+# superseded ruling: it was doors-open-before-the-wire.sh and it proved Q5 option C
+# (2026-09-14), that a tap pinned on a silent wire and a pinned master with no box each
+# published a door so a role could be set before anything enrolled. The requirement
+# stands; reac-pw.conf answers it with no node at all, so the zero-port node is cost with
+# no remaining benefit. Its positive control is a SECOND daemon with `--box` pinned --
+# needed because a daemon serving only empty segments has no PipeWire client at all.
+test('reac_pins_need_no_door',
+  find_program('tests/pins-need-no-door.sh'),
   args : [reac_pw_exe],
-  timeout : 180)
+  timeout : 300)
 
 # --- whole-binary test: a REFUSED head-amp write is VISIBLE to a second client -
 # (2026-09-14-headamp-as-node-params.md §3a). A cell written to a segment with no

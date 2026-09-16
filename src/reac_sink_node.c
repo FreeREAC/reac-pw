@@ -2199,20 +2199,17 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	if (!n)
 		return -1;
 	int want = channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : channels;
-	/* ZERO IS A WIDTH, AND IT IS THE DOOR'S (arbitration §6 Q5, ANSWERED 2026-09-14,
-	 * option C). A master with no box recognized had NO NODE AT ALL — the graph filter
-	 * is deferred until a box declares its geometry — and this node is the master
-	 * segment's DOOR: the one that carries reac.segment and accepts reac.cfg.role.
-	 * So a pinned master on a cold stage published nothing, the console had no
-	 * `/reac/segment` row, and the operator could not change the role of the segment
-	 * that most needed changing (measured on the rig, 2026-09-14).
+	/* ZERO IS STILL A WIDTH THIS FUNCTION ACCEPTS, and main no longer asks for it on a
+	 * segment with no box. The zero-port door was Q5 option C (2026-09-14): a master
+	 * with no box recognized published reac-playback at 0 ports so the segment had an
+	 * identity and a role door. The desk's verdict on it, 2026-09-16: a device reading
+	 * `none / 0 in` for an empty trunk VLAN — "a segment with NO recognised box must
+	 * not appear in the PipeWire graph at all" (operator). main's autodetect path
+	 * creates nothing until a box declares itself and calls reac_sink_node_unpublish
+	 * when one leaves; a role stays settable before anything enrols through
+	 * reac-pw.conf, which needs no node.
 	 *
-	 * ZERO PORTS, NOT A PLACEHOLDER WIDTH. The deferral's own rule — nothing plugged is
-	 * nothing in the graph — is about the AUDIO, and it is kept exactly: a door with no
-	 * ports is a door nobody can patch into, so no signal can be routed to a box that
-	 * is not there and then silently re-routed away by the rebuild when one appears.
-	 * Sizing it to 40 instead would offer the operator forty sends into nothing.
-	 * Negative is still a refusal — it is a caller's arithmetic error, never a width. */
+	 * Negative is a refusal — a caller's arithmetic error, never a width. */
 	if (want < 0)
 		return -1;
 	char want_label[64];
@@ -2247,6 +2244,23 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	n->position = NULL;   /* the old stream's io area dies with it */
 	n->channels = want;
 	return sink_open_filter(n, label);
+}
+
+void reac_sink_node_unpublish(struct reac_sink_node *n)
+{
+	if (!n || !n->stream)
+		return;
+	/* THE SAME TEARDOWN THE REBUILD PATH DOES, and for the same reasons: disconnect
+	 * EXPLICITLY before destroying, so the server sees a distinct "this node is going
+	 * away" ahead of anything else this connection sends; the pacer and the recognizer
+	 * are untouched, because the engine keeps driving the wire while no box is on it —
+	 * that is how the next one is found. */
+	pw_stream_disconnect(n->stream);
+	pw_stream_destroy(n->stream);
+	n->stream = NULL;
+	n->position = NULL;
+	n->channels = 0;
+	n->label[0] = '\0';
 }
 
 const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n)
