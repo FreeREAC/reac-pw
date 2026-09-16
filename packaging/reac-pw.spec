@@ -17,11 +17,11 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.1.5
+BuildRequires:  pkgconfig(libreac) >= 1.2.0
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.1.5
+BuildRequires:  pkgconfig(libreac-transport) >= 1.2.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -30,7 +30,7 @@ Requires:       pipewire
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.1.5
+Requires:       libreac >= 1.2.0
 Requires:       libreac-transport >= 1.1.5
 %{?systemd_requires}
 
@@ -146,6 +146,24 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.14-1
+- THE DAEMON CAN BE A BOX. `[segment X] role = box` + `model = <token>` in reac-pw.conf makes
+  a segment present itself to a REAC mixer as a stagebox: it declares a row from libreac's
+  box-model table -- port table, head-amp strap, firmware, REAC version and name -- enrols
+  as the slave end of the pairing, publishes a SOURCE of what the mixer sends it and a SINK
+  of what we send the mixer, and reports `box` on the roster.
+  (docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md.)
+- THE MODEL TABLE IS DATA, so a model nobody has captured is a row and not code: S-0816,
+  S-2416, S-4000D/M/H, the S-4000S's 0832 split, and the operator's 40-channel experiment
+  rows. A derived row's identity is OURS -- FR-<width>, firmware 1.014, REAC 9.014 -- and no
+  Roland box has ever sent a REAC major of 9. Needs libreac 1.2.0.
+- MEASURED ON A WIRE, and it broke two things on the way: a box-role segment DEFERRED AS A
+  TAP the moment a mixer spoke, and it announced from this NIC's own MAC where every real box
+  uses a Roland OUI, so our own master read `rx_box_frames=0` and `model=unknown` against a
+  box that was flooding. Both fixed; both invisible to every unit test.
+- NOT PROVEN: no Roland mixer has accepted us. The 40-channel row declares and is granted and
+  does not sustain presence against our own master -- the rig step is in the spec's section 9.
+
 * Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.13-1
 - THE ROSTER DECLARATION BELONGS TO THE NODE ALONE. 1.0.12 published the roster correctly
   and was reported broken anyway: `pw-cli info 188` showed node.name, media.class,
