@@ -1759,8 +1759,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		uint8_t box_mac[6];
 		if (c->src_mac_set) {
 			memcpy(box_mac, c->src_mac, 6);
-		} else if (c->join_box_master &&
+		} else if ((c->join_box_master || c->box_model) &&
 		           reac_mac_default_src(c->tx_if, box_mac) == 0) {
+			/* AND THE BOX ROLE IS THE OTHER CALLER (2026-09-17). Every box in this
+			 * corpus announces from a Roland OUI, and a master's own recognition
+			 * keys on it: measured in tests/box-declares-its-row.sh, our master
+			 * counted `rx_box_frames=0` against a box-role daemon flooding 628 B
+			 * frames from this NIC's 56:b1:… address, and logged `model=unknown`.
+			 * A box we cannot be recognised as is not an emulated box. */
 			/* THE ONE WIRE WHERE THE ADDRESS IS NOT VERBATIM (0.5.6, reac_mac.h).
 			 * Every box this rig has ever granted announced from a Roland OUI; the
 			 * S-0808 was sent four correct cold-connect bursts from this NIC's own
@@ -2545,7 +2551,14 @@ static int segment_tap_pin(const char *iface)
  * its pin the moment that desk is gone (#97). */
 static int segment_defers_as_tap(enum reac_role_intent intent, const struct reac_hunt *hunt)
 {
-	if (!hunt || intent == REAC_ROLE_INTENT_SLAVE || intent == REAC_ROLE_INTENT_TAP)
+	/* A BOX NEVER DEFERS (2026-09-17). The deferral exists so an AUTO segment does not
+	 * court a desk that already has boxes of its own; a segment pinned `role = box` is
+	 * the case where a desk on the wire is exactly who we are there for, and deferring
+	 * turned it into a silent tap the moment the mixer spoke — measured in
+	 * tests/box-declares-its-row.sh, where the roster read `tap` with a box pinned. A
+	 * slave is already exempt for the same reason and a box is the slave end. */
+	if (!hunt || intent == REAC_ROLE_INTENT_SLAVE || intent == REAC_ROLE_INTENT_TAP ||
+	    intent == REAC_ROLE_INTENT_BOX)
 		return 0;
 	return hunt->arb.state == REAC_SEGMENT_FOREIGN && hunt->arb.rival == REAC_RIVAL_DESK;
 }
