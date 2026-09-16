@@ -936,55 +936,65 @@ kill -TERM $SNIFF4 2>/dev/null; wait $SNIFF4 2>/dev/null
 kill -TERM $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 down_pair boxm0 mbox0
 
-# ---- THE SAME BOX ON A WIRE PINNED MASTER: REFUSED, AND THE REFUSAL IS PUBLISHED.
-# Two answers that contradict each other -- the operator wrote MASTER on this wire and a
-# stagebox is mastering it -- and the daemon never settles that by out-shouting a box. What
-# it must not do is vanish: on the rig the refused wire published nothing at all, so the
-# console had an absence to render and no remedy to show.
+# ---- THE SAME BOX ON A WIRE PINNED MASTER: JOINED TOO (operator, 2026-09-16).
+# "We set the daemons to enroll any box, master or slave." The pin says which end we want
+# and a stagebox on M has already answered; the daemon settles it by taking the box's audio
+# rather than by out-shouting it or serving nothing. It REFUSED until 2026-09-16 and the rig
+# measured the cost: a pinned enp131s0 with an S-1608 on M published a door, moved no audio,
+# and the operator read "not detected". What the switch position still costs is the head-amp,
+# and saying so is the console's job.
 #
 # THE PIN STILL DRIVES FIRST, and that is not a defect to test around. A pinned master is
 # served on LINK with no frame waited for, because a cold stagebox in slave mode transmits
 # nothing until a master announces to it (the 2026-09-08 outage). So the daemon cannot know
 # a box is mastering this wire until it has listened, and its own engine -- which classifies
 # every frame on that wire -- is what tells it, about a second later. The phase asserts the
-# END STATE and the STOP: the segment goes down, a door goes up, and nothing more of ours
-# reaches the far end.
+# END STATE: the segment comes down as a master and goes back up as that box's slave, at the
+# box's own width, carrying the box's identity.
 echo "REAC_ROLE_pinm0=master" >> "$CONF/.config/reac-pw/reac-pw.env"
 $in_peer "$FAKE" mbox1 "$BOXMAC" 8 2000 >"$RT/boxm1.log" 2>&1 &
 FAKEPID2=$!
 sleep 0.5
 up_pair pinm0 mbox1
 $in_peer python3 "$RT/sniff.py" mbox1 "$RT/pinm0.cnt" & SNIFF5=$!
-wait_for "\[pinm0\] REFUSED (rival-master-box): REAC_ROLE_pinm0 pins this segment MASTER" 20 || {
-	echo "FAIL: a pinned master beside a box on M did not refuse"
+wait_for "\[pinm0\] REAC_ROLE_pinm0 pins this segment MASTER and .* JOINING it as its slave" 20 || {
+	echo "FAIL: a pinned master beside a box on M did not join it"
 	grep -n "pinm0" "$LOG" | tail -20; tail -3 "$RT/boxm1.log"
 	echo "--- conf:"; cat "$CONF/.config/reac-pw/reac-pw.env"; exit 1; }
-wait_for "\[pinm0\] segment REFUSED and PUBLISHED (door only, 8-ch rival)" 15 || {
-	echo "FAIL: refused, and then published nothing -- which is the 2026-09-09 defect"
+wait_for "\[pinm0\] segment up (slave" 20 || {
+	echo "FAIL: joined in the journal, but the segment never came back up as a slave"
 	tail -20 "$LOG"; exit 1; }
 sleep 1.5
 RP=$(daemon_node_props $PID reac-capture.pinm0)
-[ -n "$RP" ] || { echo "FAIL: a refused wire published NO door node at all"
+[ -n "$RP" ] || { echo "FAIL: the joined wire published NO capture node at all"
 	daemon_nodes $PID; tail -20 "$LOG"; exit 1; }
 [ "$(fld "$RP" 1)" = "foreign" ] || {
-	echo "FAIL: the door does not say master.state=foreign: $RP"; exit 1; }
-[ "$(fld "$RP" 2)" = "box" ] || { echo "FAIL: the door does not say rival.kind=box: $RP"; exit 1; }
-[ "$(fld "$RP" 3)" = "rival-master-box" ] || {
-	echo "FAIL: the door does not carry the refusal code: $RP"; exit 1; }
+	echo "FAIL: the joined node does not say master.state=foreign: $RP"; exit 1; }
+[ "$(fld "$RP" 2)" = "box" ] || { echo "FAIL: the joined node does not say rival.kind=box: $RP"; exit 1; }
+# THE LINE THIS PHASE EXISTS FOR since 2026-09-16: nothing is refused any more.
+[ "$(fld "$RP" 3)" = "none" ] || {
+	echo "FAIL: a pinned wire beside a box on M must JOIN it, not refuse: $RP"; exit 1; }
 [ "$(fld "$RP" 4)" = "$BOXMAC" ] || {
-	echo "FAIL: the door names a master other than the rival $BOXMAC: $RP"; exit 1; }
-[ "$(fld "$RP" 5)" = "pinm0" ] || { echo "FAIL: the door names another segment: $RP"; exit 1; }
-# A DOOR IS NOT AN ENGINE: no playback node, because nothing is driving this wire.
-if daemon_nodes $PID | grep -q "^reac-playback.pinm0 "; then
-	echo "FAIL: a refused wire published a reac-playback node -- a door onto an engine"
-	echo "      that is not there"; daemon_nodes $PID; exit 1
-fi
-# AND THE TRANSMISSION STOPPED. A pin is served ON LINK -- a cold box cannot speak first,
-# so the daemon drives before it can possibly know a box is mastering this wire -- and what
-# the refusal has to prove is therefore not "never transmitted" but "STOPPED, and stayed
-# stopped". Measured as a DELTA over a window that begins after the door went up, with the
-# box's own frames on the same capture over the same window as the positive control: a
-# capture that has died reports absence exactly like a daemon that has stopped.
+	echo "FAIL: the joined node names a master other than the rival $BOXMAC: $RP"; exit 1; }
+[ "$(fld "$RP" 5)" = "pinm0" ] || { echo "FAIL: the joined node names another segment: $RP"; exit 1; }
+# AND IT IS THE SAME BOX A CONSOLE ALREADY KNOWS, by its own address and model -- the 0.5.2
+# rule, which a pin must not change.
+[ "$(fld "$RP" 7)" = "$BOXMAC" ] || {
+	echo "FAIL: the joined box has no address of its own (reac.box.mac): $RP"; exit 1; }
+[ "$(fld "$RP" 8)" = "s0808" ] || {
+	echo "FAIL: an 8-ch box master is the S-0808 row of the matrix and must say so: $RP"; exit 1; }
+# AND IT IS AN ENGINE, NOT A DOOR: a refusal published a capture node with nothing behind
+# it, while a joined slave carries the box BOTH ways -- its inputs in, our returns out -- so
+# the playback side is present and sized to the box. That presence is the difference between
+# this phase's answer and the one it replaced.
+daemon_nodes $PID | grep -q "^reac-playback.pinm0 " || {
+	echo "FAIL: we joined this box as its slave and published no reac-playback node, so"
+	echo "      nothing can be returned to it -- that is a refusal door wearing a join's name"
+	daemon_nodes $PID; exit 1; }
+# AND WE ARE TALKING TO IT, not at it: a slave returns its inputs upstream, so OUR frames on
+# this wire must be RISING. Measured as a delta over a window that begins after the join,
+# with the box's own frames on the same capture over the same window as the positive control:
+# a capture that has died reports absence exactly like a daemon that has stopped.
 BEFORE_P=$(other "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
 BOXB=$(seen x "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
 sleep 3
@@ -992,68 +1002,71 @@ AFTER_P=$(other "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
 BOXA=$(seen x "$RT/pinm0.cnt" "$(echo $BOXMAC | tr -d :)")
 [ "$BOXA" -gt "$((BOXB + 1000))" ] || {
 	echo "FAIL: the box's own frames went $BOXB -> $BOXA on this capture, so it is not"
-	echo "      receiving and cannot testify that we stopped"; cat "$RT/pinm0.cnt"; exit 1; }
-[ "$((AFTER_P - BEFORE_P))" -lt 50 ] || {
-	echo "FAIL: the wire was refused and a door published, and we put"
-	echo "      $((AFTER_P - BEFORE_P)) more frames on it in 3 s anyway"
+	echo "      receiving and cannot testify about what we sent"; cat "$RT/pinm0.cnt"; exit 1; }
+[ "$((AFTER_P - BEFORE_P))" -gt 50 ] || {
+	echo "FAIL: we joined this box as its slave and put only $((AFTER_P - BEFORE_P)) frames"
+	echo "      on the wire in 3 s -- a slave that returns nothing has not enrolled"
 	cat "$RT/pinm0.cnt"; exit 1; }
-# ---- AND CHANGING THE PIN AT RUNTIME RE-CLASSIFIES THE WIRE (0.5.6-8). The rig's own
-# sequence: a wire pinned MASTER with a stagebox on M is a refusal door, the operator changes
-# the pin to `auto` through the console, and what must follow is the BOX-MASTER JOIN. What
-# followed instead was the DESK-slave engine -- "rx stream = master downstream (40 ch)",
-# role_reestablish_pending -- because the in-place role swap carries the listener's old
-# configuration across and `join_box_master` is the HUNT's verdict, which the swap never
-# re-ran. A service restart took the right path, which is the tell: the difference was the
-# classification and not the role.
+# ---- AND MOVING THE PIN AT RUNTIME CHANGES NOTHING HERE ANY MORE (0.5.6-8, amended
+# 2026-09-16). The rig's own sequence was: a wire pinned MASTER with a stagebox on M is a
+# refusal door, the operator changes the pin to `auto`, and what must follow is the BOX-MASTER
+# JOIN. What followed instead was the DESK-slave engine -- "rx stream = master downstream
+# (40 ch)" -- because the in-place role swap carried the listener's old configuration across
+# and `join_box_master` is the HUNT's verdict, which the swap never re-ran.
+#
+# Since "enrol any box, master or slave" both pins reach the SAME end state, so what this
+# phase now guards is that the assertion does not knock the segment OFF it: the box-master
+# join must survive a role write, in both directions, and the desk-slave engine must never
+# appear on a wire carrying a box's own geometry.
 PINM_FLOOR=$(LINE0)
 sed -i 's/^REAC_ROLE_pinm0=master$/REAC_ROLE_pinm0=auto/' "$CONF/.config/reac-pw/reac-pw.env"
 # The role assertion reaches the daemon the way the console sends it: a write on the door's
 # own reac.cfg.role param. The conf above is what a re-open reads on the way back up.
-PINID=$(pw-dump | python3 -c "
+# EVERY DOOR THIS SEGMENT HAS, because which node carries the cfg door depends on which
+# engine is open: a master reads it on reac-playback, a lone slave on reac-capture, and a
+# JOINED box master publishes both. Aiming at one name by hand is how a write lands nowhere
+# and the phase reads the silence as a verdict.
+role_write() {
+	local want=$1 ids
+	ids=$(pw-dump | python3 -c "
 import json,sys
 for o in json.load(sys.stdin):
-    if o.get('type')=='PipeWire:Interface:Node' and o['info']['props'].get('node.name')=='reac-capture.pinm0':
-        print(o['id'])" | head -1)
-[ -n "$PINID" ] || { echo "FAIL: no door node to assert a role on"; exit 1; }
-pw-cli set-param "$PINID" Props '{ params = [ "reac.cfg.role", 1 ] }' >/dev/null 2>&1
-wait_for_since "$PINM_FLOOR" "\[pinm0\] REAC role -> slave: dropping the segment so the wire is CLASSIFIED again" 20 || {
-	echo "FAIL: the role changed and the segment was re-opened on the OLD verdict instead"
-	echo "      of being classified again — the 2026-09-09 rig defect"
-	tail -n "+$PINM_FLOOR" "$LOG" | tail -20; exit 1; }
-wait_for_since "$PINM_FLOOR" "\[pinm0\] box masters this wire" 25 || {
-	echo "FAIL: re-heard, but the box master was not recognised the second time"
-	tail -n "+$PINM_FLOOR" "$LOG" | grep -E "pinm0" | tail -20; exit 1; }
-wait_for_since "$PINM_FLOOR" "\[pinm0\] SLAVE role on a BOX MASTER" 20 || {
-	echo "FAIL: classified as a box master and still not joined as one"
-	tail -n "+$PINM_FLOOR" "$LOG" | tail -20; exit 1; }
+    if o.get('type')!='PipeWire:Interface:Node': continue
+    n=o['info']['props'].get('node.name','')
+    if n.endswith('.pinm0') and n.startswith('reac-'): print(o['id'])")
+	[ -n "$ids" ] || { echo "FAIL: no door node to assert a role on"; exit 1; }
+	for id in $ids; do
+		pw-cli set-param "$id" Props "{ params = [ \"reac.cfg.role\", $want ] }" >/dev/null 2>&1
+	done
+}
+role_write 1
+sleep 3
+RP=$(daemon_node_props $PID reac-capture.pinm0)
+[ "$(fld "$RP" 2)" = "box" ] && [ "$(fld "$RP" 3)" = "none" ] || {
+	echo "FAIL: a role write knocked the box-master join off the wire: $RP"
+	tail -n "+$PINM_FLOOR" "$LOG" | grep pinm0 | tail -12; exit 1; }
 if tail -n "+$PINM_FLOOR" "$LOG" | grep -q "\[pinm0\] .*rx stream = master downstream (40 ch)"; then
-	echo "FAIL: the segment re-opened into the DESK-slave engine — the wire carries a box's"
-	echo "      own geometry, not a desk's 40-channel downstream"; exit 1
+	echo "FAIL: the segment opened the DESK-slave engine -- the wire carries a box's own"
+	echo "      geometry, not a desk's 40-channel downstream"; exit 1
 fi
-echo "OK: a runtime pin change re-classified the wire and joined the box master"
-# AND BACK, so the phase that follows starts where it expects to and the reverse direction is
-# proven at the same time: the pin returns to MASTER and the wire is refused again.
-PINM_FLOOR2=$(LINE0)
+echo "OK: a runtime role write leaves the box-master join standing"
+# THE REVERSE DIRECTION IS NOT ASSERTED HERE, and the reason is the ruling rather than a gap
+# nobody noticed: since "enrol any box, master or slave" both pins reach the SAME end state on
+# this wire, so writing the role back to master asks the daemon for the engine it is already
+# going to run. There is no swap to observe and a phase that waited for one would be waiting
+# for a transition the design no longer has. Where a role write DOES swap engines — a wire
+# with no box mastering it — the swap's own re-classification is exercised by the desk phases
+# above. OWED: a swap-path arm for the joined-box case, once a box can be made to change mode
+# under a running daemon (a fake box master cannot: the switch is read at boot).
 sed -i 's/^REAC_ROLE_pinm0=auto$/REAC_ROLE_pinm0=master/' "$CONF/.config/reac-pw/reac-pw.env"
-PINID2=$(pw-dump | python3 -c "
-import json,sys
-for o in json.load(sys.stdin):
-    if o.get('type')=='PipeWire:Interface:Node' and o['info']['props'].get('node.name')=='reac-capture.pinm0':
-        print(o['id'])" | head -1)
-[ -n "$PINID2" ] && pw-cli set-param "$PINID2" Props '{ params = [ "reac.cfg.role", 0 ] }' >/dev/null 2>&1
-wait_for_since "$PINM_FLOOR2" "\[pinm0\] REFUSED (rival-master-box)" 30 || {
-	echo "FAIL: the pin went back to master and the wire was not refused again"
-	tail -n "+$PINM_FLOOR2" "$LOG" | grep pinm0 | tail -12; exit 1; }
-echo "OK: and back — the pin returns to master and the wire is refused again"
 
-# ---- AND THE REFUSAL IS NOT A LATCH. The switch is moved to slave: the box stops
+# ---- AND THE JOIN IS NOT A LATCH EITHER. The switch is moved to slave: the box stops
 # mastering, its sighting ages out, and the wire the operator pinned is driven after all --
-# without a restart, which is what a latched refusal would have cost.
+# without a restart, which is what a latched verdict would have cost.
 kill -TERM $FAKEPID2 2>/dev/null; wait $FAKEPID2 2>/dev/null
-wait_for "\[pinm0\] the rival stopped mastering this wire — the refusal is over" 25 || {
-	echo "FAIL: the box stopped mastering and the refusal stood anyway"; tail -20 "$LOG"; exit 1; }
-wait_for "\[pinm0\] segment up (master, pinned by REAC_ROLE_<segment>)" 15 || {
-	echo "FAIL: the refusal ended and the pinned segment never came up"; tail -20 "$LOG"; exit 1; }
+wait_for "\[pinm0\] segment up (master, pinned by REAC_ROLE_<segment>)" 40 || {
+	echo "FAIL: the box stopped mastering and the pinned segment never took the wire"
+	grep pinm0 "$LOG" | tail -20; exit 1; }
 kill -TERM $SNIFF5 2>/dev/null; wait $SNIFF5 2>/dev/null
 down_pair pinm0 mbox1
 

@@ -190,15 +190,23 @@ int main(void)
 	 * nothing else. */
 	CHK(reac_hunt_heard_anything(&r.h));
 
-	/* THE LIVE FAILURE OF 2026-09-16, from the same bytes: the segment PINNED master.
-	 * The daemon refuses rather than out-shout a box, and the remedy is the switch on
-	 * the box's own front — never a console gesture. This arm is the defect: nothing
-	 * asked for that pin, and the console now projects `auto` (spec §4). */
+	/* THE SAME BYTES WITH THE SEGMENT PINNED MASTER — the shape of the 2026-09-16 live
+	 * failure, and its fix. The daemon refused this wire that night: it published a door,
+	 * served no audio, and the operator read "not detected". Since the operator's ruling of
+	 * the same day ("we set the daemons to enroll any box, master or slave") a pin no
+	 * longer changes the answer: the box is joined either way, at its own 16 channels.
+	 * The switch position costs the head-amp, which the console reports beside a segment
+	 * that works — it is not a reason to serve nothing. */
 	CHK(replay(box_on_m, REAC_ROLE_MASTER, &r) == 0);
 	saw_a_wire(&r, "box-master-pinned");
-	CHK(r.h.verdict == REAC_HUNT_REFUSED);
+	CHK(r.h.verdict == REAC_HUNT_SLAVE);
 	CHK(r.h.arb.rival == REAC_RIVAL_BOX);
-	CHK(strcmp(reac_rival_refusal(REAC_RIVAL_BOX), "rival-master-box") == 0);
+	CHK(r.h.arb.rival_channels == 16);
+	CHK(memcmp(r.h.arb.mac, S1608_ON_M, 6) == 0);
+	/* THE ONE REFUSAL LEFT — a rival whose geometry has never been captured — is pinned by
+	 * `test_reac_hunt.c`'s own unreadable-rival arm, on built frames, because the corpus
+	 * holds no such rival to replay. That is what keeps the join above a decision about a
+	 * BOX rather than the verdict going quiet. */
 
 	/* (b) A DESK MASTERS — the M-200 holding the wire at the 40-channel downstream while
 	 * our slave sits on the segment. The rival is a DESK by geometry alone; what `auto`
