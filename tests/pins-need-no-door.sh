@@ -139,10 +139,16 @@ ip link set tapdr0 up; peer ip link set ptap0 up
 ip link set mstdr0 up; peer ip link set pmst0 up
 
 # ---- 0. THE PROBE'S POSITIVE CONTROL, AND IT COSTS A SECOND PROCESS, because the first
-# finding of this rewrite is that a daemon serving only empty segments has NO PIPEWIRE
-# CLIENT AT ALL — the connection is made by the first filter, so with no node there is
-# nothing of it on the graph to anchor a filter to. An absence measured against an empty
+# finding of this rewrite was that a daemon serving only empty segments had NO PIPEWIRE
+# CLIENT AT ALL — the connection is made by the first filter, so with no node there was
+# nothing of it on the graph to anchor a probe to. An absence measured against an empty
 # graph is not a measurement.
+#
+# SINCE THE ROSTER NODE (spec amendment 2026-09-16 third, §B) that is no longer true: this
+# daemon always publishes `reac-pw`, no ports, reac.roster=1, listing both of these empty
+# segments. The second process is KEPT anyway, and deliberately — it is the control for the
+# claim this file makes, which is about a segment's DOOR, and the roster node is not one.
+# tests/roster-node-lists-every-segment.sh is where the roster is the subject.
 #
 # So the control is a SECOND daemon on a third silent wire with `--box s1608` PINNED. The
 # spec keeps that case deliberately — a pin is the operator's statement that this box

@@ -61,3 +61,27 @@
 # exists — and it is the ONLY reason to name a VLAN here. A VLAN with a box on it that
 # already speaks needs no mention at all.
 #[segment enp131s0.14]
+
+# ============================================================================
+# DROP-INS — ~/.config/reac-pw/reac-pw.conf.d/*.conf
+#
+# The same grammar, in a directory. reac-pw reads THIS file first, then every `*.conf`
+# under `reac-pw.conf.d/` in byte order of the file name, and a LATER file overrides the
+# same key of the same segment — exactly like systemd units, sysctl.d and udev. A key a
+# later file does not mention keeps whatever the earlier one said.
+#
+# That is the door another program writes through, and openmixer writes exactly one file:
+#
+#     ~/.config/reac-pw/reac-pw.conf.d/50-openmixer.conf
+#
+# It never touches THIS file, because a generated file cannot be an operator's override.
+# And you keep the last word without editing anything it owns: a drop-in of your own whose
+# name sorts later wins.
+#
+#     ~/.config/reac-pw/reac-pw.conf.d/99-local.conf
+#     [segment enp131s0.11]
+#     role = tap
+#
+# The daemon prints, at start, every file it read IN ORDER and which file set each override,
+# so a role you did not expect is one journal line from the file that set it. A drop-in it
+# cannot read is named and skipped; the files it can read still apply.
