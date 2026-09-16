@@ -17,11 +17,11 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.2.0
+BuildRequires:  pkgconfig(libreac) >= 1.2.1
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.2.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.2.1
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -30,8 +30,8 @@ Requires:       pipewire
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.2.0
-Requires:       libreac-transport >= 1.1.5
+Requires:       libreac >= 1.2.1
+Requires:       libreac-transport >= 1.2.1
 %{?systemd_requires}
 
 %description
@@ -146,6 +146,16 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.15-1
+- THE S-4000H-0832 ON VLAN 13 ENROLS. The whole fix is libreac 1.2.1 — the box's
+  own declaration (0x00 input groups, outputs written first) parsed, its captured
+  row, one verdict per MAC — and this version exists to REQUIRE it: a 1.0.15
+  built against libreac 1.2.0 would log the same two lines and leave the roster at
+  probing, so the floor is raised in the spec AND in meson.build, where it fails
+  at configure rather than on a live wire.
+- The spec docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md gains three
+  amendments: the captured S-4000H, the ruling that any stagebox enrols on what it
+  declares, and the chassis numbering (inputs 1-8, outputs from 9).
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.14-1
 - THE DAEMON CAN BE A BOX. `[segment X] role = box` + `model = <token>` in reac-pw.conf makes
   a segment present itself to a REAC mixer as a stagebox: it declares a row from libreac's
