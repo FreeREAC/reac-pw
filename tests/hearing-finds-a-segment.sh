@@ -272,7 +272,7 @@ kill -0 $PID 2>/dev/null || {
 	echo "hearing daemon never got running"; tail -3 "$LOG"; exit 1
 }
 grep -q "hearing: .* Ethernet interface" "$LOG" || { echo "FAIL: no hearing banner"; cat "$LOG"; exit 1; }
-grep -q "\[hear0\] unpinned — listening for REAC" "$LOG" || { echo "FAIL: hear0 not sniffed"; cat "$LOG"; exit 1; }
+grep -q "\[hear0\] listening — role auto (autodetected)" "$LOG" || { echo "FAIL: hear0 not sniffed, or its role did not resolve to auto"; cat "$LOG"; exit 1; }
 grep -q "\[hear0\] REAC heard" "$LOG" || { echo "FAIL: master on the peer never heard"; cat "$LOG"; tail -5 "$PEER"; exit 1; }
 grep -q "\[hear0\] segment up" "$LOG" || { echo "FAIL: heard but not served"; cat "$LOG"; exit 1; }
 # AND IT WAS NEVER TAKEN. A wire with a master on it is not silent, so the masterless
@@ -331,7 +331,7 @@ fi
 peer ip link set desk0 down; sleep 4.5
 grep -q "\[hear0\] segment dropped" "$LOG" || { echo "FAIL: no drop after the hold"; cat "$LOG"; exit 1; }
 peer ip link set desk0 up; sleep 5
-[ "$(grep -c "\[hear0\] unpinned — listening for REAC" "$LOG")" -ge 2 ] || {
+[ "$(grep -c "\[hear0\] listening — role auto (autodetected)" "$LOG")" -ge 2 ] || {
 	echo "FAIL: not sniffed again after the drop"; cat "$LOG"; exit 1; }
 [ "$(grep -c "\[hear0\] segment up" "$LOG")" -ge 2 ] || {
 	echo "FAIL: not served again after the drop"; cat "$LOG"; exit 1; }
@@ -476,7 +476,7 @@ mkdir -p "$CONF/.config/reac-pw"
 printf '[segment pin0]\nrole = master\n' >> "$CONF/.config/reac-pw/reac-pw.conf"
 up_pair pin0 pbox0
 $in_peer python3 "$RT/sniff.py" pbox0 "$RT/pin0.cnt" & SNIFF1=$!
-wait_for "\[pin0\] pinned master — driving on link" 10 || {
+wait_for "\[pin0\] listening — role master (reac-pw.conf): driving on link" 10 || {
 	echo "FAIL: a pinned master did not say it was driving on link"; tail -20 "$LOG"; exit 1; }
 for i in $(seq 20); do [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] && break; sleep 0.1; done
 [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] || {
@@ -506,7 +506,7 @@ down_pair pin0 pbox0
 # capture sees is ours and nothing prompted it.
 up_pair cold0 kbox0
 $in_peer python3 "$RT/sniff.py" kbox0 "$RT/cold0.cnt" & SNIFF2=$!
-wait_for "\[cold0\] unpinned — listening for REAC" 10 || {
+wait_for "\[cold0\] listening — role auto (autodetected)" 10 || {
 	echo "FAIL: cold0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
 wait_for "\[cold0\] no REAC heard in .* taking it as MASTER" 10 || {
 	echo "FAIL: an unpinned wire proven silent was never taken"; tail -20 "$LOG"; exit 1; }
@@ -613,7 +613,7 @@ VBOXMAC=00:40:ab:c4:80:51
 VDESKMAC=00:40:ab:de:5c:03
 $in_peer python3 "$RT/sniff.py" vbox0 "$RT/venue.cnt" & SNIFFV=$!
 up_pair venue0 vbox0
-wait_for "\[venue0\] unpinned — listening for REAC" 10 || {
+wait_for "\[venue0\] listening — role auto (autodetected)" 10 || {
 	echo "FAIL: venue0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
 # EITHER ROUTE TO THE WIRE IS CORRECT HERE, and which one runs is a race nobody needs to
 # win -- since 0.5.4 both keep the sniffer, which is the whole point of the release. The

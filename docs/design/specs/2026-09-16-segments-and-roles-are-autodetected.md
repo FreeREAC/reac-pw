@@ -123,6 +123,19 @@ declared precedence, unchanged. Only role and declaration move. The precedence w
 in it, highest first: **argv → `reac-pw.conf` → process environment → `reac-pw.env` →
 `reac.env` → built-in**, and for role only the first two can answer at all.
 
+### 3c. When the file is read
+
+**Whenever a segment's role is RESOLVED** — its sniffer opens, its listener opens, it is asked
+whether it is ignored — guarded by one `stat()`, so a reload happens only when the file's mtime,
+size or inode moved, or it appeared or vanished. That is the same lifetime every other layer
+`reac_conf` reads already has (it opens its files on every lookup), and a new file with a
+different one is an inconsistency nobody remembers at 2 a.m.
+
+**This is not a live role change.** A segment already running keeps the engine it opened with; a
+re-read decides what the NEXT resolution sees — a link-up, a hot-plug, a re-link. The live path
+stays `reac.cfg.role` on the segment's own door, and the SIGHUP re-election of
+`2026-09-16-auto-role-per-segment.md` §5b, which this does not replace and does not build.
+
 ## 4. RULING — the daemon SAYS what it detected and what the file overrode
 
 At start, after the conf is read and before any listener opens, one block on stderr: the conf's

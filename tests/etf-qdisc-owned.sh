@@ -141,9 +141,8 @@ arm() {
 		return
 	fi
 	echo "$label-running $("$PROBE" qdisc etfa)"
-	# THE POSITIVE HALF OF THE ISOLATION PROOF. The daemon made a node, and it made
-	# it HERE. Without this, "nothing of ours on the live graph" could equally mean
-	# the daemon never published anything at all.
+	# Kept as INFORMATION, not as the control: since 2026-09-16 a master with no box
+	# recognized publishes NO NODE AT ALL, so this is 0 on a healthy run.
 	echo "$label-privatenodes $(pw-dump 2>/dev/null | grep -ac 'reac-playback\|reac-capture')"
 	echo "$label-$("$PROBE" count etfb 3)"
 	kill -TERM $pid 2>/dev/null
@@ -215,8 +214,14 @@ anyf() { echo "$OUT" | grep -a "^$1-frames " | head -1 | sed -n 's/.*any=\([0-9]
 #     published nothing anywhere, which is why the positive comes first.
 echo "$OUT" | grep -aq '^private-graph-socket ' \
 	|| fail "the namespace never reported a private PipeWire runtime dir"
-[ "$(st default-privatenodes)" -ge 1 ] 2>/dev/null \
-	|| fail "the daemon published no REAC node on the PRIVATE graph ($(line default-privatenodes)) — the isolation cannot be read off a graph with nothing in it"
+# THE POSITIVE HALF IS THE QDISC, NOT A NODE. It used to count reac-* nodes on the private
+# graph, and that stopped being a signal on 2026-09-16: a master with no box recognized
+# publishes nothing on any graph (spec 2026-09-16, "no recognised box, no node"), so on a
+# wire with no box this control now reads 0 on a perfectly healthy daemon. What is still a
+# positive — this daemon ACTED, and it acted in THIS namespace — is the etf qdisc it
+# installed on etfa, which the netns owns and the operator's host cannot see.
+[ "$(val default-running)" = "etf" ] \
+	|| fail "the daemon left no etf qdisc on etfa inside this namespace ($(line default-running)) — it did nothing HERE, so the negative below cannot mean it did nothing THERE either"
 if pw-dump >/dev/null 2>&1; then
 	pw-dump 2>/dev/null | grep -aq -- "$BIN" \
 		&& fail "a process from $BIN is on the OPERATOR'S live PipeWire graph — this test leaked out of its namespace"
