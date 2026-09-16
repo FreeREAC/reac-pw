@@ -176,22 +176,31 @@ something to carry the moment its row is declared**, exactly as a `--box MODEL` 
 pair is published at start and not when a mixer appears. A stagebox that only exists once a desk
 is powered is not a stagebox.
 
-## 6. RULING — head-amp commands are ACKNOWLEDGED and PARKED
+## 6. RULING — head-amp commands are ACKNOWLEDGED and APPLIED AS A DIGITAL TRIM
 
 A mixer drives a box's preamps: gain, pad and phantom per channel, over the head-amp records
-`reac_headamp_tx.h` already builds and `reac_ctrl_parse` already decodes. We have no preamps.
+`reac_headamp_tx.h` already builds and `reac_ctrl_parse` already decodes. We have no preamps —
+and the slave engine already answers this question, which is the answer the box role takes rather
+than inventing a second one:
 
-**We acknowledge and record, and we claim no hardware.** Each accepted record updates the segment's
-own `reac_headamp_state` and is published on the node as `reac.headamp.<ch>.{gain,pad,phantom}`,
-the props the console already reads. Nothing is actuated, and the daemon says so: the roster
-carries `reac.roster.<i>.headamp = parked`. Mapping those props onto a real local preamp door (a
-USB interface's own gain) is a LATER change with its own spec, and it is deliberately not built
-here, because a soft value that looks like a latch and drives nothing is this project's most
-expensive recurring defect (`CLAUDE.md`: a control that claims to affect audio must measure audio;
-a 48 V claim needs physical confirmation).
+- **SENS and PAD become the equivalent DIGITAL gain on the channels we return upstream**
+  (`reac_slave_headamp_gain`: a sensitivity of S dBu is a preamp gain of −S dB, with the pad
+  folded in, carried in centi-dB). That is what a real box's preamp does to the signal it sends,
+  so a mixer's head-amp control is not inert against us — it moves the audio the mixer receives,
+  which is the only thing it could honestly move.
+- **PHANTOM is recorded and actuates nothing.** +48 V is a voltage, not a gain. It is kept as
+  state, published where the other two are, and claimed nowhere: no hardware claim ever comes
+  from a soft value on this project (`CLAUDE.md`, and the head-amp rulings of 2026-09-14).
+- **A record for a channel outside our declared width is dropped**, by the row's own head-amp
+  base — `model_base + (input − 1)`, and the base is the ROW's chassis strap, not a per-width
+  table (`reac_ports.h` retired that table and the box role conforms: the engine takes
+  `strap × 0x10` from the declared row).
 
-Refusing them is not an option: a real box answers, and a master whose head-amp writes are ignored
-retries them for as long as it runs.
+Mapping these onto a real local preamp door (a USB interface's own gain) is a LATER change with
+its own spec, and it is deliberately not built here.
+
+Refusing them is not an option: a real box answers, and a master whose head-amp writes are
+ignored retries them for as long as it runs.
 
 ## 7. RULING — `auto` NEVER elects `box`
 
@@ -199,6 +208,13 @@ retries them for as long as it runs.
 desk elects SLAVE or TAP, a box master elects SLAVE. `box` joins `tap` as an EXPLICIT-ONLY intent
 (`reac_role.h`), for the mirror-image reason: a mixer never wants a surprise stagebox appearing on
 its fabric and taking channels, and the cost of a wrong guess is a desk whose inputs move.
+
+**And the converse: a box NEVER DEFERS.** The deferral that turns an `auto` segment into a tap
+when a foreign desk is heard (`segment_defers_as_tap`, master-arbitration's eighth amendment)
+does not apply to a box, for the same reason it does not apply to a slave — a desk on the wire is
+exactly who a box is there for. Measured before it was fixed: with a mixer on the far end the
+roster of a segment pinned `role = box` read `tap`, the slave engine was never opened, and the
+daemon sat silent behind a correct-looking configuration.
 
 ## 8. Proven, and by what
 
@@ -210,8 +226,39 @@ its fabric and taking channels, and the cost of a wrong guess is a desk whose in
 | §2b: the 40-channel rows are legal rows and declare 40 slots | `libreac tests/test_reac_box_table.c` |
 | §4: `role = box` + `model =`, refusals by name, `box` without a model | `reac-pw tests/test_reac_segconf.c` |
 | §7: `auto` never resolves to box, on any wire the hunt can see | `reac-pw tests/test_reac_role.c` |
-| §1/§5: a box-role daemon enrolled by a fake MASTER reaches ESTABLISHED and its upstream frames carry the ROW's width | `reac-pw tests/box-role-enrols.sh` |
-| §6: a head-amp record from the master is acknowledged and published | `reac-pw tests/box-role-enrols.sh` |
+| §1/§2/§3: the declared row REACHES THE WIRE — port table, strap, firmware, REAC version, name — decoded off the peer end of a veth by a sniffer that is not this daemon | `reac-pw tests/box-declares-its-row.sh` |
+| §5: both nodes are published, and the roster reads `box` with the row's model and width | `reac-pw tests/box-declares-its-row.sh` |
+| §1: a REAC master on the other end ENROLS us as the row we declared (`established`, model `s1608`) | `reac-pw tests/box-declares-its-row.sh` arm A |
+| §7: a box does not defer as a tap when a master is heard | `reac-pw tests/box-declares-its-row.sh` (both arms would read `tap`) |
+
+## 8b. What the first run MEASURED, including the two things it broke
+
+`tests/box-declares-its-row.sh`, on a veth pair inside a private namespace, with this daemon's own
+master side as the mixer. Both arms' numbers are read off the wire by a raw-socket sniffer that
+decodes the declaration the way a desk must:
+
+| | arm A `model = s1608` | arm B `model = fr4000` |
+|---|---|---|
+| frames | 113 957 (10 920 of them broadcast flood) | 74 920 (10 920 flood) |
+| frame size | 628 B — a 16-channel box frame | 1492 B — a 40-channel box frame |
+| declaration | selector `0x82`, strap 2, **16 in / 8 out**, block sums to 0 | selector `0x84`, strap 0, **40 in / 0 out**, sums to 0 |
+| identity | firmware **2.200**, REAC **2.302**, no name record | firmware **1.014**, REAC **9.014**, name **FR-4000** |
+| the mixer | **`established`, model `s1608`** — and its clock locked to our counter slope, naming "S-1608 (16 in / 8 out)" | grants (10 JOINs counted) and does **not** sustain presence |
+
+Two defects it found, both fixed in this lane and both invisible to every unit test:
+
+1. **A box-role segment deferred as a TAP** the moment the mixer spoke (§7's new paragraph). The
+   configuration was right, the roster said `tap`, and no engine ever opened.
+2. **The emulated box announced from this NIC's own MAC**, not a Roland OUI, and our master
+   counted `rx_box_frames=0` against a box that was flooding — it logged `model=unknown`. Every
+   box in the corpus announces from a Roland OUI and the recognisers key on it, so the box role
+   now takes the same Roland-OUI stand-in the box-master path already used.
+
+**The 40-channel experiment's answer, so far: it declares and it is granted, and presence is not
+sustained.** Our own master reads `rx_joins=10` and then `no sustained presence`. That is one
+master's behaviour and not the protocol's verdict — but it is the first evidence either way, and
+it says the interesting question is upstream presence at the fabric's full width, not the
+declaration.
 
 ## 9. NOT proven here — the rig day
 
