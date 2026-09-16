@@ -146,6 +146,21 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.13-1
+- THE ROSTER DECLARATION BELONGS TO THE NODE ALONE. 1.0.12 published the roster correctly
+  and was reported broken anyway: `pw-cli info 188` showed node.name, media.class,
+  reac.roster and no roster at all, three established segments and three minutes in. Object
+  188 was the CLIENT. pw_filter_new_simple copies the properties it is handed into the
+  context, and pw_filter_connect connects the core with a copy of the filter's properties,
+  so the node's identity landed on the client object too -- a decoy that a search for
+  reac.roster finds first and that can never carry a roster. The daemon now owns its context
+  and core, tells them only its application name, and builds the filter on that core with
+  the node's own properties: exactly one object on the graph wears reac.roster, and it is
+  the node. The start-up line now WAITS for the export and names the id -- `node reac-pw id
+  94 ... Read it with pw-cli info 94` -- because an id in a log line that points at another
+  object is worse than no id. tools/roster-probe.sh reads the roster off any graph the way
+  an operator does, and exits non-zero on an empty or short one.
+
 * Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.12-1
 - A DROP-IN DIRECTORY, ~/.config/reac-pw/reac-pw.conf.d/*.conf, in the same grammar as the
   hand-written file. reac-pw.conf is read FIRST, then every *.conf in byte order of its
