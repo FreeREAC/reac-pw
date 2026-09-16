@@ -117,8 +117,21 @@ s1608|s0808|s4000s` (a slave's own declared width/identity), `--name NAME`
 `--headamp CH:PARAM:VALUE` (a master's re-asserted head-amp table). Run
 `reac-pw --help` for the full, current list.
 
-Everything above the built-in default can also be set through a layered
-environment/config lookup — the command line wins, then the process
+With no flags at all — the packaged shape — reac-pw works the rig out for itself:
+every linked Ethernet interface is sniffed, the first REAC frame heard makes it a
+segment, every VLAN sub-interface is an interface like any other, a tagged VLAN id
+with no sub-interface is created or named in a refusal, and every segment's ROLE is
+`auto`: a box mastering the wire is slave-joined, a desk mastering it is tapped, a
+silent wire is mastered and flooded. Nothing in the environment can change a role.
+
+To override ONE segment — a switch mirror port, a recorder, a NIC to leave alone —
+write `~/.config/reac-pw/reac-pw.conf` by hand (`[segment IFNAME]` with `role =` or
+`ignore = yes`); nothing generates that file. See
+[packaging/reac-pw.conf.example](packaging/reac-pw.conf.example) and
+[the spec](docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md).
+
+Everything above the built-in default EXCEPT the role can also be set through a
+layered environment/config lookup — the command line wins, then the process
 environment, then a per-segment key, then `~/.config/reac-pw/reac-pw.env`,
 then `~/.config/openmixer/reac.env` as the last resort. See
 [docs/RATE-AND-CLOCK-CONFIG.md](docs/RATE-AND-CLOCK-CONFIG.md) for the full

@@ -147,6 +147,21 @@ meson test -C _build
 
 %changelog
 * Wed Sep 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.11-1
+- SEGMENTS AND ROLES ARE AUTODETECTED; NO ENVIRONMENT VARIABLE DECIDES A ROLE. The rig
+  moved from one box on a 100 Mbit/s USB NIC to three boxes on a 1 Gbit trunk and the
+  console's GENERATED ~/.config/reac-pw/reac-pw.env still carried the previous rig's
+  answers -- the VLAN segments pinned `tap`, so the daemon served three mirror ports on a
+  fabric with no mirror. Every segment was up, every node was on the graph, and no audio
+  moved: from inside the daemon a stale file and a correct one are indistinguishable.
+  REAC_ROLE and REAC_ROLE_<segment> are retired in every layer (read only so they can be
+  NAMED as ignored at start), and so is declaring a VLAN by a key's name. Every segment is
+  `auto` and the wire decides. The ONE override is a hand-written
+  ~/.config/reac-pw/reac-pw.conf -- ini-like, `[segment IFNAME]` with `role =
+  auto|master|slave|tap` and `ignore = yes`, every unusable line refused BY NAME and the
+  rest of the file honoured; naming `[segment <parent>.<vid>]` also declares that VLAN, so
+  the cold-boot mint is unchanged. The daemon prints what it autodetected and what the file
+  overrode, and every listening line now carries the role and its source. Nothing generates
+  this file: see packaging/reac-pw.conf.example.
 - A MASTER MAY NOW MAKE THE PHY EDGE ITS BOX NEEDS. Found on the desk the same day: after a
   77-minute s2idle the daemon re-took the wire and probed correctly for 73 MINUTES across two
   processes -- ~1620 completed scene pushes, 8003 frames a second leaving the NIC, zero coming

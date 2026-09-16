@@ -8,17 +8,35 @@ These configure a segment at start-up. What drives it while it runs is the node
 properties and params in [NODE-PROPERTIES.md](NODE-PROPERTIES.md) — the rate, the role
 and the stagebox head-amp door.
 
-Per-segment keys (`REAC_ROLE_<segment>`, `REAC_SRC_MAC_<segment>`, ...) live in
+Per-segment keys (`REAC_RATE_<segment>`, `REAC_SRC_MAC_<segment>`, ...) live in
 `~/.config/reac-pw/reac-pw.env` and take precedence over the bare key, which is only
-a floor. `--role`, `--rate`, `--src-mac` and the other command-line flags still win
-over both when given.
+a floor. `--rate`, `--src-mac` and the other command-line flags still win over both
+when given.
 
-## A VLAN segment is DECLARED by being named
+## The ROLE is not here, and neither is a VLAN declaration
 
-A per-segment key whose segment splits as `<parent>.<vid>` — `REAC_ROLE_enp131s0.11`,
-`REAC_RATE_enp131s0.12` — **declares that VLAN segment**, and so does a per-segment file
-`~/.config/reac-pw/<parent>.<vid>.env` by existing. The value is never read: naming the
-segment is the declaration, so a segment declared only by its rate is declared.
+**`REAC_ROLE` and `REAC_ROLE_<segment>` are RETIRED** (2026-09-16). A segment's role is
+autodetected from the wire, and the one thing that overrides it is a hand-written
+`~/.config/reac-pw/reac-pw.conf` — see
+[`../docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md`](design/specs/2026-09-16-segments-and-roles-are-autodetected.md)
+and `packaging/reac-pw.conf.example`. A `REAC_ROLE*` key left on disk is read only so the
+daemon can NAME it as ignored at start; it decides nothing.
+
+```ini
+[segment enp131s0.11]
+role = tap        # auto | master | slave | tap   (default: auto)
+
+[segment enp131s0.13]
+ignore = yes      # never sniffed, served or minted
+```
+
+## A VLAN segment is DECLARED by being named — in reac-pw.conf
+
+A `[segment <parent>.<vid>]` section **declares that VLAN segment**. Naming it is the whole
+act; a section with no keys at all is a declaration. (The old forms — a per-segment KEY whose
+name split as `<parent>.<vid>`, and a `~/.config/reac-pw/<parent>.<vid>.env` file — are gone
+with the role key: both declared a segment as a side effect of a role projection, so the
+declaration outlived what declared it.)
 
 Every declared segment's `<parent>.<vid>` netdev is created and brought up **at start**,
 and again whenever its parent appears — the daemon may start before NetworkManager has
@@ -34,7 +52,7 @@ behaviour unchanged.
 | Knob | Effect | Default |
 |---|---|---|
 | `REAC_TX=IFNAME` | The REAC TX NIC for this segment (master: the downstream sink; slave: the upstream return + handshake socket). | the same interface as the live/RX NIC |
-| `REAC_ROLE=master\|slave\|auto` / `REAC_ROLE_<segment>` | Which end of the desk↔stagebox pairing to present on a segment. `auto` listens first: a desk mastering the wire is joined as a slave, a wire with a box and no master is taken as master after a 3 s hunt and granted, a stagebox strapped to master is refused and logged. The per-segment key overrides the wire; the bare key is only a floor for a segment nobody has heard yet. | `auto` |
+| `REAC_ROLE` / `REAC_ROLE_<segment>` | **RETIRED (2026-09-16).** Read only to be NAMED at start as ignored. Use `reac-pw.conf`'s `[segment <name>] role =` above. | — |
 | `REAC_MIXER=m200\|m300\|m5000` | Master role: which desk name reac-pw logs as. Does not set the wire's pace-code byte — that comes from `--rate` alone, and grants are box-defined, so any box locks regardless of profile. | `m200` |
 | `REAC_NAME=NAME` | PipeWire node suffix (`reac-capture.NAME`, `reac-playback.NAME`) so more than one segment can coexist in the graph. | the interface name |
 | `REAC_HEADAMP="CH:PARAM:VALUE ..."` | Master role: the per-channel head-amp table the master re-asserts to the box (space or comma separated). `CH` is the head-amp channel, `PARAM` is `phantom`\|`pad`\|`sens`, `VALUE` is 0/1 for phantom/pad or a raw SENS code. | unset (nothing re-asserted) |
