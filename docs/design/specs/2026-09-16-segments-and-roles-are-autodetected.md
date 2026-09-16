@@ -161,7 +161,7 @@ boxes on it: the desk was carrying a show test. What the tests above stand on is
 VLAN sub-interfaces inside an unprivileged user+net+pid namespace, which proves the daemon's
 decisions and proves nothing about a switch. The rig step is in §5 of the lane's report.
 
-## Amendment 2026-09-16 (later) — a node with no ports is not a segment on the graph
+## Amendment 2026-09-16 (later) — no recognised box, no node on the graph
 
 **RULED by the operator, same day:** *"a segment with NO recognised box must not appear in the
 PipeWire graph at all. The reac-capture/reac-playback nodes for a segment are created when a box
@@ -183,8 +183,10 @@ the daemon's own door on a segment that HAS one.
 
 ### The mechanical rule
 
-**A segment publishes a node only when that node has PORTS — that is, only when there is
-something to carry.** Three cases, and they are the same rule:
+**A segment publishes its nodes only when it has SOMETHING TO CARRY** — a box recognised on
+the wire, a master's stream to tap, or a width the operator pinned. Not "when it has ports":
+the empty trunk segment's door on the desk carried four, so the port count is a symptom of
+this defect and not a test for it. Four cases, and they are one rule:
 
 | the wire | ports | on the graph |
 |---|---|---|
@@ -219,4 +221,6 @@ a thing that cannot happen.
 `tests/no-box-no-node.sh`: an empty segment yields ZERO graph nodes for its name (with a
 recognised box on another arm as the positive control, because an absence measured by an
 instrument that has never seen a presence is not a measurement), a box that enrols yields the
-sized pair, and a box that goes takes them away again.
+sized pair, and a box that goes takes them away again. The test asserts NODES, not ports: a
+private PipeWire with no session manager reports 0 ports on a healthy enrolled segment for as
+long as it lives, which is a fact about the fixture and not about the daemon.

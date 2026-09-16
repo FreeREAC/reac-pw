@@ -549,6 +549,8 @@ struct autodetect_ctx {
 	const struct reac_box_model *last;  /* last model acted on (edge-detects changes) */
 	const char                  *pin;   /* a retired --box value, for the disagreement
 	                                     * notice; NULL once reported (report ONCE)  */
+	int                          pinned; /* --box: the nodes are the operator's statement
+	                                      * about this wire and survive an absent box  */
 	const char                  *tag;   /* "[iface] " once N>1, "" for a lone listener */
 	/* The bounded rebuild ladder for a reac-capture that never reached the graph
 	 * (reac_node_recover.h). Separate from `last` because a rebuild is not a model
@@ -689,8 +691,30 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	 * early return below leaves unattended. */
 	wake_step(c);
 	const struct reac_box_model *bm = reac_sink_node_recognized_box(c->sink);
-	if (!bm)
+	if (!bm) {
+		/* AND THE BOX THAT LEFT TAKES ITS NODES WITH IT (operator, 2026-09-16). The
+		 * master's own FSM clears recognized_box when the peer goes, so this NULL is
+		 * the departure and this is the one place that sees it on the main loop. A
+		 * node that outlives its box is the same `none / 0 in` row arriving by the
+		 * other door — and worse, because a console would keep patching into it.
+		 *
+		 * A PINNED --box IS EXEMPT, and deliberately: the pin says this box BELONGS on
+		 * this wire, and its whole purpose is that the patch survives a box that is
+		 * not powered yet. Removing its nodes would be removing the pin. */
+		if (c->last && !c->pinned) {
+			fprintf(stderr, "reac-pw: %sthe box is gone — removing reac-capture and "
+			        "reac-playback for this segment. They come back, sized to it, "
+			        "when a box is recognized here again.\n", c->tag);
+			reac_source_node_destroy(*c->src);
+			*c->src = NULL;
+			reac_sink_node_unpublish(c->sink);
+			c->last = NULL;
+			c->announced = NULL;
+			c->restamp = 1;
+			reac_node_recover_init(&c->recover);
+		}
 		return;                      /* nothing recognized yet */
+	}
 	if (bm == c->last) {
 		/* SAME MODEL AS LAST POLL — so the only question left is whether the node we
 		 * SAID we built is really there. Announcing a resize and never checking is
@@ -1491,6 +1515,22 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * no segment lock, and no RX feeder (hearing_serve does not start one), which is why
 	 * the ports are silent rather than carrying a wire we declined. */
 	if (c->door_only) {
+		/* A VACANT DOOR IS NO DOOR AT ALL (operator, 2026-09-16). `door_vacant` is the
+		 * tap that heard NOTHING — no master, no box, zero channels — and it published
+		 * a 0-port node so the segment could be seen and its role changed back. That is
+		 * the same `none / 0 in` device the empty trunk VLAN produced, arriving by the
+		 * other door, and the role is settable without it now (reac-pw.conf). A REFUSAL
+		 * keeps its door: it carries a width, a rival's address and a remedy — facts
+		 * about a box that IS there — and a refusal nobody can see is indistinguishable
+		 * from a daemon that is not running (the 2026-09-09 rig proof). Zero channels
+		 * is the line between them, and it is the line the operator drew. */
+		if (c->door_vacant) {
+			fprintf(stderr, "reac-pw: %sTAP with nothing to serve — NOTHING is on the "
+			        "graph for this segment. It is published when a master's stream is "
+			        "heard on it; until then this journal is where it exists, and "
+			        "reac-pw.conf is where its role is set.\n", c->tag);
+			return 0;
+		}
 		if (reac_source_node_ensure(&L->src, &L->src_cfg,
 		                            (int)c->wire_channels, NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sREFUSED, and the door node could not be "
@@ -1844,6 +1884,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			struct timespec interval = { 0, 200 * 1000000L };
 			pw_loop_update_timer(loop, L->ad_timer, &first, &interval, false);
 		}
+		L->adc.pinned = (c->pin_model != NULL);
 		if (c->pin_model) {
 			/* The fixed-install pin: put the nodes on the graph NOW, at the pinned
 			 * width and name, so the patch exists before the box is powered. This
@@ -1862,22 +1903,25 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			        "outranks the pin if a different box declares itself.\n",
 			        c->tag, c->pin_model->token, c->pin_model->in_ch, c->pin_model->out_ch,
 			        c->pin_label);
-		} else if (reac_sink_node_ensure(L->sink, 0, NULL) != 0) {
-			fprintf(stderr, "reac-pw: %sMASTER, and the segment's DOOR could not be "
-			        "created — this segment will drive the wire and the console will "
-			        "have no row for it until a box is recognized\n", c->tag);
 		} else {
-			/* THE DOOR IS UP BEFORE THE BOX (Q5, option C). reac-playback carries
-			 * reac.segment and accepts reac.cfg.role, so deferring it deferred the
-			 * SEGMENT — a pinned master on a cold stage published no node at all and
-			 * the operator could not change its role. It exists now with ZERO ports,
-			 * which keeps the deferral's actual rule (nothing plugged is nothing to
-			 * patch) while the identity is published; the autodetect watcher rebuilds
-			 * it at the box's own width the moment one declares itself. */
-			fprintf(stderr, "reac-pw: %sMASTER autodetect — the segment's door is on "
-			        "the graph now (reac-playback, no ports yet); reac-capture / "
-			        "reac-playback are sized to the box once it is recognized on the "
-			        "wire\n", c->tag);
+			/* NO RECOGNISED BOX, NO NODE (operator, 2026-09-16; the autodetect spec's
+			 * later amendment). This used to build reac-playback at ZERO ports so the
+			 * segment had an identity and a role door before anything enrolled —
+			 * Q5 option C. What the desk got from it was a device reading `none /
+			 * 0 in` for an empty trunk VLAN, a row for a thing that is not there. The
+			 * requirement that ruling served is not withdrawn: a role is settable
+			 * before anything enrols through reac-pw.conf, which needs no node at all.
+			 *
+			 * THE COST IS REAL AND IS NAMED RATHER THAN HIDDEN: openmixer's
+			 * /reac/segment roster is a GRAPH SCAN of reac.segment props, so until the
+			 * console reads the daemon's roster from somewhere that is not a node, an
+			 * empty segment is visible HERE and nowhere else. Which is what this line
+			 * is for. */
+			fprintf(stderr, "reac-pw: %sMASTER autodetect — PROBING, and NOTHING is on "
+			        "the graph for this segment: reac-capture / reac-playback are "
+			        "created when a box is recognized on this wire, and removed again "
+			        "when it leaves. A segment with no box is a line in this journal "
+			        "and not a device.\n", c->tag);
 		}
 	} else {
 		/* No recognizer (slave, or pcap / no-TX master): expose the source now, at
