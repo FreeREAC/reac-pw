@@ -13,6 +13,15 @@ mixer master. AMENDS
 else in that spec — the discovery rules, the drop-in order, the provenance, the one-`stat`
 re-read — stands unchanged and is not restated here.
 
+## 0. Why the role exists
+
+Operator, 2026-09-17: *"so that a mixer can use it: receive and send ports to a REAC mixer"*, and,
+the same day, *"being a REAC box could be a way to connect to other systems like a Dante patch or
+a Midas patch"*. The box role is a BRIDGE: a Roland desk sees a stagebox, and what is behind that
+stagebox is whatever this host can carry — a PipeWire graph, a Dante patch, a Midas stage box, a
+recorder. That is also why §6a rules the head-amp onto a real preamp rather than a number: the
+thing on the other side of the bridge has gain, and the desk must be able to drive it.
+
 ## 1. What a box role IS, and why it is not a new engine
 
 A REAC pairing has two ends, and a stagebox is the NON-driving one: the master drives the
@@ -196,8 +205,31 @@ than inventing a second one:
   table (`reac_ports.h` retired that table and the box role conforms: the engine takes
   `strap × 0x10` from the declared row).
 
-Mapping these onto a real local preamp door (a USB interface's own gain) is a LATER change with
-its own spec, and it is deliberately not built here.
+### 6a. RULING (operator, 2026-09-17, mid-lane) — the head-amp must reach a REAL preamp
+
+*"Being a REAC box could be a way to connect to other systems like a Dante patch or a Midas
+patch, that is why we need preamp."*
+
+**This is what the box role is FOR, and it changes the standing of the digital trim above: the
+trim is the FALLBACK, not the answer.** When the daemon fronts real inputs — a Dante patch, a
+Midas stage box, a local interface — the mixer's SENS/PAD/phantom records must reach THAT
+device's own preamp, so a Roland desk drives the gain of a stage box it cannot speak to. A
+console operator turning up channel 3 must move a real head amp, not a number in our ring.
+
+So the head-amp path has three tiers and a row says which it is on:
+
+1. **a declared local preamp door** — the segment names the device whose preamp answers, and
+   SENS/PAD/phantom are actuated there. THE TARGET, and the reason for the role;
+2. **the digital trim** — what the engine does today, correct for a virtual box and honest about
+   being all it is;
+3. **phantom, always state-only unless tier 1 answers it**, because +48 V is a voltage and this
+   project never claims one from a soft value.
+
+**Tier 1 is NOT BUILT in this lane** and needs its own spec: which door (openmixer's head-amp
+controller? a local ALSA/USB mixer element? the Dante/Midas control protocol?), how a row declares
+it, what a refusal looks like when the device cannot do pad or phantom, and how a restart
+re-asserts it — the restart-sweep rule of 2026-09-14 applies unchanged, and a divergence between
+what we publish and what the preamp is engaged in is a P0 on this rig.
 
 Refusing them is not an option: a real box answers, and a master whose head-amp writes are
 ignored retries them for as long as it runs.
