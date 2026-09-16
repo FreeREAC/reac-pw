@@ -80,7 +80,7 @@ the daemon can produce, on its OWN port, and it is the last rung of a ladder:
 |---|---|---|
 | `REAC_WAKE_MIN_PUSHES` | 3 | the capture has the box answering **8.355 ms** after the last chunk (libreac §1), so three whole transfers is three times a proven-sufficient exposure, not a guess |
 | `REAC_WAKE_GRACE_NS` | 12 s | ≥ 3 cycles at every rate this daemon serves (2.6945 s at 8000 fps, 2.9327 s at 3675 fps) — the clock is the FLOOR under the push count, never the trigger on its own |
-| `REAC_WAKE_DOWN_MS` | 1200 | CHOSEN, and named as chosen: no capture measures how long a link must be down for an S-1608 PHY to register it. Longer than a 1 Gb autoneg cycle and short enough that a segment's audio gap stays about a second |
+| `REAC_WAKE_DOWN_MS` | 1200 | CHOSEN, and named as chosen: no capture measures how long a link must be down for an S-1608 PHY to register it. Longer than a 1 Gb autoneg cycle, and **under `REAC_IFSCAN_DOWN_HOLD_NS` (3 s)** — past that the daemon drops the segment out from under its own remedy and re-serves it from scratch. That ceiling is not a comment: `tests/test_reac_wake.c` asserts the two constants against each other, so a later edit to either is caught by the build |
 | `REAC_WAKE_SETTLE_NS` | 20 s | the box's bounded flood (1.36 s) + cold-connect retries + our ~1.6 s ENROLL→grant dwell, with room for a slow autoneg, before a second attempt is honest |
 | `REAC_WAKE_MAX_BOUNCES` | 2 | two edges are enough for a box that is there; a third is a port flapping at an empty socket |
 
