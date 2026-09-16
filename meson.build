@@ -1003,7 +1003,8 @@ test('reac_hunt_captures', hunt_captures_test, timeout : 120)
 # must refuse it by name, each with a control showing the same call succeeding. Pure.
 wake_test = executable('test_reac_wake',
   ['tests/test_reac_wake.c', 'src/reac_wake.c'],
-  include_directories : [include_directories('src')])
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_wake', wake_test)
 
 knock_test = executable('test_reac_knock',

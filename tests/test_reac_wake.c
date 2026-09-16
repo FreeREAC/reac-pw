@@ -17,6 +17,8 @@
  */
 #include "reac_wake.h"
 
+#include <reac/transport/reac_ifscan.h>   /* REAC_IFSCAN_DOWN_HOLD_NS — the ceiling on an edge */
+
 #include <stdio.h>
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -170,7 +172,14 @@ int main(void)
 		CHK(w.bounces == REAC_WAKE_MAX_BOUNCES);
 	}
 
-	/* ---- G. EVERY REFUSAL HAS WORDS. A code the journal cannot print is a code the
+	/* ---- G. THE EDGE MUST BE SHORTER THAN THE SEGMENT'S OWN PATIENCE. The hearing
+	 * loop drops a segment REAC_IFSCAN_DOWN_HOLD_NS after link is lost and re-serves it
+	 * from scratch. An edge longer than that tears down the thing it is trying to
+	 * repair, so the two constants are asserted against each other here rather than
+	 * described in a comment that a later edit would not read. */
+	CHK((uint64_t)REAC_WAKE_DOWN_MS * MS < REAC_IFSCAN_DOWN_HOLD_NS);
+
+	/* ---- H. EVERY REFUSAL HAS WORDS. A code the journal cannot print is a code the
 	 * operator never reads. */
 	for (int r = REAC_WAKE_OK; r <= REAC_WAKE_SPENT; r++) {
 		const char *s = reac_wake_refusal_text((enum reac_wake_refusal)r);
