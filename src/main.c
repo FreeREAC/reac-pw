@@ -2300,6 +2300,13 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		L->cfg.rival_mac_set = hunt->arb.have_mac;
 		if (hunt->arb.have_mac)
 			memcpy(L->cfg.rival_mac, hunt->arb.mac, 6);
+		/* AND A PIN DOES NOT SURVIVE THIS ONE (operator, 2026-09-16: enrol any box,
+		 * master or slave). The generic line below leaves a pinned listener's role
+		 * alone, which is right for every other verdict and wrong for this one: a
+		 * MASTER engine beside a box that is already mastering serves nothing, which
+		 * is what the rig measured. Joining IS taking the slave end; a `role` the
+		 * join contradicts would open the wrong engine and be silent about it. */
+		L->cfg.role = REAC_ROLE_SLAVE;
 	}
 	if (hunt && !L->cfg.role_pinned) {
 		enum reac_role elected = reac_hunt_role(hunt);
@@ -3470,10 +3477,15 @@ static void hearing_yield(struct hearing *h, uint64_t now)
 /* The 200 ms poll's share: expire holds, apply whatever the table queued. A
  * listener whose capture socket lost its interface is a DROP here, not a
  * process exit — failure is isolated to its segment (§9). */
-/* A PINNED MASTER THAT FINDS A BOX MASTERING ITS WIRE STOPS DRIVING (operator, 2026-09-09).
+/* A PINNED MASTER THAT FINDS A BOX MASTERING ITS WIRE JOINS IT (operator, 2026-09-16: "we
+ * set the daemons to enroll any box, master or slave").
  *
- * The one contradiction: the operator wrote MASTER on this wire and a stagebox on M says it
- * is theirs. The daemon never settles that by out-shouting a box.
+ * The pin says which end we want; a stagebox on M has already answered, and the daemon
+ * settles it by taking the box's audio rather than by out-shouting it or serving nothing.
+ * It REFUSED until 2026-09-16, and the rig measured what that cost: a pinned `enp131s0`
+ * with an S-1608 on M published a door, moved no audio, and the operator read "not
+ * detected". What the switch position still costs is the head-amp — a box on M has no mixer
+ * behind it — and that is the console's to report beside a segment that works.
  *
  * WHY IT CANNOT BE DECIDED BEFORE THE ENGINE STARTS, which is the whole reason this lives
  * here and not in the hunt. A pin is served ON LINK with no frame waited for — a cold
@@ -3482,13 +3494,14 @@ static void hearing_yield(struct hearing *h, uint64_t now)
  * same 200 ms poll that takes the decision, so at that instant the table is empty by
  * construction; and a box on M announces its MASTER signature about once a second, so even
  * a listening window would have to be a whole announce cadence of added latency on EVERY
- * pinned wire, silent or not. Measured on the veth proof: the hunt-side refusal fired zero
+ * pinned wire, silent or not. Measured on the veth proof: the hunt-side verdict fired zero
  * times. So the pin drives, and its OWN engine — which classifies every frame on that wire
- * already — is what notices. The segment then comes down and a door goes up in its place.
+ * already — is what notices. The segment then comes down and is re-served as that box's
+ * slave, through the one serve path.
  *
  * `reac_sink_node_rival_box` reports FOREIGN only while we are neither established nor
  * granting, so a segment that has actually enrolled a box is never taken away from it. */
-static void hearing_refuse_pinned_master(struct hearing *h, uint64_t now)
+static void hearing_join_box_master_on_pinned(struct hearing *h, uint64_t now)
 {
 	(void)now;
 	for (int i = 0; i < h->n_slots; i++) {
@@ -3496,7 +3509,7 @@ static void hearing_refuse_pinned_master(struct hearing *h, uint64_t now)
 		if (!L->opened || L->cfg.door_only || !L->sink)
 			continue;
 		if (!L->cfg.role_pinned || L->cfg.role != REAC_ROLE_MASTER)
-			continue;   /* an unpinned wire JOINS a box master; it never refuses */
+			continue;   /* an unpinned wire reaches the same join through the hunt */
 		uint8_t mac[6];
 		unsigned channels = 0;
 		if (!reac_sink_node_rival_box(L->sink, mac, &channels))
@@ -3505,31 +3518,26 @@ static void hearing_refuse_pinned_master(struct hearing *h, uint64_t now)
 		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source ? L->cfg.rxcfg.source : "");
 		if (!name[0])
 			continue;
-		fprintf(stderr, "reac-pw: [%s] REFUSED (%s): REAC_ROLE_%s pins this segment "
-		        "MASTER and %02x:%02x:%02x:%02x:%02x:%02x masters it at %u ch, a BOX "
-		        "width. Two answers, and the console never fights a box: set the box's "
-		        "REAC Mode switch to slave and power-cycle it, or drop the pin and this "
-		        "wire will JOIN it. We drove it until we heard it and we stop now; the "
-		        "segment is republished as a door so the refusal can be seen.\n",
-		        name, reac_rival_refusal(REAC_RIVAL_BOX), name,
+		fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment MASTER and "
+		        "%02x:%02x:%02x:%02x:%02x:%02x masters it at %u ch, a BOX width — "
+		        "JOINING it as its slave at that width. The box's audio is served; its "
+		        "head-amp is not reachable in master mode, so set its REAC Mode switch to "
+		        "S and power-cycle it if you need the preamps.\n",
+		        name, name,
 		        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], channels);
 		/* The verdict is carried in the same shape the hunt would have handed over, so
-		 * there is ONE serve path and the door is configured by the same lines whichever
-		 * side of the segment's life the refusal was decided on. */
-		struct reac_hunt refused;
-		memset(&refused, 0, sizeof refused);
-		refused.verdict = REAC_HUNT_REFUSED;
-		refused.arb.state = REAC_SEGMENT_FOREIGN;
-		refused.arb.rival = REAC_RIVAL_BOX;
-		refused.arb.rival_channels = channels;
-		refused.arb.have_mac = 1;
-		memcpy(refused.arb.mac, mac, 6);
-		hearing_drop(h, name, "a box masters this wire and the pin says MASTER — refusing");
-		hearing_serve(h, name, &refused);
-		/* AND THE WIRE GOES ON BEING CLASSIFIED, or the refusal would be a latch: the
-		 * door has no engine to notice the box being switched back to slave. This is the
-		 * same kept sniffer a wire taken on silence gets, read by hearing_yield. */
-		sniffer_open_ex(h, name, 0);
+		 * there is ONE serve path and the segment is configured by the same lines
+		 * whichever side of its life the join was decided on. */
+		struct reac_hunt joined;
+		memset(&joined, 0, sizeof joined);
+		joined.verdict = REAC_HUNT_SLAVE;
+		joined.arb.state = REAC_SEGMENT_FOREIGN;
+		joined.arb.rival = REAC_RIVAL_BOX;
+		joined.arb.rival_channels = channels;
+		joined.arb.have_mac = 1;
+		memcpy(joined.arb.mac, mac, 6);
+		hearing_drop(h, name, "a box masters this wire — joining it as its slave");
+		hearing_serve(h, name, &joined);
 	}
 }
 
@@ -3618,7 +3626,7 @@ static void hearing_poll(struct hearing *h)
 			reac_ifscan_gone(&h->scan, L->cfg.rxcfg.source, 0, now);
 	}
 	hearing_hunt(h, now);
-	hearing_refuse_pinned_master(h, now);
+	hearing_join_box_master_on_pinned(h, now);
 	hearing_reevaluate(h, now);
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);

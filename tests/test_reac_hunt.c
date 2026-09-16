@@ -299,13 +299,13 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_SLAVE);
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 
-	/* A PINNED MASTER BESIDE A BOX ON M IS THE ONE CONTRADICTION, and it is REFUSED
-	 * (operator, 2026-09-09). Everywhere else the wire is obeyed; here the operator has
-	 * written down that this segment is ours to drive, and a box says it is not. The
-	 * daemon does not settle that by out-shouting a box — it refuses, names the code, and
-	 * the remedy is the box's own switch.
+	/* A PINNED MASTER BESIDE A BOX ON M JOINS IT (operator, 2026-09-16: "we set the
+	 * daemons to enroll any box, master or slave"). The pin says which end we want; the
+	 * box has already answered, and the daemon settles it by taking the box's audio rather
+	 * than by out-shouting it or walking away. What the switch costs is the head-amp, and
+	 * saying so is the console's job — it is not a reason to serve nothing.
 	 *
-	 * IT STILL WAITS FOR NOTHING. The refusal fires on the FIRST step, from whatever the
+	 * IT STILL WAITS FOR NOTHING. The verdict lands on the FIRST step, from whatever the
 	 * table already holds — a box on M streams at wire cadence, so it is there within
 	 * microseconds of the sniffer opening — and a wire whose box is COLD leaves the table
 	 * empty and the pin drives, which is the cold-start rule, untouched. */
@@ -313,7 +313,8 @@ int main(void)
 	reac_hunt_pin(&h, REAC_ROLE_MASTER);
 	CHK(box_on_m(&h, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
-	CHK(h.verdict == REAC_HUNT_REFUSED);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 	CHK(h.arb.rival == REAC_RIVAL_BOX);
 	CHK(h.arb.rival_channels == 32);
 	CHK(memcmp(h.arb.mac, BOXM, 6) == 0);
@@ -414,7 +415,7 @@ int main(void)
 	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
 
 	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
-	       "joined too unless the wire is pinned master (which refuses it), an unreadable "
+	       "joined too whatever the wire is pinned to, an unreadable "
 	       "rival is refused either way, a pin drives on link with no frame at all, a wire "
 	       "proven silent is driven while evidence still outranks that, nothing latches\n",
 	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
