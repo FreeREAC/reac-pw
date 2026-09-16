@@ -81,9 +81,10 @@ exactly the thing that goes stale (one store, one writer).
 ### 3a. The grammar, exactly
 
 INI-like. A `#` or `;` in column one, or after whitespace, starts a comment; blank lines are
-ignored; keys and values are trimmed; values are unquoted or single/double quoted; **keys and
-section keywords are case-insensitive, segment names are NOT** (an interface name is
-case-sensitive to the kernel).
+ignored; keys and values are trimmed; values are unquoted or single/double quoted; **keys, section
+keywords and VALUES are case-insensitive, segment names are NOT** (an interface name is
+case-sensitive to the kernel; the values fold because this is a file a human types, and `TAP`
+meaning something other than `tap` would be a trap with no upside).
 
 ```ini
 # ~/.config/reac-pw/reac-pw.conf — the operator's overrides. reac-pw never writes this file.
