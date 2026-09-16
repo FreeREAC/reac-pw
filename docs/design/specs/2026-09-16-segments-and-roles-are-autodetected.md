@@ -322,7 +322,7 @@ reac.roster            = 1
 reac.roster.n          = 3
 reac.roster.0.name     = enp131s0.11         # the segment's identity: the interface name
 reac.roster.0.state    = probing | established | slave | tap | refused | ignored
-reac.roster.0.model    = S-1608              # `none` when nothing is recognised
+reac.roster.0.model    = s1608               # `none` when nothing is recognised
 reac.roster.0.role     = auto | master | slave | tap     # as RESOLVED, not as asked
 reac.roster.0.source   = autodetected | conf:<file>      # conf:reac-pw.conf.d/50-openmixer.conf
 reac.roster.0.width    = 16/8                # in/out; `0/0` when there is nothing to carry
@@ -338,6 +338,10 @@ reac.roster.1.name     = ...
   when a box is recognised on the wire, `probing` for everything the daemon is sniffing and has
   not decided. No second ledger: nothing writes a roster field, the roster is READ off the
   daemon's state (derive, never store the derivation);
+- **`model` is `reac.box-model`'s own vocabulary** — the token (`s1608`, `s4000s`) and
+  `none`, exactly as the segment's own node publishes it. A roster that spelled a box a
+  second way would be a second vocabulary for one fact, and the display string carries the
+  width that `.width` already owns;
 - **`width` is the published pair's width** — the same numbers the `autodetected ... ->
   reac-capture N in / reac-playback M out` line prints — and `0/0` exactly when there is no pair;
 - **a change updates the PROPS, never the node.** The node is created once and lives for the

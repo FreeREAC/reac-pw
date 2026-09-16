@@ -142,6 +142,8 @@ reac_pw_src = [
   'src/reac_link_budget.c',
   'src/reac_declared_vlan.c',
   'src/reac_segconf.c',
+  'src/reac_roster.c',
+  'src/reac_roster_node.c',
 ]
 
 # include_directories('src') is new here: it used to resolve implicitly (a quoted
@@ -682,6 +684,22 @@ test('reac_master_gone_is_re_decided',
 # without it the test SKIPS rather than passing while proving nothing.
 test('reac_no_box_no_node',
   find_program('tests/no-box-no-node.sh'),
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 300)
+
+# --- whole-binary test: ONE node lists every segment, empty ones included -----
+#
+# The amendment before this one took the per-segment zero-port door off the graph and named
+# its own cost: the console's segment roster is a GRAPH SCAN, so an empty segment has no row
+# at all. The operator's other ruling the same day -- "not autodetecting is an error" -- is a
+# sentence only a client that can SEE a probing segment can say. So the daemon publishes ONE
+# port-less node, `reac-pw`, and every segment lives in its props. This drives the real binary
+# on real netdevs: one empty wire and one with a box (the positive control for every reading),
+# a drop-in in reac-pw.conf.d/ beating the hand-written file with its provenance on the row,
+# and a box leaving -- which must move the PROPERTIES and not the node id. Needs libreac's
+# fake_box; without it the test SKIPS rather than passing while proving nothing.
+test('reac_roster_node_lists_every_segment',
+  find_program('tests/roster-node-lists-every-segment.sh'),
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
