@@ -683,6 +683,12 @@ test('reac_master_gone_is_re_decided',
 # the other two. Needs libreac's fake_box (the same knob box-wakes-on-a-phy-edge uses);
 # without it the test SKIPS rather than passing while proving nothing.
 # --- source-shape test: `auto` never elects the box intent (2026-09-17 spec §7) ------
+# --- whole-binary test: a box-role segment DECLARES ITS ROW on the wire ---------------
+test('box-declares-its-row',
+  find_program('tests/box-declares-its-row.sh'),
+  args : [reac_pw_exe],
+  timeout : 240)
+
 test('box-is-never-elected',
   find_program('tests/box-is-never-elected.sh'),
   timeout : 30)
