@@ -135,6 +135,7 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_link_budget.c',
   'src/reac_declared_vlan.c',
 ]
 
@@ -958,6 +959,19 @@ hunt_test = executable('test_reac_hunt',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt', hunt_test)
+
+# --- unit test: the LINK BUDGET, measured on the desk 2026-09-16 ---------------
+# enp131s0 is a 100 Mbit/s port and carried FOUR declared 96 kHz master segments (the
+# untagged one plus VLANs 11/12/13): 387 Mbit/s offered onto a 100 Mbit/s wire, the etf
+# qdisc discarding 23 784 pkt/s as overlimit — 75% of every segment's frames, evenly —
+# and an S-1608 in slave mode sitting at rx=0 because it never saw a master stream it
+# could lock to. A master that does not fit REFUSES; delivering a quarter of a stream
+# with every health sign green is the silent clamp this repo exists to refuse. Pure.
+link_budget_test = executable('test_reac_link_budget',
+  ['tests/test_reac_link_budget.c', 'src/reac_link_budget.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep])
+test('reac_link_budget', link_budget_test)
 
 # --- dev-only: the auto-role detection against REAL captured frames -----------
 # tests/test_reac_hunt.c drives the four outcomes from the libreac builders; this replays

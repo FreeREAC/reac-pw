@@ -81,6 +81,7 @@
 #include <reac/transport/reac_seglock.h>    /* one master per segment, across processes */
 #include <reac/transport/reac_ifscan.h>     /* which interfaces to sniff, which are segments */
 #include "reac_declared_vlan.h"   /* the VLAN segments the operator DECLARED, minted at start */
+#include "reac_link_budget.h"     /* what a master costs its physical port, and whether it fits */
 #include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */
 #include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
@@ -1245,6 +1246,44 @@ static int listener_open_tap(struct listener *L, struct pw_loop *loop)
 	return 0;
 }
 
+/* THE LINK'S SPEED IN Mbit/s, or 0 when it cannot be read — a down port, a veth, a
+ * netns where sysfs is not ours. `reac_link_budget_fits` treats 0 as "no limit
+ * known", never as a refusal (reac_link_budget.h). */
+static unsigned link_speed_mbit(const char *ifname)
+{
+	char parent[IFNAMSIZ], path[64 + IFNAMSIZ];
+	uint16_t vid;
+	/* A VLAN sub-interface has no speed of its own: the wire is the PARENT's, and so
+	 * is the budget every segment on that trunk shares. */
+	const char *dev = reac_declared_vlan_split(ifname, parent, sizeof parent, &vid)
+	                  ? parent : ifname;
+	snprintf(path, sizeof path, "/sys/class/net/%s/speed", dev);
+	FILE *f = fopen(path, "r");
+	if (!f)
+		return 0;
+	long v = 0;
+	int got = fscanf(f, "%ld", &v);
+	fclose(f);
+	return (got == 1 && v > 0) ? (unsigned)v : 0;
+}
+
+/* The PHYSICAL port a segment transmits on — its VLAN parent, or itself. Two segments
+ * share a budget exactly when this answers the same name for both. */
+static void link_port_of(const char *ifname, char *out, size_t cap)
+{
+	char parent[IFNAMSIZ];
+	uint16_t vid;
+	if (reac_declared_vlan_split(ifname, parent, sizeof parent, &vid))
+		snprintf(out, cap, "%s", parent);
+	else
+		snprintf(out, cap, "%s", ifname);
+}
+
+/* What the OTHER master segments on this listener's physical port have already
+ * committed, in kbit/s — defined beside the listener table it walks (this daemon's ONE
+ * `struct hearing`), declared here because listener_open is what asks. */
+static uint64_t link_used_kbit(const struct listener *self);
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
@@ -1423,6 +1462,46 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
+		/* AND THE WIRE HAS TO HAVE ROOM FOR IT. A REAC master's downstream is a
+		 * fixed 1492 B broadcast at sample_rate/12 pps — ~97 Mbit/s at 96 kHz — and
+		 * a 100 Mbit/s port carries exactly one. On 2026-09-16 this port carried
+		 * FOUR declared masters (the untagged segment and VLANs 11, 12 and 13, three
+		 * of them with no box on them at all): 387 Mbit/s offered, the link pinned at
+		 * 99.6 Mbit/s, and the port's etf qdisc discarding 23 784 pkt/s as overlimit
+		 * — 75% of EVERY segment's frames, evenly. Every health sign stayed green:
+		 * the nodes were up, each pacer counted its own frames, and the drops sat on
+		 * a counter nobody reads. What an S-1608 in slave mode saw was a master
+		 * stream at a quarter of its packet rate and invitations thinned the same
+		 * way, so it never locked and rx stayed 0 for hours.
+		 *
+		 * Refusing is the only honest answer: a quarter of a stream is not a degraded
+		 * master, it is a silent one, and the operator can move a segment to another
+		 * port or drop a rate the moment they are told which one did not fit. */
+		unsigned link_mbit = link_speed_mbit(c->tx_if);
+		uint64_t want_kbit = reac_link_cost_kbit(reac_link_master_pps(L->rx.sample_rate),
+		                                         REAC_FRAME_BYTES);
+		uint64_t used_kbit = link_used_kbit(L);
+		if (!reac_link_budget_fits(link_mbit, used_kbit, want_kbit)) {
+			char port[IFNAMSIZ];
+			link_port_of(c->tx_if, port, sizeof port);
+			fprintf(stderr,
+			    "reac-pw: %sREFUSING to master '%s' — it does not FIT on %s.\n"
+			    "         This master costs %llu kbit/s (%u pps x %d B at %u Hz);\n"
+			    "         %llu kbit/s of %s's %u Mbit/s is already committed to other\n"
+			    "         REAC masters. Transmitting anyway does not share the wire,\n"
+			    "         it fills it: the port's qdisc then discards frames from\n"
+			    "         EVERY segment on it and no box can sync to any of them.\n"
+			    "         Move this segment to another port, or lower a rate.\n",
+			    c->tag, c->tx_if, port,
+			    (unsigned long long)want_kbit, reac_link_master_pps(L->rx.sample_rate),
+			    REAC_FRAME_BYTES, L->rx.sample_rate,
+			    (unsigned long long)used_kbit, port, link_mbit);
+			reac_rx_close(&L->rx);
+			reac_ring_free(&L->ring);
+			reac_ring_free(&L->tx_ring);
+			return -1;
+		}
+
 		int claimed = reac_seglock_claim(&L->seglock, c->tx_if);
 		if (claimed == -1) {
 			fprintf(stderr,
@@ -1983,6 +2062,28 @@ struct hearing {
 };
 
 static struct hearing g_hear;
+
+/* Counted from the RUNNING engines, never from the roster: a segment that is configured
+ * and not transmitting costs the wire nothing, and a budget read off intentions would
+ * refuse a master because of one that never opened. */
+static uint64_t link_used_kbit(const struct listener *self)
+{
+	char mine[IFNAMSIZ];
+	link_port_of(self->cfg.tx_if, mine, sizeof mine);
+	uint64_t used = 0;
+	for (int i = 0; i < g_hear.n_slots; i++) {
+		const struct listener *L = &g_hear.listeners[i];
+		if (L == self || !L->opened || !L->sink)
+			continue;
+		char theirs[IFNAMSIZ];
+		link_port_of(L->cfg.tx_if, theirs, sizeof theirs);
+		if (strcmp(mine, theirs) != 0)
+			continue;
+		used += reac_link_cost_kbit(reac_link_master_pps(L->rx.sample_rate),
+		                            REAC_FRAME_BYTES);
+	}
+	return used;
+}
 
 static uint64_t monotonic_ns(void)
 {
