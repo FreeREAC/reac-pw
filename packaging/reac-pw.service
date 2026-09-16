@@ -17,7 +17,7 @@ Type=simple
 # NO --headamp — the daemon hears its segments on every linked Ethernet
 # interface, and every setting comes from the one conf reac_conf.h reads,
 # %h/.config/reac-pw/reac-pw.env (host-wide REAC_MIXER/REAC_RATE/REAC_ROLE,
-# and per-segment REAC_<KEY>_<segment> above them); packaging/reac-pw.conf is
+# and per-segment REAC_<KEY>_<segment> above them); packaging/reac-pw.env.example is
 # the commented worked example for this rig's own two segments. This unit needs
 # HOME, so it is a USER unit — a bare system unit with no HOME cannot find either
 # file, or the user's PipeWire socket.

@@ -103,7 +103,7 @@ DESTDIR=%{buildroot} meson install -C _build
 # docs/install/services.md already documents it as "owned by the reac-pw package,
 # not by openmixer". A package that drives a unit it does not ship was the gap; this
 # closes it. No /etc/reac-pw: nothing here is host-wide system config, every fact
-# reac_conf.h reads is per-user (%%h/.config/reac-pw/), by design (see reac-pw.conf).
+# reac_conf.h reads is per-user (%%h/.config/reac-pw/), by design (see reac-pw.env.example, and reac-pw.conf.example for the ONE override file).
 install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.service
 install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
 

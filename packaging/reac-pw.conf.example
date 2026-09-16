@@ -1,0 +1,63 @@
+# reac-pw.conf — commented WORKED EXAMPLE of the ONE OVERRIDE FILE, not a file the RPM
+# installs and not a file reac-pw or openmixer ever writes.
+#
+# COPY IT TO ~/.config/reac-pw/reac-pw.conf ONLY IF YOU NEED ONE OF THE TWO THINGS BELOW.
+# With no such file — the normal case, and the shipping default — the daemon works the rig
+# out for itself (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md):
+#
+#   * every UP Ethernet interface that is not loopback and not wireless is sniffed by a
+#     passive 0x8819 socket, and becomes a SEGMENT on the first REAC frame heard on it;
+#   * every VLAN sub-interface IS an interface, so it is found by the same rule;
+#   * a tagged VLAN id heard on a trunk with no sub-interface is created (or, without
+#     CAP_NET_ADMIN, named in a refusal with the `ip link` line that would fix it);
+#   * an interface that appears or disappears while the daemon runs adds or removes its
+#     segment with no restart;
+#   * and every segment's ROLE is `auto`: a box mastering the wire is slave-joined, a desk
+#     mastering it is tapped, a silent wire is mastered and flooded.
+#
+# THIS FILE IS THE EXCEPTION, AND reac-pw.env IS NOT. `REAC_ROLE` and `REAC_ROLE_<segment>`
+# no longer decide anything, in any layer: a role written before there was anything to
+# decide against outlives the rig it described, and on 2026-09-16 exactly that served three
+# mirror ports on a fabric with no mirror — every node up, every counter green, no audio.
+# reac-pw.env keeps the host-wide keys that are NOT about which end of a wire we are
+# (REAC_RATE, REAC_MIXER, REAC_NAME, REAC_HEADAMP, ...); see packaging/reac-pw.env.example.
+
+# ============================================================================
+# [segment <interface>] — one section per segment you need to say something about.
+# The name is the INTERFACE name, which IS the segment's identity. It is
+# case-SENSITIVE, because the kernel compares interface names byte for byte.
+# Keys, the `segment` keyword and the values are case-insensitive.
+# `#` and `;` start a comment at the line start or after whitespace.
+# ============================================================================
+
+# A SWITCH MIRROR PORT. A tap serves what it hears and transmits NOTHING: no announce, no
+# join, no grant, no segment lock, no TX socket. This is the role for watching a Roland
+# desk's own fabric, and it is only useful on a mirror port — an established box unicasts
+# to its desk, so a plain trunk membership shows you the desk's downstream and nothing of
+# the stage.
+#[segment enp131s0.11]
+#role = tap
+
+# A RECORDER. `slave` courts the desk for a grant, which a real desk answers — and which
+# was measured to keep that desk's own S-1608 from enrolling for 180 s (2026-09-12). Ask
+# for it deliberately or not at all.
+#[segment enp131s0.12]
+#role = slave
+
+# A WIRE WE DRIVE WHATEVER WE HEAR. Rarely what you want: `auto` already masters a silent
+# wire, and a pin cannot beat a box that is already mastering — it joins it.
+#[segment enp131s0.1]
+#role = master
+
+# SWITCH A SEGMENT OFF ENTIRELY. Never sniffed, never served, never minted; its netdev is
+# left exactly as found. For a NIC that carries REAC you do not want this host to touch.
+#[segment enp131s0.13]
+#ignore = yes
+
+# DECLARING A VLAN THAT IS NOT THERE YET. Naming `[segment <parent>.<vid>]` also DECLARES
+# it: the sub-interface is created at start and whenever its parent appears, whether or not
+# anything has ever been heard on it. That is the cold-boot case — a stagebox is a slave,
+# it says nothing until a master speaks, and the master cannot speak until the netdev
+# exists — and it is the ONLY reason to name a VLAN here. A VLAN with a box on it that
+# already speaks needs no mention at all.
+#[segment enp131s0.14]

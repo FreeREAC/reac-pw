@@ -444,28 +444,29 @@ static void usage(const char *p)
 	  "no --live and no --pcap: the packaged-service shape. The daemon HEARS its segments:\n"
 	  "  every Ethernet interface with link is sniffed (a passive 0x8819 socket), the first\n"
 	  "  REAC frame heard makes that interface a segment named after it, the ROLE is taken\n"
-	  "  from what is heard on it (REAC_ROLE below), and link loss drops it after a %d s\n"
-	  "  hold. Nothing names an interface in advance.\n"
+	  "  from what is heard on it, and link loss drops it after a %d s hold. Nothing names\n"
+	  "  an interface in advance and NO environment variable decides a role.\n"
 	  "auto-spine (ONE daemon, N listeners — 2026-08-20-reac-auto-spine.md §5): only the\n"
 	  "  FIRST --live segment honours the per-box flags above. Every OTHER segment, and\n"
 	  "  every heard one, reads its own settings from the layered conf, keyed by its name:\n"
 	  "  REAC_<KEY>_<segment> in ~/.config/reac-pw/reac-pw.env above the bare REAC_<KEY>\n"
-	  "  (reac_conf.h's precedence). A per-segment key whose segment splits as\n"
-	  "  <parent>.<vid> DECLARES that VLAN segment, and so does a ~/.config/reac-pw/\n"
-	  "  <parent>.<vid>.env file by existing: its netdev is created, brought up and\n"
-	  "  marked ours at START and whenever its parent appears, without waiting to hear\n"
-	  "  a tagged frame on the trunk -- on a cold rig no box speaks until a master does,\n"
-	  "  and the master needs the netdev first. The exit removes what it created.\n"
+	  "  (reac_conf.h's precedence) -- for every key EXCEPT the role, which no layer here\n"
+	  "  can answer any more.\n"
+	  "the ONE override, ~/.config/reac-pw/reac-pw.conf (hand-written; nothing generates it):\n"
+	  "    [segment IFNAME]\n"
+	  "    role = auto|master|slave|tap     default: auto -- the wire decides\n"
+	  "    ignore = yes                     never sniffed, served or minted\n"
+	  "  Naming [segment <parent>.<vid>] also DECLARES that VLAN: its netdev is created,\n"
+	  "  brought up and marked ours at START and whenever its parent appears, without\n"
+	  "  waiting to hear a tagged frame on the trunk -- on a cold rig no box speaks until\n"
+	  "  a master does, and the master needs the netdev first. The exit removes what it\n"
+	  "  created. With no such file every segment is auto, which is the shipping default.\n"
 	  "    REAC_TX=IFNAME             default: the same interface (this rig's masters\n"
 	  "                               always tx == live)\n"
-	  "    REAC_ROLE=master|slave|auto  default: auto — the daemon LISTENS and takes\n"
-	  "                               the end the segment leaves open: a desk mastering\n"
-	  "                               the wire is joined as a slave, a wire with a box\n"
-	  "                               and no master is taken as master after a 3 s hunt\n"
-	  "                               and granted, a stagebox strapped to master is\n"
-	  "                               REFUSED and logged, never fought. Only the\n"
-	  "                               PER-SEGMENT key overrides the wire; a bare\n"
-	  "                               REAC_ROLE is a floor and is superseded, out loud.\n"
+	  "    REAC_ROLE / REAC_ROLE_<segment>  RETIRED (2026-09-16). Read only to be NAMED\n"
+	  "                               at start as ignored: a role written before there\n"
+	  "                               was anything to decide against outlives the rig it\n"
+	  "                               described. Use reac-pw.conf above.\n"
 	  "    REAC_MIXER=m200|m300|m5000 default: m200\n"
 	  "    REAC_NAME=NAME             node suffix; default: the interface name (the FIRST\n"
 	  "                               --live segment defaults to bare names instead,\n"
@@ -2571,10 +2572,10 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		L->cfg.tap = 1;
 		fprintf(stderr, "reac-pw: [%s] a desk masters this segment, so it is served as a "
 		        "TAP%s — never as a courting slave: with our slave present a real desk's "
-		        "own S-1608 did not enrol in 180 s (2026-09-12). REAC_ROLE_%s=slave asks "
+		        "own S-1608 did not enrol in 180 s (2026-09-12). %s [segment %s] role=slave asks "
 		        "for the recorder explicitly if that is what you want.\n", name,
-		        L->cfg.role_pinned ? " (deferring its REAC_ROLE_<segment> pin until this "
-		                             "master is gone)" : "", name);
+		        L->cfg.role_pinned ? " (deferring its reac-pw.conf pin until this "
+		                             "master is gone)" : "", REAC_SEGCONF_FILE, name);
 	}
 	if (L->cfg.tap) {
 		/* nothing to carry */
@@ -2610,18 +2611,13 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		 * join contradicts would open the wrong engine and be silent about it. */
 		L->cfg.role = REAC_ROLE_SLAVE;
 	}
-	if (hunt && !L->cfg.role_pinned) {
-		enum reac_role elected = reac_hunt_role(hunt);
-		if (L->cfg.role_layer != REAC_CONF_NONE &&
-		    L->cfg.role_intent != REAC_ROLE_INTENT_AUTO && elected != L->cfg.role)
-			fprintf(stderr, "reac-pw: [%s] REAC_ROLE=%s from %s is a floor for every "
-			        "segment, not an answer about this one — the wire says %s. "
-			        "REAC_ROLE_%s=%s pins it if that is wrong.\n",
-			        name, reac_role_name(L->cfg.role),
-			        reac_conf_layer_name(L->cfg.role_layer), reac_role_name(elected),
-			        name, reac_role_name(L->cfg.role));
-		L->cfg.role = elected;
-	}
+	/* THE WIRE DECIDES WHEREVER THE FILE DID NOT. There is no FLOOR any more and no
+	 * layer to name when one is superseded: a role comes from reac-pw.conf's own
+	 * [segment] section or from the hunt, and nothing else can answer (spec §2). The
+	 * message that used to stand here explained a bare REAC_ROLE being overruled; the
+	 * key it explained is retired, so the explanation goes with it. */
+	if (hunt && !L->cfg.role_pinned)
+		L->cfg.role = reac_hunt_role(hunt);
 	if (h->forced_rate != 0) {
 		L->cfg.rxcfg.forced_rate = h->forced_rate;
 		L->cfg.rate_layer = REAC_CONF_ARGV;
@@ -2673,7 +2669,7 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		                   : reac_role_name(L->cfg.role),
 		        L->cfg.join_box_master ? ", enrolling with the box that masters it" : "",
 		        L->cfg.role_pinned && !(L->cfg.tap && L->cfg.role_intent != REAC_ROLE_INTENT_TAP)
-		            ? "pinned by REAC_ROLE_<segment>"
+		            ? "pinned by reac-pw.conf"
 		        : L->cfg.tap && L->cfg.role_intent != REAC_ROLE_INTENT_TAP
 		            ? "deferring to the master it heard"
 		            : "chosen by hearing the wire",
@@ -3542,10 +3538,10 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		if (sn->tap_pinned) {
 			if (!sn->tap_served) {
 				sn->tap_served = 1;
-				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as "
+				fprintf(stderr, "reac-pw: [%s] %s [segment %s] role pins this segment as "
 				        "TAP — serving on link with no frame waited for: a tap "
 				        "asserts nothing, so there is nothing for the wire to "
-				        "agree with\n", sn->name, sn->name);
+				        "agree with\n", sn->name, REAC_SEGCONF_FILE, sn->name);
 			}
 			reac_ifscan_heard(&h->scan, sn->name, now);
 			continue;
@@ -3582,9 +3578,9 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
 				        sn->hunt.arb.rival_channels);
 			else if (changed && sn->hunt.pinned)
-				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as SLAVE — "
+				fprintf(stderr, "reac-pw: [%s] %s [segment %s] role pins this segment as SLAVE — "
 				        "opening the slave side on link, without waiting to be heard\n",
-				        sn->name, sn->name);
+				        sn->name, REAC_SEGCONF_FILE, sn->name);
 			else if (changed)
 				/* AND THE SENTENCE IS THE ACT. This line said "joining it as SLAVE"
 				 * over a segment that goes on to be served as a TAP — the two were
@@ -3605,9 +3601,9 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			break;
 		case REAC_HUNT_MASTER:
 			if (changed && sn->hunt.pinned)
-				fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment as MASTER — "
+				fprintf(stderr, "reac-pw: [%s] %s [segment %s] role pins this segment as MASTER — "
 				        "driving on link, with no frame waited for (a cold box has none "
-				        "to give)\n", sn->name, sn->name);
+				        "to give)\n", sn->name, REAC_SEGCONF_FILE, sn->name);
 			else if (changed)
 				/* TWO ROADS REACH THIS VERDICT AND THEY ARE NOT THE SAME FACT.
 				 * A box HEARD on the wire is one; a wire PROVEN SILENT is the
@@ -3643,14 +3639,15 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			break;
 		case REAC_HUNT_REFUSED:
 			if (changed && sn->hunt.arb.rival == REAC_RIVAL_BOX)
-				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): REAC_ROLE_%s pins this "
+				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): %s [segment %s] role pins this "
 				        "segment MASTER and %02x:%02x:%02x:%02x:%02x:%02x masters it at "
 				        "%u ch, a BOX width. Two answers, and the console never fights a "
 				        "box: set the box's REAC Mode switch to slave and power-cycle it, "
 				        "or drop the pin and this wire will JOIN it. Nothing is "
 				        "transmitted here and nothing is fought — the segment is "
 				        "published as a door so the refusal can be seen.\n",
-				        sn->name, reac_rival_refusal(sn->hunt.arb.rival), sn->name,
+				        sn->name, reac_rival_refusal(sn->hunt.arb.rival),
+				        REAC_SEGCONF_FILE, sn->name,
 				        sn->hunt.arb.mac[0], sn->hunt.arb.mac[1], sn->hunt.arb.mac[2],
 				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
 				        sn->hunt.arb.rival_channels);
@@ -3858,12 +3855,12 @@ static void hearing_join_box_master_on_pinned(struct hearing *h, uint64_t now)
 		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source ? L->cfg.rxcfg.source : "");
 		if (!name[0])
 			continue;
-		fprintf(stderr, "reac-pw: [%s] REAC_ROLE_%s pins this segment MASTER and "
+		fprintf(stderr, "reac-pw: [%s] %s [segment %s] role pins this segment MASTER and "
 		        "%02x:%02x:%02x:%02x:%02x:%02x masters it at %u ch, a BOX width — "
 		        "JOINING it as its slave at that width. The box's audio is served; its "
 		        "head-amp is not reachable in master mode, so set its REAC Mode switch to "
 		        "S and power-cycle it if you need the preamps.\n",
-		        name, name,
+		        name, REAC_SEGCONF_FILE, name,
 		        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], channels);
 		/* The verdict is carried in the same shape the hunt would have handed over, so
 		 * there is ONE serve path and the segment is configured by the same lines
@@ -3943,7 +3940,7 @@ static void hearing_reevaluate(struct hearing *h, uint64_t now)
 		        "re-hearing the wire so the segment is CLASSIFIED afresh%s\n", name,
 		        (int)((REACPW_FOLLOWS_NOBODY_TICKS + REAC_SEGMENT_HEARD_QUIET_TICKS) / 5),
 		        L->cfg.tap ? "a tap with nothing to serve" : "courting nobody",
-		        L->cfg.role_pinned ? " and REAC_ROLE_<segment> is taken up again" : "");
+		        L->cfg.role_pinned ? " and the reac-pw.conf pin is taken up again" : "");
 		hearing_drop(h, name, "the master it was following is gone — re-hearing the wire");
 		/* The sniffer's hunt is stale for the same reason a role swap's is: it was
 		 * decided against a master that is no longer there. A fresh one reads the pin
