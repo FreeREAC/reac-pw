@@ -81,7 +81,7 @@ peer ip link add link speer0 name speer0.11 type vlan id 11 || exit 90
 # PINNED MASTER: the operator has answered for this wire, and the refusal below is what
 # stopped the answer being obeyed.
 mkdir -p "$CONF/.config/reac-pw"
-echo "REAC_ROLE_stale0=master" > "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment stale0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
 $in_peer "$FAKE" speer0.11 00:40:ab:c4:11:21 8 2000 >"$RT/tag.log" 2>&1 &
 TAGPID=$!

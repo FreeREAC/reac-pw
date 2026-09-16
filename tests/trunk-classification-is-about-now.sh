@@ -7,7 +7,7 @@
 # Measured on the rig 2026-09-13, reac-pw 1.0.1. The USB NIC `enp128s20f0u2` spent an hour
 # on a switch mirror port, so the daemon heard tagged REAC on it and classified it a TRUNK.
 # The cable was then moved onto a stagebox directly — an S-4000M merge unit, untagged. The
-# pinned `REAC_ROLE_enp128s20f0u2=master` segment logged `pinned master — driving on link`
+# a segment pinned `role = master` logged `pinned master — driving on link`
 # and immediately `untagged REAC on a trunk's native VLAN is not served; give it a tag`,
 # and the box got no master until the daemon was restarted. Plug-and-play means a
 # re-purposed cable works without one.
@@ -79,7 +79,7 @@ peer ip link add link pmir0 name pmir0.11 type vlan id 11 || exit 90
 # PINNED MASTER, which is the issue's own configuration: the operator answered for this
 # wire, and after the re-patch the pin has to be obeyed without a restart.
 mkdir -p "$CONF/.config/reac-pw"
-echo "REAC_ROLE_repat0=master" > "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment repat0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
 $in_peer "$FAKE" pmir0.11 00:40:ab:c4:11:21 8 2000 >"$RT/tag.log" 2>&1 &
 TAGPID=$!
@@ -122,7 +122,7 @@ wait_for_since "$MARK" "\[repat0\] tagged REAC was heard on this parent before, 
 	echo "FAIL: the cable was re-purposed and the parent is still a trunk — this is #98:"
 	echo "      the box on it gets no master until the daemon is restarted"
 	tail -n "+$MARK" "$LOG" | tail -25; exit 1; }
-wait_for_since "$MARK" "\[repat0\] segment up (master, pinned by REAC_ROLE_<segment>)" 40 || {
+wait_for_since "$MARK" "\[repat0\] segment up (master, pinned by reac-pw.conf)" 40 || {
 	echo "FAIL: the parent was un-trunked and its pinned master still never drove it"
 	tail -n "+$MARK" "$LOG" | tail -25; exit 1; }
 wait_for_since "$MARK" "reac-master: .* PROBING" 30 || {

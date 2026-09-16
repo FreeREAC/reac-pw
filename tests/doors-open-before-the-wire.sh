@@ -120,12 +120,15 @@ mkpair() { ip link add "$1" type veth peer name "$2" || return 1
 mkpair tapdr0 ptap0 || exit 90
 mkpair mstdr0 pmst0 || exit 90
 
-# THE PINS, in the file the daemon reads itself. `tap` is per-segment only, which is why
-# both keys are written per segment.
+# THE PINS, in the ONE override file the daemon reads itself (spec 2026-09-16). A role is a
+# fact about ONE wire, so there is only a per-segment form.
 mkdir -p "$CONF/.config/reac-pw"
-cat > "$CONF/.config/reac-pw/reac-pw.env" <<EOF
-REAC_ROLE_tapdr0=tap
-REAC_ROLE_mstdr0=master
+cat > "$CONF/.config/reac-pw/reac-pw.conf" <<EOF
+[segment tapdr0]
+role = tap
+
+[segment mstdr0]
+role = master
 EOF
 
 HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$LOG" 2>&1 &
@@ -178,7 +181,7 @@ TAPDOOR=$(door_of $PID tapdr0)
 	echo "      pace.source '$(echo "$TAPDOOR" | awk '{print $6}')' — $TAPDOOR"; exit 1; }
 # AND THE JOURNAL SAYS WHICH OF THE THREE IT IS DOING, said in the tap's own words rather
 # than in a wire role it does not present.
-grep -q "\[tapdr0\] pinned tap" "$LOG" || {
+grep -q "\[tapdr0\] listening — role tap (reac-pw.conf)" "$LOG" || {
 	echo "FAIL: a tap pin was not announced as one at link"; grep tapdr0 "$LOG" | tail -10; exit 1; }
 grep -q "\[tapdr0\] segment PUBLISHED as a VACANT DOOR" "$LOG" || {
 	echo "FAIL: the tap heard nothing and did not say it was publishing a vacant door"
@@ -201,7 +204,7 @@ MSTDOOR=$(door_of $PID mstdr0)
 	echo "FAIL: more than one node carries reac.segment=mstdr0:"; door_of $PID mstdr0; exit 1; }
 [ "$(door_of $PID tapdr0 | wc -l)" -eq 1 ] || {
 	echo "FAIL: more than one node carries reac.segment=tapdr0:"; door_of $PID tapdr0; exit 1; }
-grep -q "\[mstdr0\] pinned master — driving on link" "$LOG" || {
+grep -q "\[mstdr0\] listening — role master (reac-pw.conf): driving on link" "$LOG" || {
 	echo "FAIL: the pinned master never drove on link"; grep mstdr0 "$LOG" | tail -10; exit 1; }
 # AND IT ANSWERS FOR THE SEGMENT, not only for itself. The master door's aggregate is
 # stamped by the badge timer rather than at create, so it is waited for — and `us` is the

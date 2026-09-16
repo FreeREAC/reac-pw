@@ -26,17 +26,18 @@
  * netdevs are ADOPTED (`minted = 0`), which is precisely the flag that makes reac_topo
  * leave them alone. The exit still removes exactly what was minted, from this side.
  *
- * WHAT COUNTS AS A DECLARATION. Any configuration key naming a segment whose name splits
- * as `<parent>.<vid>`, in any layer reac_conf reads (the process environment,
- * `~/.config/reac-pw/reac-pw.env`, `~/.config/openmixer/reac.env`), plus the presence of a
- * per-segment `~/.config/reac-pw/<parent>.<vid>.env` file. The VALUE is not read and does
- * not matter: naming the segment at all is the declaration, so a segment declared only by
- * a rate or a name is minted like one declared by a role.
+ * WHAT COUNTS AS A DECLARATION, SINCE 2026-09-16. A `[segment <parent>.<vid>]` section in
+ * `~/.config/reac-pw/reac-pw.conf` — reac_segconf_declared is the one reader, and this
+ * module is the table it fills. Naming the segment at all is the declaration; role and
+ * ignore are separate questions about the same section.
  *
- * THE SEGMENT IS THE TEXT AFTER THE LAST UNDERSCORE, which is how reac_conf's own
- * `<KEY>_<segment>` suffix works in every key it reads. A parent whose interface name
- * CONTAINS an underscore therefore cannot be declared this way — no predictable name
- * (enp*, eno*, eth*, ens*) has one, and the `.env` filename source has no such limit. */
+ * WHAT USED TO COUNT, AND WHY IT DOES NOT. Any conf KEY whose name ended in `_<parent>.<vid>`
+ * (typically `REAC_ROLE_enp131s0.11`), plus a per-segment `<parent>.<vid>.env` file by
+ * existing. Both were declarations made as a SIDE EFFECT of a role projection the console
+ * generated, so they outlived what declared them: on 2026-09-16 three master VLANs stood on
+ * a 100 Mbit port with no box on any of them, offering 387 Mbit/s and losing 75% of every
+ * segment's frames to the port's queue. A declaration is an explicit act now
+ * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md §2). */
 #ifndef REAC_DECLARED_VLAN_H
 #define REAC_DECLARED_VLAN_H
 
@@ -59,31 +60,9 @@ struct reac_declared_vlan {
  * reserved, and neither names a netdev anyone can create. */
 int reac_declared_vlan_split(const char *segment, char *parent, size_t cap, uint16_t *vid);
 
-/* The same, from a configuration KEY (`REAC_ROLE_enp131s0.11`). The key must begin with
- * "REAC"; the segment is what follows its last underscore. Returns 1/0 as above. */
-int reac_declared_vlan_from_key(const char *key, char *parent, size_t cap, uint16_t *vid);
-
-/* The same, from a per-segment file NAME (`enp131s0.11.env`; a path is accepted and its
- * directory ignored). Returns 1/0 as above — `reac-pw.env` and `enp131s0.env` are 0. */
-int reac_declared_vlan_from_filename(const char *fname, char *parent, size_t cap,
-                                     uint16_t *vid);
-
 /* Add (parent, vid) to `tab` if it is not already there. Returns 1 added, 0 duplicate,
  * -1 table full. `*n` is the live count and is advanced on an add. */
 int reac_declared_vlan_add(struct reac_declared_vlan *tab, int max, int *n,
                            const char *parent, uint16_t vid);
-
-/* Scan one KEY=VALUE text block (a conf file's whole contents) for declaring keys. Only
- * the key NAMES are read; values, comments and blank lines are ignored. Returns how many
- * NEW entries were added, or -1 if the table filled before the text ran out. */
-int reac_declared_vlan_scan_text(const char *text, struct reac_declared_vlan *tab, int max,
-                                 int *n);
-
-/* Every declaration this host carries: the process environment, then the two conf files,
- * then the per-segment filenames in `~/.config/reac-pw/`. `home` NULL means $HOME, the
- * same convention reac_conf_lookup uses. Returns the number of segments found, or -1 when
- * the table filled (the entries found before that are still there, and the caller says
- * so — a bound that is silently hit is a bound nobody can act on). */
-int reac_declared_vlan_scan(struct reac_declared_vlan *tab, int max, const char *home);
 
 #endif /* REAC_DECLARED_VLAN_H */

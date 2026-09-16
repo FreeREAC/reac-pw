@@ -115,7 +115,7 @@ ip link add ha0 type veth peer name pha0 || exit 90
 ip link set pha0 netns $NSPID || exit 90
 
 mkdir -p "$CONF/.config/reac-pw"
-echo "REAC_ROLE_ha0=master" > "$CONF/.config/reac-pw/reac-pw.env"
+printf '[segment ha0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
 HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$LOG" 2>&1 &
 PID=$!
