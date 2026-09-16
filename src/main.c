@@ -2245,14 +2245,20 @@ static uint64_t monotonic_ns(void)
 static int segment_ignored(struct hearing *h, const char *name)
 {
 	(void)h;
+	/* THE DECISION IS THE MODULE'S, and only the "have we said it" flag is ours. This
+	 * walked g_segconf itself once, which is a second reader of one fact: sabotaging
+	 * reac_segconf_ignored left this arm of segments-autodetect.sh GREEN, so the
+	 * assertion was decoration until the two were joined (2026-09-16). */
+	if (!reac_segconf_ignored(&g_segconf, name))
+		return 0;
 	struct reac_segconf_seg *s = NULL;
 	for (int i = 0; i < g_segconf.n; i++)
 		if (strcmp(g_segconf.seg[i].name, name) == 0) {
 			s = &g_segconf.seg[i];
 			break;
 		}
-	if (!s || !s->ignore)
-		return 0;
+	if (!s)
+		return 1;
 	if (!s->said_ignored) {
 		s->said_ignored = 1;
 		fprintf(stderr, "reac-pw: [%s] IGNORED by %s [segment %s] ignore — not sniffed, "
