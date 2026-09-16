@@ -162,3 +162,29 @@ cold-booting a box: 302 master announces, 21 grants, 138 box heartbeats, the who
 already pins our announce bytes against captured desk frames, so a byte difference in the
 ANNOUNCE would be caught there; what is NOT pinned is the SEQUENCE and cadence of the cold-connect
 opening, which is where a frame the desk sends and we do not would hide.
+
+### 5d. MEASURED 2026-09-16 — what our master sends that a desk does not: half the announces, and never a burst
+
+20 s on the live `enp131s0` (`tcpdump -s 512`, 180 621 records, 0 dropped) against
+`captures/m200i-s0808-48k-mirror__m200-BIDIR-coldboot-2026-07-11.pcap` (149 s of an M-200
+cold-booting a box) and `m200i-none-48k-clean__m200-s1608-realbox-establish-2026-07-11.pcap`.
+
+**The control FAMILIES match.** We send exactly the desk's set and nothing foreign:
+`cdea 01.00.001a` (scene transfer), `01.01.0018`, `01.02.000e`, `01.03.0019` (master
+heartbeat) and `cfea ff.ff.0100` (master announce), all to broadcast, as the desk does.
+
+**The CADENCE does not.** Our announce goes out once every **2.000 s** (median of 11, min 1.0,
+max 4.0). The M-200's 302 announces over 149 s arrive at **~2/s in back-to-back clusters** —
+median inter-arrival 0.000 s, and never a gap longer than **1.003 s**. Our heartbeat is the
+same shape: median 2.6 s against the desk's clustered ~2/s. So a cold slave box on our wire is
+invited half as often as a desk invites one, with silences up to four times the longest gap a
+desk ever leaves.
+
+**What is NOT a difference.** The desk's link-4 grant family (`04.03.0013/0014`) is absent from
+our capture, and that is downstream of the silence rather than a cause: those are answers to a
+box's own `04.03.0016/001a` cold-connect, and our S-1608 sent zero frames of any kind in the
+whole 20 s (no source but our own NIC appears in the capture).
+
+Not proven: that the cadence is why the box stays silent. It is the one measured difference,
+and the next step is the operator's — power-cycle the box on this port, and if it still says
+nothing, tighten the announce to the desk's clustered cadence and re-measure.
