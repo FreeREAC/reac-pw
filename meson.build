@@ -512,6 +512,24 @@ test('reac_hearing_finds_a_segment',
 # reac-playback.<segment> decoded off the UPSTREAM the daemon unicasts — which is what
 # reaches that box's outputs. Needs a session manager (the tone has to be LINKED) and skips
 # without one.
+# --- whole-binary test: a box that DROPPED is re-acquired by the daemon alone ------
+#
+# The 2026-09-16 desk defect: after a 77-minute s2idle the daemon probed a wire correctly for
+# 73 minutes across two processes (~1620 completed scene pushes, 8003 frames a second out,
+# rx_box_frames=0) while an enrolled S-1608 that had dropped sat silent. Every unit test in
+# this repo was green throughout, because each asks whether a PART behaves and what had to
+# behave was the daemon acting on its own silence. So this drives the real binary against
+# libreac's fake_box under FAKE_BOX_DROPPED=1 — a box that receives whole transfers, counts
+# them and answers none until its own carrier goes and returns, which is its decompiled FSM
+# and not our opinion. Its second arm is the control: the same box with the mode off enrols
+# on the push alone and the daemon must NOT bounce it. fake_box lives in the other repo, so
+# the path is a knob; without it the test SKIPS rather than passing while proving nothing.
+fake_box_path = get_option('fake_box')
+test('reac_box_wakes_on_a_phy_edge',
+  find_program('tests/box-wakes-on-a-phy-edge.sh'),
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 240)
+
 test('reac_box_master_slave_join',
   find_program('tests/box-master-slave-join.sh'),
   args : [reac_pw_exe, fake_box_master],

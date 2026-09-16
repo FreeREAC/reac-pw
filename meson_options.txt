@@ -6,3 +6,10 @@
 option('libreac_transport_srcdir', type : 'string', value : '',
   description : 'A sibling libreac checkouts transport/src, for tools/bench_hotpath.c include ' +
                 '"reac_rx.c" trick (dev-only; the benchmark is not build_by_default).')
+
+# A built libreac `fake_box` (that repo's `make fake_box`): the wire-level stagebox
+# emulator the whole-binary wake proof drives. It lives in the other repo and is not a
+# library, so the path is handed in rather than found. Empty -> the test SKIPS and says so,
+# which is the only honest alternative to running a proof with nothing at the far end.
+option('fake_box', type : 'string', value : '',
+  description : 'Path to libreacs built tools/fake_box, for tests/box-wakes-on-a-phy-edge.sh.')
