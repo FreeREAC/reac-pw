@@ -16,3 +16,4 @@
 # rpm build artifact
 reac-pw-*.tar.gz
 logs/
+/_build/
