@@ -91,6 +91,15 @@ else
 	meson setup "$HERE/$BUILD" "$HERE" || exit 1
 fi
 meson compile -C "$HERE/$BUILD" || exit 1
+
+# NO setcap HERE, AND THAT IS A DECISION, NOT AN OMISSION. tools/build.sh sets
+# cap_net_raw,cap_net_admin,cap_sys_nice on the binary it builds, for a daemon that will
+# run on the host. This script builds a binary for the SUITE, and every whole-binary test
+# runs it inside an unprivileged user+net namespace where those capabilities are already
+# granted — so the file capabilities buy nothing and cost a red: exec of a file-cap binary
+# under `capsh --drop=cap_net_admin` fails EPERM, which is exactly how
+# tests/etf-qdisc-owned.sh's refusal arm starts its daemon. Measured 2026-09-16: setcap
+# here turned one passing test into "the refusal arm's daemon died at start".
 echo "== built $HERE/$BUILD/reac-pw"
 [ $# -gt 0 ] && exec meson test -C "$HERE/$BUILD" "$@"
 exit 0

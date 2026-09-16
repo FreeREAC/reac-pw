@@ -75,6 +75,11 @@ struct reac_segconf {
 	int n_refusals;              /* how many are kept in `refusal` */
 	unsigned refused;            /* how many there were in total */
 	unsigned overflow;           /* segments past REAC_SEGCONF_MAX */
+	/* What the file looked like when it was last read, for reac_segconf_refresh. */
+	long long stamp_mtime;
+	long long stamp_size;
+	unsigned long long stamp_ino;
+	char home[256];              /* what _load was given, so a refresh can repeat it */
 };
 
 void reac_segconf_init(struct reac_segconf *c);
@@ -88,6 +93,22 @@ int reac_segconf_parse(struct reac_segconf *c, const char *text);
  * same convention reac_conf_lookup uses. `path` is filled in either way. Returns the
  * number of segments; an absent file returns 0 with `present` 0 and no refusal. */
 int reac_segconf_load(struct reac_segconf *c, const char *home);
+
+/* RE-READ THE FILE IF IT HAS MOVED UNDER US. One stat(); a reload only when the mtime,
+ * size or inode changed, or the file appeared or vanished. Returns 1 if it reloaded.
+ *
+ * WHY ON DEMAND AND NOT ONCE AT START. Every other layer this daemon's configuration has
+ * is read at the moment it is asked (`reac_conf_lookup` opens its files on every call),
+ * and a NEW file with a different lifetime from all of them is the kind of inconsistency
+ * nobody remembers at 2 a.m. A segment's role is resolved when its sniffer opens and when
+ * its listener opens — link-up, hot-plug, a re-link — so this is a handful of stats per
+ * event and never one per frame.
+ *
+ * THIS IS NOT THE LIVE ROLE CHANGE. A segment already running keeps the engine it opened
+ * with; what re-reads here is what the NEXT resolution sees. The live path is
+ * `reac.cfg.role` on the segment's own door, and the SIGHUP re-election of
+ * 2026-09-16-auto-role-per-segment.md §5b, neither of which this replaces. */
+int reac_segconf_refresh(struct reac_segconf *c);
 
 /* The entry for `name`, or NULL. Segment names are interface names and are compared
  * case-SENSITIVELY, because that is how the kernel compares them. */

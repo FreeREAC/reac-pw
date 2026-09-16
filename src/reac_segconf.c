@@ -6,6 +6,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>   /* strncasecmp */
@@ -225,13 +226,22 @@ int reac_segconf_parse(struct reac_segconf *c, const char *text)
 
 int reac_segconf_load(struct reac_segconf *c, const char *home)
 {
+	char keep[256];
+	snprintf(keep, sizeof keep, "%s", home ? home : "");
 	reac_segconf_init(c);
+	snprintf(c->home, sizeof c->home, "%s", keep);
 	if (!home)
 		home = getenv("HOME");
 	if (!home || !*home)
 		home = ".";
 	snprintf(c->path, sizeof c->path, "%s/%s/%s", home, REAC_SEGCONF_DIR, REAC_SEGCONF_FILE);
 
+	struct stat st;
+	if (stat(c->path, &st) == 0) {
+		c->stamp_mtime = (long long)st.st_mtime;
+		c->stamp_size  = (long long)st.st_size;
+		c->stamp_ino   = (unsigned long long)st.st_ino;
+	}
 	FILE *f = fopen(c->path, "re");
 	if (!f)
 		return 0;   /* absent is the normal case, and `present` stays 0 to say which */
@@ -254,6 +264,24 @@ int reac_segconf_load(struct reac_segconf *c, const char *home)
 	reac_segconf_parse(c, text);
 	free(text);
 	return c->n;
+}
+
+int reac_segconf_refresh(struct reac_segconf *c)
+{
+	if (!c || !c->path[0])
+		return 0;
+	struct stat st;
+	int there = stat(c->path, &st) == 0;
+	long long mt = there ? (long long)st.st_mtime : 0;
+	long long sz = there ? (long long)st.st_size : 0;
+	unsigned long long ino = there ? (unsigned long long)st.st_ino : 0;
+	if (there == (c->present != 0) && mt == c->stamp_mtime &&
+	    sz == c->stamp_size && ino == c->stamp_ino)
+		return 0;
+	char keep[256];
+	snprintf(keep, sizeof keep, "%s", c->home);
+	reac_segconf_load(c, keep[0] ? keep : NULL);
+	return 1;
 }
 
 const struct reac_segconf_seg *reac_segconf_find(const struct reac_segconf *c, const char *name)

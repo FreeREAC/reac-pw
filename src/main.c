@@ -983,6 +983,7 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 	 * described. With nothing said the segment is `auto` and the hunt elects it from
 	 * the wire, which is what this daemon is for. */
 	{
+		reac_segconf_refresh(&g_segconf);
 		enum reac_role_intent i;
 		if (reac_segconf_role(&g_segconf, iface, &i)) {
 			c->role_layer = REAC_CONF_SEGMENT;
@@ -2290,6 +2291,7 @@ static uint64_t monotonic_ns(void)
 static int segment_ignored(struct hearing *h, const char *name)
 {
 	(void)h;
+	reac_segconf_refresh(&g_segconf);
 	/* THE DECISION IS THE MODULE'S, and only the "have we said it" flag is ours. This
 	 * walked g_segconf itself once, which is a second reader of one fact: sabotaging
 	 * reac_segconf_ignored left this arm of segments-autodetect.sh GREEN, so the
@@ -2389,6 +2391,7 @@ static void sniffer_close(struct hearing *h, const char *name)
  * and a daemon that made a setting wait for evidence would be second-guessing it. */
 static int segment_role_pin(const char *iface, enum reac_role *out)
 {
+	reac_segconf_refresh(&g_segconf);
 	enum reac_role_intent i;
 	if (!reac_segconf_role(&g_segconf, iface, &i) || i == REAC_ROLE_INTENT_AUTO)
 		return 0;
@@ -2415,6 +2418,7 @@ static int segment_role_pin(const char *iface, enum reac_role *out)
  * there is no listener yet. */
 static enum reac_role_intent segment_role_intent(const char *iface)
 {
+	reac_segconf_refresh(&g_segconf);
 	enum reac_role_intent i;
 	if (reac_segconf_role(&g_segconf, iface, &i))
 		return i;

@@ -31,7 +31,9 @@
 # not the graph.
 set -u
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
-FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
+# NOT `${2:?}`: the meson `fake_box` option is empty by default, and a test that HARD-FAILS
+# on an unset knob is a red about the machine wearing the clothes of a red about the code.
+FAKE="${2:-}"
 SKIP=77
 
 [ -n "$FAKE" ] && [ -x "$FAKE" ] || { echo "SKIP: no fake_box at '$FAKE' (libreac: make fake_box)"; exit $SKIP; }
