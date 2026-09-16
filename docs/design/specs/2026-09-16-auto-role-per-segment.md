@@ -163,28 +163,47 @@ already pins our announce bytes against captured desk frames, so a byte differen
 ANNOUNCE would be caught there; what is NOT pinned is the SEQUENCE and cadence of the cold-connect
 opening, which is where a frame the desk sends and we do not would hide.
 
-### 5d. MEASURED 2026-09-16 — what our master sends that a desk does not: half the announces, and never a burst
+### 5d. MEASURED 2026-09-16 — the wire is FULL: four masters on a 100 Mbit/s port, 75% discarded
 
-20 s on the live `enp131s0` (`tcpdump -s 512`, 180 621 records, 0 dropped) against
-`captures/m200i-s0808-48k-mirror__m200-BIDIR-coldboot-2026-07-11.pcap` (149 s of an M-200
-cold-booting a box) and `m200i-none-48k-clean__m200-s1608-realbox-establish-2026-07-11.pcap`.
+The S-1608-in-S silence is not a frame-content question. `enp131s0` is **100 Mbit/s full
+duplex** and carried **four declared 96 kHz master segments** — the untagged one plus VLANs 11,
+12 and 13, and three of those four have no box on them at all (`reac.box.mac: none`).
 
-**The control FAMILIES match.** We send exactly the desk's set and nothing foreign:
-`cdea 01.00.001a` (scene transfer), `01.01.0018`, `01.02.000e`, `01.03.0019` (master
-heartbeat) and `cfea ff.ff.0100` (master announce), all to broadcast, as the desk does.
+| measured | value |
+|---|---|
+| offered by four masters (8 000 pps x 1 516 B each) | **387 Mbit/s** |
+| on the wire (`tcpdump`, 5.83 s, 0 dropped by the kernel) | 8 229 pkt/s = **99.6 Mbit/s** |
+| `tc -s qdisc` on the port, per second | sent 8 238, **dropped 23 784, overlimits 23 783** |
+| per-VLAN etf qdiscs (`enp131s0.11`) | 106 dropped LIFETIME — the parent's queue is where it goes |
+| what reached the wire, per segment | untagged 1 927/s, vlan11 2 084/s, vlan12 1 607/s, vlan13 2 451/s |
 
-**The CADENCE does not.** Our announce goes out once every **2.000 s** (median of 11, min 1.0,
-max 4.0). The M-200's 302 announces over 149 s arrive at **~2/s in back-to-back clusters** —
-median inter-arrival 0.000 s, and never a gap longer than **1.003 s**. Our heartbeat is the
-same shape: median 2.6 s against the desk's clustered ~2/s. So a cold slave box on our wire is
-invited half as often as a desk invites one, with silences up to four times the longest gap a
-desk ever leaves.
+**It is not a family of frames, it is three quarters of ALL of them, spread evenly.** Audio and
+invitations alike: every segment's master downstream reached the wire at ~25% of the 8 000 pps
+the protocol needs, so no box on that port could ever lock to it, and `cfea` invitations were
+thinned in the same proportion. That is exactly rx = 0, at 96 kHz and at 48 kHz alike — four
+segments at 48 k still offer 194 Mbit/s.
 
-**What is NOT a difference.** The desk's link-4 grant family (`04.03.0013/0014`) is absent from
-our capture, and that is downstream of the silence rather than a cause: those are answers to a
-box's own `04.03.0016/001a` cold-connect, and our S-1608 sent zero frames of any kind in the
-whole 20 s (no source but our own NIC appears in the capture).
+**Every sign of health stayed green**: four nodes up, each pacer counting its own `tx=812 000`,
+and the discards on a qdisc counter nobody reads. This is the silent clamp — delivering a
+quarter of a stream and reporting success.
 
-Not proven: that the cadence is why the box stays silent. It is the one measured difference,
-and the next step is the operator's — power-cycle the box on this port, and if it still says
-nothing, tighten the announce to the desk's clustered cadence and re-measure.
+**THE FIX IS AT THE SOURCE, and it is a refusal.** `src/reac_link_budget.{h,c}`: a REAC master
+costs `pps x (1492 + 24) x 8` bit/s — 97 024 kbit/s at 96 kHz — and `listener_open` refuses to
+open a master TX path that does not fit in its PHYSICAL port's rate beside the masters already
+running on it (a VLAN's budget is its parent's; the load is counted from open engines, never
+from the roster). The budget is the link itself with no headroom fraction, deliberately: one
+96 kHz master is 97% of a 100 Mbit/s port BY DESIGN, and reserving anything would refuse the
+only configuration this protocol has at its top rate. What it refuses is the SECOND stream.
+A link speed that cannot be read (a veth, a down port, a netns) is "unknown", never "full".
+
+*What this will do on the live rig, said before it is deployed:* admission is FIRST COME. On
+`enp131s0` exactly one of the four segments will open and the other three will refuse, loudly,
+naming the port and the committed load. Which one wins is the order they open in — so the
+operator's real fix is to stop declaring three master VLANs on a port that has one box, and the
+refusal is what tells them to.
+
+*And the announce-cadence finding this section used to carry is withdrawn.* The 2.0 s median
+gap measured on the wire was this drop, not a cadence: a rate measured through a 75% discard is
+a measurement of the discard. Re-measure the announce cadence against a desk AFTER the budget
+refusal lands, and tighten it only if it is still slower than the M-200's clustered ~2/s (302
+announces in 149 s, never a gap over 1.003 s).
