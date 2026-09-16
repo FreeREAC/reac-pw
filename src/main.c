@@ -125,6 +125,7 @@ static struct reac_segconf g_segconf;
  * published as a DELTA, so a state change moves properties and never a node id. */
 static struct reac_roster g_roster;
 static struct reac_roster_node *g_roster_node;
+static int g_roster_said;   /* the "on the graph" line waits for the node's real id */
 
 /* Bounded, per docs/design/specs/2026-08-20-reac-auto-spine.md ("a segment
  * beyond the bound is reported, never silently ignored") — this rig needs 2;
@@ -4255,9 +4256,19 @@ static void on_roster_timer(void *data, uint64_t expirations)
 				        "and nowhere else until it can be; retrying\n");
 			return;
 		}
-		fprintf(stderr, "reac-pw: the segment roster is on the graph: node `reac-pw`, "
-		        "no ports, reac.roster=1 — every segment this daemon runs, probing ones "
-		        "included\n");
+	}
+	/* THE ANNOUNCEMENT WAITS FOR THE ID, because the operator's next command is
+	 * `pw-cli info <id>`. The export is a round trip, so the id is SPA_ID_INVALID for a
+	 * tick or two after the connect. */
+	if (!g_roster_said) {
+		uint32_t id = reac_roster_node_id(g_roster_node);
+		if (id != SPA_ID_INVALID) {
+			g_roster_said = 1;
+			fprintf(stderr, "reac-pw: the segment roster is on the graph: node "
+			        "`reac-pw` id %u, no ports, reac.roster=1 — every segment this "
+			        "daemon runs, probing ones included. Read it with "
+			        "`pw-cli info %u`\n", id, id);
+		}
 	}
 	roster_collect(rc);
 	struct reac_roster_kv kv[REAC_ROSTER_KV_MAX];

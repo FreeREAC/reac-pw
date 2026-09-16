@@ -18,7 +18,13 @@
 #define REAC_ROSTER_MEDIA_CLASS "Reac/Roster"
 
 struct reac_roster_node {
-	struct pw_filter *filter;
+	/* OUR OWN CORE, AND THAT IS THE POINT. pw_filter_connect() connects the core with a
+	 * COPY OF THE FILTER'S PROPERTIES when the filter has none, so everything meant for
+	 * the NODE lands on the CLIENT object too — see the decoy this cost, below. Owning
+	 * the context and the core is what lets the client say only what a client should. */
+	struct pw_context *context;
+	struct pw_core    *core;
+	struct pw_filter  *filter;
 };
 
 /* A filter with no ports has nothing to do, and says so: no process callback, no param
@@ -34,6 +40,40 @@ struct reac_roster_node *reac_roster_node_new(struct pw_loop *loop)
 	struct reac_roster_node *n = calloc(1, sizeof *n);
 	if (!n)
 		return NULL;
+	/* THE NODE'S IDENTITY MUST NOT LAND ON THE CLIENT, and the shortest path puts it
+	 * there. pw_filter_new_simple copies the properties it is given into the CONTEXT, and
+	 * pw_filter_connect() connects the core with a COPY OF THE FILTER'S properties — so
+	 * either way the CLIENT object ends up wearing node.name=reac-pw,
+	 * media.class=Reac/Roster and reac.roster=1, with no roster on it at all.
+	 *
+	 * THAT COST A LIVE DEFECT REPORT ON THE DAY THIS SHIPPED. The operator looked for
+	 * reac.roster, found the CLIENT's id first, ran `pw-cli info <id>`, saw three
+	 * properties and no roster, and filed it against a daemon that was publishing
+	 * correctly on the node next door. `reac.roster` is the declaration a client FINDS
+	 * this node by, so exactly one object may wear it — anything else is a decoy that
+	 * answers a search with silence.
+	 *
+	 * So we own the context and the core, give THEM only what a client should say about
+	 * itself, and build the filter on that core with the node's own properties. */
+	struct pw_properties *client_props = pw_properties_new(
+		PW_KEY_APP_NAME, "reac-pw",
+		NULL);
+	if (!client_props) {
+		free(n);
+		return NULL;
+	}
+	n->context = pw_context_new(loop, client_props, 0);
+	if (!n->context) {
+		free(n);
+		return NULL;
+	}
+	n->core = pw_context_connect(n->context, pw_properties_new(PW_KEY_APP_NAME, "reac-pw",
+	                                                           NULL), 0);
+	if (!n->core) {
+		pw_context_destroy(n->context);
+		free(n);
+		return NULL;
+	}
 	struct pw_properties *props = pw_properties_new(
 		PW_KEY_NODE_NAME, REAC_ROSTER_NODE_NAME,
 		PW_KEY_NODE_DESCRIPTION, "REAC segments (reac-pw)",
@@ -41,18 +81,21 @@ struct reac_roster_node *reac_roster_node_new(struct pw_loop *loop)
 		 * WirePlumber's linking and routing rules match on; this matches none of
 		 * them, so the node is seen, read and left alone. */
 		PW_KEY_MEDIA_CLASS, REAC_ROSTER_MEDIA_CLASS,
-		/* THE DECLARATION A CLIENT FINDS IT BY. Never the node name: a name is an
-		 * address, and a console that greps for one is a console that breaks when a
-		 * second daemon runs under a different name. */
+		/* THE DECLARATION, ON THE NODE AND NOWHERE ELSE. Never the node name: a name
+		 * is an address, and a console that greps for one breaks when a second daemon
+		 * runs under a different name. */
 		"reac.roster", "1",
 		NULL);
 	if (!props) {
+		pw_core_disconnect(n->core);
+		pw_context_destroy(n->context);
 		free(n);
 		return NULL;
 	}
-	n->filter = pw_filter_new_simple(loop, "reac:roster", props,
-	                                 &roster_filter_events, n);
+	n->filter = pw_filter_new(n->core, "reac:roster", props);
 	if (!n->filter) {
+		pw_core_disconnect(n->core);
+		pw_context_destroy(n->context);
 		free(n);
 		return NULL;
 	}
@@ -60,10 +103,22 @@ struct reac_roster_node *reac_roster_node_new(struct pw_loop *loop)
 	 * scheduled. The connect is what exports it, which is the whole job. */
 	if (pw_filter_connect(n->filter, PW_FILTER_FLAG_INACTIVE, NULL, 0) < 0) {
 		pw_filter_destroy(n->filter);
+		pw_core_disconnect(n->core);
+		pw_context_destroy(n->context);
 		free(n);
 		return NULL;
 	}
 	return n;
+}
+
+/* THE NODE'S ID ON THE GRAPH, or SPA_ID_INVALID until the export completes. The daemon
+ * waits for it before announcing itself: an id in a log line that points at a different
+ * object is worse than no id at all, and the operator's next command is `pw-cli info`. */
+uint32_t reac_roster_node_id(const struct reac_roster_node *n)
+{
+	if (!n || !n->filter)
+		return SPA_ID_INVALID;
+	return pw_filter_get_node_id(n->filter);
 }
 
 void reac_roster_node_publish(struct reac_roster_node *n,
@@ -97,5 +152,9 @@ void reac_roster_node_destroy(struct reac_roster_node *n)
 		pw_filter_disconnect(n->filter);
 		pw_filter_destroy(n->filter);
 	}
+	if (n->core)
+		pw_core_disconnect(n->core);
+	if (n->context)
+		pw_context_destroy(n->context);
 	free(n);
 }
