@@ -123,6 +123,7 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_watch.c',
   'src/reac_knock.c',
+  'src/reac_wake.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
   'src/reac_headamp_state.c',
@@ -992,6 +993,19 @@ test('reac_hunt_captures', hunt_captures_test, timeout : 120)
 # cabled and carrier-up, zero frames in eight seconds). This pins BOTH halves: nothing is
 # ever emitted before the wire has been observed masterless for the listening window, and
 # the first frame from anybody ends the knocking for good. Pure; no socket.
+# --- unit test: the WAKE LADDER, and when the master may break its own link ---------
+# 2026-09-16: an S-1608 that dropped while the desk was suspended ignored ~1620 completed
+# scene pushes over 73 minutes and two processes, on a wire carrying 8003 of our frames a
+# second. Its firmware leaves that state on a PHY edge and on nothing else. This pins both
+# halves: the replayed live window must produce the edges the ladder allows, and each of
+# the facts that forbid an edge — no carrier, an unreadable carrier, a box already talking,
+# a push of ours that never completed, a sibling segment being served, a spent ladder —
+# must refuse it by name, each with a control showing the same call succeeding. Pure.
+wake_test = executable('test_reac_wake',
+  ['tests/test_reac_wake.c', 'src/reac_wake.c'],
+  include_directories : [include_directories('src')])
+test('reac_wake', wake_test)
+
 knock_test = executable('test_reac_knock',
   ['tests/test_reac_knock.c', 'src/reac_knock.c'],
   include_directories : [include_directories('src')],
