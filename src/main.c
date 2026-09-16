@@ -3542,10 +3542,30 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        "driving on link, with no frame waited for (a cold box has none "
 				        "to give)\n", sn->name, sn->name);
 			else if (changed)
-				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
-				        "present — taking the wire as MASTER: probe, grant, "
-				        "establish\n", sn->name,
-				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL));
+				/* TWO ROADS REACH THIS VERDICT AND THEY ARE NOT THE SAME FACT.
+				 * A box HEARD on the wire is one; a wire PROVEN SILENT is the
+				 * other (reac_knock's licence, `silence_proven`), and this
+				 * sentence claimed the first in both cases. Read straight off
+				 * the desk's journal, 2026-09-16 14:38:56, two lines apart:
+				 *
+				 *   no REAC heard in 500 ms — ... this wire has none: taking it
+				 *   as MASTER and probing until a box cold-connects
+				 *   no master heard in 3 s and a box is present — taking the
+				 *   wire as MASTER: probe, grant, establish
+				 *
+				 * Nothing had been heard at all. An operator reading the second
+				 * line believes the daemon can see a box, which is the one thing
+				 * it could not see for the next 73 minutes. */
+				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and %s — "
+				        "taking the wire as MASTER: probe, grant, establish\n",
+				        sn->name,
+				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL),
+				        sn->hunt.silence_proven
+				          ? "NOTHING at all was heard on it — a master fills every "
+				            "audio slot, so this wire has none. Whether a box is "
+				            "there is still unknown: a slave is silent until a "
+				            "master speaks"
+				          : "a box is present");
 			/* THE PIN DECIDES WHETHER WE KEEP WATCHING IT, not the evidence we won
 			 * it with (0.5.4). A wire nobody answered for is ours only while nobody
 			 * else claims it, however we came to be driving it; a pinned one keeps
