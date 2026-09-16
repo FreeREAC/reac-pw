@@ -307,3 +307,75 @@ answers, in the order they will fail:
 
 The rig step is `~/.config/reac-pw/reac-pw.conf.d/99-local.conf`, the segment carrying the M-200,
 and `libreac tools/m200-compare.sh` — the exact lines are in the lane's report.
+
+## Amendment 2026-09-17 — a real S-4000H declared itself, and its declaration breaks two guesses
+
+An **S-4000H, 8 in / 32 out**, alone on VLAN 13, was captured declaring itself to our master
+(`vlan13-0832.pcap`, 4 s, `enp131s0.13`, box `00:40:ab:c4:25:80`). Its config-announce, as sent:
+
+```
+01 03 00 10 | 84 | 00 00 | 00 | 01 01 01 01 01 01 01 01 00 00 03 03 | 00 03 00 00 00 01 00 00 00 00 00 | 56
+  link/len  | sel|       |strap|          the twelve port slots      |        the model tail           | ck
+```
+
+Three facts come out of it, and two of them refute something this spec had guessed.
+
+**a. `0x00` IS AN INPUT GROUP — a fourth port-slot code, now captured.** `reac_ports.h` listed
+three codes and refused everything else, and that refusal is what kept this box off the graph:
+`reac_ports_parse` returned −1, so `reac_master_set_box` was never called, so the master held an
+ungranted window until `grant_dwell` and dropped back to PROBING with `REAC_M_DROP_BOX_UNKNOWN` —
+for minutes, exactly as the operator saw (`state=probing model=none role=master width=0/0`). The
+table above reads 8 output groups (32 out) + 2 of `0x00` + 2 empty = twelve, and the operator's
+ruling the same day names the chassis 8 in / 32 out: the `0x00` groups are the box's 8 inputs.
+What DISTINGUISHES `0x00` from `0x02` is NOT decided here — one capture, one chassis, and a
+splitter's inputs may well be marked apart from a head-amp-owned input. §9 gains the rig step.
+
+**b. THE TABLE IS A FABRIC PLACEMENT, NOT A SORTED LIST.** All three previously captured rows put
+their input groups first, so the synthesiser sorted in-then-out and nobody could tell the two
+apart. This chassis places its OUTPUT groups first. A row therefore declares its layout:
+`port_layout` — `IN_FIRST` (the three Roland rows, and the default) or `SPLIT_OUT_FIRST` (this
+chassis: outputs first, inputs marked `0x00`). The two halves of that shape were captured
+together and no capture shows them varying apart, so they are ONE declared fact and not two
+flags — a row may not mix a layout nobody has seen.
+
+**c. §2b's `s4000h` row was a GUESS at 16/16 and is replaced by the capture.** The row is now
+`s4000h` | S-4000H-0832 | **8/32** | **CAPTURED** | Roland, identity page NOT captured. The
+sibling `s4000s-0832` stays DERIVED: it is a different chassis strap and this capture says
+nothing about it.
+
+**THE IDENTITY PAGE IS ABSENT FROM THIS CAPTURE, AND ABSENCE IS RECORDED AS ABSENCE.** In 4 s the
+box sent its config-announce and the three cold-connect JOIN records (`0014` join, `0000`
+head-mark, `0013` box-ready — byte-identical to the S-1608's, the table's constants) and a box
+heartbeat. It sent NO `0016`/`001a` inventory record, no link-4 name fragment and no DT1 `0x0500`
+reply: firmware, REAC version and ASCII name are UNKNOWN for this box. They are left at zero and
+`reac_box_model_block` emits no identity block for a row whose `fw_milli` is zero — a row may not
+fabricate a page it has never seen, and copying the S-4000S's 2.500/2.102 would have been exactly
+that. The identity page is polled by the grant sweep's group B, so the likely reason it is absent
+is that we never granted; the capture that would settle it is named in §9.
+
+**A WIDTH NAMES NO MODEL AT ALL ONCE TWO CAPTURED ROWS SHARE ONE.** `s0808` (8/8) and `s4000h`
+(8/32) are both CAPTURED and both 8 inputs, so `reac_box_master_model(width)` — which answered the
+FIRST captured row of that width — would now name an S-0808 for this box. It refuses an ambiguous
+width instead: a model comes from the byte-exact declaration (`reac_ctrl_identify_box`), never
+from a width, and never from a frame LENGTH. This box is why the distinction is not academic: it
+declares 8 inputs and its upstream frames are **1204 B = 32 channels**, so length-derived width
+and declared width disagree by 24 on the live wire.
+
+**ONE MAC, ONE VERDICT.** The daemon logged the same box twice — `box … (8 ch)` off the 340 B
+config-announce and `unknown … (32 ch)` off the 1204 B broadcast flood — because the sniffer's log
+printed the per-FRAME sighting. A broadcast filler is deliberately role-`unknown` (a master's
+downstream is byte-identical in kind), so a box that floods will always produce that second line
+while the sighting is what reaches the log. `reac_hunt_observe` now answers with the disco TABLE's
+entry for that MAC — the corroborated verdict, where facts only sharpen — so one box is one line.
+
+### §9 gains three rig steps for this chassis
+
+4. **Which upstream slots carry the 8 inputs.** The box returns 32 channels; a 4 s capture cannot
+   say which 8 are its preamps (nothing was plugged in, and the pre-grant 340 B frames are
+   digitally silent). Inject a tone into input 1 and require the level to follow it — a null from
+   an un-granted box is not evidence (`CLAUDE.md`: prove the injection landed).
+5. **The identity page**, once the grant sustains: `tcpdump -i enp131s0.13 -w … ether proto 0x8819
+   and ether host 00:40:ab:c4:25:80`, 20 s from a box power-cycle, which spans the grant sweep's
+   group-B poll. The row's `fw_milli` / `reac_*` / `name` stay zero until it lands.
+6. **Whether `0x00` marks a head-amp-less input.** Send a head-amp record at strap base 0x00 and
+   look at the preamp, physically — never at a soft meter.
