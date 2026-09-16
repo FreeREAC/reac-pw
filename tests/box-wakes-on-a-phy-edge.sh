@@ -32,10 +32,13 @@
 # down and up is not a thing to measure a tone across.
 set -u
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
-FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
+# NOT `${2:?}`: the meson `fake_box` option is empty by default, so this file HARD-FAILED
+# in every run where the knob was not set — a red about the machine wearing the clothes of
+# a red about the code. The `[ -x ]` SKIP two lines down was unreachable.
+FAKE="${2:-}"
 SKIP=77
 
-[ -x "$FAKE" ] || { echo "SKIP: no fake_box at '$FAKE' (libreac: make fake_box)"; exit $SKIP; }
+[ -n "$FAKE" ] && [ -x "$FAKE" ] || { echo "SKIP: no fake_box at '$FAKE' (libreac: make fake_box)"; exit $SKIP; }
 for t in unshare nsenter ip pipewire pw-cli; do
 	command -v $t >/dev/null 2>&1 || { echo "SKIP: no $t"; exit $SKIP; }
 done
