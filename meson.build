@@ -464,6 +464,18 @@ segconf_test = executable('test_reac_segconf',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_segconf', segconf_test)
 
+# --- unit test: the ROSTER's prop grammar and its DELTA ------------------------
+# The second amendment took the zero-port node off the graph and NAMED what it cost: an
+# empty segment has no row on the console at all. This node is that row, and the subject
+# here is the DELTA -- a roster that republishes every tick is a property storm on every
+# client with the same node id, which is the defect one door down from the node churn the
+# node exists to avoid. Pure: no PipeWire, no netlink, no clock.
+roster_test = executable('test_reac_roster',
+  ['tests/test_reac_roster.c', 'src/reac_roster.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_roster', roster_test)
+
 # --- whole-binary test: segments and roles are AUTODETECTED -------------------
 #
 # The 2026-09-16 desk defect: the rig moved from one box on a 100 Mbit USB NIC to three
