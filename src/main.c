@@ -81,6 +81,7 @@
 #include <reac/transport/reac_seglock.h>    /* one master per segment, across processes */
 #include <reac/transport/reac_ifscan.h>     /* which interfaces to sniff, which are segments */
 #include "reac_declared_vlan.h"   /* the VLAN segments the operator DECLARED, minted at start */
+#include "reac_segconf.h"         /* the ONE override file: per-segment role and ignore */
 #include "reac_link_budget.h"     /* what a master costs its physical port, and whether it fits */
 #include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */
 #include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
@@ -107,6 +108,15 @@
 #include <sys/statvfs.h>
 #include <linux/if_packet.h>
 #include <net/if.h>           /* IFNAMSIZ */
+
+/* THE ONE OVERRIDE (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md).
+ * Read once at start, before any socket, and asked about every segment thereafter. Nothing
+ * else may pin a role: `REAC_ROLE` and `REAC_ROLE_<segment>` are retired in every layer,
+ * because the file that carried them is GENERATED and a generated file goes stale silently
+ * — on 2026-09-16 it pinned three VLAN segments `tap` a rig ago and the desk moved no
+ * audio with every node up. A LIVE role change is `reac.cfg.role` on the segment's door,
+ * not a re-read of this. */
+static struct reac_segconf g_segconf;
 
 /* Bounded, per docs/design/specs/2026-08-20-reac-auto-spine.md ("a segment
  * beyond the bound is reported, never silently ignored") — this rig needs 2;
@@ -942,36 +952,19 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 	 * one particular segment, so it is the launch floor the hunt resolves against
 	 * — a console generating this file writes the bare key as the launch role for a
 	 * segment it has not seen. `auto` at either level asks for the hunt outright. */
-	c->role_layer = reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v);
-	if (c->role_layer != REAC_CONF_NONE) {
+	/* THE ROLE COMES FROM THE OVERRIDE FILE OR FROM NOWHERE (spec §2, §3). Every layer
+	 * reac_conf reads is silent on this question now — a launch-time key is a decision
+	 * taken before there is anything to decide against, and it outlives the rig it
+	 * described. With nothing said the segment is `auto` and the hunt elects it from
+	 * the wire, which is what this daemon is for. */
+	{
 		enum reac_role_intent i;
-		if (reac_role_intent_parse(v, &i) == 0) {
+		if (reac_segconf_role(&g_segconf, iface, &i)) {
+			c->role_layer = REAC_CONF_SEGMENT;
 			c->role_intent = i;
 			c->role = reac_role_from_intent(i);
-			c->role_pinned = (i != REAC_ROLE_INTENT_AUTO &&
-			                  c->role_layer == REAC_CONF_SEGMENT);
-			/* `tap` IS PER-SEGMENT ONLY. A bare REAC_ROLE describes every segment
-			 * on the host and cannot know that one of them is a mirror port; taking
-			 * it from the floor would silence every wire this host drives on the
-			 * strength of a key that was never about any of them. Refused loudly,
-			 * never downgraded to a role that transmits. */
+			c->role_pinned = (i != REAC_ROLE_INTENT_AUTO);
 			c->tap = (i == REAC_ROLE_INTENT_TAP);
-			if (c->tap && c->role_layer != REAC_CONF_SEGMENT) {
-				fprintf(stderr, "reac-pw: [%s] REAC_ROLE=tap from %s is REFUSED — "
-				        "tap is a fact about ONE wire (a mirror port) and only "
-				        "REAC_ROLE_<segment> can say it. This segment keeps auto.\n",
-				        iface, reac_conf_layer_name(c->role_layer));
-				c->tap = 0;
-				c->role_intent = REAC_ROLE_INTENT_AUTO;
-				c->role = reac_role_from_intent(REAC_ROLE_INTENT_AUTO);
-				c->role_pinned = 0;
-				c->role_layer = REAC_CONF_NONE;
-			}
-		} else {
-			fprintf(stderr, "reac-pw: [%s] ignoring REAC_ROLE='%s' from %s "
-			        "(master|slave|auto|tap)\n",
-			        iface, v, reac_conf_layer_name(c->role_layer));
-			c->role_layer = REAC_CONF_NONE;
 		}
 	}
 
@@ -2177,6 +2170,7 @@ struct hearing {
 
 static struct hearing g_hear;
 
+
 /* Counted from the RUNNING engines, never from the roster: a segment that is configured
  * and not transmitting costs the wire nothing, and a budget read off intentions would
  * refuse a master because of one that never opened. */
@@ -2242,6 +2236,30 @@ static uint64_t monotonic_ns(void)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/* IS THIS SEGMENT SWITCHED OFF? Said ONCE per segment, because the answer is asked on
+ * every link event and a line per event would be a chattering port's own denial of
+ * service. Never silent the first time: an interface that vanishes from the journal for
+ * no stated reason is exactly the shape this spec exists to remove. */
+static int segment_ignored(struct hearing *h, const char *name)
+{
+	(void)h;
+	struct reac_segconf_seg *s = NULL;
+	for (int i = 0; i < g_segconf.n; i++)
+		if (strcmp(g_segconf.seg[i].name, name) == 0) {
+			s = &g_segconf.seg[i];
+			break;
+		}
+	if (!s || !s->ignore)
+		return 0;
+	if (!s->said_ignored) {
+		s->said_ignored = 1;
+		fprintf(stderr, "reac-pw: [%s] IGNORED by %s [segment %s] ignore — not sniffed, "
+		        "not served, not minted; its netdev is left exactly as found\n",
+		        name, REAC_SEGCONF_FILE, name);
+	}
+	return 1;
 }
 
 static struct sniffer *sniffer_find(struct hearing *h, const char *name)
@@ -2320,11 +2338,8 @@ static void sniffer_close(struct hearing *h, const char *name)
  * and a daemon that made a setting wait for evidence would be second-guessing it. */
 static int segment_role_pin(const char *iface, enum reac_role *out)
 {
-	char v[256];
-	if (reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v) != REAC_CONF_SEGMENT)
-		return 0;
 	enum reac_role_intent i;
-	if (reac_role_intent_parse(v, &i) != 0 || i == REAC_ROLE_INTENT_AUTO)
+	if (!reac_segconf_role(&g_segconf, iface, &i) || i == REAC_ROLE_INTENT_AUTO)
 		return 0;
 	/* `tap` PINS NO WIRE ROLE, because it presents no end of the pairing. Answering
 	 * `master` here — which reac_role_from_intent would, the field holding one of two
@@ -2349,17 +2364,37 @@ static int segment_role_pin(const char *iface, enum reac_role *out)
  * there is no listener yet. */
 static enum reac_role_intent segment_role_intent(const char *iface)
 {
-	char v[256];
 	enum reac_role_intent i;
+	if (reac_segconf_role(&g_segconf, iface, &i))
+		return i;
+	return REAC_ROLE_INTENT_AUTO;
+}
+
+/* WHERE THIS SEGMENT'S ROLE CAME FROM, in the words the start-up block uses. A
+ * configuration whose effect cannot be read back is a configuration nobody can debug, and
+ * this rig has spent a night on exactly that (spec §4). */
+static const char *segment_role_source(const char *iface)
+{
+	return reac_segconf_find(&g_segconf, iface) &&
+	       reac_segconf_find(&g_segconf, iface)->role_set
+	               ? REAC_SEGCONF_FILE : "autodetected";
+}
+
+/* A `REAC_ROLE` KEY THAT IS STILL ON DISK IS NAMED, ONCE, AND NOT OBEYED. A key that
+ * stopped applying and says nothing is indistinguishable from one that is working, which
+ * is the same class of silence the whole spec is about — one level down. */
+static void segment_say_env_role_retired(const char *iface)
+{
+	char v[256];
 	enum reac_conf_layer layer = reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v);
-	if (layer == REAC_CONF_NONE || reac_role_intent_parse(v, &i) != 0)
-		return REAC_ROLE_INTENT_AUTO;
-	/* `tap` IS PER-SEGMENT ONLY, for listener_cfg_from_conf's reason: a bare REAC_ROLE
-	 * describes every segment on the host and cannot know that one of them is a mirror
-	 * port. A floor that says `tap` is not an answer about this wire. */
-	if (i == REAC_ROLE_INTENT_TAP && layer != REAC_CONF_SEGMENT)
-		return REAC_ROLE_INTENT_AUTO;
-	return i;
+	if (layer == REAC_CONF_NONE)
+		return;
+	fprintf(stderr, "reac-pw: [%s] REAC_ROLE%s%s='%s' in %s is IGNORED: a segment's role "
+	        "is autodetected, and the one thing that overrides it is %s "
+	        "[segment %s] role= (spec 2026-09-16)\n",
+	        iface, layer == REAC_CONF_SEGMENT ? "_" : "",
+	        layer == REAC_CONF_SEGMENT ? iface : "", v, reac_conf_layer_name(layer),
+	        REAC_SEGCONF_FILE, iface);
 }
 
 /* IS THIS SEGMENT PINNED `tap`? The question segment_role_pin above cannot answer,
@@ -2456,16 +2491,24 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 	 * we are waiting on, and that is what made the 2026-09-08 outage unreadable. */
 	if (!announce)
 		return 0;
+	/* AND WHERE THE ROLE CAME FROM, in the same line. Spec §4: a configuration whose
+	 * effect cannot be read back is one nobody can debug. `(autodetected)` is the
+	 * ordinary case and says so; the file is named when it answered. */
+	const char *src = segment_role_source(name);
 	if (sn->tap_pinned)
-		fprintf(stderr, "reac-pw: [%s] pinned tap — serving what is heard on link and "
-		        "transmitting NOTHING: no announce, no join, no grant, no seglock\n", name);
+		fprintf(stderr, "reac-pw: [%s] listening — role tap (%s): serving what is heard "
+		        "on link and transmitting NOTHING: no announce, no join, no grant, "
+		        "no seglock\n", name, src);
 	else if (pinned && pin == REAC_ROLE_MASTER)
-		fprintf(stderr, "reac-pw: [%s] pinned master — driving on link\n", name);
+		fprintf(stderr, "reac-pw: [%s] listening — role master (%s): driving on link\n",
+		        name, src);
 	else if (pinned)
-		fprintf(stderr, "reac-pw: [%s] pinned slave — cold-connect flood, then listening "
-		        "for a master\n", name);
+		fprintf(stderr, "reac-pw: [%s] listening — role slave (%s): cold-connect flood, "
+		        "then listening for a master\n", name, src);
 	else
-		fprintf(stderr, "reac-pw: [%s] unpinned — listening for REAC\n", name);
+		fprintf(stderr, "reac-pw: [%s] listening — role auto (autodetected): the wire "
+		        "decides\n", name);
+	segment_say_env_role_retired(name);
 	return 0;
 }
 
@@ -3075,8 +3118,17 @@ static void declared_ensure(struct hearing *h)
 /* Read the declarations once, at start. */
 static void declared_load(struct hearing *h)
 {
+	/* A DECLARATION IS A SECTION IN THE OVERRIDE FILE, NOT A KEY NAME (spec §2).
+	 * reac_declared_vlan read `REAC_ROLE_<parent>.<vid>`'s NAME to mint a netdev before
+	 * anything was heard — the cold-boot fix of 2026-09-15, which is real and is kept —
+	 * but the declaration then outlived what declared it: three master VLANs were left
+	 * standing on a 100 Mbit port with no box on any of them (auto-role §5d). Naming a
+	 * segment in this file is an explicit act; a role projection is a side effect. */
 	struct reac_declared_vlan tab[REAC_DECLARED_VLAN_MAX];
-	int n = reac_declared_vlan_scan(tab, REAC_DECLARED_VLAN_MAX, NULL);
+	int count = 0;
+	int n = reac_segconf_declared(&g_segconf, tab, REAC_DECLARED_VLAN_MAX, &count);
+	if (n >= 0)
+		n = count;
 	if (n < 0) {
 		h->decl_full = 1;
 		n = REAC_DECLARED_VLAN_MAX;
@@ -3321,6 +3373,13 @@ static void hearing_apply(struct hearing *h)
 		const struct reac_ifscan_entry *e = reac_ifscan_find(&h->scan, ev.name);
 		switch (ev.verb) {
 		case REAC_IFSCAN_LISTEN:
+			/* AN IGNORED SEGMENT IS NEVER TOUCHED, and the refusal is where the
+			 * work would have started: no sniffer, no topology tap, no listener,
+			 * no netdev. This is trunk spec §8's REAC_IFACES_DENY, finally built,
+			 * in the place the 2026-09-16 ruling puts it — the operator's own
+			 * file, one section per segment. */
+			if (segment_ignored(h, ev.name))
+				break;
 			sniffer_open(h, ev.name);
 			/* AND THE TAG DETECTOR, on a physical parent. The sniffer answers
 			 * "is there REAC here"; only this answers "is it tagged, and on
@@ -3347,6 +3406,8 @@ static void hearing_apply(struct hearing *h)
 			 * first. A refused wire keeps its sniffer for the same reason (0.5.1):
 			 * a door has no engine that could ever notice the rival leaving. Two
 			 * AF_PACKET sockets on one interface cost one more idle fd. */
+			if (segment_ignored(h, ev.name))
+				break;
 			struct sniffer *sn = sniffer_find(h, ev.name);
 			struct reac_hunt verdict;
 			int have = sn != NULL;
@@ -4081,6 +4142,45 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 }
 
 
+/* WHAT WE DETECTED AND WHAT THE FILE OVERRODE, said at start, before a socket is opened
+ * (spec §4). Absent is the normal case and is printed as such: "absent" and "empty" must
+ * not read alike, because one of them means the operator's file is not where they think
+ * it is. */
+static void segconf_announce(void)
+{
+	if (!g_segconf.present) {
+		fprintf(stderr, "reac-pw: no %s — every segment autodetects: roles come from "
+		        "the wire (auto) and segments from the host's interfaces. Looked at %s\n",
+		        REAC_SEGCONF_FILE, g_segconf.path);
+	} else {
+		fprintf(stderr, "reac-pw: %s: %d segment(s) overridden\n",
+		        g_segconf.path, g_segconf.n);
+		for (int i = 0; i < g_segconf.n; i++) {
+			const struct reac_segconf_seg *sg = &g_segconf.seg[i];
+			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s\n", sg->name,
+			        sg->role_set ? " role=" : "",
+			        sg->role_set ? reac_role_intent_name(sg->role) : "",
+			        sg->ignore ? " ignore" : "");
+		}
+	}
+	for (int i = 0; i < g_segconf.n_refusals; i++)
+		fprintf(stderr, "reac-pw: %s REFUSED %s\n", REAC_SEGCONF_FILE,
+		        g_segconf.refusal[i]);
+	if (g_segconf.refused > (unsigned)g_segconf.n_refusals)
+		fprintf(stderr, "reac-pw: %s refused %u line(s) in all; the first %d are above\n",
+		        REAC_SEGCONF_FILE, g_segconf.refused, g_segconf.n_refusals);
+	/* AND THE HOST-WIDE KEY THAT NO LONGER DOES ANYTHING. The per-segment ones are named
+	 * as each interface is met (segment_say_env_role_retired); this is the bare one, which
+	 * belongs to no interface and would otherwise never be mentioned at all. */
+	char v[256];
+	enum reac_conf_layer l = reac_conf_lookup("REAC_ROLE", NULL, NULL, v, sizeof v);
+	if (l != REAC_CONF_NONE)
+		fprintf(stderr, "reac-pw: REAC_ROLE='%s' in %s is IGNORED: there is no host-wide "
+		        "role — a role is a fact about ONE wire, and the only thing that can "
+		        "state one is %s [segment <name>] role= (spec 2026-09-16)\n",
+		        v, reac_conf_layer_name(l), REAC_SEGCONF_FILE);
+}
+
 int main(int argc, char **argv)
 {
 	/* HELP IS PURE TEXT AND MUST NOT REQUIRE A CAPABILITY. Asking how to run this
@@ -4103,6 +4203,12 @@ int main(int argc, char **argv)
 	/* Before anything is opened, per §4e: a missing capability must arrive as a
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();
+
+	/* THE ONE OVERRIDE, READ BEFORE ANY DECISION IS TAKEN. Every question about a
+	 * segment's role or whether to touch it at all is asked of this, so it has to be
+	 * loaded before the first listener_cfg_from_conf and before hearing_start. */
+	reac_segconf_load(&g_segconf, NULL);
+	segconf_announce();
 
 	/* ---- the CLI template: byte-identical to every invocation before this one.
 	 * These are the flags/variables main() always had; they describe ONE

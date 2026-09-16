@@ -141,6 +141,7 @@ reac_pw_src = [
   'src/reac_qdisc.c',
   'src/reac_link_budget.c',
   'src/reac_declared_vlan.c',
+  'src/reac_segconf.c',
 ]
 
 # include_directories('src') is new here: it used to resolve implicitly (a quoted
@@ -451,6 +452,33 @@ declared_vlan_test = executable('test_reac_declared_vlan',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_declared_vlan', declared_vlan_test)
+
+# --- unit test: the ONE override file's grammar, and what it REFUSES -----------
+# Pure text plus one file this test writes. Every refusal is asserted to NAME its subject:
+# a config reader that drops a line in silence is how an operator ends up with a rig that
+# is not doing what their file says -- which, one level up, is the defect the whole
+# autodetect spec exists to remove.
+segconf_test = executable('test_reac_segconf',
+  ['tests/test_reac_segconf.c', 'src/reac_segconf.c', 'src/reac_declared_vlan.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_segconf', segconf_test)
+
+# --- whole-binary test: segments and roles are AUTODETECTED -------------------
+#
+# The 2026-09-16 desk defect: the rig moved from one box on a 100 Mbit USB NIC to three
+# boxes on a 1 Gbit trunk and the console's GENERATED reac-pw.env still carried the
+# previous rig's answers -- the VLAN segments pinned `tap`, so the daemon served three
+# mirror ports on a fabric with no mirror, every node up and no audio moving. From inside
+# the daemon a stale file and a correct one are indistinguishable. test_reac_segconf pins
+# the grammar and every rule in it can be right while main.c still asks reac_conf for
+# REAC_ROLE, so this drives the real binary against real netdevs: a stale env deciding
+# nothing, a conf overriding one segment and removing another, a tagged VLAN id with no
+# sub-interface named by its id, and an interface hot-plugged under a running daemon.
+test('reac_segments_autodetect',
+  find_program('tests/segments-autodetect.sh'),
+  args : [reac_pw_exe],
+  timeout : 300)
 
 # --- whole-binary test: a DECLARED VLAN segment is minted before anything is heard ---
 #
