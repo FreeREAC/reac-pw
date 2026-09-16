@@ -837,6 +837,12 @@ struct listener_cfg {
 	uint8_t src_mac[6];
 	int src_mac_set;
 	int box_channels;                   /* SLAVE role: our own input width */
+	/* THE ROW WE PRESENT AS, when this segment is pinned `role = box`
+	 * (docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md). NULL on every other
+	 * role. It is the ONE source for what we declare: the enrolment frames, the
+	 * upstream width, the head-amp strap, the two nodes' port counts and the roster's
+	 * model all read it, and nothing re-derives any of them from a number. */
+	const struct reac_box_model *box_model;
 	/* WHAT IS MASTERING THIS WIRE, carried out of the hunt's verdict (0.5.1, DESIGN.md).
 	 * `wire_channels` is the width of the stream this segment RECEIVES — 40 for a desk's
 	 * downstream, the box's own width when a stagebox on M masters it — and it sizes the
@@ -1000,6 +1006,37 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			c->role = reac_role_from_intent(i);
 			c->role_pinned = (i != REAC_ROLE_INTENT_AUTO);
 			c->tap = (i == REAC_ROLE_INTENT_TAP);
+		}
+		/* `role = box` — WE ARE THE STAGEBOX on this wire. The row comes from the
+		 * same file, already validated there (reac_segconf's cross-check refuses a
+		 * box with no model and falls the segment back to auto), so a row here is a
+		 * row that exists. The upstream width is the ROW'S and never a second
+		 * number: an output-only row still speaks at the minimum pair. */
+		if (c->role_intent == REAC_ROLE_INTENT_BOX) {
+			const char *tok = reac_segconf_model(&g_segconf, iface);
+			c->box_model = tok ? reac_box_model_by_token(tok) : NULL;
+			if (c->box_model) {
+				c->box_channels = reac_box_model_upstream_width(c->box_model);
+				fprintf(stderr, "reac-pw: [%s] BOX role — presenting %s to the "
+				        "mixer: %d in / %d out, firmware %u.%03u, REAC %u.%u%02u"
+				        "%s\n", iface, c->box_model->display,
+				        c->box_model->in_ch, c->box_model->out_ch,
+				        c->box_model->fw_milli / 1000u, c->box_model->fw_milli % 1000u,
+				        c->box_model->reac_major, c->box_model->reac_minor,
+				        c->box_model->reac_patch,
+				        c->box_model->origin == REAC_BOX_DERIVED
+				                ? " (a DERIVED row — no real box of this model has"
+				                  " ever been captured)" : "");
+			} else {
+				/* Unreachable through the conf, which refuses this case by name;
+				 * kept because a silent fall-through to a default width is
+				 * exactly the defect the refusal exists for. */
+				fprintf(stderr, "reac-pw: [%s] role = box with no usable model — "
+				        "the segment stays on the hunt\n", iface);
+				c->role_intent = REAC_ROLE_INTENT_AUTO;
+				c->role_pinned = 0;
+				c->role = REAC_ROLE_MASTER;
+			}
 		}
 	}
 
@@ -1774,6 +1811,10 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			? (bm_up ? bm_up->out_ch : (int)c->wire_channels)
 			: c->box_channels;
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
+		                                /* THE ROW WE DECLARE (box role); NULL on every
+		                                 * other slave, where the width keys the
+		                                 * captured matrix as it always has. */
+		                                .model = c->box_model,
 		                                .box_channels = up_ch,
 		                                .sample_rate = L->rx.sample_rate,
 		                                .src_mac = box_mac,
@@ -1822,11 +1863,16 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 				 * engine's ring as its carrier instead of a pacer. Sized to the
 				 * width the wire declared, and labelled with the model that width
 				 * identified where it identifies one (0.5.2). */
-				if (c->join_box_master) {
-					const struct reac_box_model *bm = bm_up;
+				/* AND THE SINK IS WHAT WE SEND: the box's INPUTS, which arrive on
+				 * the mixer's input channels. The same node the box-master path
+				 * publishes over the same ring — one mechanism, two callers. */
+				if (c->join_box_master || c->box_model) {
+					const struct reac_box_model *bm = c->box_model ? c->box_model
+					                                               : bm_up;
 					struct reac_sink_cfg ucfg = {
 						.ifname = c->tx_if,
-						.channels = up_ch,
+						.channels = c->box_model
+						        ? c->box_model->in_ch : up_ch,
 						.sample_rate = L->rx.sample_rate,
 						.src_mac = box_mac,
 						.console_field = c->mixer->console_field,
@@ -1840,7 +1886,9 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 						        "no reac-playback node — its inputs still "
 						        "arrive, but nothing can be routed to it\n",
 						        c->tag);
-					else if (reac_sink_node_ensure(L->sink, up_ch,
+					else if (reac_sink_node_ensure(L->sink,
+					                               c->box_model ? c->box_model->in_ch
+					                                            : up_ch,
 					                               bm ? bm->display : NULL) != 0)
 						fprintf(stderr, "reac-pw: %scould not size reac-playback "
 						        "to the box master's %d outputs\n", c->tag, up_ch);
@@ -1942,15 +1990,22 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * segment broadcasts its own geometry, and that width is evidence, not a
 		 * guess — an 8-channel box gets an 8-port capture node rather than a 40-slot
 		 * fabric with 32 rows of silence in it. */
-		int width = c->join_box_master ? (int)c->wire_channels : 0;
+		/* A BOX ROLE'S CAPTURE IS WHAT THE MIXER SENDS US — the row's OUTPUT count,
+		 * because the ports are named from the BOX's side and the graph's from ours
+		 * (2026-09-17 spec §5). It is known before any mixer appears, which is the
+		 * point: a stagebox that only exists once a desk is powered is not a
+		 * stagebox. */
+		int width = c->box_model ? c->box_model->out_ch
+		                         : (c->join_box_master ? (int)c->wire_channels : 0);
 		/* AND IT NAMES THE BOX, as the master path's capture node does (0.5.6-9). The
 		 * identity keys were published either way, but a console reads the node's
 		 * DESCRIPTION for the operator-facing name, so a joined box read the generic
 		 * "REAC 16ch capture" where a served one reads "S-1608 (16 in / 8 out)". The
 		 * label comes from the row the broadcast width matched, and is absent where no
 		 * row matches — the same rule the identity keys already follow. */
-		const struct reac_box_model *bm_cap = c->join_box_master
-			? reac_box_master_model(c->wire_channels) : NULL;
+		const struct reac_box_model *bm_cap = c->box_model
+			? c->box_model
+			: (c->join_box_master ? reac_box_master_model(c->wire_channels) : NULL);
 		if (reac_source_node_ensure(&L->src, &L->src_cfg, width,
 		                            bm_cap ? bm_cap->display : NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
@@ -4151,6 +4206,12 @@ static void roster_add_listener(struct listener *L, int *dup)
 		 * the case an operator must be able to SEE from the console. */
 		st = REAC_ROSTER_REFUSED;
 		role = reac_role_name(L->cfg.role);
+	} else if (L->cfg.box_model) {
+		/* A BOX IS THE SLAVE END OF THE PAIRING AND A DIFFERENT ROLE TO READ. The
+		 * state stays the slave one — that is what the engine is doing — and the ROLE
+		 * is what the operator asked for, which is the fact a console renders. */
+		st = REAC_ROSTER_SLAVE;
+		role = reac_role_intent_name(REAC_ROLE_INTENT_BOX);
 	} else if (L->cfg.role == REAC_ROLE_SLAVE || L->cfg.join_box_master) {
 		st = REAC_ROSTER_SLAVE;
 		role = "slave";
@@ -4165,13 +4226,19 @@ static void roster_add_listener(struct listener *L, int *dup)
 	 * `bm->token` and `none` — the console keys off that vocabulary, and a roster that
 	 * spelled the same box a second way would be a second vocabulary for one fact. The
 	 * display string also carries the width, which `.width` already owns. */
-	const char *model = bm ? bm->token
-	                       : (L->cfg.pin_model ? L->cfg.pin_model->token : NULL);
+	const char *model = L->cfg.box_model ? L->cfg.box_model->token
+	                   : (bm ? bm->token
+	                         : (L->cfg.pin_model ? L->cfg.pin_model->token : NULL));
 	/* THE WIDTH IS THE PAIR'S, and the pair exists only where a box does. A slave's
 	 * capture is the width of the stream it receives, which the hunt already carried
 	 * into wire_channels; nothing else invents a number. */
 	int in = 0, out = 0;
-	if (bm) {
+	if (L->cfg.box_model) {
+		/* WHAT WE DECLARE, not what the wire carries: the pair is published from the
+		 * row at start, so the roster reads the row too. */
+		in = L->cfg.box_model->in_ch;
+		out = L->cfg.box_model->out_ch;
+	} else if (bm) {
 		in = bm->in_ch;
 		out = bm->out_ch;
 	} else if (L->cfg.pin_model) {
