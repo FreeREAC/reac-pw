@@ -95,5 +95,35 @@ pushed at a box that arrives later.
 | `reac.discovery.scope`, `.state`, `.seq`, `.devices` | playback | what this NIC has heard |
 | `reac.health.*` | playback | the pacer's own telemetry — see [HEALTH-TELEMETRY.md](HEALTH-TELEMETRY.md) |
 
+## Reading — the ROSTER, including the segments that have no node
+
+The two nodes above exist only where there is **something to carry** — a box recognised, a
+master to tap, or a width the operator pinned. A segment that is probing an empty wire has
+no node at all, by ruling. So the daemon publishes ONE more node, for itself:
+
+| | |
+|---|---|
+| `node.name` | `reac-pw` |
+| `media.class` | `Reac/Roster` — a class no session manager has a rule for, so nothing links or routes it |
+| ports | none |
+| find it by | the property `reac.roster = 1`, never the name |
+
+Its properties are the roster, one index-keyed group per segment the daemon runs:
+
+| property | meaning |
+|---|---|
+| `reac.roster.n` | how many groups there are |
+| `reac.roster.<i>.name` | the interface name — the segment's identity, and what a reader keys on. The index is an ORDER (byte order of the names), not an identity |
+| `reac.roster.<i>.state` | `probing` \| `established` \| `slave` \| `tap` \| `refused` \| `ignored` |
+| `reac.roster.<i>.model` | the recognised box in `reac.box-model`'s own vocabulary (`s1608`, `s4000s`), or `none` |
+| `reac.roster.<i>.role` | `auto` \| `master` \| `slave` \| `tap`, as RESOLVED — never as asked |
+| `reac.roster.<i>.source` | `autodetected`, or `conf:<file>` naming the file that pinned it |
+| `reac.roster.<i>.width` | the published pair's `in/out`, `0/0` where there is no pair |
+
+The node is created once and lives for the process: every change is a property update, so a
+client that has found it once never has to find it again. It is a READ surface only — a role
+is still written on the segment's own door (`reac.cfg.role`), or pinned across restarts in
+the conf.
+
 Environment knobs are a separate surface and live in [ENV-KNOBS.md](ENV-KNOBS.md): they
 configure a segment at start-up, where these properties and params drive it while it runs.

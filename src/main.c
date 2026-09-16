@@ -4391,27 +4391,44 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
  * it is. */
 static void segconf_announce(void)
 {
-	if (!g_segconf.present) {
-		fprintf(stderr, "reac-pw: no %s — every segment autodetects: roles come from "
-		        "the wire (auto) and segments from the host's interfaces. Looked at %s\n",
-		        REAC_SEGCONF_FILE, g_segconf.path);
+	if (g_segconf.n_files == 0) {
+		fprintf(stderr, "reac-pw: no %s and no %s/ — every segment autodetects: roles "
+		        "come from the wire (auto) and segments from the host's interfaces. "
+		        "Looked at %s\n",
+		        REAC_SEGCONF_FILE, REAC_SEGCONF_DIRD, g_segconf.path);
 	} else {
-		fprintf(stderr, "reac-pw: %s: %d segment(s) overridden\n",
-		        g_segconf.path, g_segconf.n);
+		/* THE FILES, IN THE ORDER THEY WERE OBEYED. With a drop-in directory behind
+		 * the conf, "the config said so" names nothing an operator can open — and an
+		 * order they cannot read back is an order they will get wrong (spec amendment
+		 * 2026-09-16 third, §C). */
+		fprintf(stderr, "reac-pw: %d configuration file(s), read in this order, LAST "
+		        "WINS per key:\n", g_segconf.n_files);
+		for (int i = 0; i < g_segconf.n_files; i++)
+			fprintf(stderr, "reac-pw:   %d. %s/%s\n", i + 1, g_segconf.base,
+			        g_segconf.file[i]);
+		fprintf(stderr, "reac-pw: %d segment(s) overridden\n", g_segconf.n);
 		for (int i = 0; i < g_segconf.n; i++) {
 			const struct reac_segconf_seg *sg = &g_segconf.seg[i];
-			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s\n", sg->name,
+			/* AND WHICH FILE SET EACH KEY. This is the whole safety of last-wins:
+			 * an override nobody can trace back to a file is the 2026-09-16 fault
+			 * with one more file in it. */
+			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s%s%s%s%s%s\n", sg->name,
 			        sg->role_set ? " role=" : "",
 			        sg->role_set ? reac_role_intent_name(sg->role) : "",
-			        sg->ignore ? " ignore" : "");
+			        sg->role_set ? " (" : "",
+			        sg->role_set ? sg->role_file : "",
+			        sg->role_set ? ")" : "",
+			        sg->ignore ? " ignore (" : "",
+			        sg->ignore ? sg->ignore_file : "",
+			        sg->ignore ? ")" : "");
 		}
 	}
 	for (int i = 0; i < g_segconf.n_refusals; i++)
-		fprintf(stderr, "reac-pw: %s REFUSED %s\n", REAC_SEGCONF_FILE,
-		        g_segconf.refusal[i]);
+		fprintf(stderr, "reac-pw: REFUSED %s\n", g_segconf.refusal[i]);
 	if (g_segconf.refused > (unsigned)g_segconf.n_refusals)
-		fprintf(stderr, "reac-pw: %s refused %u line(s) in all; the first %d are above\n",
-		        REAC_SEGCONF_FILE, g_segconf.refused, g_segconf.n_refusals);
+		fprintf(stderr, "reac-pw: %u line(s) were refused in all; the first %d are "
+		        "above, each naming its own file\n",
+		        g_segconf.refused, g_segconf.n_refusals);
 	/* AND THE HOST-WIDE KEY THAT NO LONGER DOES ANYTHING. The per-segment ones are named
 	 * as each interface is met (segment_say_env_role_retired); this is the bare one, which
 	 * belongs to no interface and would otherwise never be mentioned at all. */
