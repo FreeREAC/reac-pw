@@ -1414,7 +1414,12 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
 
 static void sink_publish_health(struct reac_sink_node *n)
 {
-	if (!n->stream || !n->pacer_open)
+	/* THE PACER IS THE GATE, NOT THE NODE. This read `!n->stream || !n->pacer_open`, and
+	 * since the no-node ruling (2026-09-16) a master PROBING an empty wire has no stream —
+	 * so the whole health window went silent, INCLUDING its stderr half, on exactly the
+	 * segment whose only remaining home is the journal. The properties below need a node
+	 * and are skipped without one; the LINE does not, and is printed either way. */
+	if (!n->pacer_open)
 		return;
 	if (!reac_pacer_health_poll(&n->pacer, reac_pacer_mono_ns(), &n->health))
 		return;   /* window still open */
@@ -1552,7 +1557,10 @@ static void sink_publish_health(struct reac_sink_node *n)
 		REACPW_PROP_HEALTH_WAKE_LEAD_US,   wlead,
 		NULL);
 	if (props) {
-		pw_stream_update_properties(n->stream, &props->dict);
+		/* No node on a segment with no box, and the properties have nowhere to go —
+		 * but the window still closed and the line below still prints. */
+		if (n->stream)
+			pw_stream_update_properties(n->stream, &props->dict);
 		pw_properties_free(props);
 	}
 
