@@ -89,6 +89,31 @@ for o in d:
     print("roster", o["id"], p.get("node.name","?"), n, kv)
 ' "$1"
 }
+# EVERY OBJECT ON THE GRAPH THAT WEARS reac.roster, WHATEVER ITS TYPE — one line each,
+# `<type> <id>`. The roster is a NODE; anything else carrying the same declaration is a
+# decoy, and on 2026-09-16 exactly one existed: pw_filter_new_simple copies the properties
+# it is given into the CONTEXT as well, so the CLIENT object wore node.name=reac-pw,
+# media.class=Reac/Roster and reac.roster=1 with no roster on it at all. The operator ran
+# `pw-cli info <that id>`, saw three properties and no roster, and filed a live defect
+# against a daemon that was publishing correctly on the node next door.
+wearers_of() {
+	pw-dump | python3 -c '
+import json,sys
+pid=int(sys.argv[1])
+d=json.load(sys.stdin)
+mine={o["id"] for o in d if o.get("type")=="PipeWire:Interface:Client"
+      and int(o["info"]["props"].get("application.process.id",-1))==pid}
+for o in d:
+    t=o.get("type","?")
+    p=o.get("info",{}).get("props",{})
+    if str(p.get("reac.roster")) != "1": continue
+    # OURS: a node by its client, a client by being one of ours.
+    if t=="PipeWire:Interface:Client":
+        if o["id"] not in mine: continue
+    elif int(p.get("client.id",-1)) not in mine: continue
+    print(t.rsplit(":",1)[-1], o["id"])
+' "$1"
+}
 # The segment nodes, for the positive control: <node.name> <reac.segment>.
 seg_nodes() {
 	pw-dump | python3 -c '
@@ -144,6 +169,9 @@ grep -a "autodetected .* -> reac-capture" "$LOG" | head -1 | sed 's/^/  control-
 # ---- A + B. THE ROSTER ITSELF ---------------------------------------------------------
 echo "roster-count $(roster_of $PID | wc -l)"
 roster_of $PID | sed 's/^/  A /'
+echo "wearers-count $(wearers_of $PID | wc -l)"
+wearers_of $PID | sed 's/^/  wearer /'
+grep -a "roster is on the graph" "$LOG" | head -1 | sed 's/^/  rosterline /'
 
 # ---- C. THE BOX GOES, AND THE NODE MUST NOT --------------------------------------------
 kill -TERM $FAKEPID 2>/dev/null; kill -9 $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
@@ -192,6 +220,23 @@ A=$(line_of A)
 	|| fail "the roster node is not named reac-pw: $A"
 [ "$(echo "$A" | awk '{print $5}')" = "0" ] \
 	|| fail "the roster node has ports — it is a node about segments, never a door to one: $A"
+
+# A1b. AND NOTHING ELSE ON THE GRAPH WEARS reac.roster. The declaration is how a client
+#      FINDS the roster, so a second object carrying it is a decoy that answers `pw-cli
+#      info` with three properties and no roster — which is precisely how this daemon was
+#      reported broken while it was working (2026-09-16).
+[ "$(val wearers-count)" = "1" ] \
+	|| fail "$(val wearers-count) object(s) carry reac.roster=1 and only the NODE may: $(echo "$OUT" | grep -a '^  wearer ')"
+echo "$OUT" | grep -qa '^  wearer Node ' \
+	|| fail "the object carrying reac.roster=1 is not a Node: $(echo "$OUT" | grep -a '^  wearer ')"
+
+# A1c. THE JOURNAL NAMES THE NODE ID, so the operator's next command reads the right
+#      object. An id in a log line that points at something else is worse than no id.
+rid=$(echo "$OUT" | grep -a '^  rosterline ' | sed 's/.*id \([0-9]*\).*/\1/')
+[ -n "$rid" ] && [ "$rid" != "$(echo "$OUT" | grep -a '^  rosterline ')" ] \
+	|| fail "the daemon announced the roster without naming its node id: $(echo "$OUT" | grep -a '^  rosterline ')"
+[ "$rid" = "$(echo "$A" | awk '{print $3}')" ] \
+	|| fail "the journal says the roster is node $rid and the graph says it is $(echo "$A" | awk '{print $3}')"
 
 # A2. IT LISTS BOTH SEGMENTS: the empty one and the boxed one.
 [ "$(prop A reac.roster.n)" = "2" ] \

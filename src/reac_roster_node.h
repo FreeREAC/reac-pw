@@ -28,6 +28,8 @@
 #ifndef REAC_ROSTER_NODE_H
 #define REAC_ROSTER_NODE_H
 
+#include <stdint.h>
+
 #include "reac_roster.h"
 
 struct pw_loop;
@@ -37,6 +39,13 @@ struct reac_roster_node;
  * anything: the caller retries on the next tick, and a daemon with no graph still carries
  * audio and still has its journal. */
 struct reac_roster_node *reac_roster_node_new(struct pw_loop *loop);
+
+/* The node's id on the graph, or SPA_ID_INVALID while the export is still in flight. The
+ * announcement waits for it: an operator reads a log line and runs `pw-cli info <id>`, and
+ * the one thing that must never happen is that id landing on another object — which is
+ * exactly how this node was reported broken on the day it shipped (the CLIENT wore its
+ * properties; see reac_roster_node.c). */
+uint32_t reac_roster_node_id(const struct reac_roster_node *n);
 
 /* Apply one delta from reac_roster_delta. `remove` entries REMOVE the key (a NULL value in
  * the dict PipeWire merges), which is what makes a departed segment leave no trace. */
