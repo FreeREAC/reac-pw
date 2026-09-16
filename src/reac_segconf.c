@@ -4,6 +4,8 @@
 #include "reac_segconf.h"
 #include "reac_declared_vlan.h"
 
+#include <dirent.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -28,7 +30,11 @@ static void refuse(struct reac_segconf *c, int line, const char *fmt, ...)
 	if (c->n_refusals >= REAC_SEGCONF_REFUSALS)
 		return;
 	char *dst = c->refusal[c->n_refusals];
-	int k = snprintf(dst, REAC_SEGCONF_REFUSAL_LEN, "line %d: ", line);
+	/* THE FILE IS PART OF THE ADDRESS NOW. With a directory behind the conf a bare line
+	 * number points at nothing, and the operator's next act is to open the wrong file. */
+	const char *where = c->reading[0] ? c->reading : REAC_SEGCONF_FILE;
+	int k = line > 0 ? snprintf(dst, REAC_SEGCONF_REFUSAL_LEN, "%s:%d: ", where, line)
+	                 : snprintf(dst, REAC_SEGCONF_REFUSAL_LEN, "%s: ", where);
 	if (k < 0 || k >= REAC_SEGCONF_REFUSAL_LEN)
 		return;
 	va_list ap;
@@ -108,8 +114,10 @@ static struct reac_segconf_seg *seg_get(struct reac_segconf *c, const char *name
 	return s;
 }
 
-int reac_segconf_parse(struct reac_segconf *c, const char *text)
+int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char *label)
 {
+	snprintf(c->reading, sizeof c->reading, "%s", label ? label : REAC_SEGCONF_FILE);
+	c->gen++;
 	if (!text)
 		return c->n;
 	struct reac_segconf_seg *cur = NULL;
@@ -170,9 +178,14 @@ int reac_segconf_parse(struct reac_segconf *c, const char *text)
 				       "was NOT read", name, REAC_SEGCONF_MAX);
 				continue;
 			}
-			if (!is_new)
-				refuse(c, lineno, "[segment %s] appears more than once; the keys "
-				       "are merged", name);
+			/* A REPEATED HEADER IS A TYPO WITHIN ONE FILE AND AN OVERRIDE ACROSS
+			 * TWO. Same text, two meanings, told apart by the only thing that can
+			 * tell them apart: which file we are in. Refusing the override would
+			 * refuse the drop-in directory's whole purpose. */
+			if (!is_new && cur->seen_gen == c->gen)
+				refuse(c, lineno, "[segment %s] appears more than once in this "
+				       "file; the keys are merged", name);
+			cur->seen_gen = c->gen;
 			snprintf(cur_name, sizeof cur_name, "%s", name);
 			continue;
 		}
@@ -208,6 +221,7 @@ int reac_segconf_parse(struct reac_segconf *c, const char *text)
 			}
 			cur->role = i;
 			cur->role_set = 1;
+			snprintf(cur->role_file, sizeof cur->role_file, "%s", c->reading);
 		} else if (!strcasecmp(key, "ignore")) {
 			int b;
 			if (parse_bool(val, &b) != 0) {
@@ -216,12 +230,138 @@ int reac_segconf_parse(struct reac_segconf *c, const char *text)
 				continue;
 			}
 			cur->ignore = b;
+			cur->ignore_set = 1;
+			snprintf(cur->ignore_file, sizeof cur->ignore_file, "%s", c->reading);
 		} else {
 			refuse(c, lineno, "[segment %s] has no key '%s' — role, ignore",
 			       cur_name, key);
 		}
 	}
 	return c->n;
+}
+
+int reac_segconf_parse(struct reac_segconf *c, const char *text)
+{
+	return reac_segconf_parse_file(c, text, REAC_SEGCONF_FILE);
+}
+
+/* One file's whole text, parsed as `label`. Returns 1 if it was read, 0 if it was not
+ * there, -1 if it was there and could not be read (a refusal, never fatal). The stamp is
+ * taken WHATEVER the answer, because "it was not there" is a state the refresh must be
+ * able to see change. */
+static int read_one(struct reac_segconf *c, const char *label, struct reac_segconf_stamp *st)
+{
+	char path[1024];
+	snprintf(path, sizeof path, "%s/%s", c->base, label);
+	struct stat sb;
+	memset(st, 0, sizeof *st);
+	if (stat(path, &sb) == 0) {
+		st->present  = 1;
+		st->mtime_ns = (long long)sb.st_mtim.tv_sec * 1000000000LL + sb.st_mtim.tv_nsec;
+		st->size     = (long long)sb.st_size;
+		st->ino      = (unsigned long long)sb.st_ino;
+	}
+	FILE *f = fopen(path, "re");
+	if (!f) {
+		/* A DANGLING SYMLINK AND A PERMISSION DENIAL ARE NOT "ABSENT". The caller
+		 * decides which of those two this is: the hand-written file's absence is the
+		 * normal case, a drop-in that the DIRECTORY listed and we cannot open is a
+		 * fact the operator needs. */
+		return st->present ? -1 : 0;
+	}
+	if (c->n_files < REAC_SEGCONF_FILES)
+		snprintf(c->file[c->n_files++], REAC_SEGCONF_FILE_LEN, "%s", label);
+	/* Bounded read: this file is a handful of stanzas, and a config reader that will
+	 * allocate whatever it is pointed at is a config reader that can be pointed at
+	 * /dev/zero. Anything past the bound is REFUSED by name, never truncated quietly. */
+	char *text = malloc(64 * 1024);
+	if (!text) {
+		fclose(f);
+		snprintf(c->reading, sizeof c->reading, "%s", label);
+		refuse(c, 0, "out of memory reading this file");
+		return -1;
+	}
+	size_t n = fread(text, 1, 64 * 1024 - 1, f);
+	text[n] = '\0';
+	int more = (fgetc(f) != EOF);
+	fclose(f);
+	snprintf(c->reading, sizeof c->reading, "%s", label);
+	if (more)
+		refuse(c, 0, "larger than 64 KiB; the rest was NOT read");
+	reac_segconf_parse_file(c, text, label);
+	free(text);
+	return 1;
+}
+
+/* The drop-ins, in BYTE order of their name. Not locale collation: a configuration whose
+ * precedence changes with $LANG is not a precedence. */
+static int name_cmp(const void *a, const void *b)
+{
+	return strcmp((const char *)a, (const char *)b);
+}
+
+static void load_dropins(struct reac_segconf *c)
+{
+	char dird[1024];
+	snprintf(dird, sizeof dird, "%s/%s", c->base, REAC_SEGCONF_DIRD);
+	struct stat sb;
+	memset(&c->stamp_dir, 0, sizeof c->stamp_dir);
+	if (stat(dird, &sb) == 0) {
+		c->stamp_dir.present  = 1;
+		c->stamp_dir.mtime_ns = (long long)sb.st_mtim.tv_sec * 1000000000LL + sb.st_mtim.tv_nsec;
+		c->stamp_dir.size     = (long long)sb.st_size;
+		c->stamp_dir.ino      = (unsigned long long)sb.st_ino;
+	}
+	DIR *d = opendir(dird);
+	if (!d)
+		return;   /* no directory is the normal case, exactly like no conf */
+	/* One name is one drop-in; the bound is the same class as every other bound here and
+	 * the excess is COUNTED, not dropped in silence. */
+	static char names[REAC_SEGCONF_FILES][REAC_SEGCONF_FILE_LEN];
+	int n = 0;
+	struct dirent *e;
+	while ((e = readdir(d))) {
+		const char *nm = e->d_name;
+		size_t len = strlen(nm);
+		/* `*.conf`, and nothing hidden: an editor's `.#50-openmixer.conf` swap file
+		 * and a `.bak` are not configuration, and reading either is how a half-written
+		 * file becomes a rig. */
+		if (nm[0] == '.' || len < 6 || strcmp(nm + len - 5, ".conf") != 0)
+			continue;
+		if (len + sizeof(REAC_SEGCONF_DIRD) + 1 >= REAC_SEGCONF_FILE_LEN) {
+			c->files_overflow++;   /* a name we could not even print in a refusal */
+			continue;
+		}
+		if (n >= REAC_SEGCONF_FILES - 1) {
+			c->files_overflow++;
+			continue;
+		}
+		snprintf(names[n++], REAC_SEGCONF_FILE_LEN, "%s", nm);
+	}
+	closedir(d);
+	qsort(names, (size_t)n, REAC_SEGCONF_FILE_LEN, name_cmp);
+	for (int i = 0; i < n; i++) {
+		char label[REAC_SEGCONF_FILE_LEN];
+		snprintf(label, sizeof label, "%s/%s", REAC_SEGCONF_DIRD, names[i]);
+		int slot = c->n_files;
+		if (slot >= REAC_SEGCONF_FILES) {
+			c->files_overflow++;   /* the stamp table is full; never clobber one */
+			continue;
+		}
+		int r = read_one(c, label, &c->stamp[slot]);
+		/* THE DIRECTORY LISTED IT, so "not there" is not the normal case here — it is
+		 * a dangling symlink, a permission denial, or a file removed under us. Each of
+		 * those is a fact the operator needs; only the hand-written file is allowed to
+		 * be absent in silence. */
+		if (r <= 0) {
+			snprintf(c->reading, sizeof c->reading, "%s", label);
+			refuse(c, 0, "is listed in the directory and could NOT be read (%s); "
+			       "the files that could be read are still applied", strerror(errno));
+		}
+	}
+	if (c->files_overflow)
+		refuse(c, 0, "%u drop-in(s) past the %d-file bound were NOT read",
+		       c->files_overflow, REAC_SEGCONF_FILES - 1);
 }
 
 int reac_segconf_load(struct reac_segconf *c, const char *home)
@@ -234,49 +374,49 @@ int reac_segconf_load(struct reac_segconf *c, const char *home)
 		home = getenv("HOME");
 	if (!home || !*home)
 		home = ".";
-	snprintf(c->path, sizeof c->path, "%s/%s/%s", home, REAC_SEGCONF_DIR, REAC_SEGCONF_FILE);
+	snprintf(c->base, sizeof c->base, "%s/%s", home, REAC_SEGCONF_DIR);
+	snprintf(c->path, sizeof c->path, "%s/%s", c->base, REAC_SEGCONF_FILE);
 
-	struct stat st;
-	if (stat(c->path, &st) == 0) {
-		c->stamp_mtime = (long long)st.st_mtime;
-		c->stamp_size  = (long long)st.st_size;
-		c->stamp_ino   = (unsigned long long)st.st_ino;
-	}
-	FILE *f = fopen(c->path, "re");
-	if (!f)
-		return 0;   /* absent is the normal case, and `present` stays 0 to say which */
-	c->present = 1;
-	/* Bounded read: this file is a handful of stanzas, and a config reader that will
-	 * allocate whatever it is pointed at is a config reader that can be pointed at
-	 * /dev/zero. Anything past the bound is REFUSED by name, never truncated quietly. */
-	char *text = malloc(64 * 1024);
-	if (!text) {
-		fclose(f);
-		refuse(c, 0, "out of memory reading %s", c->path);
-		return 0;
-	}
-	size_t n = fread(text, 1, 64 * 1024 - 1, f);
-	text[n] = '\0';
-	int more = (fgetc(f) != EOF);
-	fclose(f);
-	if (more)
-		refuse(c, 0, "%s is larger than 64 KiB; the rest was NOT read", c->path);
-	reac_segconf_parse(c, text);
-	free(text);
+	/* THE HAND-WRITTEN FILE FIRST, and the drop-ins after it: later wins per key
+	 * (reac_segconf.h's REAC_SEGCONF_DIRD has the four reasons). An absent hand-written
+	 * file is the normal case and `present` is what says so — "absent" and "empty" must
+	 * not read alike. */
+	if (read_one(c, REAC_SEGCONF_FILE, &c->stamp[0]) > 0)
+		c->present = 1;
+	load_dropins(c);
 	return c->n;
+}
+
+/* Has `label` moved since the stamp? An absent file with an absent stamp has not. */
+static int moved(const struct reac_segconf *c, const char *label,
+                 const struct reac_segconf_stamp *st)
+{
+	char path[1024];
+	snprintf(path, sizeof path, "%s/%s", c->base, label);
+	struct stat sb;
+	int there = stat(path, &sb) == 0;
+	if (there != st->present)
+		return 1;
+	if (!there)
+		return 0;
+	long long mt = (long long)sb.st_mtim.tv_sec * 1000000000LL + sb.st_mtim.tv_nsec;
+	return mt != st->mtime_ns || (long long)sb.st_size != st->size ||
+	       (unsigned long long)sb.st_ino != st->ino;
 }
 
 int reac_segconf_refresh(struct reac_segconf *c)
 {
-	if (!c || !c->path[0])
+	if (!c || !c->base[0])
 		return 0;
-	struct stat st;
-	int there = stat(c->path, &st) == 0;
-	long long mt = there ? (long long)st.st_mtime : 0;
-	long long sz = there ? (long long)st.st_size : 0;
-	unsigned long long ino = there ? (unsigned long long)st.st_ino : 0;
-	if (there == (c->present != 0) && mt == c->stamp_mtime &&
-	    sz == c->stamp_size && ino == c->stamp_ino)
+	int move = moved(c, REAC_SEGCONF_FILE, &c->stamp[0]) ||
+	           moved(c, REAC_SEGCONF_DIRD, &c->stamp_dir);
+	/* Only if neither moved: the files the directory listed last time. A file REWRITTEN
+	 * in place does not move the directory, which is exactly what a console rewriting
+	 * its own drop-in does. */
+	for (int i = 0; !move && i < c->n_files; i++)
+		if (strcmp(c->file[i], REAC_SEGCONF_FILE) != 0)
+			move = moved(c, c->file[i], &c->stamp[i]);
+	if (!move)
 		return 0;
 	char keep[256];
 	snprintf(keep, sizeof keep, "%s", c->home);
@@ -308,6 +448,18 @@ int reac_segconf_role(const struct reac_segconf *c, const char *name, enum reac_
 	if (out)
 		*out = s->role;
 	return 1;
+}
+
+const char *reac_segconf_role_file(const struct reac_segconf *c, const char *name)
+{
+	const struct reac_segconf_seg *s = reac_segconf_find(c, name);
+	return s && s->role_set && s->role_file[0] ? s->role_file : NULL;
+}
+
+const char *reac_segconf_ignore_file(const struct reac_segconf *c, const char *name)
+{
+	const struct reac_segconf_seg *s = reac_segconf_find(c, name);
+	return s && s->ignore_set && s->ignore_file[0] ? s->ignore_file : NULL;
 }
 
 int reac_segconf_declared(const struct reac_segconf *c, struct reac_declared_vlan *tab,

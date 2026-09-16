@@ -51,19 +51,57 @@
 /* Refusals kept verbatim for the start-up block. Past this they are still COUNTED — a
  * bound that is silently hit is a bound nobody can act on. */
 #define REAC_SEGCONF_REFUSALS 8
-#define REAC_SEGCONF_REFUSAL_LEN 160
+#define REAC_SEGCONF_REFUSAL_LEN 200
 
 /* The file, relative to `~/.config/reac-pw/`. Stated here so the daemon, the test and the
  * documentation cannot drift apart. */
 #define REAC_SEGCONF_DIR  ".config/reac-pw"
 #define REAC_SEGCONF_FILE "reac-pw.conf"
 
+/* THE DROP-IN DIRECTORY, and the door the console writes through (spec amendment
+ * 2026-09-16 third, §A). Same grammar, same parser, same vocabulary; only the ORDER is
+ * new — the hand-written file first, then every `*.conf` here in BYTE order, LAST WINS
+ * PER KEY. That is the order systemd, sysctl.d, udev and WirePlumber already train every
+ * operator on this host to expect, and it is what lets BOTH doors the operator ruled for
+ * actually override: the console writes `reac-pw.conf.d/50-openmixer.conf` and never
+ * touches the hand-written file, and an operator who wants the last word takes it back
+ * with a name that sorts later (`99-local.conf`). It is safe only because every answer
+ * names the file it came from — see reac_segconf_role_file below. */
+#define REAC_SEGCONF_DIRD "reac-pw.conf.d"
+
+/* The base file plus this many drop-ins. Past it the excess is REPORTED, never read in
+ * silence — a console that writes one file and an operator who writes a handful are the
+ * whole population, and a directory with 17 of them is a mistake worth naming. */
+#define REAC_SEGCONF_FILES 17
+/* `reac-pw.conf` or `reac-pw.conf.d/<name>` — what a refusal and a provenance answer
+ * carry. Never an absolute path: what the operator needs is which of THEIR files said it,
+ * and the directory is already printed once at start. */
+#define REAC_SEGCONF_FILE_LEN 96
+
 struct reac_segconf_seg {
 	char name[IFNAMSIZ];
 	enum reac_role_intent role;  /* meaningful only when role_set */
-	int  role_set;               /* the file said `role =` for this segment */
-	int  ignore;                 /* the file said `ignore = yes` */
+	int  role_set;               /* SOME file said `role =` for this segment */
+	int  ignore;                 /* the last file that said `ignore =` said yes */
+	int  ignore_set;             /* some file said `ignore =` at all */
 	int  said_ignored;           /* the "not sniffed" line is printed once per segment */
+	/* WHICH FILE ANSWERED, PER KEY — the provenance the amendment's §C requires, and the
+	 * thing that makes last-wins debuggable rather than merely defined. Per KEY and not
+	 * per section, because last-wins is per key: `ignore` from the operator's file and
+	 * `role` from the console's drop-in is the ordinary case, not a corner one. */
+	char role_file[REAC_SEGCONF_FILE_LEN];
+	char ignore_file[REAC_SEGCONF_FILE_LEN];
+	unsigned seen_gen;           /* the file-number this section was last opened in */
+};
+
+/* What a file looked like when it was read, for reac_segconf_refresh. NANOSECOND mtime:
+ * a seconds-resolution stamp cannot see a drop-in rewritten twice in one second, which is
+ * exactly what a console writing its file does. */
+struct reac_segconf_stamp {
+	long long mtime_ns;
+	long long size;
+	unsigned long long ino;
+	int present;
 };
 
 struct reac_segconf {
@@ -75,27 +113,50 @@ struct reac_segconf {
 	int n_refusals;              /* how many are kept in `refusal` */
 	unsigned refused;            /* how many there were in total */
 	unsigned overflow;           /* segments past REAC_SEGCONF_MAX */
-	/* What the file looked like when it was last read, for reac_segconf_refresh. */
-	long long stamp_mtime;
-	long long stamp_size;
-	unsigned long long stamp_ino;
+	/* EVERY FILE READ, IN READ ORDER, so the start block can print the order it obeyed.
+	 * `file[0]` is REAC_SEGCONF_FILE whenever the hand-written file was there. */
+	char file[REAC_SEGCONF_FILES][REAC_SEGCONF_FILE_LEN];
+	int n_files;
+	unsigned files_overflow;     /* drop-ins past REAC_SEGCONF_FILES */
+	/* What each of them looked like when it was read, plus the DIRECTORY — a file added
+	 * or removed moves the directory's own mtime and nothing else. */
+	struct reac_segconf_stamp stamp[REAC_SEGCONF_FILES];
+	struct reac_segconf_stamp stamp_dir;
 	char home[256];              /* what _load was given, so a refresh can repeat it */
+	char base[512];              /* `<home>/.config/reac-pw`: every file path is base/file[i] */
+	char reading[REAC_SEGCONF_FILE_LEN];  /* the file being parsed, for the refusals */
+	unsigned gen;                /* the file-number being parsed; a repeated section is a
+	                              * typo WITHIN one file and an override ACROSS two */
 };
 
 void reac_segconf_init(struct reac_segconf *c);
 
-/* Parse one file's whole TEXT. Returns the number of segments the file names (0 is a
- * perfectly good answer for an empty or all-comment file). Never fails: everything it
- * cannot use is refused by name into `refusal[]`. */
+/* Parse one file's whole TEXT, as if it were `label` (`reac-pw.conf` or
+ * `reac-pw.conf.d/<name>`), MERGING onto whatever earlier files said: a key this text
+ * carries overrides, a key it is silent about keeps its earlier answer. Returns the
+ * running number of segments (0 is a perfectly good answer for an empty or all-comment
+ * file). Never fails: everything it cannot use is refused by NAME AND FILE into
+ * `refusal[]`. */
+int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char *label);
+
+/* The same, as the hand-written file. Kept because most callers have one text and no
+ * directory, and because a test of the GRAMMAR should not have to name a file. */
 int reac_segconf_parse(struct reac_segconf *c, const char *text);
 
-/* Read `<home>/.config/reac-pw/reac-pw.conf` and parse it. `home` NULL means $HOME, the
- * same convention reac_conf_lookup uses. `path` is filled in either way. Returns the
- * number of segments; an absent file returns 0 with `present` 0 and no refusal. */
+/* Read `<home>/.config/reac-pw/reac-pw.conf`, THEN every `*.conf` in
+ * `<home>/.config/reac-pw/reac-pw.conf.d/` in byte order, and parse them in that order —
+ * later wins per key (REAC_SEGCONF_DIRD above has the reasons). `home` NULL means $HOME,
+ * the same convention reac_conf_lookup uses. `path` is filled in either way. Returns the
+ * number of segments; an absent hand-written file returns 0 with `present` 0 and no
+ * refusal, and an absent directory is equally normal. A drop-in that exists and cannot be
+ * READ is a refusal by name, and the files that could be read are still honoured. */
 int reac_segconf_load(struct reac_segconf *c, const char *home);
 
-/* RE-READ THE FILE IF IT HAS MOVED UNDER US. One stat(); a reload only when the mtime,
- * size or inode changed, or the file appeared or vanished. Returns 1 if it reloaded.
+/* RE-READ IF ANYTHING HAS MOVED UNDER US. A stat() of the conf, a stat() of the
+ * directory, and — only when neither moved — one of each drop-in that was read; a reload
+ * only when an mtime, size or inode changed, or a file or the directory appeared or
+ * vanished. A file ADDED or REMOVED moves the directory's own mtime, so the common case
+ * costs two stats and nothing is opened unless something moved. Returns 1 if it reloaded.
  *
  * WHY ON DEMAND AND NOT ONCE AT START. Every other layer this daemon's configuration has
  * is read at the moment it is asked (`reac_conf_lookup` opens its files on every call),
@@ -125,6 +186,17 @@ int reac_segconf_ignored(const struct reac_segconf *c, const char *name);
  * is silent about this segment, which is the normal case and means: the wire decides. */
 int reac_segconf_role(const struct reac_segconf *c, const char *name,
                       enum reac_role_intent *out);
+
+/* WHICH FILE PINNED THIS SEGMENT'S ROLE — `reac-pw.conf` or `reac-pw.conf.d/<name>` — or
+ * NULL when nothing did (the normal case: the wire decided). This is what
+ * `reac.roster.<i>.source` publishes and what the start block prints, and it is the whole
+ * safety of last-wins: an override nobody can trace back to a file is the 2026-09-16
+ * fault with one more file in it. */
+const char *reac_segconf_role_file(const struct reac_segconf *c, const char *name);
+
+/* The same for `ignore`, so an IGNORED segment on the roster can say who switched it
+ * off. NULL when no file said `ignore =` for it. */
+const char *reac_segconf_ignore_file(const struct reac_segconf *c, const char *name);
 
 /* Every VLAN segment this file DECLARES, appended to a reac_declared_vlan table: naming
  * `[segment <parent>.<vid>]` is the declaration, so the netdev is minted at start whether

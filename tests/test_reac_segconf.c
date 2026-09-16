@@ -173,6 +173,110 @@ int main(void)
 	CHECK(reac_segconf_load(&c, home) == 0, "an empty file named a segment");
 	CHECK(c.present == 1, "an empty file that EXISTS reported itself absent");
 
+	/* ---- 5. THE DROP-IN DIRECTORY (amendment 2026-09-16, third, §A) ------------
+	 *
+	 * The console needs a door that is not the operator's file, and the operator needs
+	 * to keep the last word inside the same grammar. The order is the one every drop-in
+	 * directory on this host already uses: the base file first, then `*.conf` in BYTE
+	 * order, LAST WINS PER KEY. Everything below is that sentence, split into the parts
+	 * that can break separately. */
+	char dird[640];
+	snprintf(dird, sizeof dird, "%s/%s", dir, REAC_SEGCONF_DIRD);
+	snprintf(cmd, sizeof cmd, "mkdir -p '%s'", dird);
+	CHECK(system(cmd) == 0, "could not make the conf.d dir");
+
+	/* The base file, and two drop-ins that disagree with it and with each other. */
+	f = fopen(path, "we");
+	if (f) { fputs("[segment s0]\nrole = master\n[segment s2]\nignore = yes\n", f); fclose(f); }
+	char dp[768];
+	snprintf(dp, sizeof dp, "%s/20-local.conf", dird);
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment s0]\nrole = slave\n[segment s1]\nignore = yes\n", f); fclose(f); }
+	snprintf(dp, sizeof dp, "%s/50-openmixer.conf", dird);
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment s0]\nrole = tap\n[segment s2]\nrole = master\n", f); fclose(f); }
+	/* NOT `*.conf`: neither is read, and neither is a refusal either. */
+	snprintf(dp, sizeof dp, "%s/notes.txt", dird);
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment sX]\nrole = tap\n", f); fclose(f); }
+	snprintf(dp, sizeof dp, "%s/50-openmixer.conf.bak", dird);
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment sY]\nrole = tap\n", f); fclose(f); }
+
+	reac_segconf_init(&c);
+	reac_segconf_load(&c, home);
+	CHECK(c.refused == 0, "a clean base + drop-in set refused %u line(s): %s", c.refused,
+	      c.n_refusals ? c.refusal[0] : "");
+	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_TAP,
+	      "the LAST drop-in did not win s0's role (a drop-in overrides the hand-written file)");
+	CHECK(reac_segconf_ignored(&c, "s1"), "a drop-in's own segment was not read");
+	/* A KEY NOBODY LATER MENTIONED KEEPS ITS EARLIER ANSWER. Last-wins is per KEY, not
+	 * per section: the drop-in said `role` for s2 and said nothing about `ignore`. */
+	CHECK(reac_segconf_ignored(&c, "s2"), "a later file's `role` erased an earlier `ignore`");
+	CHECK(role_of(&c, "s2") == REAC_ROLE_INTENT_MASTER, "the drop-in's s2 role was not read");
+	CHECK(reac_segconf_find(&c, "sX") == NULL, "a file that is not *.conf was read");
+	CHECK(reac_segconf_find(&c, "sY") == NULL, "`.conf.bak` was read as a drop-in");
+
+	/* WHICH FILE ANSWERED — the provenance §C requires, and what makes last-wins
+	 * debuggable rather than merely defined. */
+	const char *src = reac_segconf_role_file(&c, "s0");
+	CHECK(src && strstr(src, "50-openmixer.conf"),
+	      "s0's role names '%s' as its source, expected the drop-in that set it",
+	      src ? src : "(none)");
+	src = reac_segconf_role_file(&c, "s2");
+	CHECK(src && strstr(src, "50-openmixer.conf"), "s2's role provenance is '%s'",
+	      src ? src : "(none)");
+	CHECK(reac_segconf_role_file(&c, "s9") == NULL,
+	      "a segment nobody pinned reported a source file");
+	/* THE FILES READ, IN READ ORDER, so the start block can print them. */
+	CHECK(c.n_files == 3, "read %d file(s), expected the base plus two drop-ins", c.n_files);
+	if (c.n_files == 3) {
+		CHECK(strcmp(c.file[0], REAC_SEGCONF_FILE) == 0,
+		      "the hand-written file was not read FIRST (got '%s')", c.file[0]);
+		CHECK(strstr(c.file[1], "20-local.conf") != NULL,
+		      "the drop-ins are not in byte order: [1] is '%s'", c.file[1]);
+		CHECK(strstr(c.file[2], "50-openmixer.conf") != NULL,
+		      "the drop-ins are not in byte order: [2] is '%s'", c.file[2]);
+	}
+
+	/* A REPEATED SECTION ACROSS FILES IS AN OVERRIDE (silent, above). WITHIN one file it
+	 * is still a typo, and the refusal names the FILE as well as the line — with N files
+	 * a bare line number points at nothing. */
+	snprintf(dp, sizeof dp, "%s/90-dup.conf", dird);
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment s5]\nrole = tap\n[segment s5]\nrole = slave\n", f); fclose(f); }
+	reac_segconf_init(&c);
+	reac_segconf_load(&c, home);
+	CHECK(refusal_names(&c, "90-dup.conf"), "a refusal did not name the file it came from");
+	CHECK(refusal_names(&c, "90-dup.conf:3:"), "a refusal did not name its line");
+
+	/* AN UNREADABLE DROP-IN IS REFUSED BY NAME AND IS NOT FATAL. A dangling symlink,
+	 * because this test also runs as root in a container, where mode 000 is readable. */
+	snprintf(cmd, sizeof cmd, "ln -sf /nonexistent-reac-pw '%s/40-broken.conf'", dird);
+	CHECK(system(cmd) == 0, "could not make the dangling drop-in");
+	reac_segconf_init(&c);
+	reac_segconf_load(&c, home);
+	CHECK(refusal_names(&c, "40-broken.conf"), "an unreadable drop-in was dropped in silence");
+	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_TAP,
+	      "one unreadable drop-in threw away the files that were readable");
+
+	/* THE RE-READ SEES A NEW DROP-IN. Same one-stat rule as the conf: the directory's
+	 * own mtime moves when a file is added, which is why the walk costs two stats in the
+	 * common case. A test that writes twice in one second is exactly what a
+	 * seconds-resolution stamp cannot see, so this is also the guard for that. */
+	CHECK(reac_segconf_refresh(&c) == 0, "an unchanged conf.d reloaded anyway");
+	snprintf(dp, sizeof dp, "%s/95-late.conf", dird);
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment s0]\nrole = slave\n", f); fclose(f); }
+	CHECK(reac_segconf_refresh(&c) == 1, "a drop-in added under a running daemon was not seen");
+	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_SLAVE,
+	      "the new last drop-in did not win s0's role after the re-read");
+	/* AND A REWRITE OF ONE DROP-IN, IN THE SAME SECOND, IS ALSO SEEN. */
+	f = fopen(dp, "we");
+	if (f) { fputs("[segment s0]\nrole = master\n", f); fclose(f); }
+	CHECK(reac_segconf_refresh(&c) == 1, "a drop-in rewritten in the same second was not seen");
+	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_MASTER, "the rewritten drop-in was not applied");
+
 	unlink(path);
 	snprintf(cmd, sizeof cmd, "rm -rf '%s'", home);
 	if (system(cmd) != 0)
