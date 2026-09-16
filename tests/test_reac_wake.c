@@ -47,7 +47,7 @@ int main(void)
 	 * played, and then the daemon acts — once. Stepped on a 100 ms grid over the first
 	 * two minutes, so an edge one step early or one step late is caught. */
 	reac_wake_init(&w, t0);
-	int bounces = 0;
+	int bounces = 0, exhausted = 0;
 	uint64_t first_bounce = 0;
 	for (t = t0; t < t0 + 120 * SEC; t += 100 * MS) {
 		struct reac_wake_obs o = silent_at(t0, t);
@@ -56,6 +56,8 @@ int main(void)
 			if (!bounces) first_bounce = t;
 			bounces++;
 		}
+		/* The ladder is spent inside this window, so the one-shot lands here. */
+		if (a == REAC_WAKE_ACT_EXHAUSTED) exhausted++;
 		/* Nothing is ever refused as "spent" before an edge has been made. */
 		if (!bounces) CHK(w.refusal != REAC_WAKE_SPENT);
 	}
@@ -69,7 +71,6 @@ int main(void)
 
 	/* ---- B. THE LADDER IS SPENT, AND THE DAEMON SAYS SO EXACTLY ONCE. After that this
 	 * segment is never bounced again however long it stays silent. */
-	int exhausted = 0;
 	for (t = t0 + 120 * SEC; t < t0 + 3600 * SEC; t += SEC) {
 		struct reac_wake_obs o = silent_at(t0, t);
 		enum reac_wake_act a = reac_wake_step(&w, t, &o);

@@ -24,12 +24,65 @@ void reac_wake_reopen(struct reac_wake *w, uint64_t now_ns)
 enum reac_wake_act reac_wake_step(struct reac_wake *w, uint64_t now_ns,
                                   const struct reac_wake_obs *o)
 {
-	(void)now_ns; (void)o;
-	/* TODAY'S BEHAVIOUR, kept here only long enough for the test to fail against it:
-	 * the master drives the wire and never touches its own link, whatever the wire
-	 * says. 73 minutes of exactly this is the defect. */
-	w->refusal = REAC_WAKE_PUSH_NOT_PROVEN;
-	return REAC_WAKE_ACT_NONE;
+	/* THE LADDER IS READ IN THIS ORDER ON PURPOSE: cheapest fact first, and the one
+	 * that would be most wrong to act on before the one that is merely early. A wire
+	 * with no carrier is not a box to wake; a carrier we could not read is not
+	 * evidence of anything; a box that is talking is not silent. Only then does the
+	 * question "have we played the cheap rung yet" arise at all. */
+	if (!o->probing) {
+		/* Granting or established: an edge here tears down the thing that works. */
+		w->refusal = REAC_WAKE_NOT_PROBING;
+		return REAC_WAKE_ACT_NONE;
+	}
+	if (o->carrier == 0) {
+		w->refusal = REAC_WAKE_NO_CARRIER;
+		return REAC_WAKE_ACT_NONE;
+	}
+	if (o->carrier < 0) {
+		/* -1 is UNKNOWN and says nothing. An unreadable probe is never evidence
+		 * about a link, and this one would spend an edge on the strength of it. */
+		w->refusal = REAC_WAKE_CARRIER_UNKNOWN;
+		return REAC_WAKE_ACT_NONE;
+	}
+	if (o->rx_box_frames > 0) {
+		/* The far end is alive. Whatever is wrong, a PHY edge is not the remedy and
+		 * the frames already arriving are the evidence against it. */
+		w->refusal = REAC_WAKE_BOX_IS_TALKING;
+		return REAC_WAKE_ACT_NONE;
+	}
+	if (o->siblings_served) {
+		/* A bounce takes the device's VLAN children down with it. We never break a
+		 * segment that is serving to wake one that is not. */
+		w->refusal = REAC_WAKE_SIBLING_SERVED;
+		return REAC_WAKE_ACT_NONE;
+	}
+	if (w->bounces >= REAC_WAKE_MAX_BOUNCES) {
+		w->refusal = REAC_WAKE_SPENT;
+		if (w->spent_said)
+			return REAC_WAKE_ACT_NONE;
+		w->spent_said = 1;
+		return REAC_WAKE_ACT_EXHAUSTED;
+	}
+	if (w->last_bounce_ns && now_ns - w->last_bounce_ns < REAC_WAKE_SETTLE_NS) {
+		/* The box owes us a flood, a cold-connect and our own grant dwell. */
+		w->refusal = REAC_WAKE_SETTLING;
+		return REAC_WAKE_ACT_NONE;
+	}
+	/* THE CHEAP RUNG, AND IT IS COUNTED IN TRANSFERS. The clock is only the floor
+	 * underneath: a master whose push never COMPLETES has not played this rung at
+	 * all, and an interrupted transfer is measured to produce nothing. Both must be
+	 * satisfied, and the push count is the one that can refuse forever. */
+	if (o->scene_pushes < REAC_WAKE_MIN_PUSHES ||
+	    now_ns - w->opened_ns < REAC_WAKE_GRACE_NS) {
+		w->refusal = REAC_WAKE_PUSH_NOT_PROVEN;
+		return REAC_WAKE_ACT_NONE;
+	}
+	/* Everything cheap has been tried and the wire answered none of it. Make the box
+	 * the one event its firmware leaves DROP on. */
+	w->refusal = REAC_WAKE_OK;
+	w->bounces++;
+	w->last_bounce_ns = now_ns;
+	return REAC_WAKE_ACT_BOUNCE;
 }
 
 const char *reac_wake_refusal_text(enum reac_wake_refusal r)
