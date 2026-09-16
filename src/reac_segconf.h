@@ -78,6 +78,10 @@
  * and the directory is already printed once at start. */
 #define REAC_SEGCONF_FILE_LEN 96
 
+/* A box-model token: the longest in the table is `s4000s-0832`. A token past this is
+ * refused by name like any other unknown one. */
+#define REAC_SEGCONF_MODEL_LEN 24
+
 struct reac_segconf_seg {
 	char name[IFNAMSIZ];
 	enum reac_role_intent role;  /* meaningful only when role_set */
@@ -85,6 +89,16 @@ struct reac_segconf_seg {
 	int  ignore;                 /* the last file that said `ignore =` said yes */
 	int  ignore_set;             /* some file said `ignore =` at all */
 	int  said_ignored;           /* the "not sniffed" line is printed once per segment */
+	/* THE MODEL ROW A BOX-ROLE SEGMENT DECLARES (2026-09-17 spec §4). A token from
+	 * libreac's box-model table — `s1608`, `s4000s-0832`, `fr4000` — and nothing
+	 * else: what we present to a mixer is a declared row, never a width somebody
+	 * typed. Meaningful ONLY under `role = box`; on any other role it is refused by
+	 * name, because a key that is read on one role and ignored on another is a trap
+	 * with no upside. There is NO DEFAULT: a box that declares the wrong width to a
+	 * mixer is a patch that silently lands on the wrong channels. */
+	char model[REAC_SEGCONF_MODEL_LEN];
+	int  model_set;
+	char model_file[REAC_SEGCONF_FILE_LEN];
 	/* WHICH FILE ANSWERED, PER KEY — the provenance the amendment's §C requires, and the
 	 * thing that makes last-wins debuggable rather than merely defined. Per KEY and not
 	 * per section, because last-wins is per key: `ignore` from the operator's file and
@@ -197,6 +211,12 @@ const char *reac_segconf_role_file(const struct reac_segconf *c, const char *nam
 /* The same for `ignore`, so an IGNORED segment on the roster can say who switched it
  * off. NULL when no file said `ignore =` for it. */
 const char *reac_segconf_ignore_file(const struct reac_segconf *c, const char *name);
+
+/* THE MODEL ROW THIS SEGMENT DECLARES, or NULL when it declares none — which is every
+ * segment that is not a box, and a box whose model was refused. The string is a token of
+ * libreac's own box-model table (reac_box_model_by_token), folded to lower case, so the
+ * caller looks the row up rather than re-deriving a width from a name. */
+const char *reac_segconf_model(const struct reac_segconf *c, const char *name);
 
 /* Every VLAN segment this file DECLARES, appended to a reac_declared_vlan table: naming
  * `[segment <parent>.<vid>]` is the declaration, so the netdev is minted at start whether
