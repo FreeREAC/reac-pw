@@ -160,3 +160,63 @@ The LIVE trunk. Nothing in this lane ran against `enp131s0.1/.11/.12` with the o
 boxes on it: the desk was carrying a show test. What the tests above stand on is veth pairs and
 VLAN sub-interfaces inside an unprivileged user+net+pid namespace, which proves the daemon's
 decisions and proves nothing about a switch. The rig step is in §5 of the lane's report.
+
+## Amendment 2026-09-16 (later) — a node with no ports is not a segment on the graph
+
+**RULED by the operator, same day:** *"a segment with NO recognised box must not appear in the
+PipeWire graph at all. The reac-capture/reac-playback nodes for a segment are created when a box
+is recognised on that wire and torn down when it leaves; the probing state lives in the daemon's
+own row/log, not on the graph."*
+
+**The live case.** The empty untagged trunk segment `enp131s0.1` — probing, box-model `none` —
+logged *"MASTER autodetect — the segment's door is on the graph now (reac-playback, no ports
+yet)"*, and the console rendered a device reading `none / 0 in`. A row for a thing that is not
+there, which the operator must then learn to ignore.
+
+**This SUPERSEDES the "door before the wire" half of Q5 option C** (openmixer's
+`2026-09-13-reac-plug-and-play.md` §0/§4 and `2026-08-20-reac-master-arbitration.md`'s Q5 answer,
+as built in reac-pw 0.5.1 and tested by `tests/doors-open-before-the-wire.sh`). The reason that
+ruling gave — a role, tap included, must be settable before anything enrols — is a real
+requirement and is NOT withdrawn; what is withdrawn is satisfying it with a **zero-port PipeWire
+node**. A role is settable before anything enrols through `reac-pw.conf` (§3) and, live, through
+the daemon's own door on a segment that HAS one.
+
+### The mechanical rule
+
+**A segment publishes a node only when that node has PORTS — that is, only when there is
+something to carry.** Three cases, and they are the same rule:
+
+| the wire | ports | on the graph |
+|---|---|---|
+| a box recognised on it (master enrolled it, or we slave-joined a box master) | its declared width | **yes** — `reac-capture` in / `reac-playback` out, sized and labelled by the box |
+| a foreign MASTER heard and tapped | the master's downstream width | **yes** — the tap serves a real stream, and this rule is not about who owns the wire |
+| nothing recognised: probing, refused, or a tap with no stream | 0 | **no node at all** |
+| `--box MODEL` pinned (a fixed installation) | the pinned width | **yes** — the pin is an explicit declaration that this box belongs on this wire, the same class of act as a `reac-pw.conf` section, and its whole purpose is that a patch survives a box that is not powered yet |
+
+**And it is symmetric: a box that LEAVES takes its nodes with it.** The master's own FSM already
+clears `recognized_box` when the peer goes (`reac_pacer`, `reac_master_forget_box`); the
+autodetect watcher acts on that NULL and destroys both nodes. A node that outlives its box is the
+same `none / 0 in` row arriving by the other door.
+
+### What this costs, said before it is deployed
+
+**openmixer's `/reac/segment` roster is a GRAPH SCAN** (`packages/server/src/reac-props-discovery.ts`,
+governed by `2026-08-20-reac-auto-spine.md`): a segment is discovered by reading `reac.segment`
+off a node's props, and by nothing else. So a segment with no node has **no row on the console at
+all** — not a row that says "probing". That is a real loss and it is the console's half to fix:
+the daemon must offer its segment roster somewhere that is not a node's props, and the console
+must read it there. **Not built in this lane, and named rather than glossed.** Until it is, an
+empty segment is visible in the daemon's journal and nowhere else — which is what the ruling
+asks for and is less wrong than a device that says `none / 0 in`.
+
+The console already carries a rule for exactly this shape ("a reac-pw ghost door, box-model none,
+width 0x0, never outranks the real box's door") — that rule becomes dead code once no such door
+is ever published, and should be retired with the retargeting rather than left as a guard against
+a thing that cannot happen.
+
+### Proven by
+
+`tests/no-box-no-node.sh`: an empty segment yields ZERO graph nodes for its name (with a
+recognised box on another arm as the positive control, because an absence measured by an
+instrument that has never seen a presence is not a measurement), a box that enrols yields the
+sized pair, and a box that goes takes them away again.
