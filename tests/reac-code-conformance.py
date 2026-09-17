@@ -23,10 +23,11 @@ from pathlib import Path
 # The floor as of 2026-09-17 (28 bare refusal/failure-shaped lines left, all named
 # owed in the spec's proportionate-scope note). LOWER THIS when a line migrates;
 # never raise it to make a new one fit.
-FLOOR = 28
+FLOOR = 31
 
 REFUSAL_WORDS = re.compile(r'REFUSED|FATAL|failed|FAILED|could not|COULD NOT')
 FPRINTF_START = re.compile(r'fprintf\(stderr,\s*"reac-pw:')
+FPRINTF_CALL = re.compile(r'\bfprintf\(\s*stderr\s*,')
 CODE_EMIT_START = re.compile(r'reac_code_emit\(stderr,\s*"reac-pw"')
 TOKEN_DEF = re.compile(r'X\(\s*(RC_[A-Z_]+)\s*,\s*"([A-Z_]+)"\s*\)')
 
@@ -62,11 +63,15 @@ def bare_refusal_lines(src_files):
     for path in src_files:
         lines = path.read_text().splitlines(keepends=True)
         for i, line in enumerate(lines):
-            if CODE_EMIT_START.search(line):
-                continue
-            if not FPRINTF_START.search(line):
+            # Match on the JOINED statement, never the physical line: a refusal written as
+            # `fprintf(stderr,\n\t"reac-pw: FATAL ...")` -- the common split style -- shares no
+            # line between the call and the prefix and slipped past a per-line match
+            # (review of this lane, 2026-09-17: three such lines in main.c were not counted).
+            if not FPRINTF_CALL.search(line):
                 continue
             stmt = statement_text(lines, i)
+            if CODE_EMIT_START.search(stmt) or not FPRINTF_START.search(stmt):
+                continue
             if REFUSAL_WORDS.search(stmt):
                 hits.append(f'{path.name}:{i + 1}')
     return hits
