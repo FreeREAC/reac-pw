@@ -48,7 +48,7 @@ if ! grep -qE '^\s*0\s+[0-9]+\s+1\s*$' <<<"$map_fake"; then
 	echo "$map_fake"
 	exit 1
 fi
-if grep -q "FATAL — refusing to start as uid 0" <<<"$out_fake"; then
+if grep -q "E_ROOT_REFUSED" <<<"$out_fake"; then
 	echo "FAIL: fake (namespaced) root was refused. This breaks every one of the 25"
 	echo "      capability-gated whole-binary tests under tests/, which all rely on"
 	echo "      unshare -r --map-root-user for raw sockets with no real host root."
@@ -66,7 +66,7 @@ fi
 out_bare=$(HOME=/nonexistent-reac-pw-test timeout 5 "$BIN" 2>&1); rc_bare=$?
 
 if [ "$i_am_host_root" -eq 1 ]; then
-	if ! grep -q "FATAL — refusing to start as uid 0 (root)" <<<"$out_bare"; then
+	if ! grep -q "E_ROOT_REFUSED" <<<"$out_bare"; then
 		echo "FAIL: this shell IS the host's root (uid_map: $my_map) and the daemon"
 		echo "      was not refused — root can still start it"
 		echo "$out_bare" | head -20
@@ -80,7 +80,7 @@ if [ "$i_am_host_root" -eq 1 ]; then
 	fi
 	echo "OK: host root (uid_map $my_map) refused, rc=$rc_bare; namespaced root (uid_map $map_fake) not refused"
 else
-	if grep -q "FATAL — refusing to start as uid 0" <<<"$out_bare"; then
+	if grep -q "E_ROOT_REFUSED" <<<"$out_bare"; then
 		echo "FAIL: this shell is NOT the host's root (uid $(id -u), uid_map: $my_map)"
 		echo "      and was refused anyway — the check is not reading the identity"
 		echo "      it claims to"
