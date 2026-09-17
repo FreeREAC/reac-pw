@@ -23,12 +23,16 @@
  * recognition (reac_master_set_box) lands WHILE granting, which is the window-restart
  * path the S-4000S takes and the S-1608 does not.
  *
- * The knob getters cache in statics, so one process exercises one configuration; the
- * meson declaration runs this binary twice with different env and it asserts the arm it
- * was given. Both arms matter: the fast one must be fast, and the default must not move.
+ * libreac reads no environment of its own (docs/design/specs/
+ * 2026-09-17-tunables-api-and-shared-refusal-codes.md) — this test reads its OWN two env
+ * vars (meson runs this binary twice with different env, one process per configuration)
+ * and pushes them through reac_master_tunables_set() before touching the FSM, the same
+ * doorway the real daemon uses. Both arms matter: the fast one must be fast, and the
+ * default must not move.
  */
 #include <reac/reac_master.h>
 #include <reac/reac_ports.h>
+#include <reac/reac_tunables.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +48,14 @@ int main(void)
 {
 	const char *v = getenv("REACPW_GRANT_ON_DECLARE");
 	const int fast = !(v && v[0] == '0');
+	const char *dwell_ms_env = getenv("REACPW_GRANT_DWELL_MS");
+
+	struct reac_master_tunables mt = REAC_MASTER_TUNABLES_DEFAULT;
+	mt.grant_on_declare = fast;
+	if (dwell_ms_env)
+		mt.grant_dwell_ms = strtol(dwell_ms_env, NULL, 10);
+	reac_master_tunables_set(&mt);
+
 	struct reac_master m;
 
 	reac_master_init(&m, M_SRC, NULL, FPS);
