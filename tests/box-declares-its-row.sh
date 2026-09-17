@@ -195,7 +195,10 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	# REAC_BOX_CHANNELS set to a DIFFERENT legal width from its row's, so every width
 	# asserted below is asserted against a key that is trying to change it; the key
 	# must be named as ignored and nothing it names may move.
-	HOME="$CONF" REAC_DEBUG=1 ${envw:+REAC_BOX_CHANNELS=$envw} "$BIN" >"$RT/$tag.log" 2>&1 &
+	# THROUGH `env`, NOT AS A BARE PREFIX: bash recognises assignment prefixes before
+	# expansion, so an expanded `REAC_BOX_CHANNELS=8` word becomes the COMMAND NAME
+	# and the daemon never starts -- measured here as "the sniffer saw 0 frames".
+	HOME="$CONF" REAC_DEBUG=1 env ${envw:+REAC_BOX_CHANNELS="$envw"} "$BIN" >"$RT/$tag.log" 2>&1 &
 	local pid=$!
 	# SAMPLED OVER THE RUN, NOT ONCE AT THE END. The master's wake ladder takes the link
 	# down and up when a box goes quiet, and every node and row on both sides is torn
