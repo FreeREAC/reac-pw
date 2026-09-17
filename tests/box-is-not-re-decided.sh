@@ -120,13 +120,13 @@ fi
 if grep -q "\[nbx0\] .*re-hearing the wire" "$LOG"; then
 	echo "FAIL: the box segment was re-heard"; grep -n "\[nbx0\]" "$LOG" | tail -20; exit 1
 fi
-# AND IT IS STILL THE BOX IT WAS ASKED TO BE: one BOX role line, never a second one from
+# AND IT IS STILL THE BOX IT WAS ASKED TO BE: one `role = box` line, never a second from
 # a rebuild. A segment re-served after a drop says it again.
 N=$(grep -c "\[nbx0\] role = box —" "$LOG")
 [ "$N" = "1" ] || { echo "FAIL: the box row was taken up $N times — it was re-served"
                     grep -n "\[nbx0\]" "$LOG" | tail -20; exit 1; }
 
-echo "OK: a quiet mixer does not re-decide a box segment (1 `role = box` line, no re-hearing)"
+echo 'OK: a quiet mixer does not re-decide a box segment (one role = box line, no re-hearing)'
 echo "    and the control segment on the same daemon WAS re-decided when its master left"
 INNER
 )
