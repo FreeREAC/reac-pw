@@ -1902,10 +1902,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 				if (c->join_box_master || c->box_model) {
 					const struct reac_box_model *bm = c->box_model ? c->box_model
 					                                               : bm_up;
+					/* ONE NUMBER, SPELLED ONCE. The width of what we send was
+					 * written out three times in this block and REPORTED as a
+					 * fourth, different one (`up_ch`) when the sizing failed —
+					 * a message about a size nobody tried. */
+					const int sink_ch = c->box_model ? c->box_model->in_ch : up_ch;
 					struct reac_sink_cfg ucfg = {
 						.ifname = c->tx_if,
-						.channels = c->box_model
-						        ? c->box_model->in_ch : up_ch,
+						.channels = sink_ch,
 						.sample_rate = L->rx.sample_rate,
 						.src_mac = box_mac,
 						.console_field = c->mixer->console_field,
@@ -1914,17 +1918,21 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 						.rate_match_off = -1,
 						.upstream_ring = &L->tx_ring };
 					L->sink = reac_sink_node_new(loop, &L->tx_ring, &ucfg);
+					/* ONE TEXT FOR BOTH CALLERS. What reac-playback carries is
+					 * the upstream we send — the box master's outputs on a join,
+					 * the mixer's inputs under role = box — and naming only the
+					 * first misdescribed the second. What both need said is the
+					 * width that was tried and that nothing can be routed. */
 					if (!L->sink)
-						fprintf(stderr, "reac-pw: %sthe box master's outputs have "
-						        "no reac-playback node — its inputs still "
-						        "arrive, but nothing can be routed to it\n",
-						        c->tag);
-					else if (reac_sink_node_ensure(L->sink,
-					                               c->box_model ? c->box_model->in_ch
-					                                            : up_ch,
+						fprintf(stderr, "reac-pw: %sthe %d channels we send "
+						        "upstream have no reac-playback node — what "
+						        "arrives still arrives, but nothing can be "
+						        "routed out\n", c->tag, sink_ch);
+					else if (reac_sink_node_ensure(L->sink, sink_ch,
 					                               bm ? bm->display : NULL) != 0)
 						fprintf(stderr, "reac-pw: %scould not size reac-playback "
-						        "to the box master's %d outputs\n", c->tag, up_ch);
+						        "to the %d channels we send upstream\n",
+						        c->tag, sink_ch);
 				}
 			} else {
 				fprintf(stderr, "reac-pw: %sslave engine thread failed to start\n", c->tag);
