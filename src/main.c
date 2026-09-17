@@ -2923,21 +2923,22 @@ static struct topo_tap *tap_find(struct hearing *h, const char *parent)
  * daemon itself masters on ANOTHER parent (`enp131s0.11/.12/.13`). The parent was then
  * refused as a trunk for ever and the cold box got no master.
  *
- * THE MECHANISM IS THE SOCKET'S FIRST MICROSECONDS. `reac_topo_tap_open()` creates the tap
- * as `socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))` and binds it to the parent's ifindex
- * a few syscalls later — the BPF filter, PACKET_AUXDATA and `if_nametoindex()` sit between.
- * An AF_PACKET socket opened with a NON-ZERO protocol is live on EVERY interface from
- * `socket()` until `bind()`, so in that window the queue fills with frames from other
- * links, and the 0x8819 filter attached first makes sure the ones that survive are exactly
- * the frames this classifier treats as evidence. On the rig they are our own VLAN masters
- * tagged on enp131s0, three sources at the wire cadence across a window a couple of
- * hundred microseconds wide: one frame per VLAN, every start, and ~10 per VLAN across a
- * link bounce because a bounce re-opens the tap several times.
+ * THE MECHANISM WAS THE SOCKET'S FIRST MICROSECONDS, AND THE LIBRARY CLOSED IT. Up to
+ * libreac 1.2.1 `reac_topo_tap_open()` created the tap as `socket(AF_PACKET, SOCK_RAW,
+ * htons(ETH_P_ALL))` and bound it a few syscalls later — the BPF filter, PACKET_AUXDATA
+ * and `if_nametoindex()` sat between — and a packet socket created with a NON-ZERO
+ * protocol is live on EVERY interface until its bind lands. On the rig that queued one
+ * frame per VLAN per start from our own masters on ANOTHER parent, and ~10 per VLAN
+ * across a link bounce. libreac 1.2.2 (#18) creates the socket with protocol 0 and gives
+ * ETH_P_ALL to the bind, so the hook is never installed unbound; meson.build's floor is
+ * 1.2.2 for exactly this, because the difference is invisible to a symbol check.
  *
- * PACKET_IGNORE_OUTGOING CANNOT SAVE THIS, and reading its presence as protection is what
- * kept the bug alive after #98: the flag is set after `open()` returns, it drops frames as
- * they ARRIVE and never the ones already queued, and half of what a wide-open tap queues is
- * somebody else's INBOUND traffic, which the flag is not about at all.
+ * THE IFINDEX TEST BELOW STAYS, AND IS NOW A REGRESSION DETECTOR. It costs one compare on
+ * a frame we are already reading, it is the only thing that would announce a library that
+ * went back to a wide-open tap, and it still does the work PACKET_IGNORE_OUTGOING cannot:
+ * that flag drops frames as they ARRIVE, never the ones a socket already queued, and is
+ * not about another interface's INBOUND traffic at all. Reading its presence as protection
+ * is what kept the bug alive after #98.
  *
  * So the frame's own ifindex is the only honest answer, and the kernel puts it in
  * `sockaddr_ll.sll_ifindex` on every packet-socket read. This reads the tap directly to get
@@ -3011,6 +3012,8 @@ static void on_topo_io(void *data, int fd, uint32_t mask)
 		if (topo_tap_read(&tp->tap, &f) <= 0)
 			break;
 		/* #102: EVIDENCE ABOUT THIS PARENT IS WHAT ARRIVED INBOUND ON THIS PARENT.
+		 * With libreac >= 1.2.2 the foreign half can no longer happen (#18) and this
+		 * is the alarm that would say so if it did; the outgoing half is ours to make.
 		 * Anything else — another interface's frame queued before the tap was bound,
 		 * or one of our own transmissions — decides nothing here. Said once per tap,
 		 * with the sender, the VLAN and the real ifindex, so a repeat of this report

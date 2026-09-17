@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.17',
+  version: '1.0.18',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -78,7 +78,13 @@ m_dep        = cc.find_library('m', required : false)
 # the master never sizes it, and the roster sits at probing — which is precisely the
 # live defect of 2026-09-17. A floor that only ever catches missing symbols would let
 # that ship, so this one is raised for what the library DOES.
-libreac_dep = dependency('libreac', version : '>=1.2.1',
+# 1.2.2 RAISES IT AGAIN, for behaviour again: that is where reac_topo_tap_open() creates
+# the topology tap DEAF (protocol 0) and lets the bind make it live, so the tap can no
+# longer hear another interface's frames in the microseconds before it is bound (libreac
+# #18, measured at 88 632 foreign frames over 400 opens on 1.2.1). Against 1.2.1 this
+# daemon builds and runs and misclassifies a cold parent as a trunk on start, which is
+# the defect of 2026-09-14 — invisible to a symbol floor.
+libreac_dep = dependency('libreac', version : '>=1.2.2',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -95,7 +101,10 @@ libreac_dep = dependency('libreac', version : '>=1.2.1',
 # pacer's default became etf. A 1.1.2 satisfies '>=1.1.0', links against nothing that is
 # missing at configure time, and fails at LINK -- which is exactly the shape of failure
 # these floors are hand-raised to turn into a configure-time refusal.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.2.1', required : true)
+# >=1.2.2 SINCE 1.0.18: reac_topo.c lives in this library, and 1.2.2 is where its tap
+# stops hearing unbound-window traffic (libreac #18). Behaviour, not symbols, so nothing
+# below configure time would catch a 1.2.1.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.2.2', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,

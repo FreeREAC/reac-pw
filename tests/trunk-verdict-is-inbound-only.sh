@@ -11,13 +11,17 @@
 # masters on ANOTHER parent (enp131s0.11/.12/.13). The direct link was then refused as a
 # trunk for ever and the cold box got no master.
 #
-# THE MECHANISM (src/main.c, on_topo_io's header). libreac's tap is
-# socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)) and binds to the parent's ifindex a few
-# syscalls later; an AF_PACKET socket opened with a non-zero protocol is live on EVERY
-# interface until bind(), so whatever 0x8819 the machine carried in that window is queued
-# and read back as this parent's. PACKET_IGNORE_OUTGOING does not cover it: it is set after
-# the open, it drops frames as they arrive rather than the queue, and it says nothing about
-# another interface's INBOUND traffic.
+# THE MECHANISM, AND WHAT CHANGED (src/main.c, on_topo_io's header). Up to libreac 1.2.1
+# the tap was socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)) bound to the parent's ifindex a
+# few syscalls later, and a packet socket created with a non-zero protocol is live on EVERY
+# interface until bind(), so whatever 0x8819 the machine carried in that window was queued
+# and read back as this parent's. libreac 1.2.2 creates the socket deaf (protocol 0) and
+# gives ETH_P_ALL to the bind (libreac #18), and meson.build's floor now demands it. This
+# test does not move: it is the DAEMON's arm of the same job, it passes on either library,
+# and it is what would go red if a future tap — or a future reader of it — let a foreign
+# frame decide a parent again. PACKET_IGNORE_OUTGOING never covered any of it: it is set
+# after the open, it drops frames as they arrive rather than the queue, and it says nothing
+# about another interface's INBOUND traffic.
 #
 # THE RIG'S OWN CONDITION, reproduced, in BOTH the flavours a wide-open tap queues:
 #   - `noise0.11/.12/.13` carry tagged REAC at 4000 frames a second each, transmitted from
