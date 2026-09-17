@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+
+/* reac_knobs — every REACPW_ and REAC_ env/conf knob, DISCOVERED and PUBLISHED.
+ *
+ * "We should be able to set them and keep them if needed, and announce them when
+ * detected, so that we can manage them; autodetection does not mean obscurity, it's
+ * discovery and publish." (operator, 2026-09-17). Segment/role autodetection
+ * (2026-09-16) removed the daemon's DEPENDENCY on env vars for what it decides for
+ * itself; it never forbade an operator override for what is legitimately tunable, and
+ * `reac_knobs_announce()` is what makes every such override VISIBLE at start, rather
+ * than something only docs/ENV-KNOBS.md and --help claim exists.
+ *
+ * A knob's `conf_capable` bit means its REAL call site reads it through
+ * `reac_conf_lookup` (this table's own lookup, in `reac_knobs_announce`, is the SAME
+ * call — a different answer here from the real read site would be an announce that
+ * lies). A knob marked NOT conf_capable is read with a bare `getenv` at its call site
+ * and is announced the same way: never claimed to be layered when it is not.
+ * `tests/test_reac_knob_table.c` and `tools/gen-env-knobs-doc.py` both walk this same
+ * table, so the code, the announce and docs/ENV-KNOBS.md cannot drift apart silently. */
+#ifndef REAC_KNOBS_H
+#define REAC_KNOBS_H
+
+#include <stdio.h>
+
+struct reac_knob {
+	const char *key;
+	int conf_capable;
+	const char *why_not_conf; /* NULL when conf_capable; else the reason, one line */
+};
+
+/* The closed table. Defined in reac_knobs.c so it exists exactly once. */
+extern const struct reac_knob g_reac_knobs[];
+extern const int g_reac_knobs_count;
+
+/* One reading of a boolean knob THROUGH THE LAYERS -- reac_envflag.h's own parser, fed
+ * from reac_conf_lookup instead of a bare getenv, so a boolean knob gets the same
+ * reac-pw.env capability as every other one here. */
+int reac_conf_flag(const char *key, int dflt);
+
+/* One line per knob that is SET, one grammar, so an operator can see every override in
+ * force without reading source: `reac-pw: S_KNOB_SET knob KEY=value (env|conf)`. Unset
+ * prints nothing. Writes to `out` (normally stderr; a test passes its own FILE*).
+ * Returns the number of knobs found SET. */
+int reac_knobs_announce(FILE *out);
+
+#endif /* REAC_KNOBS_H */

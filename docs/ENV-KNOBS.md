@@ -61,6 +61,14 @@ behaviour unchanged.
 | `REAC_RATE=44100\|48000\|96000` | The REAC sample rate for a segment. A master defines the rate; a slave auto-detects it from the wire cadence. | 96000 (master); auto-detected (slave) |
 | `REACPW_GRANT_ON_DECLARE=0` | Master role: opt out of ending the grant dwell as soon as the box declares itself, restoring the full wall-clock hold. The dwell is a cap for a box that has not declared, not a wait. | on (end on declare) |
 | `REACPW_GRANT_DWELL_S=N` | Master role: the grant-dwell cap, in whole seconds. | built-in ~1.6 s (a real M-200 holds a cold box ~27 s) |
+| `REACPW_GRANT_DWELL_MS=N` | Master role: the grant-dwell cap, in milliseconds — finer-grained than `REACPW_GRANT_DWELL_S`. Whichever is set wins; unset both and the built-in applies. | built-in ~1.6 s |
+| `REACPW_EST_SCENE=1` | Master role, rig falsification switch: stream a scene push into every FILLER slot the locked cadence leaves after the 1/s cfea and chanmap heartbeats keep theirs, to test whether that (not the cadence lock) is what a slow box needs. | unset (no added scene pushes) |
+| `REACPW_BOX_MASTER_FRAME=box` | Box-master role, rig experiment: imitate the S-1608's own frame exactly (340 B at the master's width, unicast) instead of the ruling's 40-ch mixer frame. Any other value (or unset) is the mixer frame. | unset (40-ch mixer frame) |
+| `REACPW_BOX_MASTER_BURST=chanmap` | Box-master role, rig experiment: burst the chanmap section instead of the default cadence. | unset (default cadence) |
+| `REACPW_BOX_MASTER_FILL=noise` | Box-master role, rig experiment: fill unused slots with noise instead of silence. | unset (silence) |
+| `REACPW_BOX_MASTER_PRESILENCE_MS=N` | Box-master role, rig experiment: milliseconds of silence to send before the first real frame. | 0 |
+| `REACPW_GUARD_FLOOR_FRAMES=N` | libreac-transport's pacer: the ring-depth guard floor, in frames, for the M5 depth sweep — lets a sweep step change the floor without a rebuild. Out of range or unparseable keeps the compiled floor and says so. | the compiled `REAC_PACER_GUARD_FLOOR_FRAMES` |
+| `REACPW_NO_HEADAMP=1` | libreac-transport's pacer: suppress our own head-amp push on establishment, so a box's own state-4 commit promotion stays visible instead of being overwritten ~1.7 s later. A diagnostic affordance, never a service mode. | unset (head-amp armed normally) |
 | `REAC_DEBUG=1` | Opt-in RX/source telemetry on stderr, roughly every 2 s: frame/dup/gap counters, ring fill, active channels. | unset (silent) |
 | `REAC_IFACES_ALLOW_WIRELESS=ifname[,ifname...]\|*` | Autodetect: opt a wireless interface into the scan. Wi-Fi's jitter makes REAC unworkable without a repacer this project does not have, so use this only for a deliberate, informed exception. | unset (every wireless NIC excluded) |
 | `REACPW_NO_ENROLL=1` | Master role: suppress the pre-grant ENROLL for a box whose width is already known. A rig-test switch, not a new default. | unset (ENROLL sent) |
@@ -97,3 +105,31 @@ on an opinion formed too soon.
 Every knob above is also in `reac-pw --help` (the `environment` section of
 `usage()` in `src/main.c`); keep the code, `usage()` and this file in sync when a
 knob is added or removed.
+
+## Discovered AND published, not just documented (2026-09-17)
+
+*"We should be able to set them and keep them if needed, and announce them when
+detected, so that we can manage them; autodetection does not mean obscurity, it's
+discovery and publish."* (operator ruling). At start, before any of them is acted
+on, the daemon prints one line per knob that is SET — `src/reac_knobs.c`'s
+`g_reac_knobs` table, the same one `tests/test_reac_knob_table.c` checks against
+this file:
+
+```
+reac-pw: S_KNOB_SET knob REAC_DEBUG=1 (env)
+reac-pw: S_KNOB_SET knob REACPW_PACER_LEAD_US=3000 (env)
+reac-pw: S_KNOB_SUMMARY knobs: 2 set, 26 default
+```
+
+An unset knob prints nothing — silence is the whole story of a default. `(env)`
+means the process environment answered; `(conf)` means `~/.config/reac-pw/reac-pw.env`
+or `~/.config/openmixer/reac.env` did (`reac_conf_lookup`'s own layering,
+`RATE-AND-CLOCK-CONFIG.md`). A knob marked `conf_capable` in the table is read
+through that SAME lookup at its real call site — what is announced is what is
+honoured. A knob that is not (today: `REACPW_CLOCK_REF`, forwarded verbatim into a
+long-lived node that never copies it, and the libreac-internal knobs this lane
+cannot verify without cutting a libreac release — `docs/design/specs/
+2026-09-17-knobs-codes-and-test-ratchets.md` §6) is read with a bare `getenv` and
+is announced the same way: never claimed to be layered when it is not.
+`tests/test_reac_knob_table.c` fails when a knob the code reads is missing from
+this file, or this file names one the code does not read.

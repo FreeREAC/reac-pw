@@ -18,6 +18,7 @@
 #include <spa/pod/builder.h>
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include <reac/transport/reac_pacer.h>   /* the segment's clock discipline: the graph-clock door */
+#include <reac/transport/reac_conf.h>    /* REAC_DEBUG: layered, so it can be set in reac-pw.env too */
 #include <reac/reac_clock.h>   /* reac_clock_name_is_hardware, for the REAC_DEBUG line */
 
 #include <pipewire/pipewire.h>
@@ -328,7 +329,10 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	n->channels = (channels > 0 && channels <= REAC_MAX_CHANNELS)
 	              ? channels : REAC_MAX_CHANNELS;
 	snprintf(n->label, sizeof n->label, "%s", label ? label : "");
-	n->debug = getenv("REAC_DEBUG") != NULL;
+	{
+		char v[16];
+		n->debug = reac_conf_lookup("REAC_DEBUG", NULL, NULL, v, sizeof v) != REAC_CONF_NONE;
+	}
 	atomic_init(&n->rate_reconnecting, 0);
 
 	char rate_str[16];

@@ -85,6 +85,8 @@
 #include "reac_roster.h"          /* every segment as one node's props (amendment §B) */
 #include "reac_roster_node.h"     /* ...and the port-less node that carries them */
 #include "reac_link_budget.h"     /* what a master costs its physical port, and whether it fits */
+#include "reac_code.h"            /* the stable token vocabulary for refusals + status lines */
+#include "reac_knobs.h"           /* every env/conf knob, discovered AND PUBLISHED */
 #include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */
 #include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
@@ -315,8 +317,8 @@ static void refuse_if_root(void)
 		return;  /* uid 0 inside a mapped namespace: a test's fake root, or a
 		          * rootless container — not the host's real root. */
 
-	fprintf(stderr,
-	    "reac-pw: FATAL — refusing to start as uid 0 (root).\n"
+	reac_code_emit(stderr, "reac-pw", RC_E_ROOT_REFUSED,
+	    "FATAL — refusing to start as uid 0 (root).\n"
 	    "         A root instance is never the console user's: it runs under a\n"
 	    "         DIFFERENT systemd --user manager than the console session's,\n"
 	    "         so it binds the SAME abstract segment-lock socket and either\n"
@@ -1009,10 +1011,12 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	}
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
-		fprintf(stderr, "reac-pw: %scould not size reac-capture to %d ch (%s)\n",
+		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+		        "%scould not size reac-capture to %d ch (%s)\n",
 		        c->tag, bm->in_ch, bm->display);
 	if (reac_sink_node_ensure(c->sink, bm->out_ch, bm->display) != 0)
-		fprintf(stderr, "reac-pw: %scould not size reac-playback to %d ch (%s)\n",
+		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+		        "%scould not size reac-playback to %d ch (%s)\n",
 		        c->tag, bm->out_ch, bm->display);
 	/* A REBUILT CAPTURE NODE IS BLANK UNTIL SOMEBODY STAMPS IT. The sink's badge push
 	 * fires on a CHANGE, and a rebuild changes nothing it watches — so the recovered
@@ -1854,6 +1858,23 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		const uint8_t *master_src = c->src_mac_set ? c->src_mac : master_mac_buf;
 		reac_ring_init(&L->tx_ring, REAC_MAX_CHANNELS, (uint32_t)(L->rx.sample_rate / 4));
 		L->tx_ring_init = 1;
+		/* #75/#77: layered (reac_conf_lookup), so each is also settable in
+		 * reac-pw.env and announced at start like every other knob (§1).
+		 * REACPW_CLOCK_REF stays a bare getenv HERE: this cfg is forwarded
+		 * verbatim into a node that OUTLIVES this block and does not copy it
+		 * (reac_source_node.c's own consumer of the same knob does not either),
+		 * so a stack (or even static, with more than one segment in-process)
+		 * buffer would be a dangling pointer the first time it is read back.
+		 * getenv()'s string is valid for the life of the process, which a
+		 * conf-file layer cannot promise without a persistent copy this lane
+		 * chose not to add under time pressure -- named owed, spec §6. */
+		char v_catchup[16];
+		int clock_follow = reac_conf_flag("REACPW_CLOCK_FOLLOW", REAC_CLOCK_FOLLOW_DEFAULT);
+		const char *clock_ref = getenv("REACPW_CLOCK_REF");
+		int catchup_max_slots =
+		    reac_conf_lookup("REACPW_CATCHUP_MAX_SLOTS", NULL, NULL, v_catchup,
+		                     sizeof v_catchup) != REAC_CONF_NONE ? atoi(v_catchup) : 0;
+		int rate_match_off = reac_conf_flag("REACPW_RATE_MATCH", 0) ? 0 : -1;
 		struct reac_sink_cfg scfg = { .ifname = c->tx_if,
 		                              /* The graph filter is DEFERRED until a box is
 		                               * recognized (reac_sink_node_new leaves it at 0
@@ -1873,26 +1894,22 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * REACPW_CLOCK_FOLLOW=0 opts out and gets
 		                               * the free-run, which is then REPORTED rather than
 		                               * silent (reac_sink_node.h carries the ruling). */
-		                              .clock_follow = reac_envflag("REACPW_CLOCK_FOLLOW",
-		                                                  REAC_CLOCK_FOLLOW_DEFAULT),
+		                              .clock_follow = clock_follow,
 		                              /* --rate / a conf-file rate is an ASSERTION; only the
 		                               * built-in best-drivable pick is the convention. */
 		                              .rate_asserted = c->rate_layer != REAC_CONF_BUILTIN
 		                                            && c->rate_layer != REAC_CONF_NONE,
 		                              /* #77: unset -> nothing is designated and the
 		                               * name heuristic alone grades the reference. */
-		                              .clock_ref = getenv("REACPW_CLOCK_REF"),
+		                              .clock_ref = clock_ref,
 		                              /* Slot-debt budget. Unset -> the measured
 		                               * default; see reac_pacer.h. */
-		                              .catchup_max_slots = getenv("REACPW_CATCHUP_MAX_SLOTS")
-		                                  ? atoi(getenv("REACPW_CATCHUP_MAX_SLOTS"))
-		                                  : 0,
+		                              .catchup_max_slots = catchup_max_slots,
 		                              /* RATE MATCHING SHIPS OFF. OPT IN WITH
 		                               * REACPW_RATE_MATCH=1. See reac_pacer.h's
 		                               * cfg.rate_match_off for the full measurement —
 		                               * unchanged by this refactor. */
-		                              .rate_match_off =
-		                                  reac_envflag("REACPW_RATE_MATCH", 0) ? 0 : -1 };
+		                              .rate_match_off = rate_match_off };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
@@ -1940,8 +1957,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		if (claimed == -1) {
 			char holder[160];
 			describe_seglock_holder(L->seglock.name, holder, sizeof holder);
-			fprintf(stderr,
-			    "reac-pw: %sREFUSING to master '%s' — another process already holds\n"
+			reac_code_emit(stderr, "reac-pw", RC_E_SEGMENT_HELD,
+			    "%sREFUSING to master '%s' — another process already holds\n"
 			    "         that segment (%s)%s%s. Two masters on one segment is the\n"
 			    "         fault this lock exists to make impossible; it has cost an\n"
 			    "         evening once and corrupted a live measurement once.\n"
@@ -2064,6 +2081,24 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		int up_ch = c->join_box_master
 			? (bm_up ? bm_up->out_ch : (int)c->wire_channels)
 			: c->box_channels;
+		/* The rig experiment, no rebuild between runs: REACPW_BOX_MASTER_FRAME=box
+		 * imitates the S-1608 exactly (340 B at the master's width, unicast);
+		 * anything else is the ruling's 40-ch mixer frame. Read here because main
+		 * owns the environment. Layered (reac_conf_lookup) so each can also be set
+		 * in reac-pw.env, and announced at start like every other knob (§1). */
+		char v_frame[16], v_burst[16], v_fill[16], v_presil[16];
+		int box_master_frame_box =
+		    reac_conf_lookup("REACPW_BOX_MASTER_FRAME", NULL, NULL, v_frame, sizeof v_frame)
+		        != REAC_CONF_NONE && strcmp(v_frame, "box") == 0;
+		int box_master_burst_chanmap =
+		    reac_conf_lookup("REACPW_BOX_MASTER_BURST", NULL, NULL, v_burst, sizeof v_burst)
+		        != REAC_CONF_NONE && strcmp(v_burst, "chanmap") == 0;
+		int box_master_fill_noise =
+		    reac_conf_lookup("REACPW_BOX_MASTER_FILL", NULL, NULL, v_fill, sizeof v_fill)
+		        != REAC_CONF_NONE && strcmp(v_fill, "noise") == 0;
+		int box_master_presilence_ms =
+		    reac_conf_lookup("REACPW_BOX_MASTER_PRESILENCE_MS", NULL, NULL, v_presil,
+		                     sizeof v_presil) != REAC_CONF_NONE ? atoi(v_presil) : 0;
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
 		                                /* THE ROW WE DECLARE (box role); NULL on every
 		                                 * other slave, where the width keys the
@@ -2074,27 +2109,10 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                                .src_mac = box_mac,
 		                                .tag = c->tag,
 		                                .box_master = c->join_box_master,
-		                                /* The rig experiment, no rebuild between runs:
-		                                 * REACPW_BOX_MASTER_FRAME=box imitates the S-1608
-		                                 * exactly (340 B at the master's width, unicast);
-		                                 * anything else is the ruling's 40-ch mixer frame.
-		                                 * Read here because main owns the environment. */
-		                                .box_master_frame_box =
-		                                    (getenv("REACPW_BOX_MASTER_FRAME") &&
-		                                     strcmp(getenv("REACPW_BOX_MASTER_FRAME"),
-		                                            "box") == 0),
-		                                .box_master_burst_chanmap =
-		                                    (getenv("REACPW_BOX_MASTER_BURST") &&
-		                                     strcmp(getenv("REACPW_BOX_MASTER_BURST"),
-		                                            "chanmap") == 0),
-		                                .box_master_fill_noise =
-		                                    (getenv("REACPW_BOX_MASTER_FILL") &&
-		                                     strcmp(getenv("REACPW_BOX_MASTER_FILL"),
-		                                            "noise") == 0),
-		                                .box_master_presilence_ms =
-		                                    getenv("REACPW_BOX_MASTER_PRESILENCE_MS")
-		                                      ? atoi(getenv("REACPW_BOX_MASTER_PRESILENCE_MS"))
-		                                      : 0 };
+		                                .box_master_frame_box = box_master_frame_box,
+		                                .box_master_burst_chanmap = box_master_burst_chanmap,
+		                                .box_master_fill_noise = box_master_fill_noise,
+		                                .box_master_presilence_ms = box_master_presilence_ms };
 		if (reac_slave_open(&L->slave, &slcfg, &L->tx_ring) == 0) {
 			L->slave_open = 1;
 			if (reac_slave_start(&L->slave) == 0) {
@@ -2153,13 +2171,15 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 					 * first misdescribed the second. What both need said is the
 					 * width that was tried and that nothing can be routed. */
 					if (!L->sink)
-						fprintf(stderr, "reac-pw: %sthe %d channels we send "
+						reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+						        "%sthe %d channels we send "
 						        "upstream have no reac-playback node — what "
 						        "arrives still arrives, but nothing can be "
 						        "routed out\n", c->tag, sink_ch);
 					else if (reac_sink_node_ensure(L->sink, sink_ch,
 					                               bm ? bm->display : NULL) != 0)
-						fprintf(stderr, "reac-pw: %scould not size reac-playback "
+						reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+						        "%scould not size reac-playback "
 						        "to the %d channels we send upstream\n",
 						        c->tag, sink_ch);
 				}
@@ -2697,7 +2717,8 @@ static void on_sniff_io(void *data, int fd, uint32_t mask)
 			reac_knock_heard(&sn->knock);
 		if (seen != 1)
 			continue;
-		fprintf(stderr, "reac-pw: [%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
+		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_HEARD,
+		        "[%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
 		        "%s%s (%u ch): this interface is a segment\n",
 		        sn->name, reac_disco_role_name(sight.role),
 		        sight.mac[0], sight.mac[1], sight.mac[2],
@@ -3053,7 +3074,8 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		 * only the wire's two ends, so a TAP read "master" here — the role that
 		 * transmits, printed over the one role that never does. `tap` is spelled by
 		 * reac_role_intent_name, the vocabulary that has it. */
-		fprintf(stderr, "reac-pw: [%s] segment up (%s%s, %s) — %lu served so far\n", name,
+		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_UP,
+		        "[%s] segment up (%s%s, %s) — %lu served so far\n", name,
 		        /* AND A BOX IS SPELLED `box`, for the same reason a tap is not
 		         * spelled `master`: reac_role_name knows only the wire's two ends,
 		         * and this line is read beside a roster that says `box`. */
@@ -3078,7 +3100,8 @@ static void hearing_drop(struct hearing *h, const char *name, const char *why)
 	L->opened = 0;
 	L->rx_started = 0;
 	h->dropped++;
-	fprintf(stderr, "reac-pw: [%s] segment dropped — %s\n", name, why);
+	reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_DROPPED,
+	        "[%s] segment dropped — %s\n", name, why);
 }
 
 /* The definition promised above the poll. Placed here because it needs hearing_drop. */
@@ -4035,7 +4058,8 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			break;
 		case REAC_HUNT_REFUSED:
 			if (changed && sn->hunt.arb.rival == REAC_RIVAL_BOX)
-				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): %s [segment %s] role pins this "
+				reac_code_emit(stderr, "reac-pw", RC_E_ENROLL_REFUSED,
+				        "[%s] REFUSED (%s): %s [segment %s] role pins this "
 				        "segment MASTER and %02x:%02x:%02x:%02x:%02x:%02x masters it at "
 				        "%u ch, a BOX width. Two answers, and the console never fights a "
 				        "box: set the box's REAC Mode switch to slave and power-cycle it, "
@@ -4048,7 +4072,8 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        sn->hunt.arb.mac[3], sn->hunt.arb.mac[4], sn->hunt.arb.mac[5],
 				        sn->hunt.arb.rival_channels);
 			else if (changed)
-				fprintf(stderr, "reac-pw: [%s] REFUSED (%s): "
+				reac_code_emit(stderr, "reac-pw", RC_E_ENROLL_REFUSED,
+				        "[%s] REFUSED (%s): "
 				        "%02x:%02x:%02x:%02x:%02x:%02x masters this wire and carries no "
 				        "legal 52 + n*36 geometry, so there is nothing to size a segment "
 				        "from and nobody has captured a peer like it. Neither driven over "
@@ -4839,6 +4864,10 @@ int main(int argc, char **argv)
 	/* Before anything is opened, per §4e: a missing capability must arrive as a
 	 * sentence, not as a daemon that runs deaf. */
 	capability_preflight();
+
+	/* DISCOVERY AND PUBLISH (2026-09-17 ruling, §1): every env/conf override in
+	 * force, named, before any of them is acted on. */
+	reac_knobs_announce(stderr);
 
 	/* THE ONE OVERRIDE, READ BEFORE ANY DECISION IS TAKEN. Every question about a
 	 * segment's role or whether to touch it at all is asked of this, so it has to be
