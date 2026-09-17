@@ -714,6 +714,18 @@ test('box-is-never-elected',
   find_program('tests/box-is-never-elected.sh'),
   timeout : 30)
 
+# --- whole-binary test: a QUIET MIXER does not re-decide a `role = box` segment -------
+#
+# hearing_reevaluate's exemption was written for the pinned recorder and keyed on that
+# intent alone, so a box on a wire whose desk is not switched on yet was torn down and
+# re-heard every ten seconds. The control segment in the same run is a box master that
+# joins and stops -- #97's own case, which MUST still be re-decided, so the absence
+# asserted for the box segment is measured by a probe that has just seen a presence.
+test('box-is-not-re-decided',
+  find_program('tests/box-is-not-re-decided.sh'),
+  args : [reac_pw_exe, fake_box_master],
+  timeout : 300)
+
 test('reac_no_box_no_node',
   find_program('tests/no-box-no-node.sh'),
   args : [reac_pw_exe, fake_box_path],
