@@ -17,11 +17,11 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.2.1
+BuildRequires:  pkgconfig(libreac) >= 1.2.2
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.2.1
+BuildRequires:  pkgconfig(libreac-transport) >= 1.2.2
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -30,8 +30,8 @@ Requires:       pipewire
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.2.1
-Requires:       libreac-transport >= 1.2.1
+Requires:       libreac >= 1.2.2
+Requires:       libreac-transport >= 1.2.2
 %{?systemd_requires}
 
 %description
@@ -152,6 +152,16 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.18-1
+- REQUIRES libreac 1.2.2, WHERE THE TOPOLOGY TAP STOPS HEARING OTHER LINKS (#18).
+  Until 1.2.1 the tap's packet socket was created with a protocol and so was live
+  on every interface for the few syscalls before its bind; on the rig that put one
+  frame per VLAN per start, from this daemon's own masters on ANOTHER parent, into
+  the queue the trunk classifier reads — and a cold-cable NIC was refused a master
+  for ever. Built against 1.2.1 this daemon behaves exactly as it did, so the floor
+  is raised in meson.build and here: nothing short of a version check can see it.
+  The ifindex test in on_topo_io stays, no longer as the workaround it was but as
+  the alarm that would announce a library which regressed.
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.17-1
 - THE 0832 HARNESS PROVES ITS FAR END BEFORE IT JUDGES THE DAEMON. tests/box-0832-enrols.sh
   reported that the split chassis resolved as an S-4000S-3208 against two different reac-pw
