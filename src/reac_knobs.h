@@ -22,6 +22,8 @@
 #define REAC_KNOBS_H
 
 #include <stdio.h>
+#include <stddef.h>
+#include <reac/transport/reac_conf.h>   /* enum reac_conf_layer */
 
 struct reac_knob {
 	const char *key;
@@ -38,9 +40,26 @@ extern const int g_reac_knobs_count;
  * reac-pw.env capability as every other one here. */
 int reac_conf_flag(const char *key, int dflt);
 
+/* THE COMMAND LINE (operator ruling, 2026-09-17): --set KEY=VALUE, highest precedence,
+ * resolved against this same table. Returns 1 if `key` names a known knob (accepted),
+ * 0 if not — the caller (main.c) refuses an unknown key with RC_E_UNKNOWN_KNOB and
+ * exits rather than silently ignoring a typo. `key` and `value` must outlive the
+ * process (they point into argv[], which does). */
+int reac_knobs_set_argv(const char *key, const char *value);
+
+/* `key` resolved at argv (reac_knobs_set_argv) > reac_conf_lookup's own precedence.
+ * Same contract as reac_conf_lookup, plus REAC_CONF_ARGV when a --set answered. Every
+ * knob site that used to call reac_conf_lookup directly for a table key calls this
+ * instead, so a command-line override reaches it too. */
+enum reac_conf_layer reac_knobs_resolve(const char *key, char *out, size_t cap);
+
+/* reac_conf_flag's own shape, through reac_knobs_resolve instead of reac_conf_lookup —
+ * a boolean knob that also honours --set. */
+int reac_knobs_resolve_flag(const char *key, int dflt);
+
 /* One line per knob that is SET, one grammar, so an operator can see every override in
- * force without reading source: `reac-pw: S_KNOB_SET knob KEY=value (env|conf)`. Unset
- * prints nothing. Writes to `out` (normally stderr; a test passes its own FILE*).
+ * force without reading source: `reac-pw: S_KNOB_SET knob KEY=value (cli|env|conf)`.
+ * Unset prints nothing. Writes to `out` (normally stderr; a test passes its own FILE*).
  * Returns the number of knobs found SET. */
 int reac_knobs_announce(FILE *out);
 

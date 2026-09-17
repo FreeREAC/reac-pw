@@ -11,14 +11,16 @@
  * TOKEN first, always, so the two can move independently: prose for a human, a token for
  * a script or a log scraper.
  *
- * LIVES HERE, NOT IN LIBREAC, though `reac_master.c` and `transport/src/reac_pacer.c`
- * emit refusals of their own too and are the more natural long-term home for a shared
- * vocabulary. reac-pw links the SYSTEM `libreac-devel` package (`pkg-config libreac`,
- * currently 1.2.2), not the sibling checkout, and a lane may not bump a version or cut a
- * release (`tools/reac-release` is the main session's) — a header only libreac ships
- * would be uncompilable here until a libreac release lands it. If libreac later adopts
- * this shape, this file becomes a thin alias for its header; docs/design/specs/
- * 2026-09-17-knobs-codes-and-test-ratchets.md §6 names it owed.
+ * STILL A SEPARATE COPY, NOT YET A THIN ALIAS, though libreac 1.3.0 now ships
+ * `include/reac/reac_code.h` with the same shape (docs/design/specs/
+ * 2026-09-17-tunables-api-and-shared-refusal-codes.md, the libreac side of this spec's
+ * §6 "owed"): reac-pw links the SYSTEM `libreac-devel` package (`pkg-config libreac`,
+ * currently 1.2.2), not the sibling checkout, and this lane may not bump the floor in
+ * `meson.build` or cut a release (`tools/reac-release` is the main session's) — doing
+ * so now would break every build against the still-current system package. Once the
+ * floor moves to >= 1.3.0, this file becomes `#include <reac/reac_code.h>` and the two
+ * token lists (kept in sync by hand in the meantime — see the libreac copy for the
+ * shared subset) merge into one.
  *
  * Scope is proportionate, not exhaustive (2026-09-17 ruling, §2): this covers the
  * refusal/failure lines and the status lines a test keys on. An ordinary debug print
@@ -45,7 +47,9 @@
 	X(RC_S_SEGMENT_UP,      "S_SEGMENT_UP") \
 	X(RC_S_SEGMENT_DROPPED, "S_SEGMENT_DROPPED") \
 	X(RC_S_KNOB_SET,        "S_KNOB_SET") \
-	X(RC_S_KNOB_SUMMARY,    "S_KNOB_SUMMARY")
+	X(RC_S_KNOB_SUMMARY,    "S_KNOB_SUMMARY") \
+	X(RC_E_UNKNOWN_KNOB,    "E_UNKNOWN_KNOB") \
+	X(RC_S_NO_OVERRIDES,    "S_NO_OVERRIDES")
 
 enum reac_code {
 	RC_NONE = 0,

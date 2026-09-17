@@ -87,6 +87,7 @@
 #include "reac_link_budget.h"     /* what a master costs its physical port, and whether it fits */
 #include "reac_code.h"            /* the stable token vocabulary for refusals + status lines */
 #include "reac_knobs.h"           /* every env/conf knob, discovered AND PUBLISHED */
+#include <reac/reac_tunables.h>   /* the daemon SETS what libreac used to read via getenv */
 #include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */
 #include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
@@ -110,6 +111,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
 #include <dirent.h>
 #include <pwd.h>
 #include <linux/if_packet.h>
@@ -308,6 +310,11 @@ static int uid_map_is_full_host_range(void)
 	fclose(f);
 	return got && ns_id == 0 && host_id == 0 && len == 4294967295ULL;
 }
+
+/* Forward-declared: defined near main() (push_libreac_tunables's own comment explains
+ * why), used earlier by the per-listener setup below. */
+static const char *resolve_clock_ref(void);
+static void push_libreac_tunables(void);
 
 static void refuse_if_root(void)
 {
@@ -754,6 +761,18 @@ static void usage(const char *p)
 	  "                somewhere else; see src/reac_rt.h for the ladder.\n",
 	  p, REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX,
 	  (int)(REAC_IFSCAN_DOWN_HOLD_NS / 1000000000ULL));
+
+	/* FROM THE TABLE, so this list cannot drift from what reac_knobs_announce()
+	 * and docs/ENV-KNOBS.md actually walk (operator ruling, 2026-09-17): every
+	 * knob above is also settable at the command line, highest precedence. */
+	fprintf(stderr,
+	  "  --set KEY=VALUE  override any knob below at the highest precedence\n"
+	  "                (cli > env > conf files > built-in default). Repeatable.\n"
+	  "                Unknown KEY refuses to start (E_UNKNOWN_KNOB).\n"
+	  "  Every knob --set and reac-pw.conf/.env accept (%d; see ENV-KNOBS.md for\n"
+	  "  what each does and its default):\n", g_reac_knobs_count);
+	for (int i = 0; i < g_reac_knobs_count; i++)
+		fprintf(stderr, "    %s\n", g_reac_knobs[i].key);
 }
 
 /* MASTER autodetect — the only mode there is. A main-loop watcher that polls the box
@@ -1860,17 +1879,17 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		L->tx_ring_init = 1;
 		/* #75/#77: layered (reac_conf_lookup), so each is also settable in
 		 * reac-pw.env and announced at start like every other knob (§1).
-		 * REACPW_CLOCK_REF stays a bare getenv HERE: this cfg is forwarded
-		 * verbatim into a node that OUTLIVES this block and does not copy it
-		 * (reac_source_node.c's own consumer of the same knob does not either),
-		 * so a stack (or even static, with more than one segment in-process)
-		 * buffer would be a dangling pointer the first time it is read back.
-		 * getenv()'s string is valid for the life of the process, which a
-		 * conf-file layer cannot promise without a persistent copy this lane
-		 * chose not to add under time pressure -- named owed, spec §6. */
+		 * REACPW_CLOCK_REF used to stay a bare getenv here: this cfg is forwarded
+		 * into a node that OUTLIVES this block, and neither consumer copied it, so
+		 * a conf-layer stack buffer would have dangled. Closed 2026-09-17:
+		 * resolve_clock_ref() (below) resolves once into a STATIC buffer (the same
+		 * process-lifetime guarantee getenv() gave, now through argv/conf/env too)
+		 * and reac_source_node.c copies its own besides (matching
+		 * reac_sink_node.c's existing n->clock_ref[64] pattern) — the last
+		 * env-only knob exception in g_reac_knobs is gone. */
 		char v_catchup[16];
 		int clock_follow = reac_conf_flag("REACPW_CLOCK_FOLLOW", REAC_CLOCK_FOLLOW_DEFAULT);
-		const char *clock_ref = getenv("REACPW_CLOCK_REF");
+		const char *clock_ref = resolve_clock_ref();
 		int catchup_max_slots =
 		    reac_conf_lookup("REACPW_CATCHUP_MAX_SLOTS", NULL, NULL, v_catchup,
 		                     sizeof v_catchup) != REAC_CONF_NONE ? atoi(v_catchup) : 0;
@@ -2205,7 +2224,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		/* Before any source node is built (the deferred autodetect path builds them
 		 * from this same cfg), so every rebuild carries the clock door. */
 		L->src_cfg.pacer = reac_sink_node_pacer(L->sink);
-		L->src_cfg.clock_ref = getenv("REACPW_CLOCK_REF");
+		L->src_cfg.clock_ref = resolve_clock_ref();
 	}
 	/* The master node publishes reac.cfg.role.state off the SEGMENT's record, so
 	 * the answer is derived from the engine that is actually up rather than
@@ -4837,6 +4856,62 @@ static void segconf_announce(void)
 		        v, reac_conf_layer_name(l), REAC_SEGCONF_FILE);
 }
 
+/* REACPW_CLOCK_REF, resolved ONCE into a STATIC buffer — the same process-lifetime
+ * storage guarantee a bare getenv() gave, now reached through reac_knobs_resolve so
+ * argv/conf/env all work (2026-09-17, the fix that removed the last env-only knob
+ * exception; see the comment at its two call sites). NULL when unset, matching
+ * getenv()'s own NULL-on-unset contract. */
+static const char *resolve_clock_ref(void)
+{
+	static char buf[256];
+	static int done;
+	static const char *cached;
+	if (!done) {
+		done = 1;
+		if (reac_knobs_resolve("REACPW_CLOCK_REF", buf, sizeof buf) != REAC_CONF_NONE)
+			cached = buf;
+	}
+	return cached;
+}
+
+/* THE OTHER SIDE OF DISCOVERY AND PUBLISH: libreac reads no environment of its own
+ * (libreac's docs/design/specs/2026-09-17-tunables-api-and-shared-refusal-codes.md)
+ * — every REACPW_* / REAC_* knob that used to be a bare getenv INSIDE reac_master.c,
+ * reac_pacer.c, reac_ifscan.c or reac_rx.c is now a field this daemon resolves
+ * through g_reac_knobs (so it is announced above, exactly like every other knob)
+ * and PUSHES into the library through reac_*_tunables_set(), once, before the
+ * transport starts. Call after reac_knobs_announce() and before hearing_start(). */
+static void push_libreac_tunables(void)
+{
+	char v[256];
+
+	struct reac_master_tunables mt = REAC_MASTER_TUNABLES_DEFAULT;
+	mt.grant_on_declare = reac_knobs_resolve_flag("REACPW_GRANT_ON_DECLARE", 1);
+	if (reac_knobs_resolve("REACPW_GRANT_DWELL_MS", v, sizeof v) != REAC_CONF_NONE)
+		mt.grant_dwell_ms = strtol(v, NULL, 10);
+	if (reac_knobs_resolve("REACPW_GRANT_DWELL_S", v, sizeof v) != REAC_CONF_NONE)
+		mt.grant_dwell_s = strtol(v, NULL, 10);
+	mt.no_enroll = reac_knobs_resolve_flag("REACPW_NO_ENROLL", 0);
+	mt.est_scene = reac_knobs_resolve_flag("REACPW_EST_SCENE", 0);
+	reac_master_tunables_set(&mt);
+
+	struct reac_pacer_tunables pt = REAC_PACER_TUNABLES_DEFAULT;
+	if (reac_knobs_resolve("REACPW_GUARD_FLOOR_FRAMES", v, sizeof v) != REAC_CONF_NONE) {
+		char *end = NULL;
+		unsigned long f = strtoul(v, &end, 10);
+		if (end && *end == '\0')
+			pt.guard_floor_frames = (unsigned int)f;
+	}
+	pt.no_headamp = reac_knobs_resolve_flag("REACPW_NO_HEADAMP", 0);
+	reac_pacer_tunables_set(&pt);
+
+	struct reac_transport_tunables tt = REAC_TRANSPORT_TUNABLES_DEFAULT;
+	if (reac_knobs_resolve("REAC_IFACES_ALLOW_WIRELESS", v, sizeof v) != REAC_CONF_NONE)
+		tt.allow_wireless = v;   /* reac_transport_tunables_set copies it */
+	tt.debug = reac_knobs_resolve_flag("REAC_DEBUG", 0);
+	reac_transport_tunables_set(&tt);
+}
+
 int main(int argc, char **argv)
 {
 	/* HELP IS PURE TEXT AND MUST NOT REQUIRE A CAPABILITY. Asking how to run this
@@ -4856,6 +4931,38 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/* THE COMMAND LINE, HIGHEST PRECEDENCE (operator ruling, 2026-09-17): a
+	 * generic, repeatable `--set KEY=VALUE` resolves against g_reac_knobs by
+	 * name — the same table --help lists and reac_knobs_announce walks — rather
+	 * than adding a bespoke flag per knob. An unknown key is refused here, before
+	 * any capability or segment is touched: a typo in an override must not start
+	 * the daemon at a default the operator did not ask for. Parsed before
+	 * reac_knobs_announce() so a --set value is what gets announced. */
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--set") != 0)
+			continue;
+		if (i + 1 >= argc) {
+			reac_code_emit(stderr, "reac-pw", RC_E_UNKNOWN_KNOB,
+			                "--set needs KEY=VALUE\n");
+			return 2;
+		}
+		char *eq = strchr(argv[i + 1], '=');
+		if (!eq) {
+			reac_code_emit(stderr, "reac-pw", RC_E_UNKNOWN_KNOB,
+			                "--set %s: not KEY=VALUE\n", argv[i + 1]);
+			return 2;
+		}
+		*eq = '\0';   /* argv[] is writable; split in place, once */
+		const char *key = argv[i + 1];
+		const char *value = eq + 1;
+		if (!reac_knobs_set_argv(key, value)) {
+			reac_code_emit(stderr, "reac-pw", RC_E_UNKNOWN_KNOB,
+			                "--set %s: no such knob (see --help)\n", key);
+			return 2;
+		}
+		i++;   /* consumed the KEY=VALUE argument too */
+	}
+
 	/* Before ANY capability is even read: uid 0 already carries every one of
 	 * them, so it must be refused first or the check right after would pass
 	 * silently over the one identity that must never start this daemon. */
@@ -4868,6 +4975,34 @@ int main(int argc, char **argv)
 	/* DISCOVERY AND PUBLISH (2026-09-17 ruling, §1): every env/conf override in
 	 * force, named, before any of them is acted on. */
 	reac_knobs_announce(stderr);
+
+	/* "FIX INSTALLATION": an expert who has set nothing yet gets ONE line saying
+	 * where overrides go, rather than silence that reads as "there is nothing to
+	 * configure". Autodetect is the default in every other sense; this is the
+	 * discoverable path to the expert one (packaging/reac-pw.conf.example,
+	 * reac-pw.env.example — both %doc in the RPM). */
+	{
+		const char *home = getenv("HOME");
+		char path[512];
+		struct stat st;
+		int conf_present = 0;
+		if (home && *home) {
+			snprintf(path, sizeof path, "%s/.config/reac-pw/reac-pw.conf", home);
+			conf_present = (stat(path, &st) == 0);
+		}
+		if (!conf_present)
+			reac_code_emit(stderr, "reac-pw", RC_S_NO_OVERRIDES,
+			                "no ~/.config/reac-pw/reac-pw.conf — every segment "
+			                "autodetects. Expert overrides: reac-pw.conf, "
+			                "reac-pw.conf.d/, reac-pw.env, REACPW_*/REAC_* env, or "
+			                "--set KEY=VALUE (see packaging/reac-pw.conf.example, "
+			                "reac-pw.env.example, --help)\n");
+	}
+
+	/* THE OTHER SIDE OF DISCOVERY AND PUBLISH: every knob libreac used to read
+	 * itself is resolved here (same table, same cli>env>conf precedence as
+	 * everything above) and pushed in before the transport starts. */
+	push_libreac_tunables();
 
 	/* THE ONE OVERRIDE, READ BEFORE ANY DECISION IS TAKEN. Every question about a
 	 * segment's role or whether to touch it at all is asked of this, so it has to be

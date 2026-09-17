@@ -119,6 +119,12 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %files
 %license LICENSE
 %doc README.md
+# THE EXPERT'S DISCOVERABLE PATH ("fix installation" — operator, 2026-09-17). A fixed
+# install has no way to type a segment declaration or an override until these two
+# examples are ON THE MACHINE — before this line they existed only in the source
+# tarball, never in the RPM. reac-pw itself prints where to look for them (S_NO_OVERRIDES,
+# main.c) the first time it runs with no ~/.config/reac-pw/reac-pw.conf.
+%doc packaging/reac-pw.conf.example packaging/reac-pw.env.example
 # File capabilities, applied by rpm itself (%%caps survives rpm -V / --restore;
 # no setcap scriptlet needed):
 #
