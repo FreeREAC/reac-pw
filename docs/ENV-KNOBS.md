@@ -11,7 +11,13 @@ and the stagebox head-amp door.
 Per-segment keys (`REAC_RATE_<segment>`, `REAC_SRC_MAC_<segment>`, ...) live in
 `~/.config/reac-pw/reac-pw.env` and take precedence over the bare key, which is only
 a floor. `--rate`, `--src-mac` and the other command-line flags still win over both
-when given.
+when given, and **every knob in the table below is also settable generically** with
+`--set KEY=VALUE` (repeatable), at the same highest precedence, whether or not it has
+its own named flag — `reac-pw --help` lists every key this accepts.
+
+PRECEDENCE, HIGHEST FIRST: **cli** (`--set KEY=VALUE` or a named flag) > **env** (the
+process environment) > **conf** (`~/.config/reac-pw/reac-pw.env`, then
+`~/.config/openmixer/reac.env`) > the built-in default.
 
 ## The ROLE is not here, and neither is a VLAN declaration
 
@@ -121,15 +127,19 @@ reac-pw: S_KNOB_SET knob REACPW_PACER_LEAD_US=3000 (env)
 reac-pw: S_KNOB_SUMMARY knobs: 2 set, 26 default
 ```
 
-An unset knob prints nothing — silence is the whole story of a default. `(env)`
-means the process environment answered; `(conf)` means `~/.config/reac-pw/reac-pw.env`
-or `~/.config/openmixer/reac.env` did (`reac_conf_lookup`'s own layering,
-`RATE-AND-CLOCK-CONFIG.md`). A knob marked `conf_capable` in the table is read
-through that SAME lookup at its real call site — what is announced is what is
-honoured. A knob that is not (today: `REACPW_CLOCK_REF`, forwarded verbatim into a
-long-lived node that never copies it, and the libreac-internal knobs this lane
-cannot verify without cutting a libreac release — `docs/design/specs/
-2026-09-17-knobs-codes-and-test-ratchets.md` §6) is read with a bare `getenv` and
-is announced the same way: never claimed to be layered when it is not.
-`tests/test_reac_knob_table.c` fails when a knob the code reads is missing from
-this file, or this file names one the code does not read.
+An unset knob prints nothing — silence is the whole story of a default. `(cli)`
+means `--set` or a named flag answered; `(env)` means the process environment did;
+`(conf)` means `~/.config/reac-pw/reac-pw.env` or `~/.config/openmixer/reac.env` did
+(`reac_conf_lookup`'s own layering, `RATE-AND-CLOCK-CONFIG.md`). Every knob in the
+table is `conf_capable`: **libreac reads no environment of its own**
+(`docs/design/specs/2026-09-17-tunables-api-and-shared-refusal-codes.md`, the libreac
+side of this repo's own `2026-09-17-knobs-codes-and-test-ratchets.md` §6) — the eight
+that used to be a bare `getenv` inside `reac_master.c`/`reac_pacer.c`/`reac_ifscan.c`
+are resolved here (`reac_knobs_resolve`, same table, same cli>env>conf precedence)
+and pushed into the library through `reac_*_tunables_set()` before the transport
+starts (`push_libreac_tunables`, `main.c`). `REACPW_CLOCK_REF` — the one knob a
+pointer-lifetime concern had kept env-only — is conf_capable too, since 2026-09-17:
+`resolve_clock_ref()` resolves it once into a static buffer and
+`reac_source_node.c` copies its own besides (matching `reac_sink_node.c`'s existing
+pattern). `tests/test_reac_knob_table.c` fails when a knob the code reads is
+missing from this file, or this file names one the code does not read.

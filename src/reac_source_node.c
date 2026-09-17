@@ -59,9 +59,15 @@ struct reac_source_node {
 	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
 	char nodename[80];              /* what this node is called, for its own messages */
 	/* The graph-clock reference, published from the RT callback into the segment's
-	 * pacer. See reac_source_node_cfg's own comment for why this node has it too. */
+	 * pacer. See reac_source_node_cfg's own comment for why this node has it too.
+	 * A fixed buffer, copied at construction (mirrors reac_sink_node.c's own
+	 * n->clock_ref[64]): the caller's string is REACPW_CLOCK_REF resolved through
+	 * reac_knobs_resolve, whose storage does not outlive that one call, and this
+	 * node outlives it (2026-09-17 — the copy that removed the last env-only
+	 * knob exception, reac-pw's docs/design/specs/
+	 * 2026-09-17-knobs-codes-and-test-ratchets.md §6). */
 	struct reac_pacer *pacer;
-	const char *clock_ref;
+	char clock_ref[64];
 	struct spa_io_position *position;   /* SPA_IO_Position area; NULL until configured */
 	char graph_clock[64];               /* last driver clock name seen (REAC_DEBUG line) */
 	/* One diagnostic line, composed by the RT callback and printed by the main loop.
@@ -320,7 +326,10 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	 * this function returns: a field the RT path reads is never filled by the caller
 	 * afterwards. */
 	n->pacer = pacer;
-	n->clock_ref = clock_ref;
+	if (clock_ref) {
+		snprintf(n->clock_ref, sizeof n->clock_ref, "%s", clock_ref);
+		n->clock_ref[sizeof n->clock_ref - 1] = '\0';
+	}
 	atomic_init(&n->log_pending, 0);
 	n->ring = ring;
 	n->rx = rx;
