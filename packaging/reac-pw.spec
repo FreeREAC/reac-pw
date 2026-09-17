@@ -152,6 +152,23 @@ meson test -C _build --suite netns --num-processes 1
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.17-1
+- THE 0832 HARNESS PROVES ITS FAR END BEFORE IT JUDGES THE DAEMON. tests/box-0832-enrols.sh
+  reported that the split chassis resolved as an S-4000S-3208 against two different reac-pw
+  binaries. Measured: the daemon and the wire were both right all along -- an older fake_box
+  takes `<if> <secs> <token>` and IGNORES the token (it only grew one in libreac 1.2.1),
+  declaring its built-in capture of the S-4000S-3208, so the test read a 32/8 box off a wire
+  that never carried a split one. Both arms now require fake_box's own `declaring as <row>`
+  line first and name the rebuild when it is missing. With a current fake_box both arms pass
+  on the desk: 8x32 for the 0832 row, 32x8 for the control.
+- THE NAMESPACE TESTS ARE THE `netns` SUITE AND %check RUNS THEM ONE AT A TIME. All 24 mint a
+  veth pair, a nested network namespace and their own PipeWire; meson's default of one process
+  per core ran a dozen at once and the losers timed out, which is the packaging flake and not
+  the daemon. %check is now `meson test --no-suite netns` plus `--suite netns
+  --num-processes 1`. tests/netns-tests-are-serial.sh is the ratchet: it finds namespace tests
+  by the tool they invoke, refuses to pass on an empty scan, and requires the spec to run both
+  halves.
+
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.16-1
 - THE REVIEW OF PR #103, seven findings, each with the test that holds it where a
   test can. The box role's width now comes from its model row alone:
