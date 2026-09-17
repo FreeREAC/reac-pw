@@ -17,11 +17,11 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.2.2
+BuildRequires:  pkgconfig(libreac) >= 1.3.0
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.2.2
+BuildRequires:  pkgconfig(libreac-transport) >= 1.3.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -174,6 +174,22 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.21-1
+- EVERY KNOB IS THE DAEMON'S (needs libreac 1.3.0): the eight knobs libreac used to read
+  from the environment are resolved through the daemon's own table and pushed in with
+  reac_*_tunables_set before the transport starts; REACPW_CLOCK_REF is copied into the
+  source node instead of forwarded as a pointer. Env-only knobs: none. Every set knob is
+  announced with its source.
+- --set KEY=VALUE, repeatable, at the highest precedence (cli > env > conf > default), for
+  every knob in the table; an unknown key is refused with RC_E_UNKNOWN_KNOB before any
+  capability or segment is touched; --help lists the table. The named flags (--rate,
+  --role, --tx, ...) still resolve on their own path (owed: aliases into the same lookup).
+- A first start with no reac-pw.conf prints one RC_S_NO_OVERRIDES line naming where an
+  expert puts overrides; reac-pw.conf.example and reac-pw.env.example ship as %doc.
+- Six libreac refusal lines carry codes through the shared include/reac/reac_code.h; the
+  code ratchet joins the newest sibling libreac checkout; floor 31, unchanged.
+- The netns tests declare is_parallel : false, so a plain `meson test` runs them serially
+  too (the box-declares-its-row flake); the serial ratchet requires that line.
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.20-1
 - KNOBS ARE DISCOVERED AND PUBLISHED (operator ruling 2026-09-17): the 27 REACPW_/REAC_
   knobs sit in one table (src/reac_knobs.c); 19 are read through reac_conf_lookup so
