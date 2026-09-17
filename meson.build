@@ -348,6 +348,7 @@ test('reac_linkmon', linkmon_test)
 test('reac_link_edge_observed',
   find_program('tests/link-edge-observed.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [linkmon_test],
   timeout : 30)
 
@@ -410,6 +411,7 @@ test('reac_rx_live_iface', rx_live_iface_test)
 test('reac_iface_vanish_exits',
   find_program('tests/iface-vanish-exits.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 60)
 
@@ -425,6 +427,7 @@ test('reac_iface_vanish_exits',
 test('reac_link_up_reestablishes',
   find_program('tests/link-up-reestablishes.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 60)
 
@@ -457,6 +460,7 @@ etf_wire_probe = executable('etf-wire-probe',
 test('reac_etf_qdisc_owned',
   find_program('tests/etf-qdisc-owned.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 300)
 
@@ -506,6 +510,7 @@ test('reac_roster', roster_test)
 test('reac_segments_autodetect',
   find_program('tests/segments-autodetect.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 300)
 
@@ -522,6 +527,7 @@ test('reac_segments_autodetect',
 test('reac_declared_vlan_is_minted',
   find_program('tests/declared-vlan-is-minted.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 300)
 
@@ -554,6 +560,7 @@ test('reac_qdisc', qdisc_test)
 test('reac_etf_late_is_the_wake',
   find_program('tests/etf-late-is-the-wake.sh'),
   suite : ['netns', 'load'],
+  is_parallel : false,
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 600)
 
@@ -568,6 +575,7 @@ test('reac_etf_late_is_the_wake',
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 600)
 
@@ -587,6 +595,7 @@ fake_box_path = get_option('fake_box')
 test('reac_box_wakes_on_a_phy_edge',
   find_program('tests/box-wakes-on-a-phy-edge.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
@@ -601,6 +610,7 @@ test('reac_box_wakes_on_a_phy_edge',
 test('reac_box_0832_enrols',
   find_program('tests/box-0832-enrols.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
@@ -616,6 +626,7 @@ test('reac_box_0832_enrols',
 test('reac_box_master_slave_join',
   find_program('tests/box-master-slave-join.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 420)
 
@@ -629,6 +640,7 @@ test('reac_box_master_slave_join',
 test('reac_box_master_rejoins',
   find_program('tests/box-master-rejoins.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -654,6 +666,7 @@ courtship_probe = executable('courtship-probe',
 test('reac_courtship_backs_off',
   find_program('tests/courtship-backs-off.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [courtship_probe],
   timeout : 120)
 
@@ -672,6 +685,7 @@ tap_probe = executable('tap-probe',
 test('reac_tap_sends_nothing',
   find_program('tests/tap-sends-nothing.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [courtship_probe, tap_probe],
   timeout : 120)
 
@@ -684,6 +698,7 @@ test('reac_tap_sends_nothing',
 test('reac_trunk_classification_is_about_now',
   find_program('tests/trunk-classification-is-about-now.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
@@ -697,6 +712,7 @@ test('reac_trunk_classification_is_about_now',
 test('reac_trunk_verdict_is_inbound_only',
   find_program('tests/trunk-verdict-is-inbound-only.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -708,6 +724,7 @@ test('reac_trunk_verdict_is_inbound_only',
 test('reac_trunk_verdict_expires_on_the_start_path',
   find_program('tests/trunk-verdict-expires-on-the-start-path.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -719,6 +736,7 @@ test('reac_trunk_verdict_expires_on_the_start_path',
 test('reac_master_gone_is_re_decided',
   find_program('tests/master-gone-is-re-decided.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
@@ -734,6 +752,7 @@ test('reac_master_gone_is_re_decided',
 test('reac_no_box_no_node',
   find_program('tests/no-box-no-node.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
@@ -741,6 +760,7 @@ test('reac_no_box_no_node',
 test('box-declares-its-row',
   find_program('tests/box-declares-its-row.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 240)
 
@@ -770,6 +790,7 @@ test('box-speaks-one-vocabulary',
 test('box-is-not-re-decided',
   find_program('tests/box-is-not-re-decided.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -787,6 +808,7 @@ test('box-is-not-re-decided',
 test('reac_roster_node_lists_every_segment',
   find_program('tests/roster-node-lists-every-segment.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
@@ -802,6 +824,7 @@ test('reac_roster_node_lists_every_segment',
 test('reac_pins_need_no_door',
   find_program('tests/pins-need-no-door.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 300)
 
@@ -817,6 +840,7 @@ test('reac_pins_need_no_door',
 test('reac_headamp_refusal_is_visible',
   find_program('tests/headamp-refusal-is-visible.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 180)
 
@@ -854,6 +878,7 @@ test('reac_packaged_shape',
 test('reac_refuses_root',
   find_program('tests/refuses-root.sh'),
   suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 30)
 
