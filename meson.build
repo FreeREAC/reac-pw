@@ -1539,3 +1539,16 @@ test('reac_code_conformance', python3,
   args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
           meson.current_source_dir() / 'src',
           meson.current_source_dir() / 'src' / 'reac_code.h'])
+
+# --- text: every tests/*.sh grep/wait_for pattern maps to a producer, or is debt ------
+# "Let's be precise, let's organise tests to not depend on greps" (2026-09-17). Matches
+# every quoted grep/wait_for pattern in tests/*.sh against src/*.c's printf-family format
+# strings (conversions wildcarded) and src/reac_code.h's tokens; refuses a pattern with
+# neither a producer nor a named line in tests/known-debt-grep-patterns.txt, which is
+# itself a ratchet (may only shrink). Sabotage-verified by injecting an unmapped pattern
+# into a scratch copy of tests/ and requiring it to be refused.
+test('reac_asserted_lines_have_a_producer', python3,
+  args : [meson.current_source_dir() / 'tests' / 'asserted-lines-have-a-producer.py',
+          meson.current_source_dir() / 'tests',
+          meson.current_source_dir() / 'src',
+          meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt'])

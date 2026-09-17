@@ -279,8 +279,8 @@ kill -0 $PID 2>/dev/null || {
 }
 grep -q "hearing: .* Ethernet interface" "$LOG" || { echo "FAIL: no hearing banner"; cat "$LOG"; exit 1; }
 grep -q "\[hear0\] listening — role auto (autodetected)" "$LOG" || { echo "FAIL: hear0 not sniffed, or its role did not resolve to auto"; cat "$LOG"; exit 1; }
-grep -q "\[hear0\] REAC heard" "$LOG" || { echo "FAIL: master on the peer never heard"; cat "$LOG"; tail -5 "$PEER"; exit 1; }
-grep -q "\[hear0\] segment up" "$LOG" || { echo "FAIL: heard but not served"; cat "$LOG"; exit 1; }
+grep -qE "S_SEGMENT_HEARD.*\[hear0\]" "$LOG" || { echo "FAIL: master on the peer never heard"; cat "$LOG"; tail -5 "$PEER"; exit 1; }
+grep -qE "S_SEGMENT_UP.*\[hear0\]" "$LOG" || { echo "FAIL: heard but not served"; cat "$LOG"; exit 1; }
 # AND IT WAS NEVER TAKEN. A wire with a master on it is not silent, so the masterless
 # licence must never have been granted here. This is an ABSENCE claim and it gets its
 # positive control at the end of the file, where the same string is REQUIRED to have
@@ -335,7 +335,7 @@ fi
 # Link down past the hold: the segment drops, and the interface is sniffed again when
 # link returns, so the master still on the peer is heard afresh.
 peer ip link set desk0 down; sleep 4.5
-grep -q "\[hear0\] segment dropped" "$LOG" || { echo "FAIL: no drop after the hold"; cat "$LOG"; exit 1; }
+grep -qE "S_SEGMENT_DROPPED.*\[hear0\]" "$LOG" || { echo "FAIL: no drop after the hold"; cat "$LOG"; exit 1; }
 peer ip link set desk0 up; sleep 5
 [ "$(grep -c "\[hear0\] listening — role auto (autodetected)" "$LOG")" -ge 2 ] || {
 	echo "FAIL: not sniffed again after the drop"; cat "$LOG"; exit 1; }
