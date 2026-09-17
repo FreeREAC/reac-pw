@@ -703,13 +703,18 @@ test('reac_master_gone_is_re_decided',
 # and a box that goes takes them away again -- the middle arm is the positive control for
 # the other two. Needs libreac's fake_box (the same knob box-wakes-on-a-phy-edge uses);
 # without it the test SKIPS rather than passing while proving nothing.
-# --- source-shape test: `auto` never elects the box intent (2026-09-17 spec §7) ------
+test('reac_no_box_no_node',
+  find_program('tests/no-box-no-node.sh'),
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 300)
+
 # --- whole-binary test: a box-role segment DECLARES ITS ROW on the wire ---------------
 test('box-declares-its-row',
   find_program('tests/box-declares-its-row.sh'),
   args : [reac_pw_exe],
   timeout : 240)
 
+# --- source-shape test: `auto` never elects the box intent (2026-09-17 spec §7) ------
 test('box-is-never-elected',
   find_program('tests/box-is-never-elected.sh'),
   timeout : 30)
@@ -735,11 +740,6 @@ test('box-speaks-one-vocabulary',
 test('box-is-not-re-decided',
   find_program('tests/box-is-not-re-decided.sh'),
   args : [reac_pw_exe, fake_box_master],
-  timeout : 300)
-
-test('reac_no_box_no_node',
-  find_program('tests/no-box-no-node.sh'),
-  args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
 # --- whole-binary test: ONE node lists every segment, empty ones included -----
