@@ -714,6 +714,17 @@ test('box-is-never-elected',
   find_program('tests/box-is-never-elected.sh'),
   timeout : 30)
 
+# --- source-shape test: ONE segment, ONE word ----------------------------------------
+#
+# A `role = box` segment was spelled `BOX role`, `SLAVE role (…)` and `slave` in three
+# lines of one log while the conf, the roster and the console all said `box`. Two of
+# those lines need a mixer on a cable and the third a PipeWire failure, so what is read
+# is the text the daemon is built to print. It also holds the reac-playback width to one
+# spelling: the sizing failure used to report a number nobody had tried.
+test('box-speaks-one-vocabulary',
+  find_program('tests/box-speaks-one-vocabulary.sh'),
+  timeout : 30)
+
 # --- whole-binary test: a QUIET MIXER does not re-decide a `role = box` segment -------
 #
 # hearing_reevaluate's exemption was written for the pinned recorder and keyed on that
