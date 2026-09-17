@@ -4,6 +4,11 @@
 #
 # WHOLE-BINARY, END TO END: AN 8-IN / 32-OUT SPLIT BOX ENROLS AT ITS OWN WIDTH.
 #
+# THE CHASSIS IS LABELLED S-4000H AND THE WIRE CALLS IT AN S-4000S. A real M-200 driving
+# this very box displays "S-4000S, 08 in / 32 out" because the box sends no name record and
+# the 0x84 selector's default label is S-4000S. The table row and this test use the wire's
+# name, `s4000s-0832`.
+#
 # THE JOB, AND THE MORNING IT WAS NOT DONE. 2026-09-17 07:00, VLAN 13, reac-pw 1.0.14: the
 # operator plugged in an S-4000H-0832 and the roster read `state=probing model=none
 # role=master width=0/0` for minutes, twice over the same MAC:
@@ -15,10 +20,10 @@
 # frames through the decoder, the table, the classifier and the master FSM. It cannot see
 # what this sees: the real binary, on a real wire, publishing a real width.
 #
-# THE FAR END IS libreac's fake_box UNDER A MODEL TOKEN — `fake_box <if> <secs> s4000h` —
-# so it declares the row captured from that very box (input groups marked 0x00, outputs
-# written first) and returns 32 channels while declaring 8 inputs, which is what the live
-# unit does and is exactly the disagreement that broke the old width heuristic.
+# THE FAR END IS libreac's fake_box UNDER A MODEL TOKEN — `fake_box <if> <secs>
+# s4000s-0832` — so it declares the row captured from that very box (input groups marked
+# 0x00, outputs written first) and returns the 8 channels a real M-200 measured it
+# returning once granted (217 905 frames of 340 B, m200-s4000h-coldboot.pcap).
 #
 # THE SECOND ARM IS THE CONTROL, and the first proves nothing without it: the SAME binary
 # and the SAME wire with `s4000s` must publish 32x8. A probe that reports 8x32 from a
@@ -103,12 +108,12 @@ say() { printf '%s\n' "$*"; }
 
 # ---- ARM 1: the split box. 8 inputs declared, 32 channels returned, and the daemon has
 # to publish the DECLARATION's geometry rather than the frame's.
-A1=$(run_arm s4000h 2>&1) || true
+A1=$(run_arm s4000s-0832 2>&1) || true
 case "$A1" in *"SKIP: "*) echo "${A1##*SKIP: }" | head -1 | sed 's/^/SKIP: /'; exit $SKIP;; esac
 say "$A1"
-echo "$A1" | grep -q "BOXRC=0" || { say "FAIL: the S-4000H never enrolled (fake_box exit != 0)"; FAIL=1; }
+echo "$A1" | grep -q "BOXRC=0" || { say "FAIL: the 0832 split never enrolled (fake_box exit != 0)"; FAIL=1; }
 echo "$A1" | grep -q "ESTABLISHED" || { say "FAIL: the master never reached ESTABLISHED"; FAIL=1; }
-echo "$A1" | grep -q "recognized box = S-4000H-0832" || { say "FAIL: the box was not NAMED from its declaration"; FAIL=1; }
+echo "$A1" | grep -q "recognized box = S-4000S-0832" || { say "FAIL: the box was not NAMED from its declaration"; FAIL=1; }
 echo "$A1" | grep -q "reac.box.width.*8x32" || { say "FAIL: the published width is not 8x32 — the declaration did not reach the graph"; FAIL=1; }
 # ONE MAC, ONE VERDICT: the sniffer's line may appear, but never as `unknown` for a box
 # that has declared itself.

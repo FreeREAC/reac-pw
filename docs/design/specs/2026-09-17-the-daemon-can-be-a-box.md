@@ -440,3 +440,43 @@ order (`reac_upstream.h`: input N is wire channel N−1), the 8 inputs are chann
 box's 32-channel return. The capture is consistent with a group structure — the 1204 B frames
 repeat one 8-channel pattern four times — but consistency is not proof, so §9 step 4 stands as
 written: inject a tone into input 1 and require the level to follow it.
+
+## Amendment 2026-09-17 (fourth) — the M-200 is the oracle, and it corrects two of the above
+
+Three captures of the SAME box (`00:40:ab:c4:25:80`) on a real M-200 (`00:40:ab:c9:cc:03`,
+44.1 kHz, 3675 fps, VLAN 12): `m200-s4000h-enrol.pcap` (60 s, steady state),
+`m200-s4000h-coldboot.pcap` (90 s, power-cycle) and `m200-s4000h-replug.pcap` (60 s, cable
+pull). They settle what our own 4 s could not.
+
+**a. THE ROW IS FULLY CAPTURED, AND ITS NAME IS `s4000s-0832`.** The cold boot carries the box's
+one config-announce (t=+53.704) — byte-identical to the block captured on VLAN 13, which is the
+independent second wire that block needed — and, at t=+57.438, its identity page: `cc0016`
+firmware `"2500"` and `cc001a` REAC `0000:0002:0001:0002` = 2.102, both **byte-identical to the
+S-4000S-3208's captured records**. The M-200 displays "S-4000S, 08 in / 32 out, fw 2.500, REAC
+2.102" and it is right: the box sends NO name record, so the 0x84 selector's default label is all
+a desk has. One chassis, two straps. The `s4000h` token is gone; the H is a front-panel label.
+
+**b. THE 32-CHANNEL RETURN WAS A STATE, NOT A CHASSIS FACT — the first amendment over-read it.**
+Granted by the M-200 the box returns **340 B, 8 channels**, for all 217 905 frames of the steady
+state and from the first frame of the cold boot. The 1204 B frames it sent US are what it does
+when its declaration goes unanswered. `reac_box_model_upstream_width` therefore stays the
+declared input count, and §9 step 4 (which upstream slots carry the 8 preamps) is ANSWERED for
+the granted case: there are only eight, ascending, as `reac_upstream.h` already says.
+
+**c. OUR GRANT IS NOT THE DEFECT, AND HALF OF IT IS BYTE-IDENTICAL TO THE M-200's.** The desk's
+ENROLL group map for this box is `01 03 00 0d 10 04 02 41 00 00 00 00 00 c3 c3 c3 c3 …` — ONE
+`0x41` input group and FOUR `0xc3`, which is exactly what `set_enroll_width(8)` emits, byte for
+byte. Its scene push is 686 chunks, which is exactly what ours sends. The whole divergence is
+that we never reach the grant at all: the M-200's cfea goes `boxes=0` → `boxes=1` after its grant
+sweep, and ours stayed `boxes=0` because the port decoder refused the declaration. Hypothesis (c)
+of the brief — "our grant asks the wrong width" — is REFUTED by these bytes.
+
+**d. NOT OURS TO FIX HERE, AND MEASURED: THE M-200 ADDRESSES THIS BOX'S PREAMPS AT CH 0x20.**
+Twenty-four head-amp records at t=+57.4, CH `0x20`–`0x27`, three params each — for a box whose
+config-announce carries `block[7] = 0x00`, which `reac_ports.h`'s strap law reads as base `0x00`.
+The law holds for the three boxes it was derived from (S-0808 0x00, S-1608 0x20, S-4000S 0x00) and
+does not predict this one. **Every head-amp record we send this chassis would land 32 rows away**,
+which is the silent-48 V failure mode that law exists to prevent — so it is recorded here as a
+measured divergence with a rig step, and NOT patched from one capture: the base may follow the
+box's OUTPUT count, the granted placement, or a strap byte we are reading wrong. The step is
+`REAC_HEADAMP_PHANTOM` at 0x20 versus 0x00 on the live unit, confirmed by looking at the preamp.
