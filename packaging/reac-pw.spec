@@ -156,6 +156,9 @@ meson test -C _build
 - The spec docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md gains three
   amendments: the captured S-4000H, the ruling that any stagebox enrols on what it
   declares, and the chassis numbering (inputs 1-8, outputs from 9).
+- tests/box-0832-enrols.sh drives the real binary against fake_box wearing that row
+  and reads 8x32 OFF THE GRAPH, with an S-4000S control arm reading 32x8 — no unit
+  test in either repo can see a published width.
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.14-1
 - THE DAEMON CAN BE A BOX. `[segment X] role = box` + `model = <token>` in reac-pw.conf makes
   a segment present itself to a REAC mixer as a stagebox: it declares a row from libreac's

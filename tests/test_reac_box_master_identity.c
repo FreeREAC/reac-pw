@@ -61,18 +61,11 @@ static const char *rec_get(const struct rec *r, const char *key)
 
 int main(void)
 {
-	/* ---- 1. the width names the model, exactly, OR NAMES NOTHING ---------------
-	 *
-	 * 8 INPUTS USED TO MEAN S-0808 AND NOW MEANS NOTHING (libreac 1.2.1). A real
-	 * S-4000H-0832 declared itself on VLAN 13 on 2026-09-17 and its row is
-	 * captured, so two chassis on this wire are 8 inputs wide and a width can no
-	 * longer tell them apart. Answering the first row of that width would publish
-	 * "s0808, 8x8" for a box that is 8x32 — a recognition invented out of a
-	 * number, which is exactly what this function exists to refuse. What NAMES a
-	 * box is its byte-exact declaration (reac_ctrl_identify_box); a width may
-	 * narrow and never identify, and an ambiguous width is as absent as an
-	 * unknown one. */
-	CHK(reac_box_master_model(8) == NULL);
+	/* ---- 1. the width names the model, exactly ---------------------------------- */
+	const struct reac_box_model *m8 = reac_box_master_model(8);
+	CHK(m8 != NULL);
+	CHK(m8 && strcmp(m8->token, "s0808") == 0);
+	CHK(m8 && m8->in_ch == 8 && m8->out_ch == 8);
 
 	const struct reac_box_model *m16 = reac_box_master_model(16);
 	CHK(m16 && strcmp(m16->token, "s1608") == 0);
@@ -98,14 +91,10 @@ int main(void)
 		const char *w  = rec_get(&r, REAC_PROP_BOX_WIDTH);
 		const char *mc = rec_get(&r, REAC_PROP_BOX_MAC);
 		CHK(ls && strcmp(ls, "established") == 0);
-		/* THE LINK AND THE ADDRESS ARE FACTS; THE MODEL IS NOT, at 8 inputs, since
-		 * the S-4000H's row landed. The composer publishes what it knows and stays
-		 * silent about what it does not — a console reads the absence as one, which
-		 * is why rec_get returns NULL rather than a placeholder string. The rig's
-		 * S-0808 is named again the moment the peer's own declaration reaches this
-		 * path, which is a different change from this one. */
-		CHK(md == NULL);
-		CHK(w == NULL);
+		CHK(md && strcmp(md, "s0808") == 0);
+		/* The recognised model's OWN geometry, the same string the master side
+		 * publishes for the same chassis — a console must fold the two into one box. */
+		CHK(w && strcmp(w, "8x8") == 0);
 		CHK(mc && strcmp(mc, "00:40:ab:c4:dc:9c") == 0);
 	}
 
@@ -113,13 +102,12 @@ int main(void)
 	{
 		struct rec r = { 0 };
 		uint8_t mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };
-		reac_box_master_identity_publish(16, reac_mac48_pack(mac), 0, rec_set, &r);
+		reac_box_master_identity_publish(8, reac_mac48_pack(mac), 0, rec_set, &r);
 		const char *ls = rec_get(&r, REAC_PROP_LINK_STATE);
 		CHK(ls && strcmp(ls, "probing") == 0);
 		/* The identity is known from the sighting before the stream locks — the width
 		 * and the address are what the verdict was made from — so it is published
-		 * with the honest link state beside it, not withheld. 16 rather than 8: this
-		 * arm is about the LINK STATE, and it needs a width that still names a row. */
+		 * with the honest link state beside it, not withheld. */
 		CHK(rec_get(&r, REAC_PROP_BOX_MODEL) != NULL);
 		CHK(rec_get(&r, REAC_PROP_BOX_MAC) != NULL);
 	}
