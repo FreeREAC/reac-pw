@@ -233,6 +233,7 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	echo "$tag master-sees-state ${mstate:-not-established}"
 	echo "$tag master-joins $(grep -ao "rx_joins=[0-9]*" "$RT/$tag.master.log" | tail -1 | cut -d= -f2)"
 	echo "$tag env-width-ignored $(grep -ac "REAC_BOX_CHANNELS.*IGNORED" "$RT/$tag.log")"
+	echo "$tag mac-standin $(grep -ac "slave box source MAC = .*Roland OUI" "$RT/$tag.log")"
 	grep -a "BOX role" "$RT/$tag.log" | head -1 | sed "s/^/  $tag saidbox /"
 	grep -aiE "establish|grant|enrol|announce" "$RT/$tag.log" | tail -4 | sed "s/^/  $tag boxlog /"
 	grep -aiE "establish|grant|recogniz|autodetect|box" "$RT/$tag.master.log" | tail -5 | sed "s/^/  $tag mixlog /"
@@ -318,6 +319,14 @@ JOINS=$(get B master-joins); JOINS=${JOINS:-0}
 # retired key must SAY it is ignored, or an operator cannot tell it from one that works.
 [ "$(get A env-width-ignored)" -ge 1 ] 2>/dev/null ||
 	say "arm A never named REAC_BOX_CHANNELS as ignored — the key is read under role = box and says nothing about it"
+
+# ---- AND THE MAC LINE DESCRIBES THE ADDRESS IT ACTUALLY SENT --------------------------
+# A box role announces from the Roland OUI standin (it is how a master recognises a box at
+# all), and the one line an operator reads a capture against must say so. The annotation
+# used to key on the box-MASTER join alone, so this arm described a Roland-OUI address as
+# this NIC's own — a log that disagrees with the frames it is describing.
+[ "$(get A mac-standin)" -ge 1 ] 2>/dev/null ||
+	say "arm A's source-MAC line does not name the Roland OUI standin it is sending from"
 [ "$(get B roster-model)" = "fr4000" ] || say "arm B's roster model is '$(get B roster-model)'"
 
 [ $fail -eq 0 ] && echo "OK: a box-role segment declares its row on the wire — the S-1608's own 16/8, strap 2, firmware 2.200, REAC 2.302, and the 40-channel experiment with our FR-4000 / 1.014 / 9.014 identity — and the roster says the same"
