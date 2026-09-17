@@ -33,11 +33,15 @@ for f in tests/*.sh; do
 	grep -q 'unshare -' "$f" || continue
 	found=$((found + 1))
 	# The declaration block: the find_program line and the four lines under it.
-	if grep -A 4 "find_program('$f')" "$MB" | grep -qE "suite : ('netns'|\[.*'netns'.*\])"; then
+	# The tag alone is not the guard: a plain `meson test` (no --num-processes 1) schedules a
+	# tagged test in parallel unless the declaration also says is_parallel : false (the
+	# 2026-09-17 box-declares-its-row flake). Both lines, or the test is not serial.
+	if grep -A 6 "find_program('$f')" "$MB" | grep -qE "suite : ('netns'|\[.*'netns'.*\])" \
+	   && grep -A 6 "find_program('$f')" "$MB" | grep -qE "is_parallel : false"; then
 		tagged=$((tagged + 1))
 	else
 		echo "FAIL: $f mints namespaces but is not declared in the 'netns' suite —"
-		echo "      add \`suite : 'netns',\` to its test() in $MB, or it runs in parallel"
+		echo "      add \`suite : 'netns',\` AND \`is_parallel : false,\` to its test() in $MB, or it runs in parallel"
 		echo "      with the other namespace tests and flakes the rpm %check."
 		FAIL=1
 	fi
