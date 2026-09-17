@@ -108,6 +108,8 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/statvfs.h>
+#include <dirent.h>
+#include <pwd.h>
 #include <linux/if_packet.h>
 #include <net/if.h>           /* IFNAMSIZ */
 
@@ -377,6 +379,139 @@ static void capability_preflight(void)
 		    path, path);
 		say_nosuid(path);
 	}
+}
+
+/* ---- naming a segment lock's holder (2026-09-18) --------------------------
+ *
+ * "grep <name> /proc/net/unix" tells an operator a lock is held; it does not
+ * say by WHOM. Measured 2026-09-18: the console daemon's refusal named the
+ * socket and nothing else, and the operator had to go find the rival process
+ * by hand. Best-effort, three /proc reads chained, and silent (not fatal, not
+ * even logged) the moment any of them cannot see what it is looking for —
+ * most often permission: an unprivileged console daemon asking about a ROOT
+ * holder cannot open that pid's /proc/<pid>/fd at all (DAC denies a non-owner,
+ * non-root reader), which is exactly the shape of the defect this exists
+ * against and precisely the case it cannot see into. The refusal message
+ * still carries the socket name and the manual `grep` line unconditionally,
+ * so a silent lookup here never loses information the caller already had. */
+
+/* The segment lock's own name is already the exact string /proc/net/unix
+ * prints for an abstract socket (reac_seglock.c: "@" + the abstract path), so
+ * this is a straight line-by-line match on the last column, no reformatting. */
+static int seglock_inode_of(const char *name, unsigned long *inode_out)
+{
+	FILE *f = fopen("/proc/net/unix", "r");
+	if (!f)
+		return 0;
+	char line[512];
+	int found = 0;
+	/* header line first; every /proc/net/unix has exactly one */
+	if (!fgets(line, sizeof line, f)) {
+		fclose(f);
+		return 0;
+	}
+	while (fgets(line, sizeof line, f)) {
+		char num[64], ref[16], proto[16], flags[16], type[16], st[16], inode[32], path[300];
+		int n = sscanf(line, "%63s %15s %15s %15s %15s %15s %31s %299s",
+		               num, ref, proto, flags, type, st, inode, path);
+		if (n == 8 && strcmp(path, name) == 0) {
+			*inode_out = strtoul(inode, NULL, 10);
+			found = 1;
+			break;
+		}
+	}
+	fclose(f);
+	return found;
+}
+
+/* Which pid holds an open fd on socket inode `inode` — scanning every
+ * /proc/<pid>/fd this reader has permission to open. A pid whose /fd we
+ * cannot open (another uid, no CAP_SYS_PTRACE) is skipped, not an error: the
+ * scan reports what it could see, and the caller already treats "found
+ * nothing" as silence, not as proof the socket has no holder. */
+static int pid_holding_socket(unsigned long inode, pid_t *pid_out)
+{
+	DIR *proc = opendir("/proc");
+	if (!proc)
+		return 0;
+	char target[48];
+	snprintf(target, sizeof target, "socket:[%lu]", inode);
+	int found = 0;
+	struct dirent *pe;
+	while (!found && (pe = readdir(proc))) {
+		if (pe->d_name[0] < '0' || pe->d_name[0] > '9')
+			continue;
+		char fddir[64];
+		snprintf(fddir, sizeof fddir, "/proc/%s/fd", pe->d_name);
+		DIR *fdd = opendir(fddir);
+		if (!fdd)
+			continue;
+		struct dirent *fe;
+		while ((fe = readdir(fdd))) {
+			if (fe->d_name[0] == '.')
+				continue;
+			char fdpath[300], linkbuf[128];
+			snprintf(fdpath, sizeof fdpath, "%s/%s", fddir, fe->d_name);
+			ssize_t ln = readlink(fdpath, linkbuf, sizeof linkbuf - 1);
+			if (ln < 0)
+				continue;
+			linkbuf[ln] = '\0';
+			if (strcmp(linkbuf, target) == 0) {
+				*pid_out = (pid_t)atoi(pe->d_name);
+				found = 1;
+				break;
+			}
+		}
+		closedir(fdd);
+	}
+	closedir(proc);
+	return found;
+}
+
+/* "pid N, user X (comm)" for a pid we could read /proc/<pid>/status of;
+ * "pid N" alone if the Uid: line could not be read (still worth having: a pid
+ * is enough to `ps` or `kill` it). getpwuid() failing (no NSS entry) falls
+ * back to the raw uid rather than dropping the line. */
+static void describe_pid(pid_t pid, char *out, size_t outlen)
+{
+	char path[64], line[256], comm[64] = "";
+	uid_t uid = (uid_t)-1;
+	snprintf(path, sizeof path, "/proc/%d/status", (int)pid);
+	FILE *f = fopen(path, "r");
+	if (f) {
+		while (fgets(line, sizeof line, f)) {
+			if (strncmp(line, "Name:", 5) == 0)
+				sscanf(line + 5, "%63s", comm);
+			else if (strncmp(line, "Uid:", 4) == 0) {
+				unsigned u;
+				if (sscanf(line + 4, "%u", &u) == 1)
+					uid = (uid_t)u;
+			}
+		}
+		fclose(f);
+	}
+	if (uid == (uid_t)-1) {
+		snprintf(out, outlen, "pid %d", (int)pid);
+		return;
+	}
+	struct passwd *pw = getpwuid(uid);
+	if (pw)
+		snprintf(out, outlen, "pid %d, user %s (%s)", (int)pid, pw->pw_name,
+		         comm[0] ? comm : "?");
+	else
+		snprintf(out, outlen, "pid %d, uid %u (%s)", (int)pid, (unsigned)uid,
+		         comm[0] ? comm : "?");
+}
+
+/* The one entry point: `out` is "" (untouched callers just skip it) unless
+ * every step above succeeded. */
+static void describe_seglock_holder(const char *name, char *out, size_t outlen)
+{
+	out[0] = '\0';
+	unsigned long inode;
+	pid_t pid;
+	if (seglock_inode_of(name, &inode) && pid_holding_socket(inode, &pid))
+		describe_pid(pid, out, outlen);
 }
 
 /* Why the AF_PACKET TX could not open, said in words the operator can act on.
@@ -1803,15 +1938,18 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 
 		int claimed = reac_seglock_claim(&L->seglock, c->tx_if);
 		if (claimed == -1) {
+			char holder[160];
+			describe_seglock_holder(L->seglock.name, holder, sizeof holder);
 			fprintf(stderr,
 			    "reac-pw: %sREFUSING to master '%s' — another process already holds\n"
-			    "         that segment (%s). Two masters on one segment is the\n"
+			    "         that segment (%s)%s%s. Two masters on one segment is the\n"
 			    "         fault this lock exists to make impossible; it has cost an\n"
 			    "         evening once and corrupted a live measurement once.\n"
 			    "         Nothing is taken over automatically: stop the holder, or\n"
 			    "         drive a different segment. Who holds it:\n"
 			    "           grep %s /proc/net/unix\n",
-			    c->tag, c->tx_if, L->seglock.name, L->seglock.name);
+			    c->tag, c->tx_if, L->seglock.name,
+			    holder[0] ? ", held by " : "", holder, L->seglock.name);
 			reac_rx_close(&L->rx);
 			reac_ring_free(&L->ring);
 			reac_ring_free(&L->tx_ring);
