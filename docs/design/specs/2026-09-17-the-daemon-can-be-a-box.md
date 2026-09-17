@@ -480,3 +480,9 @@ which is the silent-48 V failure mode that law exists to prevent — so it is re
 measured divergence with a rig step, and NOT patched from one capture: the base may follow the
 box's OUTPUT count, the granted placement, or a strap byte we are reading wrong. The step is
 `REAC_HEADAMP_PHANTOM` at 0x20 versus 0x00 on the live unit, confirmed by looking at the preamp.
+
+**e. THE CFEA WIDTH BYTE IS CORROBORATED BY A SECOND BOX.** The M-200 announces the ENROLLED
+box's input width: `0x08` beside this chassis, `0x10` beside an S-1608 on the same desk
+(`m200-s1608-replug.pcap`, steady state, `boxes=1`). `reac_master_set_box` stamps
+`cfg.out_channels = in_ch`, which is that byte, so an admitted 0832 makes us announce `0x08`
+exactly as the desk does — asserted in libreac's `tests/test_box_0832.c` arm 4.
