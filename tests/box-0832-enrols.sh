@@ -111,6 +111,25 @@ say() { printf '%s\n' "$*"; }
 A1=$(run_arm s4000s-0832 2>&1) || true
 case "$A1" in *"SKIP: "*) echo "${A1##*SKIP: }" | head -1 | sed 's/^/SKIP: /'; exit $SKIP;; esac
 say "$A1"
+# THE INJECTION IS PROVEN BEFORE ITS RESULT IS READ. `fake_box <if> <secs> <token>` only
+# grew its third argument with the 0832 row (libreac 1.2.1); an OLDER binary IGNORES the
+# token and declares the capture's S-4000S-3208 instead. That is what arm 1 was really
+# reading on 2026-09-17 when it reported "the split chassis resolves as 32/8" against two
+# different reac-pw binaries: the wire never carried a split chassis at all
+# (~/Devel/audio/libreac/fake_box, built before the token, holds no "declaring as" string;
+# with a fake_box from this libreac both arms pass). fake_box announces the row it is
+# wearing — require that line, naming THIS row, before any verdict about the daemon. A far
+# end that cannot say what it is testifies about nothing.
+far_end_is() {   # far_end_is <arm output> <expected display> <arm label>
+	echo "$1" | grep -q "fake_box: declaring as $2" && return 0
+	say "FAIL$3: the far end never declared $2 — fake_box ignored its model token, so this"
+	say "      wire carried the capture's S-4000S-3208 and nothing here is about the row that"
+	say "      was asked for. Rebuild libreac's fake_box (libreac >= 1.2.1: make fake_box)."
+	FAIL=1
+	return 1
+}
+
+far_end_is "$A1" "S-4000S-0832 (8 in / 32 out)" ""
 echo "$A1" | grep -q "BOXRC=0" || { say "FAIL: the 0832 split never enrolled (fake_box exit != 0)"; FAIL=1; }
 echo "$A1" | grep -q "ESTABLISHED" || { say "FAIL: the master never reached ESTABLISHED"; FAIL=1; }
 # THE LINE THE DAEMON REALLY EMITS. This assertion used to grep `recognized box =
@@ -130,6 +149,7 @@ echo "$A1" | grep -E "REAC heard — unknown" >/dev/null && { say "FAIL: the sam
 A2=$(run_arm s4000s 2>&1) || true
 case "$A2" in *"SKIP: "*) say "SKIP: the control arm could not run"; exit $SKIP;; esac
 say "$A2"
+far_end_is "$A2" "S-4000S-3208 (32 in / 8 out)" " (control)"
 echo "$A2" | grep -q "BOXRC=0" || { say "FAIL (control): the S-4000S did not enrol"; FAIL=1; }
 echo "$A2" | grep -q "reac.box.width.*32x8" || { say "FAIL (control): the S-4000S did not publish 32x8 — this harness cannot tell two chassis apart"; FAIL=1; }
 # AND THE NAMING GREP TELLS THE TWO APART TOO: the same pattern, the other row's display.
