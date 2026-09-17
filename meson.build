@@ -427,14 +427,6 @@ test('reac_link_up_reestablishes',
   args : [reac_pw_exe],
   timeout : 60)
 
-# --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
-# drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
-# test_reac_ifscan pins the table; this drives the real binary on a veth pair
-# with a second reac-pw mastering the peer end, inside an unprivileged user+net
-# namespace. Skips where that or PipeWire is unavailable. Timeout covers
-# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups, and since 2026-09-08 the three
-# cold-start phases (pinned-drives-on-link, the knock, a desk answering) with their own
-# peer captures and a 6 s no-further-announce hold.
 # A STAGEBOX WITH ITS REAC MODE SWITCH ON M, for the far end of the veth pair. The daemon
 # cannot play one (its master role IS a desk: the fixed 40-channel downstream), and the
 # 0.5.1 ruling turns on exactly this peer -- joined on an unpinned wire, refused on one
@@ -564,21 +556,20 @@ test('reac_etf_late_is_the_wake',
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 600)
 
+# --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
+# drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
+# test_reac_ifscan pins the table; this drives the real binary on a veth pair
+# with a second reac-pw mastering the peer end, inside an unprivileged user+net
+# namespace. Skips where that or PipeWire is unavailable. Timeout covers
+# 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups, and since 2026-09-08 the three
+# cold-start phases (pinned-drives-on-link, the knock, a desk answering) with their own
+# peer captures and a 6 s no-further-announce hold.
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
   suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 600)
 
-# --- whole-binary test: a box master is ENROLLED WITH, its own way (0.5.6) ----
-#
-# "It is only a matter of following the same protocol that we expect." Measured at the far
-# end of the cable, against the ground-truth capture of a real S-1608 meeting the real
-# S-0808: the bounded broadcast flood AT THE MASTER'S WIDTH, the config-announce BEFORE the
-# cold-connect burst, the grant, the 1/s heartbeat, and a tone played into
-# reac-playback.<segment> decoded off the UPSTREAM the daemon unicasts — which is what
-# reaches that box's outputs. Needs a session manager (the tone has to be LINKED) and skips
-# without one.
 # --- whole-binary test: a box that DROPPED is re-acquired by the daemon alone ------
 #
 # The 2026-09-16 desk defect: after a 77-minute s2idle the daemon probed a wire correctly for
@@ -612,6 +603,15 @@ test('reac_box_0832_enrols',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
+# --- whole-binary test: a box master is ENROLLED WITH, its own way (0.5.6) ----
+#
+# "It is only a matter of following the same protocol that we expect." Measured at the far
+# end of the cable, against the ground-truth capture of a real S-1608 meeting the real
+# S-0808: the bounded broadcast flood AT THE MASTER'S WIDTH, the config-announce BEFORE the
+# cold-connect burst, the grant, the 1/s heartbeat, and a tone played into
+# reac-playback.<segment> decoded off the UPSTREAM the daemon unicasts — which is what
+# reaches that box's outputs. Needs a session manager (the tone has to be LINKED) and skips
+# without one.
 test('reac_box_master_slave_join',
   find_program('tests/box-master-slave-join.sh'),
   suite : 'netns',
@@ -819,14 +819,6 @@ test('reac_headamp_refusal_is_visible',
   args : [reac_pw_exe],
   timeout : 180)
 
-# --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
-#
-# auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
-# (2026-09-02 §d) nothing is configured for it either — REAC_IFACES retired with the
-# per-interface files, so the daemon HEARS its segments. An `argc < 2` guard answered
-# usage before any of that was reached, and the packaged service could never start
-# (measured on the rig, 2026-08-31). Needs no NIC: it asserts help still works with
-# nothing configured, and that a bare `reac-pw` gets PAST argument handling.
 # --- the namespace tests are a SUITE, and the rpm runs that suite one at a time -------
 #
 # A ratchet, not a rule anyone has to remember: a test that mints a veth pair and a private
@@ -837,6 +829,14 @@ test('netns_tests_are_serial',
   find_program('tests/netns-tests-are-serial.sh'),
   timeout : 30)
 
+# --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
+#
+# auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
+# (2026-09-02 §d) nothing is configured for it either — REAC_IFACES retired with the
+# per-interface files, so the daemon HEARS its segments. An `argc < 2` guard answered
+# usage before any of that was reached, and the packaged service could never start
+# (measured on the rig, 2026-08-31). Needs no NIC: it asserts help still works with
+# nothing configured, and that a bare `reac-pw` gets PAST argument handling.
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
   args : [reac_pw_exe,
@@ -1059,10 +1059,6 @@ gain_test = executable('test_reac_gain',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_gain', gain_test)
 
-# --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
-# Pins reac_link_state_from_master: every reac_master_state -> its badge string
-# (IDLE folded into "probing"), the just_dropped overlay, and the exact wire
-# strings a consumer (openmixer's stagebox card) matches on.
 # --- source gate: every dequeued pw_buffer is queued back, on every path -------
 # Not a unit test: the defect lives in a PipeWire callback no unit test reaches,
 # and it fails in the way that hides best — the sink re-sends one stale frame
@@ -1097,6 +1093,10 @@ box_identity_test = executable('test_reac_box_identity',
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_identity', box_identity_test)
 
+# --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
+# Pins reac_link_state_from_master: every reac_master_state -> its badge string
+# (IDLE folded into "probing"), the just_dropped overlay, and the exact wire
+# strings a consumer (openmixer's stagebox card) matches on.
 link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', ],
   include_directories : [include_directories('src')],
@@ -1191,12 +1191,6 @@ hunt_captures_test = executable('test_reac_hunt_captures',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt_captures', hunt_captures_test, timeout : 120)
 
-# --- unit test: the KNOCK, which wakes a cold stagebox on a wire nobody pinned -----
-# A box in slave mode transmits nothing until a master announces to it, so hearing alone
-# can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes
-# cabled and carrier-up, zero frames in eight seconds). This pins BOTH halves: nothing is
-# ever emitted before the wire has been observed masterless for the listening window, and
-# the first frame from anybody ends the knocking for good. Pure; no socket.
 # --- unit test: the WAKE LADDER, and when the master may break its own link ---------
 # 2026-09-16: an S-1608 that dropped while the desk was suspended ignored ~1620 completed
 # scene pushes over 73 minutes and two processes, on a wire carrying 8003 of our frames a
@@ -1211,6 +1205,12 @@ wake_test = executable('test_reac_wake',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_wake', wake_test)
 
+# --- unit test: the KNOCK, which wakes a cold stagebox on a wire nobody pinned -----
+# A box in slave mode transmits nothing until a master announces to it, so hearing alone
+# can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes
+# cabled and carrier-up, zero frames in eight seconds). This pins BOTH halves: nothing is
+# ever emitted before the wire has been observed masterless for the listening window, and
+# the first frame from anybody ends the knocking for good. Pure; no socket.
 knock_test = executable('test_reac_knock',
   ['tests/test_reac_knock.c', 'src/reac_knock.c'],
   include_directories : [include_directories('src')],
@@ -1501,3 +1501,16 @@ bench_hotpath = executable('bench_hotpath',
 usage_test = executable('test_reac_headamp_usage',
   ['tests/test_reac_headamp_usage.c'])
 test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
+
+# --- meson-text: every whole-binary header sits above ITS OWN test -----------
+# Five `# --- ... ---` headers had drifted onto the wrong test (a later block
+# wedged in between a header and the test it was written for, and nothing
+# checked) — line ~430 above the wrong test, ~573, ~822, ~1062, ~1194, all
+# fixed 2026-09-17. Pure text: walks every header, finds the next `test(` call
+# before another header intervenes, and refuses when the header shares no
+# normalized keyword with that test's `tests/*.sh` script name. Sabotage-
+# verified by swapping two headers in a scratch copy and requiring both
+# directions to fail.
+test('meson_headers_sit_above_their_test', python3,
+  args : [meson.current_source_dir() / 'tests' / 'meson-headers-sit-above-their-test.py',
+          meson.current_source_dir() / 'meson.build'])
