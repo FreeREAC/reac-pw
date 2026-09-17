@@ -164,7 +164,7 @@ meson test -C _build --suite netns --num-processes 1
 - THE NAMESPACE TESTS ARE THE `netns` SUITE AND %check RUNS THEM ONE AT A TIME. All 24 mint a
   veth pair, a nested network namespace and their own PipeWire; meson's default of one process
   per core ran a dozen at once and the losers timed out, which is the packaging flake and not
-  the daemon. %check is now `meson test --no-suite netns` plus `--suite netns
+  the daemon. %%check is now `meson test --no-suite netns` plus `--suite netns
   --num-processes 1`. tests/netns-tests-are-serial.sh is the ratchet: it finds namespace tests
   by the tool they invoke, refuses to pass on an empty scan, and requires the spec to run both
   halves.
