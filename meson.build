@@ -337,6 +337,7 @@ test('reac_linkmon', linkmon_test)
 # namespace or iproute2 is unavailable.
 test('reac_link_edge_observed',
   find_program('tests/link-edge-observed.sh'),
+  suite : 'netns',
   args : [linkmon_test],
   timeout : 30)
 
@@ -398,6 +399,7 @@ test('reac_rx_live_iface', rx_live_iface_test)
 # unavailable. Timeout covers 2 x (5 s settle + 6 s observe) plus startup.
 test('reac_iface_vanish_exits',
   find_program('tests/iface-vanish-exits.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 60)
 
@@ -412,6 +414,7 @@ test('reac_iface_vanish_exits',
 # perturb a live REAC segment. Timeout covers 5 s settle + 3 s of toggles.
 test('reac_link_up_reestablishes',
   find_program('tests/link-up-reestablishes.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 60)
 
@@ -451,6 +454,7 @@ etf_wire_probe = executable('etf-wire-probe',
 
 test('reac_etf_qdisc_owned',
   find_program('tests/etf-qdisc-owned.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 300)
 
@@ -499,6 +503,7 @@ test('reac_roster', roster_test)
 # sub-interface named by its id, and an interface hot-plugged under a running daemon.
 test('reac_segments_autodetect',
   find_program('tests/segments-autodetect.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 300)
 
@@ -514,6 +519,7 @@ test('reac_segments_autodetect',
 # later; then requires the exit to take away exactly what it minted.
 test('reac_declared_vlan_is_minted',
   find_program('tests/declared-vlan-is-minted.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 300)
 
@@ -545,11 +551,13 @@ test('reac_qdisc', qdisc_test)
 # assertions are announced as NOT RUN rather than skipped quietly.
 test('reac_etf_late_is_the_wake',
   find_program('tests/etf-late-is-the-wake.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 600)
 
 test('reac_hearing_finds_a_segment',
   find_program('tests/hearing-finds-a-segment.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 600)
 
@@ -577,6 +585,7 @@ test('reac_hearing_finds_a_segment',
 fake_box_path = get_option('fake_box')
 test('reac_box_wakes_on_a_phy_edge',
   find_program('tests/box-wakes-on-a-phy-edge.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
@@ -590,11 +599,13 @@ test('reac_box_wakes_on_a_phy_edge',
 # harness must read 32x8 for an S-4000S, or it cannot tell two chassis apart.
 test('reac_box_0832_enrols',
   find_program('tests/box-0832-enrols.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
 test('reac_box_master_slave_join',
   find_program('tests/box-master-slave-join.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 420)
 
@@ -607,6 +618,7 @@ test('reac_box_master_slave_join',
 # telemetry line at all, and the previous listener's healthy number is one `tail -1` away.
 test('reac_box_master_rejoins',
   find_program('tests/box-master-rejoins.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -631,6 +643,7 @@ courtship_probe = executable('courtship-probe',
 
 test('reac_courtship_backs_off',
   find_program('tests/courtship-backs-off.sh'),
+  suite : 'netns',
   args : [courtship_probe],
   timeout : 120)
 
@@ -648,6 +661,7 @@ tap_probe = executable('tap-probe',
 
 test('reac_tap_sends_nothing',
   find_program('tests/tap-sends-nothing.sh'),
+  suite : 'netns',
   args : [courtship_probe, tap_probe],
   timeout : 120)
 
@@ -659,6 +673,7 @@ test('reac_tap_sends_nothing',
 # what the link carries NOW.
 test('reac_trunk_classification_is_about_now',
   find_program('tests/trunk-classification-is-about-now.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
@@ -671,6 +686,7 @@ test('reac_trunk_classification_is_about_now',
 # this parent's. Three tagged sources on one veth, a silent pinned-master veth beside it.
 test('reac_trunk_verdict_is_inbound_only',
   find_program('tests/trunk-verdict-is-inbound-only.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -681,6 +697,7 @@ test('reac_trunk_verdict_is_inbound_only',
 # the life of the process. Here the tags simply stop and the link is never touched.
 test('reac_trunk_verdict_expires_on_the_start_path',
   find_program('tests/trunk-verdict-expires-on-the-start-path.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -691,6 +708,7 @@ test('reac_trunk_verdict_expires_on_the_start_path',
 # restart fixed it. The link is left UP throughout, because the cable case already worked.
 test('reac_master_gone_is_re_decided',
   find_program('tests/master-gone-is-re-decided.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
@@ -705,12 +723,14 @@ test('reac_master_gone_is_re_decided',
 # without it the test SKIPS rather than passing while proving nothing.
 test('reac_no_box_no_node',
   find_program('tests/no-box-no-node.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
 # --- whole-binary test: a box-role segment DECLARES ITS ROW on the wire ---------------
 test('box-declares-its-row',
   find_program('tests/box-declares-its-row.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 240)
 
@@ -739,6 +759,7 @@ test('box-speaks-one-vocabulary',
 # asserted for the box segment is measured by a probe that has just seen a presence.
 test('box-is-not-re-decided',
   find_program('tests/box-is-not-re-decided.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
@@ -755,6 +776,7 @@ test('box-is-not-re-decided',
 # fake_box; without it the test SKIPS rather than passing while proving nothing.
 test('reac_roster_node_lists_every_segment',
   find_program('tests/roster-node-lists-every-segment.sh'),
+  suite : 'netns',
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
@@ -769,6 +791,7 @@ test('reac_roster_node_lists_every_segment',
 # needed because a daemon serving only empty segments has no PipeWire client at all.
 test('reac_pins_need_no_door',
   find_program('tests/pins-need-no-door.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 300)
 
@@ -783,6 +806,7 @@ test('reac_pins_need_no_door',
 # rig by a measured gain change.
 test('reac_headamp_refusal_is_visible',
   find_program('tests/headamp-refusal-is-visible.sh'),
+  suite : 'netns',
   args : [reac_pw_exe],
   timeout : 180)
 
@@ -794,6 +818,16 @@ test('reac_headamp_refusal_is_visible',
 # usage before any of that was reached, and the packaged service could never start
 # (measured on the rig, 2026-08-31). Needs no NIC: it asserts help still works with
 # nothing configured, and that a bare `reac-pw` gets PAST argument handling.
+# --- the namespace tests are a SUITE, and the rpm runs that suite one at a time -------
+#
+# A ratchet, not a rule anyone has to remember: a test that mints a veth pair and a private
+# PipeWire cannot share a machine with another doing the same, and %check's default
+# one-process-per-core is what made the packaging check flake. Keyed on what a script does
+# (it calls unshare), so a new one cannot forget the label.
+test('netns_tests_are_serial',
+  find_program('tests/netns-tests-are-serial.sh'),
+  timeout : 30)
+
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
   args : [reac_pw_exe,

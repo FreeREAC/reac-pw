@@ -108,7 +108,13 @@ install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.
 install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
 
 %check
-meson test -C _build
+# THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
+# namespace and its own PipeWire; meson's default is one process per core, so a dozen of
+# them raced for the builder's namespace and PipeWire startup budget and the losers timed
+# out -- a flake that looked like the daemon and was the harness. Everything else still
+# runs in parallel. tests/netns-tests-are-serial.sh keeps both halves of this honest.
+meson test -C _build --no-suite netns
+meson test -C _build --suite netns --num-processes 1
 
 %files
 %license LICENSE
