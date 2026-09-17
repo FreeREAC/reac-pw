@@ -146,6 +146,25 @@ meson test -C _build
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.16-1
+- THE REVIEW OF PR #103, seven findings, each with the test that holds it where a
+  test can. The box role's width now comes from its model row alone:
+  REAC_BOX_CHANNELS is read under `role = box` only to be NAMED as ignored, as
+  REAC_ROLE is, so the wire and the graph cannot be given two different geometries
+  by an env key.
+- A QUIET MIXER NO LONGER RE-DECIDES A BOX SEGMENT. hearing_reevaluate's exemption
+  keyed on the pinned-recorder intent alone, so a box waiting for a desk to be
+  switched on was dropped and re-heard every ten seconds.
+  tests/box-is-not-re-decided.sh measures it with a re-decided control segment on
+  the same daemon.
+- ONE SEGMENT, ONE WORD: `BOX role`, `SLAVE role (…)` and `slave` all become `box`,
+  the word the conf, the roster and the console already use
+  (tests/box-speaks-one-vocabulary.sh). The source-MAC line names the Roland OUI
+  standin a box role actually sends from, and the reac-playback sizing failure
+  reports the width that was tried instead of one nobody tried.
+- tests/box-0832-enrols.sh stopped asserting a string no code path emits
+  (`recognized box = …`): it reads the daemon's own `autodetected <display>`, and
+  the control arm proves that grep can tell the two chassis apart.
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.15-1
 - THE S-4000H-0832 ON VLAN 13 ENROLS. The whole fix is libreac 1.2.1 — the box's
   own declaration (0x00 input groups, outputs written first) parsed, its captured
