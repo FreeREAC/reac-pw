@@ -551,7 +551,7 @@ test('reac_qdisc', qdisc_test)
 # assertions are announced as NOT RUN rather than skipped quietly.
 test('reac_etf_late_is_the_wake',
   find_program('tests/etf-late-is-the-wake.sh'),
-  suite : 'netns',
+  suite : ['netns', 'load'],
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 600)
 

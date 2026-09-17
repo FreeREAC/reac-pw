@@ -113,8 +113,8 @@ install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-r
 # them raced for the builder's namespace and PipeWire startup budget and the losers timed
 # out -- a flake that looked like the daemon and was the harness. Everything else still
 # runs in parallel. tests/netns-tests-are-serial.sh keeps both halves of this honest.
-meson test -C _build --no-suite netns
-meson test -C _build --suite netns --num-processes 1
+meson test -C _build --no-suite netns --no-suite load
+meson test -C _build --no-suite load --suite netns --num-processes 1
 
 %files
 %license LICENSE

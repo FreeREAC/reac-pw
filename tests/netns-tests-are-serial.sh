@@ -33,7 +33,7 @@ for f in tests/*.sh; do
 	grep -q 'unshare -' "$f" || continue
 	found=$((found + 1))
 	# The declaration block: the find_program line and the four lines under it.
-	if grep -A 4 "find_program('$f')" "$MB" | grep -q "suite : 'netns'"; then
+	if grep -A 4 "find_program('$f')" "$MB" | grep -qE "suite : ('netns'|\[.*'netns'.*\])"; then
 		tagged=$((tagged + 1))
 	else
 		echo "FAIL: $f mints namespaces but is not declared in the 'netns' suite —"
