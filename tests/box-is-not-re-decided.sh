@@ -91,7 +91,7 @@ HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$LOG" 2>&1 &
 PID=$!
 
 # ---- 1. BOTH SEGMENTS ARE REALLY UP. Neither claim below means anything otherwise.
-wait_for_since 1 "\[nbx0\] BOX role" 25 || {
+wait_for_since 1 "\[nbx0\] role = box —" 25 || {
 	echo "FAIL: the box row was never taken up — nothing was measured"
 	tail -25 "$LOG"; exit 1; }
 wait_for_since 1 "\[ngn0\] box masters this wire" 30 || {
@@ -122,11 +122,11 @@ if grep -q "\[nbx0\] .*re-hearing the wire" "$LOG"; then
 fi
 # AND IT IS STILL THE BOX IT WAS ASKED TO BE: one BOX role line, never a second one from
 # a rebuild. A segment re-served after a drop says it again.
-N=$(grep -c "\[nbx0\] BOX role" "$LOG")
+N=$(grep -c "\[nbx0\] role = box —" "$LOG")
 [ "$N" = "1" ] || { echo "FAIL: the box row was taken up $N times — it was re-served"
                     grep -n "\[nbx0\]" "$LOG" | tail -20; exit 1; }
 
-echo "OK: a quiet mixer does not re-decide a box segment (1 BOX role line, no re-hearing)"
+echo "OK: a quiet mixer does not re-decide a box segment (1 `role = box` line, no re-hearing)"
 echo "    and the control segment on the same daemon WAS re-decided when its master left"
 INNER
 )

@@ -234,7 +234,7 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	echo "$tag master-joins $(grep -ao "rx_joins=[0-9]*" "$RT/$tag.master.log" | tail -1 | cut -d= -f2)"
 	echo "$tag env-width-ignored $(grep -ac "REAC_BOX_CHANNELS.*IGNORED" "$RT/$tag.log")"
 	echo "$tag mac-standin $(grep -ac "slave box source MAC = .*Roland OUI" "$RT/$tag.log")"
-	grep -a "BOX role" "$RT/$tag.log" | head -1 | sed "s/^/  $tag saidbox /"
+	grep -a "role = box —" "$RT/$tag.log" | head -1 | sed "s/^/  $tag saidbox /"
 	grep -aiE "establish|grant|enrol|announce" "$RT/$tag.log" | tail -4 | sed "s/^/  $tag boxlog /"
 	grep -aiE "establish|grant|recogniz|autodetect|box" "$RT/$tag.master.log" | tail -5 | sed "s/^/  $tag mixlog /"
 	wait $snpid 2>/dev/null

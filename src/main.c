@@ -1019,7 +1019,11 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			c->box_model = tok ? reac_box_model_by_token(tok) : NULL;
 			if (c->box_model) {
 				c->box_channels = reac_box_model_upstream_width(c->box_model);
-				fprintf(stderr, "reac-pw: [%s] BOX role — presenting %s to the "
+				/* ONE WORD FOR ONE SEGMENT (2026-09-17). The roster, the
+				 * conf key and this line all say `box`; `BOX role`,
+				 * `SLAVE role` and `slave` were three spellings of the
+				 * same segment in one log. */
+				fprintf(stderr, "reac-pw: [%s] role = box — presenting %s to the "
 				        "mixer: %d in / %d out, firmware %u.%03u, REAC %u.%u%02u"
 				        "%s\n", iface, c->box_model->display,
 				        c->box_model->in_ch, c->box_model->out_ch,
@@ -1885,8 +1889,16 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 					        "config-announce, then the cold-connect burst, then "
 					        "its outputs from reac-playback at the wire rate\n",
 					        c->tag, up_ch);
+				else if (c->box_model)
+					/* SAID AS THE ROSTER SAYS IT. This is the same segment the
+					 * conf pinned `box` and the roster publishes as `box`; it
+					 * used to read `SLAVE role` here, which is the engine's
+					 * name for the wire end and not the operator's word. */
+					fprintf(stderr, "reac-pw: %srole = box (%d-ch upstream "
+					        "return) — answering the mixer as the row we declare, "
+					        "locked to its cadence\n", c->tag, up_ch);
 				else
-					fprintf(stderr, "reac-pw: %sSLAVE role (%d-ch upstream return) — "
+					fprintf(stderr, "reac-pw: %srole = slave (%d-ch upstream return) — "
 					        "responding to an external master, locked to its cadence\n",
 					        c->tag, up_ch);
 				/* THE BOX MASTER'S OUTPUTS ARE ROUTABLE FROM HERE (0.5.6). The
@@ -2825,7 +2837,11 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		 * transmits, printed over the one role that never does. `tap` is spelled by
 		 * reac_role_intent_name, the vocabulary that has it. */
 		fprintf(stderr, "reac-pw: [%s] segment up (%s%s, %s) — %lu served so far\n", name,
+		        /* AND A BOX IS SPELLED `box`, for the same reason a tap is not
+		         * spelled `master`: reac_role_name knows only the wire's two ends,
+		         * and this line is read beside a roster that says `box`. */
 		        L->cfg.tap ? reac_role_intent_name(REAC_ROLE_INTENT_TAP)
+		        : L->cfg.box_model ? reac_role_intent_name(REAC_ROLE_INTENT_BOX)
 		                   : reac_role_name(L->cfg.role),
 		        L->cfg.join_box_master ? ", enrolling with the box that masters it" : "",
 		        L->cfg.role_pinned && !(L->cfg.tap && L->cfg.role_intent != REAC_ROLE_INTENT_TAP)
