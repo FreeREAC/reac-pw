@@ -1,9 +1,16 @@
 # Installed by the reac-pw RPM as /usr/lib/systemd/user-preset/90-reac-pw.preset.
 #
-# A fresh install (the desk image, no prior state) starts the daemon for the console
-# user the moment that user's systemd --user instance reads presets -- normally at
-# first login, or immediately via the postinst systemd_user_post scriptlet on a host
-# where a user manager is already running. Numbered ahead of the distro's catch-all
+# NOT AUTO-APPLIED BY THE PACKAGE, SINCE 1.0.19. `%post` used to run this preset with
+# `systemctl --no-reload preset --global`, which is not scoped to the user running the
+# install: it enables the unit for EVERY systemd --user instance on the host, present
+# or future -- including one `sudo` spawns for root the moment it next runs. Measured
+# 2026-09-18: exactly that started a second reac-pw under root, which won the segment
+# lock the console user's own daemon needed. `%post` no longer calls this file at all
+# (packaging/reac-pw.spec).
+#
+# It stays packaged for an operator who wants `systemctl --user preset-all` (no
+# --global: scoped to their OWN session only) instead of a plain `enable --now`; both
+# land on the same unit. Numbered ahead of the distro's catch-all
 # 99-default-disable.preset (systemd presets are first-file-wins per unit), so this
 # line decides reac-pw.service and the disable-everything default never reaches it.
 #
