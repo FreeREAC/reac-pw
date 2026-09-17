@@ -16,20 +16,49 @@
 #
 # Run directly: `python3 tests/reac-code-conformance.py [src-dir] [reac_code.h]`.
 
+import os
 import re
 import sys
 from pathlib import Path
 
 # The floor as of 2026-09-17 (28 bare refusal/failure-shaped lines left, all named
 # owed in the spec's proportionate-scope note). LOWER THIS when a line migrates;
-# never raise it to make a new one fit.
+# never raise it to make a new one fit. Covers reac-pw's own src/*.c always, and
+# libreac's src/*.c + transport/src/*.c too when the sibling checkout is found
+# (see find_libreac() below) — the combined count, so a line moved from one repo's
+# bare-fprintf into the other's would not quietly duck the ratchet.
 FLOOR = 31
 
 REFUSAL_WORDS = re.compile(r'REFUSED|FATAL|failed|FAILED|could not|COULD NOT')
 FPRINTF_START = re.compile(r'fprintf\(stderr,\s*"reac-pw:')
+# libreac's own prog tags (reac_master.c/reac_pacer.c/reac_slave.c/reac_ifscan.c) —
+# broader than reac-pw's single "reac-pw:" prefix, since libreac's fprintf lines
+# name the module, not the daemon.
+FPRINTF_START_LIBREAC = re.compile(
+    r'fprintf\(stderr,\s*"(reac-pw|reac-pacer|reac_pacer|reac_slave|reac-master|reac_master):')
 FPRINTF_CALL = re.compile(r'\bfprintf\(\s*stderr\s*,')
-CODE_EMIT_START = re.compile(r'reac_code_emit\(stderr,\s*"reac-pw"')
+CODE_EMIT_START = re.compile(r'reac_code_emit\(stderr,\s*"[a-z_-]+"')
 TOKEN_DEF = re.compile(r'X\(\s*(RC_[A-Z_]+)\s*,\s*"([A-Z_]+)"\s*\)')
+
+
+def find_libreac(reac_pw_root):
+    """The sibling libreac checkout, when present: LIBREAC_SRCDIR if set, else the
+    conventional sibling beside this repo (tools/r1-build-test.sh's own convention
+    for the same lookup). Recognized by shipping include/reac/reac_code.h — the
+    shared vocabulary header (docs/design/specs/
+    2026-09-17-tunables-api-and-shared-refusal-codes.md) — not just by existing:
+    an older libreac clone with no such header has nothing this scan can join.
+    Returns None, silently, when neither is found: this ratchet must not require
+    the sibling checkout to build or test reac-pw on its own."""
+    env_dir = os.environ.get('LIBREAC_SRCDIR')
+    candidates = [Path(env_dir)] if env_dir else [
+        reac_pw_root.parent / 'libreac',
+        reac_pw_root.parent / 'libreac-wt-knobs',
+    ]
+    for c in candidates:
+        if (c / 'include' / 'reac' / 'reac_code.h').exists():
+            return c
+    return None
 
 
 def statement_text(lines, start_idx, max_lines=8):
@@ -58,7 +87,7 @@ def used_tokens(src_files):
     return used
 
 
-def bare_refusal_lines(src_files):
+def bare_refusal_lines(src_files, start_pattern=FPRINTF_START):
     hits = []
     for path in src_files:
         lines = path.read_text().splitlines(keepends=True)
@@ -70,7 +99,7 @@ def bare_refusal_lines(src_files):
             if not FPRINTF_CALL.search(line):
                 continue
             stmt = statement_text(lines, i)
-            if CODE_EMIT_START.search(stmt) or not FPRINTF_START.search(stmt):
+            if CODE_EMIT_START.search(stmt) or not start_pattern.search(stmt):
                 continue
             if REFUSAL_WORDS.search(stmt):
                 hits.append(f'{path.name}:{i + 1}')
@@ -97,13 +126,27 @@ def main(argv):
               file=sys.stderr)
         return 1
 
-    used = used_tokens(src_files)
+    all_src_files = list(src_files)
+    hits = bare_refusal_lines(src_files, FPRINTF_START)
+
+    libreac_root = find_libreac(src_dir.resolve().parent)
+    joined_note = ''
+    if libreac_root:
+        libreac_code_h = libreac_root / 'include' / 'reac' / 'reac_code.h'
+        libreac_src_files = sorted((libreac_root / 'src').glob('*.c')) + \
+            sorted((libreac_root / 'transport' / 'src').glob('*.c'))
+        declared.update(declared_tokens(libreac_code_h))
+        all_src_files += libreac_src_files
+        hits += bare_refusal_lines(libreac_src_files, FPRINTF_START_LIBREAC)
+        joined_note = (f' + libreac sibling at {libreac_root} '
+                        f'({len(libreac_src_files)} .c files joined)')
+
+    used = used_tokens(all_src_files)
     unused = sorted(set(declared) - used)
     if unused:
         print(f'{len(unused)} declared code(s) are never emitted: {unused}', file=sys.stderr)
         return 1
 
-    hits = bare_refusal_lines(src_files)
     if len(hits) > FLOOR:
         print(f'{len(hits)} bare refusal/failure fprintf lines bypass reac_code_emit, '
               f'over the floor of {FLOOR}:', file=sys.stderr)
@@ -112,7 +155,7 @@ def main(argv):
         return 1
 
     print(f'OK: {len(declared)} codes all emitted at least once; '
-          f'{len(hits)} bare refusal line(s) left (floor {FLOOR}).')
+          f'{len(hits)} bare refusal line(s) left (floor {FLOOR}){joined_note}.')
     return 0
 
 
