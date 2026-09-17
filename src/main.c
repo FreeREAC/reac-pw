@@ -1809,8 +1809,13 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		fprintf(stderr, "reac-pw: %sslave box source MAC = "
 		        "%02x:%02x:%02x:%02x:%02x:%02x%s\n", c->tag,
 		        box_mac[0], box_mac[1], box_mac[2], box_mac[3], box_mac[4], box_mac[5],
+		        /* THE ANNOTATION READS THE SAME CONDITION THE ADDRESS DID (2026-09-17).
+		         * The Roland standin is taken for the box role too, so keying this on
+		         * join_box_master alone made a box-role listener describe a Roland-OUI
+		         * address as its own NIC's -- and this line is what a capture is read
+		         * against. */
 		        c->src_mac_set ? " (--src-mac override)"
-		                       : c->join_box_master
+		                       : (c->join_box_master || c->box_model)
 		                           ? " (Roland OUI + this NIC's host part, the one wire that"
 		                             " is not verbatim; --src-mac overrides)"
 		                           : " (this NIC's own address; --src-mac overrides)");
