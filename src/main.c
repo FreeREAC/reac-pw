@@ -251,6 +251,85 @@ static void say_nosuid(const char *exe)
 		    "         (could not tell whether that path is on a nosuid mount)\n");
 }
 
+/* ---- root refusal (2026-09-18) ---------------------------------------------
+ *
+ * A ROOT INSTANCE IS NEVER THE CONSOLE'S. This daemon needs no root: file
+ * capabilities on the binary (cap_net_raw, cap_net_admin, cap_sys_nice — the
+ * capability preflight below reads the very same effective set) already grant a
+ * console-user process everything it opens. A root run would ALSO be able to
+ * open raw sockets and mint VLAN sub-interfaces that the console user then
+ * cannot close, and — the defect that forced this check — it runs under a
+ * DIFFERENT systemd --user manager (root's, not the console session's, spawned
+ * the moment `sudo` activity starts one), so it binds the SAME abstract
+ * segment-lock socket as the console's own daemon (abstract AF_UNIX sockets are
+ * scoped by NETWORK namespace, and root's user manager shares the host's).
+ * Measured 2026-09-18: `sudo dnf install reac-pw-1.0.18` globally enabled the
+ * packaged unit (packaging fix, same release), and the next root user manager
+ * started a second reac-pw that won the lock and left the console daemon
+ * logging "the segment is held" — every box vanished until the root instance
+ * was killed by hand.
+ *
+ * EFFECTIVE, NOT REAL, UID. This binary carries no setuid bit — privilege comes
+ * only from file capabilities (capability_preflight() below reads CapEff, the
+ * same effective set) — so real and effective uid agree on every path this
+ * daemon is actually started from. geteuid() is what is asked because it is the
+ * identity the kernel will charge for every socket this process opens next.
+ * Checked before capability_preflight() on purpose: uid 0 carries every
+ * capability already, so the capability check alone would pass silently and
+ * hide exactly this failure.
+ *
+ * NOT EVERY uid-0 IS THE HOST'S ROOT. Every capability-gated whole-binary test
+ * under tests/ (25 of them) runs this same binary through
+ * `unshare -r --map-root-user`, which maps ONE unprivileged host uid to uid 0
+ * INSIDE A NEW USER NAMESPACE, so geteuid() there also reads 0 — that is how
+ * those tests get CAP_NET_RAW/CAP_NET_ADMIN for a private veth pair without any
+ * real host root, and refusing all of them would refuse the very tests this
+ * daemon is proven by. The two are told apart by /proc/self/uid_map: the HOST's
+ * own (initial) user namespace maps identically, "0 0 4294967295" — the full
+ * 32-bit range, because nothing remapped it — while `unshare -r` always narrows
+ * that to a single line's length of 1 (one host uid, one namespace uid).
+ * Measured directly: a live desk shell reads 4294967295; the same binary under
+ * `unshare -r --map-root-user` reads 1, with or without a private net or pid
+ * namespace alongside it. Only the first shape is refused. A read failure (no
+ * /proc, or a kernel with no uid_map) proves nothing either way and does NOT
+ * refuse — a preflight must never turn an unrelated read failure into blocking
+ * a legitimate start. */
+static int uid_map_is_full_host_range(void)
+{
+	FILE *f = fopen("/proc/self/uid_map", "r");
+	if (!f)
+		return 0;
+	unsigned long long ns_id = 0, host_id = 0, len = 0;
+	int got = (fscanf(f, "%llu %llu %llu", &ns_id, &host_id, &len) == 3);
+	fclose(f);
+	return got && ns_id == 0 && host_id == 0 && len == 4294967295ULL;
+}
+
+static void refuse_if_root(void)
+{
+	if (geteuid() != 0)
+		return;
+	if (!uid_map_is_full_host_range())
+		return;  /* uid 0 inside a mapped namespace: a test's fake root, or a
+		          * rootless container — not the host's real root. */
+
+	fprintf(stderr,
+	    "reac-pw: FATAL — refusing to start as uid 0 (root).\n"
+	    "         A root instance is never the console user's: it runs under a\n"
+	    "         DIFFERENT systemd --user manager than the console session's,\n"
+	    "         so it binds the SAME abstract segment-lock socket and either\n"
+	    "         wins it — locking the console user's own daemon out — or\n"
+	    "         loses it while looking healthy. It would also open raw REAC\n"
+	    "         sockets and mint VLAN sub-interfaces the console user cannot\n"
+	    "         then close.\n"
+	    "         This package needs no root: file capabilities on the binary\n"
+	    "         (cap_net_raw,cap_net_admin,cap_sys_nice) already grant what a\n"
+	    "         console-user process needs. Run it as the console user:\n"
+	    "           systemctl --user enable --now reac-pw\n"
+	    "         (README.md). Refusing to start.\n");
+	exit(1);
+}
+
 /* Read our own effective set and act on what is missing. Returns with the
  * process alive only if CAP_NET_RAW is held. */
 static void capability_preflight(void)
@@ -4613,6 +4692,11 @@ int main(int argc, char **argv)
 			return 0;
 		}
 	}
+
+	/* Before ANY capability is even read: uid 0 already carries every one of
+	 * them, so it must be refused first or the check right after would pass
+	 * silently over the one identity that must never start this daemon. */
+	refuse_if_root();
 
 	/* Before anything is opened, per §4e: a missing capability must arrive as a
 	 * sentence, not as a daemon that runs deaf. */

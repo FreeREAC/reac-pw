@@ -844,6 +844,18 @@ test('reac_packaged_shape',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
+# --- whole-binary test: the daemon refuses to start as uid 0 (2026-09-18) -----
+# A root instance runs under a DIFFERENT systemd --user manager than the console
+# session's and binds the same abstract segment-lock socket — measured to win it
+# and lock the console user's own daemon out. `unshare -r` maps us to a fake root
+# inside a private user namespace; a positive control proves the normal uid is
+# NOT refused, before trusting that the fake-root run is.
+test('reac_refuses_root',
+  find_program('tests/refuses-root.sh'),
+  suite : 'netns',
+  args : [reac_pw_exe],
+  timeout : 30)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c',],
