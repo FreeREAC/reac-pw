@@ -353,13 +353,20 @@ fabricate a page it has never seen, and copying the S-4000S's 2.500/2.102 would 
 that. The identity page is polled by the grant sweep's group B, so the likely reason it is absent
 is that we never granted; the capture that would settle it is named in §9.
 
-**A WIDTH NAMES NO MODEL AT ALL ONCE TWO CAPTURED ROWS SHARE ONE.** `s0808` (8/8) and `s4000h`
-(8/32) are both CAPTURED and both 8 inputs, so `reac_box_master_model(width)` — which answered the
-FIRST captured row of that width — would now name an S-0808 for this box. It refuses an ambiguous
-width instead: a model comes from the byte-exact declaration (`reac_ctrl_identify_box`), never
-from a width, and never from a frame LENGTH. This box is why the distinction is not academic: it
-declares 8 inputs and its upstream frames are **1204 B = 32 channels**, so length-derived width
-and declared width disagree by 24 on the live wire.
+**A WIDTH NEVER NAMES THIS ROW.** `s0808` is 8/8 and `s4000h` is 8/32, so a width of 8 can no
+longer pick one — and `reac_box_master_model(width)` answered the FIRST row of that width. The
+slave path is the only caller and it has nothing else to go on: a stagebox strapped to master mode
+sends no declaration at all, so a width is its whole evidence. The rule is therefore that a row
+with no identity page (`REAC_BOX_DECLARED`) does not answer a width; `s0808` keeps the number it
+has always had, and the S-4000H is named by its DECLARATION, byte for byte, on the master path
+where it sends one. **And if two FULLY CAPTURED rows ever share a width, the answer must be
+neither** — that is law here, and deliberately not code yet: the pair that would exercise it does
+not exist, and a branch no test can reach is decoration. The capture that creates the pair writes
+the branch.
+
+Either way the number is never the name. This box is why that is not academic: it declares 8
+inputs and its upstream frames are **1204 B = 32 channels**, so a length-derived width and the
+declared width disagree by 24 on the live wire.
 
 **ONE MAC, ONE VERDICT.** The daemon logged the same box twice — `box … (8 ch)` off the 340 B
 config-announce and `unknown … (32 ch)` off the 1204 B broadcast flood — because the sniffer's log
