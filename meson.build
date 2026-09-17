@@ -580,6 +580,19 @@ test('reac_box_wakes_on_a_phy_edge',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
+# --- whole-binary: the split box enrols at its DECLARED width (2026-09-17) ---------
+#
+# The live defect of that morning: an S-4000H-0832 declaring 8 in / 32 out and returning
+# 32-channel frames sat at `probing model=none width=0/0`. libreac's unit proof replays
+# that box's captured frames; this one drives the real binary against fake_box wearing the
+# same row, and reads the WIDTH OFF THE GRAPH — 8x32 — which is what a console sees and
+# what no unit test in either repo can observe. Its second arm is the control: the same
+# harness must read 32x8 for an S-4000S, or it cannot tell two chassis apart.
+test('reac_box_0832_enrols',
+  find_program('tests/box-0832-enrols.sh'),
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 240)
+
 test('reac_box_master_slave_join',
   find_program('tests/box-master-slave-join.sh'),
   args : [reac_pw_exe, fake_box_master],
