@@ -42,21 +42,29 @@ generated doc disagrees with what is committed.
 
 *"We need the error codes and not only messages."*
 
-`include/reac/reac_code.h` (libreac, not reac-pw: `reac_master.c` and `reac_pacer.c` emit refusals
-of their own, and a token vocabulary read by two binaries is one vocabulary only if it lives where
-both already link) declares a closed `enum reac_code` — `RC_E_*` for a refusal/failure, `RC_S_*`
+`src/reac_code.h` (reac-pw, not libreac). libreac's own refusals (`reac_master.c`,
+`transport/src/reac_pacer.c`) are a real second source of the same shape and the ideal home is
+libreac if that repo ever migrates them too — but this lane cannot verify the answer: reac-pw
+links the SYSTEM `libreac-devel` package (`pkg-config libreac`, currently 1.2.2), not the sibling
+checkout, and a lane may not bump a version or cut a release (`tools/reac-release` is the main
+session's). A header only libreac ships would be uncompilable here until a libreac release lands
+it. `src/reac_code.h` declares a closed `enum reac_code` — `RC_E_*` for a refusal/failure, `RC_S_*`
 for a notable status — each with a stable token returned by `reac_code_token()`. Every such line
 goes through `reac_code_emit(FILE *out, const char *prog, enum reac_code, const char *fmt, ...)`,
 which prints `<prog>: <TOKEN> <prose>\n` — the token is the first field, always. Prose may reword
-freely; the token is the contract.
+freely; the token is the contract. This pass's proportionate scope (enrolment refused, sizing
+failed, root refused, segment held, segment heard/up/dropped, knob set/summary) is entirely
+reac-pw's own `src/main.c`, so the libreac question does not block it; libreac's own two call sites
+stay bare `fprintf` for now, named as owed below.
 
 Scope is proportionate, not exhaustive: the refusal and status lines this spec's tests key on
 (enrolment refused, sizing failed, root refused, segment held, segment heard/dropped/re-heard,
 knob set) are migrated. An ordinary debug `fprintf` stays a debug `fprintf`.
-`tests/test_reac_code_conformance.c` lists every token and greps `src/*.c` (and libreac's
-`transport/src/*.c`) for a bare `fprintf(stderr, "reac-pw:` / `fprintf(stderr, "reac-pacer:`
-opening a refusal-shaped sentence (`REFUSED`, `FATAL`, `failed`, `could not`) that does not go
-through `reac_code_emit` — a ratchet whose floor may only fall.
+`tests/test_reac_code_conformance.c` lists every token and greps `src/*.c` for a bare
+`fprintf(stderr, "reac-pw:` opening a refusal-shaped sentence (`REFUSED`, `FATAL`, `failed`,
+`could not`) that does not go through `reac_code_emit` — a ratchet whose floor may only fall.
+libreac's own `reac_master.c`/`reac_pacer.c` refusals are OWED, not silently exempted: named in
+§5.
 
 ## 3. RULING — a test asserts a CODE (and a field), never a prose sentence
 
@@ -89,3 +97,13 @@ Nothing about segment/role autodetection (§1 of `2026-09-16-segments-and-roles-
 stands exactly as ruled) — `REACPW_*` pacing/timing/debug knobs were never part of that ruling's
 subject and this spec does not reclassify them as decisions the wire makes. `REAC_ROLE*` stays
 retired and NAMED-not-honoured, unchanged.
+
+## 6. Owed
+
+- `reac_master.c`'s and `reac_pacer.c`'s own refusal lines (`REACPW_GRANT_DWELL_*`,
+  `REACPW_NO_ENROLL`, the pacer's `REACPW_PACER`/`REACPW_PACER_LEAD_US` refusals) do not go
+  through `reac_code_emit` — libreac ships no such header today, and this lane links the system
+  package. A future libreac release that adds `reac_code.h` (or accepts this one, moved) can
+  absorb them; until then they stay bare `fprintf`, unmigrated on purpose rather than silently.
+- The majority of `tests/*.sh` prose greps stay prose, tracked (with a reason) in
+  `tests/known-debt-grep-patterns.txt` rather than migrated — proportionate scope per §3.

@@ -140,6 +140,7 @@ libreac_transport_srcdir = get_option('libreac_transport_srcdir')
 # --- the reac-pw client -----------------------------------------------------
 reac_pw_src = [
   'src/main.c',
+  'src/reac_knobs.c',
   'src/reac_box_pin.c',
   'src/reac_watch.c',
   'src/reac_knock.c',
@@ -1141,6 +1142,19 @@ envflag_test = executable('test_reac_envflag',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_envflag', envflag_test)
 
+# --- unit test: every env/conf knob is DISCOVERED and PUBLISHED (2026-09-17) --------
+# The table (src/reac_knobs.c) is well-formed and every non-conf_capable entry names
+# why; reac_conf_flag is layered with the right default on a miss; reac_knobs_announce
+# prints the exact grammar for a knob that is set and NOTHING for one that is not; and
+# the code<->doc round trip against docs/ENV-KNOBS.md holds both directions, so the two
+# cannot drift the way the file's own closing promise never checked.
+knob_table_test = executable('test_reac_knob_table',
+  ['tests/test_reac_knob_table.c', 'src/reac_knobs.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_knob_table', knob_table_test,
+  env : ['REACPW_SRCDIR=' + meson.current_source_dir()])
+
 # --- unit test: the bounded rebuild ladder for a node that never reached the graph ---
 # Pure decision (reac_node_recover): a grace before acting, a doubling window, a bound,
 # one terminal line, and a reset the moment the node appears. The defect it answers cost
@@ -1514,3 +1528,14 @@ test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
 test('meson_headers_sit_above_their_test', python3,
   args : [meson.current_source_dir() / 'tests' / 'meson-headers-sit-above-their-test.py',
           meson.current_source_dir() / 'meson.build'])
+
+# --- text: every declared reac_code is emitted, and bare refusals stay under a floor --
+# "We need the error codes and not only messages" (2026-09-17). Every token in
+# src/reac_code.h's REAC_CODE_LIST must be reachable through reac_code_emit somewhere in
+# src/*.c, and a REFUSED/FATAL/failed-shaped bare fprintf that still bypasses the helper
+# is counted against a floor that may only fall (proportionate migration, spec §2) — a
+# change that adds a new one, or un-migrates one already counted, fails the build.
+test('reac_code_conformance', python3,
+  args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
+          meson.current_source_dir() / 'src',
+          meson.current_source_dir() / 'src' / 'reac_code.h'])
