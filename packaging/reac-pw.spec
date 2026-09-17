@@ -143,7 +143,23 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %{_userpresetdir}/90-reac-pw.preset
 
 %post
-%systemd_user_post reac-pw.service
+# NO %%systemd_user_post, SINCE 1.0.19. That macro expands to
+# `systemd-update-helper install-user-units reac-pw.service`, which runs
+# `systemctl --no-reload preset --global reac-pw.service` -- `--global`, not scoped to
+# whichever user ran `dnf`. Measured 2026-09-18: `sudo dnf install reac-pw-1.0.18` ran
+# %%post as root during the transaction, applied 90-reac-pw.preset's `enable
+# reac-pw.service` GLOBALLY (a symlink under /etc/systemd/user/default.target.wants/,
+# read by EVERY systemd --user instance on the host, present or future), and the very
+# next `sudo` invocation that spawned root's own user manager started a SECOND reac-pw
+# as root. It won the abstract segment-lock socket the console user's daemon needed,
+# which logged "the segment is held: stop the holder" and every box vanished (links
+# 206 -> 46) until the root instance was killed by hand.
+# This package enables the unit for NOBODY, ever, from a scriptlet. The operator runs,
+# once, as the console user (README.md, docs/install/services.md):
+#   systemctl --user enable --now reac-pw
+# Clean up any global enablement a <=1.0.18 reac-pw left behind on THIS host already --
+# harmless (a no-op, exit suppressed) if none exists.
+systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 
 %preun
 %systemd_user_preun reac-pw.service
@@ -152,6 +168,26 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Fri Sep 18 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.19-1
+- NO GLOBAL ENABLE. %%post no longer calls %%systemd_user_post (which ran
+  `systemctl --no-reload preset --global reac-pw.service`, not scoped to the user
+  running `dnf`). Measured 2026-09-18: `sudo dnf install reac-pw-1.0.18` globally
+  enabled the unit, and the next `sudo`-spawned root user manager started a SECOND
+  daemon that won the segment lock and locked the console user's own daemon out --
+  every box vanished until it was killed by hand. %%post now only cleans up any
+  such leftover global enablement from a <=1.0.18 install; the operator enables the
+  unit once, per console user (`systemctl --user enable --now reac-pw`), same as
+  every upgrade already required.
+- THE DAEMON REFUSES TO START AS UID 0. A root instance is never the console
+  user's, and would open raw sockets and mint VLAN sub-interfaces the console
+  user cannot then close. tests/refuses-root.sh proves the refusal under a
+  userns-mapped fake root (`unshare -r`) with a positive control that the normal
+  uid starts.
+- THE SEGMENT-HELD REFUSAL NAMES THE HOLDER, when /proc lets it: PID and user,
+  read from /proc/net/unix's inode and /proc/<pid>/status, alongside the existing
+  `grep <name> /proc/net/unix` hint. Silent (same message as before) where
+  permission denies it -- typically an unprivileged daemon reading a root holder.
+
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.18-1
 - REQUIRES libreac 1.2.2, WHERE THE TOPOLOGY TAP STOPS HEARING OTHER LINKS (#18).
   Until 1.2.1 the tap's packet socket was created with a protocol and so was live
