@@ -482,7 +482,9 @@ static void usage(const char *p)
 	  "                               matching every invocation before this one)\n"
 	  "    REAC_HEADAMP=\"CH:PARAM:VALUE ...\"  the head-amp re-assertion table, space or\n"
 	  "                               comma separated (replaces N --headamp flags)\n"
-	  "    REAC_BOX_CHANNELS=N        slave role: our own input width; default 16\n"
+	  "    REAC_BOX_CHANNELS=N        slave role: our own input width; default 16.\n"
+	  "                               IGNORED under role = box, where the model row\n"
+	  "                               is the only width; named as ignored at start.\n"
 	  "    REAC_SRC_MAC=aa:bb:..      the source address on this wire (per-segment too)\n"
 	  "  and REAC_RATE per segment exactly as a single-segment run already resolves it.\n"
 	  "environment (see docs/ENV-KNOBS.md; unset = the default behaviour named below):\n"
@@ -1084,13 +1086,33 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 		}
 	}
 
-	if (reac_conf_lookup("REAC_BOX_CHANNELS", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
-		int n = atoi(v);
-		if (n >= 2 && n <= REAC_MAX_CHANNELS && (n & 1) == 0)
-			c->box_channels = n;
-		else
-			fprintf(stderr, "reac-pw: [%s] ignoring invalid REAC_BOX_CHANNELS='%s'\n",
-			        iface, v);
+	/* THE ROW IS THE ONLY WIDTH A BOX HAS (spec 2026-09-17 §2a, §5: `in_ch`/`out_ch`
+	 * are the ONE place a width is declared, and the PipeWire pair's widths come from
+	 * the ROW and from nothing else). An env key that moved this number would put a
+	 * second width in the daemon: the frames keep the row's geometry and everything
+	 * sized from `box_channels` follows the env — wire and graph split, with no line
+	 * saying so. So under `role = box` the key is READ ONLY TO BE NAMED, exactly as
+	 * REAC_ROLE is (segment_say_env_role_retired): a key that stopped applying and
+	 * says nothing is indistinguishable from one that is working. */
+	{
+		enum reac_conf_layer bcl =
+			reac_conf_lookup("REAC_BOX_CHANNELS", iface, NULL, v, sizeof v);
+		if (bcl != REAC_CONF_NONE && c->role_intent == REAC_ROLE_INTENT_BOX) {
+			fprintf(stderr, "reac-pw: [%s] REAC_BOX_CHANNELS='%s' in %s is IGNORED "
+			        "under role = box: the width is the model row's (%s: %d in / "
+			        "%d out) and there is no second one (spec 2026-09-17 §2a, §5)\n",
+			        iface, v, reac_conf_layer_name(bcl),
+			        c->box_model ? c->box_model->display : "no row",
+			        c->box_model ? c->box_model->in_ch : 0,
+			        c->box_model ? c->box_model->out_ch : 0);
+		} else if (bcl != REAC_CONF_NONE) {
+			int n = atoi(v);
+			if (n >= 2 && n <= REAC_MAX_CHANNELS && (n & 1) == 0)
+				c->box_channels = n;
+			else
+				fprintf(stderr, "reac-pw: [%s] ignoring invalid "
+				        "REAC_BOX_CHANNELS='%s'\n", iface, v);
+		}
 	}
 
 	/* REAC_RATE is resolved inside listener_open, by the SAME per-segment

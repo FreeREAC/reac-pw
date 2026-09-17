@@ -165,8 +165,8 @@ for o in json.load(sys.stdin):
         print(o["info"]["props"].get("node.name","?"))
 '; }
 
-arm() {   # arm <tag> <model-token> <iface>
-	local tag="$1" model="$2" ifc="$3" peer="${3}p"
+arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
+	local tag="$1" model="$2" ifc="$3" peer="${3}p" envw="${4:-}"
 	ip link add "$ifc" type veth peer name "$peer" || return 90
 	unshare -n -m bash -c 'mount -t sysfs sysfs /sys 2>/dev/null; exec sleep 300' &
 	local nspid=$!
@@ -191,7 +191,11 @@ arm() {   # arm <tag> <model-token> <iface>
 	nsenter -t $nspid -n -m python3 "$RT/sniff.py" "$peer" 22 > "$RT/$tag.sniff" 2>"$RT/$tag.snifferr" &
 	local snpid=$!
 	sleep 0.5
-	HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$RT/$tag.log" 2>&1 &
+	# THE ENV CANNOT MOVE A BOX ROW'S WIDTH (spec §2a, §5). Arm A is launched with
+	# REAC_BOX_CHANNELS set to a DIFFERENT legal width from its row's, so every width
+	# asserted below is asserted against a key that is trying to change it; the key
+	# must be named as ignored and nothing it names may move.
+	HOME="$CONF" REAC_DEBUG=1 ${envw:+REAC_BOX_CHANNELS=$envw} "$BIN" >"$RT/$tag.log" 2>&1 &
 	local pid=$!
 	# SAMPLED OVER THE RUN, NOT ONCE AT THE END. The master's wake ladder takes the link
 	# down and up when a box goes quiet, and every node and row on both sides is torn
@@ -228,6 +232,7 @@ arm() {   # arm <tag> <model-token> <iface>
 	echo "$tag master-sees-model $mmodel"
 	echo "$tag master-sees-state ${mstate:-not-established}"
 	echo "$tag master-joins $(grep -ao "rx_joins=[0-9]*" "$RT/$tag.master.log" | tail -1 | cut -d= -f2)"
+	echo "$tag env-width-ignored $(grep -ac "REAC_BOX_CHANNELS.*IGNORED" "$RT/$tag.log")"
 	grep -a "BOX role" "$RT/$tag.log" | head -1 | sed "s/^/  $tag saidbox /"
 	grep -aiE "establish|grant|enrol|announce" "$RT/$tag.log" | tail -4 | sed "s/^/  $tag boxlog /"
 	grep -aiE "establish|grant|recogniz|autodetect|box" "$RT/$tag.master.log" | tail -5 | sed "s/^/  $tag mixlog /"
@@ -240,7 +245,7 @@ arm() {   # arm <tag> <model-token> <iface>
 	return 0
 }
 
-arm A s1608 bxa0 || exit $?
+arm A s1608 bxa0 8 || exit $?
 arm B fr4000 bxb0 || exit $?
 exit 0
 INNER
@@ -306,6 +311,13 @@ JOINS=$(get B master-joins); JOINS=${JOINS:-0}
 [ "$(get A roster-width)" = "16/8" ] || say "arm A's roster width is '$(get A roster-width)', not 16/8"
 [ "$(get B roster-width)" = "40/0" ] || say "arm B's roster width is '$(get B roster-width)', not 40/0"
 [ "$(get A roster-model)" = "s1608" ] || say "arm A's roster model is '$(get A roster-model)'"
+# ---- AND THE ENV DID NOT GET A VOTE ----------------------------------------------------
+# Arm A ran with REAC_BOX_CHANNELS=8 against a 16/8 row. Every width above was measured
+# under that key, so they are the claim's first half; this is the second, and it is the
+# one that fails if the key is merely read and silently obeyed somewhere else later: a
+# retired key must SAY it is ignored, or an operator cannot tell it from one that works.
+[ "$(get A env-width-ignored)" -ge 1 ] 2>/dev/null ||
+	say "arm A never named REAC_BOX_CHANNELS as ignored — the key is read under role = box and says nothing about it"
 [ "$(get B roster-model)" = "fr4000" ] || say "arm B's roster model is '$(get B roster-model)'"
 
 [ $fail -eq 0 ] && echo "OK: a box-role segment declares its row on the wire — the S-1608's own 16/8, strap 2, firmware 2.200, REAC 2.302, and the 40-channel experiment with our FR-4000 / 1.014 / 9.014 identity — and the roster says the same"
