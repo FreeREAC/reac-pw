@@ -4051,11 +4051,18 @@ static void hearing_join_box_master_on_pinned(struct hearing *h, uint64_t now)
  * A REAC master fills every audio slot and cannot be present and silent for one of them,
  * let alone forty thousand.
  *
- * A PINNED RECORDER IS EXEMPT. `REAC_ROLE_<segment>=slave` says BE THE BOX END HERE; a
+ * A PINNED RECORDER IS EXEMPT. `[segment X] role = slave` says BE THE BOX END HERE; a
  * wire with nobody on it does not change that, and re-serving it would reset the bounded
  * courtship's own backoff every ten seconds — which is the opposite of what that backoff
  * is for. Everything else re-hears the wire: a pin takes itself up again (the hunt serves
  * a pin on link), and `auto` takes whatever the wire now leaves open.
+ *
+ * AND SO IS A BOX, FOR THE SAME REASON ONE LEVEL STRONGER (2026-09-17 spec §5). `role =
+ * box` says WE ARE THE STAGEBOX ON THIS WIRE, and a stagebox that only exists once a desk
+ * is powered is not a stagebox: a quiet mixer is the normal state of a box waiting to be
+ * plugged into a desk, not evidence about what this segment is. Re-deciding it every ten
+ * seconds drops the declaration the row exists to make and rebuilds its published pair
+ * around the gap — churn with nothing on the other end to notice it.
  *
  * IT RE-HEARS RATHER THAN RE-OPENS, through the same seam a role swap uses: drop, close
  * the sniffer, open a fresh one, ask for a serve. A segment re-opened on the OLD verdict
@@ -4070,8 +4077,10 @@ static void hearing_reevaluate(struct hearing *h, uint64_t now)
 			continue;   /* a door follows nobody by construction */
 		if (!L->cfg.tap && L->cfg.role != REAC_ROLE_SLAVE)
 			continue;   /* only a segment that FOLLOWS can be left following nobody */
-		if (L->cfg.role_intent == REAC_ROLE_INTENT_SLAVE)
-			continue;   /* the recorder was asked for; an empty wire is its own case */
+		if (L->cfg.role_intent == REAC_ROLE_INTENT_SLAVE ||
+		    L->cfg.role_intent == REAC_ROLE_INTENT_BOX)
+			continue;   /* the recorder, or the box, was asked for; an empty wire
+			             * is its own case and never a re-classification */
 		if (L->heard.heard) {
 			L->follows_nobody_ticks = 0;
 			continue;
