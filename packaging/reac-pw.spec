@@ -168,7 +168,25 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
-* Fri Sep 18 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.19-1
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.20-1
+- KNOBS ARE DISCOVERED AND PUBLISHED (operator ruling 2026-09-17): the 27 REACPW_/REAC_
+  knobs sit in one table (src/reac_knobs.c); 19 are read through reac_conf_lookup so
+  reac-pw.conf can carry them, 8 stay env-only with a named reason each; at start the
+  daemon prints one line per knob that is SET and one summary line, nothing for defaults.
+  Four box-master knobs were undocumented and now sit in docs/ENV-KNOBS.md, which a test
+  keeps equal to the table.
+- CODES, NOT ONLY MESSAGES: src/reac_code.h declares nine stable tokens, emitted through
+  reac_code_emit as the first field of a refusal, failure or status line; prose may change,
+  tokens may not. tests/reac-code-conformance.py refuses a declared token never emitted and
+  holds a floor of 31 bare refusal lines that may only fall (measured on the joined
+  statement, so a split-style fprintf cannot hide).
+- TESTS WAIT ON TOKENS: refuses-root.sh and hearing-finds-a-segment.sh match RC tokens plus
+  the field that matters; box-0832-enrols.sh matches reac\.box-width, not a wildcard dot.
+  tests/asserted-lines-have-a-producer.py maps every remaining test grep to a producing
+  format string (157 patterns: 136 matched, 3 listed as debt with reasons, 18 self-referential).
+- FIVE ORPHANED meson HEADERS sit above their own test again; tests/meson-headers-sit-above-
+  their-test.py pairs every header with the test below it, sabotage-verified.
+* Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.19-1
 - NO GLOBAL ENABLE. %%post no longer calls %%systemd_user_post (which ran
   `systemctl --no-reload preset --global reac-pw.service`, not scoped to the user
   running `dnf`). Measured 2026-09-18: `sudo dnf install reac-pw-1.0.18` globally
