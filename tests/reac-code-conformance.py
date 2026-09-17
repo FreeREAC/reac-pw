@@ -55,10 +55,13 @@ def find_libreac(reac_pw_root):
         reac_pw_root.parent / 'libreac',
         reac_pw_root.parent / 'libreac-wt-knobs',
     ]
-    for c in candidates:
-        if (c / 'include' / 'reac' / 'reac_code.h').exists():
-            return c
-    return None
+    # When more than one sibling carries the header, the NEWEST header wins (mtime), never the
+    # first name in the list: a stale ../libreac beside a fresher lane worktree must not be
+    # the tree this scan joins (review of the 2026-09-17 lane).
+    found = [c for c in candidates if (c / 'include' / 'reac' / 'reac_code.h').exists()]
+    if not found:
+        return None
+    return max(found, key=lambda c: (c / 'include' / 'reac' / 'reac_code.h').stat().st_mtime)
 
 
 def statement_text(lines, start_idx, max_lines=8):
