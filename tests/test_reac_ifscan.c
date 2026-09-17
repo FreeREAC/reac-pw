@@ -13,6 +13,7 @@
  * queue delivers, so a broken queue cannot pass the quiet cases by being deaf.
  */
 #include <reac/transport/reac_ifscan.h>
+#include <reac/reac_tunables.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -376,15 +377,18 @@ static void t_wireless_excluded_from_scan(void)
 	CHK(reac_ifscan_find(&s, "wlp128s20f3") == NULL);   /* never entered the table at all */
 	CHK(reac_ifscan_find(&s, "reac-ghost0")->state == REAC_IFSCAN_LINKED);
 
-	/* Opt-in: REAC_IFACES_ALLOW_WIRELESS names it explicitly, and the SAME frame reaches
-	 * LISTEN. */
-	CHK(setenv("REAC_IFACES_ALLOW_WIRELESS", "wlp128s20f3", 1) == 0);
+	/* Opt-in: the daemon-set tunable (libreac reads no environment of its own —
+	 * docs/design/specs/2026-09-17-tunables-api-and-shared-refusal-codes.md) names
+	 * the interface explicitly, and the SAME frame reaches LISTEN. */
+	struct reac_transport_tunables tt = REAC_TRANSPORT_TUNABLES_DEFAULT;
+	tt.allow_wireless = "wlp128s20f3";
+	reac_transport_tunables_set(&tt);
 	reac_ifscan_init(&s);
 	reac_ifscan_feed(&s, buf, off, 0);
 	CHK(drain(&s, v, n, 8) == 2);
 	CHK(reac_ifscan_find(&s, "wlp128s20f3") != NULL &&
 	   reac_ifscan_find(&s, "wlp128s20f3")->state == REAC_IFSCAN_LINKED);
-	unsetenv("REAC_IFACES_ALLOW_WIRELESS");
+	reac_transport_tunables_set(NULL);
 }
 
 /* The live arm: an RTM_GETLINK dump of the real host through the same parser. Unprivileged.

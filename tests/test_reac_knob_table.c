@@ -14,7 +14,9 @@
  *  4. the CODE <-> DOC round trip: every table key is documented in
  *     docs/ENV-KNOBS.md, and every REACPW_/REAC_ knob documented there (except the
  *     retired REAC_ROLE, which this table deliberately excludes) is in the table —
- *     so the two cannot drift the way the old hand-kept promise never checked. */
+ *     so the two cannot drift the way the old hand-kept promise never checked;
+ *  5. --set KEY=VALUE (operator ruling, 2026-09-17): cli beats env, VALUE checked
+ *     (not presence), the last --set for a key wins, and an unknown key is refused. */
 
 #include "reac_knobs.h"
 #include "reac_code.h"
@@ -219,6 +221,41 @@ int main(void)
 			}
 			free(doc);
 		}
+	}
+
+	/* ---- 5. THE COMMAND LINE: highest precedence, over env, VALUE asserted (not
+	 * presence) — an unknown key is refused, not silently ignored (operator
+	 * ruling, 2026-09-17). LAST: reac_knobs_set_argv has no reset, so once this
+	 * runs, REAC_DEBUG is pinned to a cli value for the rest of the process —
+	 * every earlier section (the announce grammar, the doc round trip) depends on
+	 * REAC_DEBUG being freely settable via env/unset, so this must not run before
+	 * them. Uses REAC_DEBUG: a real table entry, exercising the exact resolver
+	 * push_libreac_tunables() and reac_knobs_announce() use, not a parallel one. */
+	{
+		const char *key = "REAC_DEBUG";
+		char v[64];
+
+		CHECK(reac_knobs_set_argv("REAC_NOT_A_REAL_KNOB", "1") == 0,
+		      "an unknown --set key must be refused, not silently accepted");
+
+		setenv(key, "env-value", 1);
+		CHECK(reac_knobs_resolve(key, v, sizeof v) == REAC_CONF_ENV &&
+		      strcmp(v, "env-value") == 0,
+		      "env alone should answer 'env-value', got layer/value mismatch");
+
+		CHECK(reac_knobs_set_argv(key, "cli-value") == 1,
+		      "a known --set key must be accepted");
+		CHECK(reac_knobs_resolve(key, v, sizeof v) == REAC_CONF_ARGV &&
+		      strcmp(v, "cli-value") == 0,
+		      "cli must beat env: expected 'cli-value' (REAC_CONF_ARGV), got '%s'", v);
+
+		CHECK(reac_knobs_set_argv(key, "cli-value-2") == 1,
+		      "a second --set for the same key must replace the first");
+		CHECK(reac_knobs_resolve(key, v, sizeof v) == REAC_CONF_ARGV &&
+		      strcmp(v, "cli-value-2") == 0,
+		      "the LAST --set for a key must win, got '%s'", v);
+
+		unsetenv(key);
 	}
 
 	if (real_home_buf[0])

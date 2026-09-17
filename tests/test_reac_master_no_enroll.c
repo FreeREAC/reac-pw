@@ -11,10 +11,11 @@
  * works — hence a switch, default OFF (today's behaviour byte-identical), that
  * the rig can flip in one deliberate, reversible step.
  *
- * This process sets the env var ONCE before anything reads it (the knob is
- * cached like the file's other getenv knobs), so it belongs in its own test
- * binary rather than test_reac_master's — a second env value read into that
- * cache in the same process would just be ignored.
+ * This process sets the tunable ONCE before anything reads it (libreac reads no
+ * environment of its own — docs/design/specs/
+ * 2026-09-17-tunables-api-and-shared-refusal-codes.md — reac_master_tunables_set()
+ * is the daemon's own doorway), so it belongs in its own test binary rather than
+ * test_reac_master's — a second call in the same process would just replace it.
  *
  * What must hold with the switch ON: EXACTLY the ENROLL frame disappears — the
  * grant burst's count, order and bytes, the dwell timing, and the ESTABLISHED
@@ -22,11 +23,9 @@
  * is as important as proving the frame is gone: this is a subtraction, not a
  * redesign. test_reac_master's own establish() sequence (unset env) is the
  * byte-identical-default half of this proof. */
-#ifdef _WIN32
-#error "setenv is POSIX-only; this test does not run on Windows"
-#endif
 #include <reac/reac_master.h>
 #include <reac/reac_ctrl.h>
+#include <reac/reac_tunables.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -83,8 +82,10 @@ static enum reac_master_emit slot(struct reac_master *m, int *idx, uint16_t *exp
 
 int main(void)
 {
-	/* Set FIRST, before any reac_master_next() call — no_enroll() caches on first read. */
-	CHK(setenv("REACPW_NO_ENROLL", "1", 1) == 0);
+	/* Set FIRST, before any reac_master_next() call. */
+	struct reac_master_tunables mt = REAC_MASTER_TUNABLES_DEFAULT;
+	mt.no_enroll = 1;
+	reac_master_tunables_set(&mt);
 
 	struct reac_master m;
 	struct reac_console_cfg idle = REAC_CONSOLE_CFG_IDLE;
