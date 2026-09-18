@@ -383,3 +383,35 @@ The console's half: openmixer does not read `reac.roster.*` yet, and does not wr
 `50-openmixer.conf` yet. Both are named in this spec so the door and its reader are one design,
 and neither is built in this lane. And, as in §7, nothing here ran against the operator's live
 trunk — the boxes were carrying a show test.
+
+## Amendment 2026-09-19 — a cold, slave-only VLAN is autodetected too, never only declared
+
+**RULED by the operator**, prompted by reac-pw#105 — a real trunk-port install where box
+autodetection failed because the box's VLAN was cold and slave-only, nothing had ever been heard
+on it, and the only present fix is a hand-written declaration: *"We need to autodetect the vlans
+too."* Asked how the daemon should bound which VLAN IDs it may act on, since it cannot safely
+transmit REAC frames onto every VID a trunk might carry: *"we cannot presuppose vlan names, you
+can use the name you need to."* No fixed VID list, no assumed naming scheme, no rig-specific
+interface name is ever baked into the daemon — it learns the trunk's VLANs from the wire's own
+facts, the same posture as every other rule in this spec.
+
+**The gap this closes.** §1's tagged-frame rule mints a VLAN sub-interface only once something is
+heard on it (its third bullet). A cold, slave-only segment — the ordinary case for a stagebox,
+which says nothing until a master speaks (`reac_declared_vlan.h`) — is never heard, so it is never
+minted, and `reac-pw.conf` (§3a) is the only present way to make it exist. That satisfies "the one
+override is a file" (§3) but not "not autodetecting is an error" (Amendment 2026-09-16, third).
+
+**The mechanical rule — passive-first, never blind-flooded.** Before minting or probing a VLAN
+sub-interface the daemon does not yet know about, it asks the TRUNK's OWN SWITCH what VIDs that
+port actually carries (802.1Q port-VLAN membership, by whatever the switch exposes — LLDP is the
+leading candidate, not confirmed as the only one), and acts only on VIDs the switch names. A VID
+answered this way is treated exactly like a heard one: its sub-interface is created (§1), and its
+role and declaration follow §2/§3 unchanged. **Flooding every possible VID (1–4094) is explicitly
+rejected** — it would transmit REAC frames onto every VLAN the trunk carries, including ones with
+nothing to do with REAC, which is not this daemon's wire to speak on uninvited.
+
+**Not built here.** This is the ruling and the chosen direction, not an implementation — same
+caveat as §7: nothing here has run against a real switch's VLAN-membership answer, or against the
+operator's live trunk. Open for the lane that builds it: which switch-facing mechanism reac-pw
+actually speaks (LLDP first candidate), and what a switch that does not answer it falls back to —
+silence there is not licence to flood.
