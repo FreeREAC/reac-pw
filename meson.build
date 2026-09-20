@@ -843,6 +843,25 @@ test('reac_roster_node_lists_every_segment',
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
+# --- whole-binary test: a roster group LEAVES with its segment (#106) -----------------
+#
+# The sibling above proves the roster is published and that a state change moves the
+# PROPERTIES and not the node id. This one proves the other half, which was broken on the
+# desk the whole time it was green: a segment that GOES must take its indexed keys with it.
+# It reads the node's props off pw-dump -- the graph, never the daemon's own diff, which is
+# what test_reac_roster.c already proves and what stayed right while the graph went wrong --
+# and asserts reac.roster.n and the reac.roster.<i>.* groups AGREE after a drop. A PipeWire
+# node cannot be told to drop a property (spec amendment 2026-09-20 sec b), so a shrink
+# rebuilds the node; that rebuild is what this measures. No fake_box: the segment is taken
+# away by deleting its netdev, which is the sharpest form of the carrier loss that produced
+# the report.
+test('reac_roster_keys_leave_with_their_segment',
+  find_program('tests/roster-keys-leave-with-their-segment.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 300)
+
 # --- whole-binary test: a PIN needs no door ----------------------------------
 #
 # The inverse of what this file used to assert, and that is the honest form of a
