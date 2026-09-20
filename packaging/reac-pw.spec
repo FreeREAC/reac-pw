@@ -106,6 +106,7 @@ DESTDIR=%{buildroot} meson install -C _build
 # reac_conf.h reads is per-user (%%h/.config/reac-pw/), by design (see reac-pw.env.example, and reac-pw.conf.example for the ONE override file).
 install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.service
 install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
+install -D -m0755 packaging/reac-pw-safe-enable.sh %{buildroot}%{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -147,6 +148,8 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 %{_userunitdir}/reac-pw.service
 %{_userpresetdir}/90-reac-pw.preset
+%dir %{_libexecdir}/reac-pw
+%{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
 
 %post
 # NO %%systemd_user_post, SINCE 1.0.19. That macro expands to
@@ -166,6 +169,21 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 # Clean up any global enablement a <=1.0.18 reac-pw left behind on THIS host already --
 # harmless (a no-op, exit suppressed) if none exists.
 systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
+
+%posttrans
+# THE SAFE AUTO-ENABLE (#104). %%post above enables the unit for nobody, because a
+# scriptlet running as root cannot know who the console user is and `--global` reaches
+# every user manager on the host. This does the one thing that is safe instead: when
+# there is EXACTLY ONE real interactive login session (logind class `user`, not root),
+# enable the unit for THAT user through their own manager --
+#   systemctl --machine=<user>@.host --user enable --now reac-pw.service
+# -- and in every other case (nobody logged in, several users, root only, linger only)
+# touch nothing, leaving the manual step in README.md exactly as it was. It cannot
+# enable a session that does not exist yet, which is what the 1.0.19 incident was.
+# %%posttrans, not %%post: it runs once, after the whole transaction has settled.
+# The decision lives in the helper so it is tested without an rpm transaction
+# (tests/safe-enable-selects-one-user.sh); `|| :` because a helper never fails an install.
+%{_libexecdir}/reac-pw/reac-pw-safe-enable.sh || :
 
 %preun
 %systemd_user_preun reac-pw.service

@@ -43,10 +43,10 @@ install all three from the same release. The RPM sets the file capabilities
 the daemon needs (`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without
 root.
 
-**Enabling the service — always a manual, per-user step.** The RPM installs
+**Enabling the service — automatic for one logged-in user, otherwise a manual, per-user step.** The RPM installs
 `reac-pw.service` as a systemd **user** unit (`/usr/lib/systemd/user/reac-pw.service`
 — a bare system unit has no `HOME` and cannot find `~/.config/reac-pw/` or the
-operator's PipeWire socket). No package scriptlet enables it for anyone, on
+operator's PipeWire socket). No package scriptlet enables it GLOBALLY, on
 install, upgrade or otherwise (since 1.0.19 — `%post` used to call
 `systemctl --no-reload preset --global reac-pw.service`, and `--global` is not
 scoped to the user running `dnf`: it applied to every systemd **user** instance
@@ -54,8 +54,12 @@ on the host, present or future, including one `sudo` spawns for root. Measured
 2026-09-18: `sudo dnf install reac-pw-1.0.18` started a second daemon under
 root's user manager, which won the abstract segment-lock socket and locked the
 console user's own daemon out — "the segment is held" and every box vanished
-until the root instance was killed by hand). Run this once, as the console
-user, after every install AND every upgrade:
+until the root instance was killed by hand).
+
+The package does the one safe thing instead: after the transaction, if there is **exactly one** real interactive login session on the host (logind class
+`user`, never root), it enables and starts the unit for that user through their own
+manager. Nobody logged in, several users, root only, or a lingering user with no
+login: it touches nothing. In those cases run this once, as the console user:
 
 ```
 systemctl --user enable --now reac-pw
