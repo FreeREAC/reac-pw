@@ -614,6 +614,37 @@ test('reac_box_0832_enrols',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
+# --- whole-binary: the link budget yields to the segment that heard a box (#107) ------
+#
+# 2026-09-20, the home rig: a 100 Mbit trunk, every segment `auto`, and an EMPTY VLAN won
+# the 500 ms silence race. One 96 kHz master is 97% of that port, so the admission then
+# refused the only segment with a box on it -- 690 times in 30 minutes, and the S-1608
+# never enrolled. test_reac_link_budget proves the arithmetic and test_reac_hunt the
+# verdict; what was wrong is the ORDER two segments on one physical port reach the
+# admission in, which lives in the listener table, the ifscan state machine and the
+# sniffer's discovery table at once. Two VLANs on one veth, the port's rate DECLARED
+# (REACPW_LINK_MBIT, since a veth reports 10 Gbit), and a negative arm in which the holder
+# has a box of its own and must keep the wire.
+# --- `--set KEY=VALUE` reaches the daemon at all (found by the lane above) ------------
+#
+# The knob resolver had a unit test; the FLAG had none, and it fell through the main flag
+# loop's final `else` into usage() — so every invocation carrying the flag --help documents
+# exited 2. The namespace is only how this holds CAP_NET_RAW past the preflight; it mints
+# no netdev and starts no PipeWire.
+test('set-flag-reaches-the-daemon',
+  find_program('tests/set-flag-reaches-the-daemon.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 60)
+
+test('empty-master-yields-the-budget',
+  find_program('tests/empty-master-yields-the-budget.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 420)
+
 # --- whole-binary test: a box master is ENROLLED WITH, its own way (0.5.6) ----
 #
 # "It is only a matter of following the same protocol that we expect." Measured at the far
