@@ -1103,6 +1103,12 @@ struct listener_cfg {
 	 * tells and which answer set it publishes (`reac.master.state=none` — nothing is
 	 * mastering it as far as we can hear — against the refusal's `foreign`). */
 	int door_vacant;
+	/* REAC GEAR HAS BEEN HEARD ON THIS WIRE — the `S_SEGMENT_HEARD` fact, carried from
+	 * the hunt into the open because the link-budget admission needs it and cannot ask
+	 * a hunt (#107, auto-role amendment 2026-09-20). It is what separates a segment
+	 * with something on it from one taken on the masterless licence, and only the first
+	 * may take a neighbour's budget. 0 for a `--live` segment: nothing heard it. */
+	int wire_heard;
 	/* THE PASSIVE ROLE (openmixer master-arbitration, eighth amendment, 2026-09-13).
 	 * `REAC_ROLE_<segment>=tap` or `--role tap`: serve what is heard and TRANSMIT
 	 * NOTHING — no announce, no join, no grant, no seglock, no TX socket. It is not a
@@ -1745,6 +1751,11 @@ static uint64_t link_used_kbit(const struct listener *self);
  * roster dump, on a rig where the holder was an empty VLAN. */
 static void link_budget_holders(const struct listener *self, char *out, size_t cap);
 
+/* THE EVICTION THE ADMISSION BELOW ASKS FOR BEFORE IT REFUSES (#107). Defined beside
+ * hearing_drop, which is what it acts through; returns how many segments yielded. */
+static int link_budget_yield(const char *taker, const char *tx_if, uint64_t now);
+static uint64_t monotonic_ns(void);
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
@@ -1971,6 +1982,17 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		uint64_t want_kbit = reac_link_cost_kbit(reac_link_master_pps(L->rx.sample_rate),
 		                                         REAC_FRAME_BYTES);
 		uint64_t used_kbit = link_used_kbit(L);
+		/* AND IF IT DOES NOT FIT, ASK WHETHER WHAT IS HOLDING THE PORT IS CARRYING
+		 * ANYTHING (#107, auto-role amendment 2026-09-20). Only here, and only when
+		 * this wire has REAC gear on it: a yield costs a neighbour its engine, so it
+		 * is taken exactly when the alternative is this segment being refused, and
+		 * never as a standing preference. On a port with room — a 1 Gbit trunk, or
+		 * any link whose speed cannot be read — this is not reached at all and no
+		 * neighbour is ever touched. */
+		if (!reac_link_budget_fits(link_mbit, used_kbit, want_kbit) && c->wire_heard &&
+		    link_budget_yield(c->rxcfg.source ? c->rxcfg.source : c->tx_if,
+		                      c->tx_if, monotonic_ns()) > 0)
+			used_kbit = link_used_kbit(L);   /* re-read: never assume the yield freed it */
 		if (!reac_link_budget_fits(link_mbit, used_kbit, want_kbit)) {
 			char port[IFNAMSIZ];
 			link_port_of(c->tx_if, port, sizeof port);
@@ -3066,10 +3088,6 @@ static struct listener *hearing_listener(struct hearing *h, const char *name)
  * segment gets, configured from the layered conf under the segment's own
  * name, with no first-is-bare exception — bare node names belong to the
  * --live dev shape alone, so two heard segments can never collide. */
-/* Defined below, beside hearing_drop, which is what it acts through. */
-static int link_budget_yield(struct hearing *h, const char *taker, const char *tx_if,
-                             uint64_t now);
-
 /* HAS THIS WIRE SHOWN US ANY REAC GEAR AT ALL? The `S_SEGMENT_HEARD` moment, which is the
  * trigger #107 names — and it is deliberately weaker than the test the HOLDER has to fail.
  *
@@ -3175,14 +3193,11 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		L->cfg.rate_layer = REAC_CONF_ARGV;
 	}
 	snprintf(L->cfg.tag, sizeof L->cfg.tag, "[%s] ", name);
-	/* AND THE PORT'S BUDGET IS TAKEN FROM WHOEVER IS ONLY PROBING AT NOBODY (#107,
-	 * auto-role amendment 2026-09-20). Asked HERE, before the engine opens, because
-	 * the admission inside listener_open is a pure predicate over what is already
-	 * running and tearing a neighbour down from inside it would make a refusal into
-	 * an act. A door and a tap ask nothing: neither opens a TX side, so neither needs
-	 * a budget, and a segment that has heard no box has no claim on anybody's. */
-	if (!L->cfg.tap && !L->cfg.door_only && hunt_heard_reac_gear(hunt))
-		link_budget_yield(h, name, L->cfg.tx_if, monotonic_ns());
+	/* WHAT THIS WIRE HAS ON IT, carried into the open. The link-budget admission is
+	 * the only reader (#107): a segment that has heard REAC gear may take the port
+	 * from holders that have heard nothing, and one taken on the masterless licence
+	 * may not. The hunt is the only thing that knows, and it dies here. */
+	L->cfg.wire_heard = hunt_heard_reac_gear(hunt);
 	reac_role_swap_init(&L->role_swap, L->cfg.role);
 	/* listener_open cleans up after its own refusal (its contract); a feeder
 	 * that will not start leaves an opened listener to close, as in main(). */
@@ -3272,9 +3287,9 @@ static void hearing_drop(struct hearing *h, const char *name, const char *why)
  * NOT A FLAP. `reac_ifscan_serve_failed` is the existing SEGMENT -> LINKED path with a
  * retry window; it bounces no port and does not touch the carrier-flap counter of the
  * 2026-09-02 amendment (b). Returns how many segments yielded. */
-static int link_budget_yield(struct hearing *h, const char *taker, const char *tx_if,
-                             uint64_t now)
+static int link_budget_yield(const char *taker, const char *tx_if, uint64_t now)
 {
+	struct hearing *h = &g_hear;
 	char port[IFNAMSIZ];
 	link_port_of(tx_if, port, sizeof port);
 	char yielding[REAC_IFSCAN_MAX][IFNAMSIZ];
