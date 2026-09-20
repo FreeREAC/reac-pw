@@ -240,13 +240,30 @@ keeping the port from a segment that had just heard one.
 
 ### The rule
 
-**A segment that HEARS a box takes the port's budget from holders that are PROBING WITH NO
-RECOGNISED BOX. They yield; nothing else ever does.**
+**A segment that HEARS REAC GEAR takes the port's budget from holders that have heard NOTHING
+and are PROBING WITH NO RECOGNISED BOX. They yield; nothing else ever does.**
+
+**The two sides of that sentence are deliberately NOT symmetric, and the asymmetry was measured
+before it was written.** The issue names the trigger `S_SEGMENT_HEARD`, which is any REAC sighting;
+it names the holder's disqualifier as a RECOGNISED box. A cold stagebox cannot supply the second
+until somebody masters it: its presence flood is broadcast FILLER, which `reac_disco`'s direction
+discipline classifies role-UNKNOWN by construction ("a box's presence-flood and a master's
+downstream audio are byte-identical in kind"), and its config-announce — the frame that makes it a
+`box` with a model — only arrives once a master is driving the wire. Measured on the veth,
+2026-09-20: the segment with the box read `S_SEGMENT_HEARD … unknown 00:40:ab:61:23:95 (16 ch)` and
+never upgraded, for as long as the budget kept its master from starting; the same box on a segment
+that HAD the budget went `unknown` → `box` → `box S-1608 (16 in / 8 out)` in seconds. **Requiring a
+recognised box on the TAKER's side makes the rule unreachable in exactly the deadlock it exists
+for.** Having heard anything at all is still strictly more than an empty VLAN can ever show, which
+is what makes it enough — and it is the holder's side, where the evidence is available because we
+are the ones driving, that carries the strict test.
 
 - **A HOLDER is a segment with a master engine open on the same PHYSICAL port** — `link_port_of`'s
   answer, so a parent and its VLAN children are one port, exactly as the admission already counts
   them. A tap holds nothing (it opens no TX side at all) and a door holds nothing (it has no
   engine).
+- **A TAKER must have HEARD something on its own wire** (`reac_hunt_heard_anything`). A segment
+  that has heard nothing takes nobody's budget, so two empty segments can never trade a port.
 - **EMPTY means the same three facts `port_siblings_served` already trusts**, and no new
   classifier: the master FSM is not past PROBING (`reac_sink_node_past_probing`), no box has been
   recognised (`reac_sink_node_recognized_box`), and no frames are arriving (`reac_segment_heard`).
