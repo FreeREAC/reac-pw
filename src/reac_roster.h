@@ -114,6 +114,18 @@ int reac_roster_add(struct reac_roster *r, const char *name, enum reac_roster_st
  * and it can never happen. `out` is undefined on -1. */
 int reac_roster_delta(struct reac_roster *r, struct reac_roster_kv *out, int max);
 
+/* WOULD THIS TICK'S DELTA CONTAIN A REMOVAL? True exactly when the wanted roster is
+ * SHORTER than what the node carries, which is the only thing `reac_roster_delta` emits
+ * removals for. Asked BEFORE the delta, because a removal cannot be delivered to a
+ * PipeWire node at all and the caller has to take the other road instead — the node is
+ * rebuilt (reac_roster_node.h; autodetect spec amendment 2026-09-20 §b). */
+int reac_roster_shrank(const struct reac_roster *r);
+
+/* THE NODE IS GONE AND A FRESH ONE CARRIES NOTHING. Forget what was PUBLISHED — never
+ * what this tick wants — so the next delta is the whole roster as sets, with no removal in
+ * it. The one caller is the rebuild a shrink forces. */
+void reac_roster_forget(struct reac_roster *r);
+
 /* The delta was published: the wanted set becomes what the node carries. Never call this
  * for a delta that was not published, or the next tick will believe a lie. */
 void reac_roster_commit(struct reac_roster *r);

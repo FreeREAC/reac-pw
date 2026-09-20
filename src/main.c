@@ -1756,10 +1756,62 @@ static void link_budget_holders(const struct listener *self, char *out, size_t c
 static int link_budget_yield(const char *taker, const char *tx_if, uint64_t now);
 static uint64_t monotonic_ns(void);
 
+/* ONE OWNER PER SEGMENT'S PAIR, AND IT IS THIS LISTENER (#108, autodetect spec amendment
+ * 2026-09-20 §a). Every node this listener holds, destroyed and forgotten — the capture,
+ * the playback, and a tap's per-stream sources, because a tap listener's pair lives in
+ * `tap_src[]` and nowhere else.
+ *
+ * NULLING A POINTER IS NOT A TEARDOWN, which is the whole defect: a dropped handle leaves
+ * the pw_stream CONNECTED, so the pair stays on the graph for the life of the process,
+ * carrying `reac.box-model=none` / `reac.box-width=0x0` on the SAME `reac.segment` as the
+ * real pair — the ghost openmixer's segment scan read instead of the established S-1608.
+ *
+ * `loop` is needed for the autodetect timer, which must stop BEFORE the nodes it rebuilds
+ * go away (listener_close has always done it in this order and for this reason). */
+static void listener_drop_nodes(struct listener *L, struct pw_loop *loop)
+{
+	if (L->ad_timer) {
+		pw_loop_destroy_source(loop, L->ad_timer);
+		L->ad_timer = NULL;
+	}
+	reac_source_node_destroy(L->src);          /* NULL-safe by contract */
+	L->src = NULL;
+	reac_sink_node_destroy(L->sink);
+	L->sink = NULL;
+	for (unsigned i = 0; i < REAC_TAP_MAX_STREAMS; i++) {
+		reac_source_node_destroy(L->tap_src[i]);
+		L->tap_src[i] = NULL;
+	}
+}
+
+/* Does this listener hold anything the graph can see? Read before an open and after a
+ * failed one: a listener that answers yes at either point is a ghost in the making. */
+static int listener_holds_nodes(const struct listener *L)
+{
+	if (L->src || L->sink)
+		return 1;
+	for (unsigned i = 0; i < REAC_TAP_MAX_STREAMS; i++)
+		if (L->tap_src[i])
+			return 1;
+	return 0;
+}
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
 
+	/* A LISTENER NEVER FORGETS A PAIR. This used to be `L->src = NULL; L->sink = NULL;`,
+	 * which is how a re-open with no close in front of it minted a second pair beside a
+	 * first that nothing could ever destroy. Reaching this with nodes in hand is a CALLER
+	 * that skipped listener_close, so it is destroyed AND named — a silent tidy-up here
+	 * would hide the caller that needs fixing. */
+	if (listener_holds_nodes(L)) {
+		reac_code_emit(stderr, "reac-pw", RC_E_ORPHAN_PAIR,
+		    "%sopening a segment that still holds its previous node pair — it is "
+		    "destroyed here rather than dropped, but a re-open reached this without a "
+		    "close in front of it and that is the bug to fix\n", c->tag);
+		listener_drop_nodes(L, loop);
+	}
 	L->src = NULL;
 	L->sink = NULL;
 	L->slave_open = 0;
@@ -2310,7 +2362,11 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			    reac_sink_node_ensure(L->sink, c->pin_model->out_ch, c->pin_label) != 0) {
 				fprintf(stderr, "reac-pw: %s--box: could not size the nodes to %s\n",
 				        c->tag, c->pin_model->display);
-				return -1;
+				/* A FAILED OPEN TAKES ITS OWN NODES WITH IT (#108 §a.3). Half a pair
+				 * was built by the calls above, and hearing_serve MEMSETS a listener
+				 * whose open refused — so returning here without this left a node on
+				 * the graph with no pointer to it anywhere in the process. */
+				goto fail_with_nodes;
 			}
 			fprintf(stderr, "reac-pw: %sMASTER pinned --box %s — reac-capture %d ch / "
 			        "reac-playback %d ch labelled '%s', present from boot. The pin names "
@@ -2366,7 +2422,9 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		if (reac_source_node_ensure(&L->src, &L->src_cfg, width,
 		                            bm_cap ? bm_cap->display : NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
-			return -1;
+			/* The box-master join built a reac-playback above (one mechanism, two
+			 * callers) and it is on the graph right now; the same #108 §a.3 rule. */
+			goto fail_with_nodes;
 		}
 
 	}
@@ -2389,6 +2447,21 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		listener_publish_segment(L);
 	}
 	return 0;
+
+	/* THE ONE EXIT THAT HAS ALREADY BUILT SOMETHING THE GRAPH CAN SEE (#108 §a.3). The
+	 * ring, the socket and the seglock are cleaned up at each refusal above because each
+	 * knows what it opened; the NODES were the one resource nobody took back, and the
+	 * caller cannot take them back either — hearing_serve memsets a listener whose open
+	 * refused, and main()'s array entry is simply left. The code makes it searchable:
+	 * reaching this at all means a node lived, however briefly, for a segment that never
+	 * came up. */
+fail_with_nodes:
+	reac_code_emit(stderr, "reac-pw", RC_E_ORPHAN_PAIR,
+	    "%sthe open refused AFTER putting node(s) on the graph — removing them, because "
+	    "a segment that did not come up must leave nothing behind for a console to read\n",
+	    c->tag);
+	listener_drop_nodes(L, loop);
+	return -1;
 }
 
 /* Tear down one segment, mirroring main()'s single-instance shutdown block.
@@ -2403,15 +2476,20 @@ static void listener_close(struct listener *L, struct pw_loop *loop)
 	 * runs no feeder at all. */
 	if (L->cfg.tap) {
 		listener_close_tap(L);
+		/* A VACANT TAP FELL THROUGH INTO THE DOOR and may hold `src` as well as
+		 * `tap_src[]`; one teardown owns every node either way. */
+		listener_drop_nodes(L, loop);
 		reac_role_swap_closed(&L->role_swap);
 		return;
 	}
 	if (L->rx_started)
 		reac_rx_stop(&L->rx);
-	if (L->ad_timer)
-		pw_loop_destroy_source(loop, L->ad_timer);   /* stop the autodetect watcher first */
-	reac_source_node_destroy(L->src);                /* may be NULL (never recognized) */
-	reac_sink_node_destroy(L->sink);
+	/* ONE TEARDOWN, AND IT NULLS WHAT IT FREES (#108 §a.2). This block used to destroy
+	 * `src` and `sink` and leave both pointers DANGLING at their freed structs, which is
+	 * why the open's "did this listener still hold a pair?" question could not be asked
+	 * at all: it had no way to tell a live pair from a freed one. The timer is stopped
+	 * first, as it always was — it rebuilds the very nodes it is about to lose. */
+	listener_drop_nodes(L, loop);
 	if (L->slave_open) {
 		reac_slave_stop(&L->slave);
 		reac_slave_close(&L->slave);
@@ -4888,9 +4966,10 @@ static void on_roster_timer(void *data, uint64_t expirations)
 		if (!g_roster_node) {
 			static int said;
 			if (!said++)
-				fprintf(stderr, "reac-pw: the segment roster node could not be "
-				        "created (no PipeWire?) — the segments are in this journal "
-				        "and nowhere else until it can be; retrying\n");
+				reac_code_emit(stderr, "reac-pw", RC_E_ROSTER_NODE,
+				    "the segment roster node could not be created (no PipeWire?) "
+				    "— the segments are in this journal and nowhere else until it "
+				    "can be; retrying\n");
 			return;
 		}
 	}
@@ -4908,6 +4987,31 @@ static void on_roster_timer(void *data, uint64_t expirations)
 		}
 	}
 	roster_collect(rc);
+	/* A GROUP THAT LEAVES TAKES THE NODE WITH IT (#106, spec amendment 2026-09-20 §b).
+	 * A PipeWire node cannot be told to DROP a property — the NULL-value removal is
+	 * applied to the client's own dict and what crosses is a merge of what is left — so
+	 * `reac.roster.n` fell to 0 while four stale groups stayed on the graph, one of them
+	 * `established 32/8` on a wire with no carrier. The only honest removal is a fresh
+	 * node: destroy, rebuild, forget what was published, and let the delta below emit the
+	 * WHOLE roster as sets. Rare by construction — every other tick, including every
+	 * state, width, model and provenance change, is still a property update on a node
+	 * whose id does not move. */
+	if (reac_roster_shrank(&g_roster)) {
+		fprintf(stderr, "reac-pw: a segment left the roster — rebuilding the `reac-pw` "
+		        "roster node, because a PipeWire node cannot be told to drop a property "
+		        "and a group left behind is a console reading a box that is not there\n");
+		reac_roster_node_destroy(g_roster_node);
+		g_roster_node = reac_roster_node_new(rc->loop);
+		reac_roster_forget(&g_roster);
+		g_roster_said = 0;      /* a new node has a new id, and the operator reads it */
+		if (!g_roster_node) {
+			reac_code_emit(stderr, "reac-pw", RC_E_ROSTER_NODE,
+			    "the roster node could not be rebuilt after a segment left it (no "
+			    "PipeWire?) — there is NO roster on the graph until it can be; "
+			    "retrying\n");
+			return;
+		}
+	}
 	struct reac_roster_kv kv[REAC_ROSTER_KV_MAX];
 	int n = reac_roster_delta(&g_roster, kv, REAC_ROSTER_KV_MAX);
 	if (n < 0) {
@@ -4919,7 +5023,11 @@ static void on_roster_timer(void *data, uint64_t expirations)
 	}
 	if (n == 0)
 		return;   /* nothing moved: the whole point — no property storm, no node churn */
-	reac_roster_node_publish(g_roster_node, kv, n);
+	/* COMMIT ONLY WHAT WAS PUBLISHED. A refused delta that was committed anyway would
+	 * make the next tick believe the node carries what it does not — the header says so
+	 * and it is the one way this module can lie. */
+	if (reac_roster_node_publish(g_roster_node, kv, n) != 0)
+		return;
 	reac_roster_commit(&g_roster);
 }
 

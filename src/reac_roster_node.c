@@ -5,6 +5,8 @@
 
 #include "reac_roster_node.h"
 
+#include "reac_code.h"
+
 #include <pipewire/pipewire.h>
 #include <pipewire/filter.h>
 
@@ -121,27 +123,40 @@ uint32_t reac_roster_node_id(const struct reac_roster_node *n)
 	return pw_filter_get_node_id(n->filter);
 }
 
-void reac_roster_node_publish(struct reac_roster_node *n,
-                              const struct reac_roster_kv *kv, int n_kv)
+int reac_roster_node_publish(struct reac_roster_node *n,
+                             const struct reac_roster_kv *kv, int n_kv)
 {
 	if (!n || !n->filter || !kv || n_kv <= 0)
-		return;
-	/* A REMOVAL IS A NULL VALUE IN THE DICT, and that is why this builds a spa_dict by
-	 * hand instead of a pw_properties: pw_properties_set(p, k, NULL) removes the key
-	 * from p, so a removal can never survive into p's own dict. pw_properties_update —
-	 * which is what pw_filter_update_properties runs over what we pass — reads a NULL
-	 * value as "remove this key", which is the only way a departed segment leaves no
-	 * trace on the node. */
+		return -1;
+	/* A REMOVAL CANNOT BE DELIVERED, AND IS REFUSED RATHER THAN SENT (#106, spec
+	 * amendment 2026-09-20 §b). This used to set the item's value to NULL — the
+	 * documented removal — and it never crossed: pw_properties_update DELETES the key
+	 * from the CLIENT's own dict, pw_filter_update_properties then publishes the
+	 * surviving keys as info.props, and the server MERGES those into the node. A key that
+	 * is merely absent from a merge is never removed, so it lives on the graph for ever.
+	 * Refusing the whole delta is deliberate: publishing its sets and swallowing its
+	 * removals is exactly the half-applied roster the desk read — `reac.roster.n = 0`
+	 * beside four live groups. The caller's road for a departed group is to rebuild this
+	 * node (reac_roster_node.h). */
+	for (int i = 0; i < n_kv; i++)
+		if (kv[i].remove) {
+			reac_code_emit(stderr, "reac-pw", RC_E_ROSTER_REMOVE,
+			    "the roster delta asks to REMOVE '%s', which a PipeWire node cannot "
+			    "be told — NOTHING in this delta was published; a group that leaves "
+			    "takes the roster node with it\n", kv[i].key);
+			return -1;
+		}
 	struct spa_dict_item *items = calloc((size_t)n_kv, sizeof *items);
 	if (!items)
-		return;
+		return -1;
 	for (int i = 0; i < n_kv; i++) {
 		items[i].key = kv[i].key;
-		items[i].value = kv[i].remove ? NULL : kv[i].val;
+		items[i].value = kv[i].val;
 	}
 	struct spa_dict dict = SPA_DICT_INIT(items, (uint32_t)n_kv);
 	pw_filter_update_properties(n->filter, NULL, &dict);
 	free(items);
+	return 0;
 }
 
 void reac_roster_node_destroy(struct reac_roster_node *n)
