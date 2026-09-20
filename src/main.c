@@ -3070,26 +3070,24 @@ static struct listener *hearing_listener(struct hearing *h, const char *name)
 static int link_budget_yield(struct hearing *h, const char *taker, const char *tx_if,
                              uint64_t now);
 
-/* HAS THIS WIRE SHOWN US AN ACTUAL STAGEBOX? The discovery table's own classification,
- * never a second reading of the frames: `role` is BOX exactly where libreac recognised a
- * box's geometry, and #107 turns on the difference between a segment that has heard one
- * and a segment that has heard nothing at all. */
-static int hunt_heard_a_box(const struct reac_hunt *hunt)
+/* HAS THIS WIRE SHOWN US ANY REAC GEAR AT ALL? The `S_SEGMENT_HEARD` moment, which is the
+ * trigger #107 names — and it is deliberately weaker than the test the HOLDER has to fail.
+ *
+ * ASKING FOR A RECOGNISED BOX HERE WOULD MAKE THE RULE UNREACHABLE, and that is measured,
+ * not argued (auto-role amendment 2026-09-20). A cold stagebox's presence flood is
+ * BROADCAST FILLER, which reac_disco's direction discipline classifies role-UNKNOWN by
+ * construction, and the config-announce that makes it a `box` with a model only arrives
+ * once a master is driving the wire. On the veth the segment with the box read
+ * `unknown … (16 ch)` and never upgraded for as long as the budget kept its master from
+ * starting — so a box-recognition trigger would fire exactly never in the deadlock it
+ * exists for.
+ *
+ * It is still strictly more than an empty VLAN can ever show, which is what makes it
+ * enough: a segment that has heard nothing takes nobody's budget, and two empty segments
+ * therefore cannot trade a port. */
+static int hunt_heard_reac_gear(const struct reac_hunt *hunt)
 {
-	if (!hunt)
-		return 0;
-	/* A BOX STRAPPED TO MASTER IS STILL A BOX. libreac's arbitration has already read
-	 * the aggregate and says so (`REAC_RIVAL_BOX`, from the peer's box GEOMETRY while
-	 * it CLAIMS master) — reading the role field alone would miss exactly the peer the
-	 * 0.5.1 join path exists for. */
-	if (hunt->arb.rival == REAC_RIVAL_BOX)
-		return 1;
-	for (int i = 0; i < hunt->table.n; i++)
-		/* `model` is the byte-exact config-block match and is NEVER guessed from a
-		 * width (reac_disco.h), so it is a recognised box wherever it is set. */
-		if (hunt->table.e[i].role == REAC_DISCO_ROLE_BOX || hunt->table.e[i].model)
-			return 1;
-	return 0;
+	return hunt && reac_hunt_heard_anything(hunt);
 }
 
 static void hearing_serve(struct hearing *h, const char *name, const struct reac_hunt *hunt)
@@ -3183,7 +3181,7 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	 * running and tearing a neighbour down from inside it would make a refusal into
 	 * an act. A door and a tap ask nothing: neither opens a TX side, so neither needs
 	 * a budget, and a segment that has heard no box has no claim on anybody's. */
-	if (!L->cfg.tap && !L->cfg.door_only && hunt_heard_a_box(hunt))
+	if (!L->cfg.tap && !L->cfg.door_only && hunt_heard_reac_gear(hunt))
 		link_budget_yield(h, name, L->cfg.tx_if, monotonic_ns());
 	reac_role_swap_init(&L->role_swap, L->cfg.role);
 	/* listener_open cleans up after its own refusal (its contract); a feeder
@@ -3301,13 +3299,14 @@ static int link_budget_yield(struct hearing *h, const char *taker, const char *t
 		return 0;
 	for (int i = 0; i < n; i++) {
 		reac_code_emit(stderr, "reac-pw", RC_S_BUDGET_YIELDED,
-		        "[%s] YIELDING %s's link budget to [%s], which has heard a box — this "
-		        "segment is probing with no box of its own, and one 96 kHz master is "
-		        "97%% of a 100 Mbit/s port: holding it here keeps the wire that HAS a "
-		        "box from coming up at all. Back to listening; it takes the wire again "
-		        "only if something is heard on it.\n",
+		        "[%s] YIELDING %s's link budget to [%s], which has REAC gear on it — "
+		        "this segment has heard nothing and is probing at nobody, and one "
+		        "96 kHz master is 97%% of a 100 Mbit/s port: holding it here keeps the "
+		        "wire that HAS something on it from coming up at all. Back to "
+		        "listening; it takes the wire again only when it hears something "
+		        "itself.\n",
 		        yielding[i], port, taker);
-		hearing_drop(h, yielding[i], "yielding the link budget to a segment that heard a box");
+		hearing_drop(h, yielding[i], "yielding the link budget to a segment with REAC gear on it");
 		/* BACK TO LISTENING, THROUGH THE PATH THAT ALREADY EXISTS. The sniffer
 		 * re-opens (LISTEN is queued) and the segment is classified again; the
 		 * latch below is what stops the silence licence handing it the budget
@@ -4284,9 +4283,9 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 					sn->budget_yield_said = 1;
 					fprintf(stderr, "reac-pw: [%s] still LISTENING — this "
 					        "segment yielded its port's link budget to a "
-					        "segment that heard a box, and nothing has been "
-					        "heard here since; it takes the wire again on the "
-					        "first frame of its own, never on silence\n",
+					        "segment with REAC gear on it, and nothing has "
+					        "been heard here since; it takes the wire again on "
+					        "the first frame of its own, never on silence\n",
 					        sn->name);
 				}
 				break;
