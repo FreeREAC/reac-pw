@@ -59,6 +59,7 @@ SELF_REFERENTIAL = re.compile(
     r'^\^?(PASS|FAIL|SKIP)|^BOXRC=|^const |sink_ch|REAC_ROLE_INTENT'
     r'|^\$[A-Z_][A-Z0-9_]*$'  # a bare shell var: compares captured content to itself
     r"|^suite : \("          # checks meson.build's own suite: tag, not a daemon line
+    r"|^is_parallel : false"  # its sibling: meson.build's own serial flag, not a daemon line
 )
 
 
