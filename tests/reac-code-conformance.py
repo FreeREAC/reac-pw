@@ -27,7 +27,9 @@ from pathlib import Path
 # libreac's src/*.c + transport/src/*.c too when the sibling checkout is found
 # (see find_libreac() below) — the combined count, so a line moved from one repo's
 # bare-fprintf into the other's would not quietly duck the ratchet.
-FLOOR = 31
+# 2026-09-20 (#106): the two roster-node failures now emit E_ROSTER_NODE, so the floor
+# falls 31 -> 30. It only ever falls.
+FLOOR = 30
 
 REFUSAL_WORDS = re.compile(r'REFUSED|FATAL|failed|FAILED|could not|COULD NOT')
 FPRINTF_START = re.compile(r'fprintf\(stderr,\s*"reac-pw:')

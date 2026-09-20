@@ -155,6 +155,21 @@ int reac_roster_delta(struct reac_roster *r, struct reac_roster_kv *out, int max
 	return e.n;
 }
 
+int reac_roster_shrank(const struct reac_roster *r)
+{
+	/* The delta above emits removals in exactly one loop — `i` from n_want to n_pub —
+	 * so this predicate and that loop have one condition between them. */
+	return r && r->n_want < r->n_pub;
+}
+
+void reac_roster_forget(struct reac_roster *r)
+{
+	if (!r)
+		return;
+	r->n_pub = 0;
+	memset(r->pub, 0, sizeof r->pub);
+}
+
 void reac_roster_commit(struct reac_roster *r)
 {
 	memcpy(r->pub, r->want, sizeof r->pub);

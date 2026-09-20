@@ -43,6 +43,20 @@
 	X(RC_E_SEGMENT_HELD,    "E_SEGMENT_HELD") \
 	X(RC_E_ENROLL_REFUSED,  "E_ENROLL_REFUSED") \
 	X(RC_E_LINK_BUDGET,     "E_LINK_BUDGET") \
+	/* A listener still held a node pair where it must not have, or an open that failed
+	 * had already built one (#108, autodetect spec amendment 2026-09-20 §a). Either way
+	 * the pair is destroyed at the code, so the ghost is a searchable event rather than a
+	 * node on the graph that nobody can account for. */ \
+	X(RC_E_ORPHAN_PAIR,     "E_ORPHAN_PAIR") \
+	/* A roster property REMOVAL cannot be delivered: PipeWire applies a NULL-valued dict
+	 * item to the CLIENT's copy and the server merges only what is left, so an absent key
+	 * is never removed (#106, same amendment §b). Refused, never pretended. */ \
+	X(RC_E_ROSTER_REMOVE,   "E_ROSTER_REMOVE") \
+	/* There is no roster on the graph: the node could not be created, or could not be
+	 * rebuilt after a group left it. Not fatal — the segments are still in the journal —
+	 * but a console that reads the roster is reading nothing, and must be able to tell
+	 * that from a daemon with no segments. */ \
+	X(RC_E_ROSTER_NODE,     "E_ROSTER_NODE") \
 	/* status */ \
 	X(RC_S_SEGMENT_HEARD,   "S_SEGMENT_HEARD") \
 	X(RC_S_BUDGET_YIELDED,  "S_BUDGET_YIELDED") \
