@@ -415,3 +415,80 @@ caveat as §7: nothing here has run against a real switch's VLAN-membership answ
 operator's live trunk. Open for the lane that builds it: which switch-facing mechanism reac-pw
 actually speaks (LLDP first candidate), and what a switch that does not answer it falls back to —
 silence there is not licence to flood.
+
+## Amendment 2026-09-20 — the graph FOLLOWS the segment: one owner per pair, and a roster key leaves only with its node
+
+Two defects of one family, both read off the live desk on 2026-09-20 (reac-pw#108, #106): the
+daemon's graph-facing state does not follow its own segment state. A GHOST `reac-capture` /
+`reac-playback` pair — `reac.box-model=none`, `reac.box-width=0x0`, `reac.box.mac=none` — stood
+beside every established segment's real pair, on the same `reac.segment`, so openmixer's segment
+scan (keyed by that prop) read the ghost and dropped the established S-1608 entirely; and the
+roster node carried `reac.roster.n = 0` beside four stale `reac.roster.<i>.*` groups, one of them
+`established 32/8` on a wire with no carrier. Both are the `none / 0 in` device the second
+amendment above exists to forbid, arriving by two more doors.
+
+### a. ONE OWNER PER SEGMENT'S PAIR, AND IT IS THE LISTENER
+
+A segment's `reac-capture` / `reac-playback` pair is owned by its `struct listener` and by
+nothing else. Three rules, and the third is the one that was missing:
+
+1. **Destroy before create.** `reac_source_node_ensure` / `reac_sink_node_ensure` already tear the
+   old stream down before building the new one; that stays.
+2. **A listener never FORGETS a pair.** `listener_open()` opened with `L->src = NULL;
+   L->sink = NULL;` — which drops the only handle to whatever the listener was holding. Nulling a
+   pointer is not a teardown: the PipeWire streams stay connected and the pair stays on the graph,
+   owned by nobody, for the life of the process. The prologue DESTROYS what it finds, and says so
+   with a code, because reaching it at all means a caller skipped the close.
+3. **A failed open takes its own nodes with it.** `hearing_serve`'s contract comment says
+   "listener_open cleans up after its own refusal"; for the ring, the socket and the seglock that
+   was true, for the NODES it was not. Two returns built a pair and left it — the `--box` pin path
+   and the no-recognizer path, both of which run with a live sink from the master/box-master
+   branch above them — and `hearing_serve` then `memset`s the listener, erasing the last pointer.
+   That is a ghost with no log line, which is exactly what the desk saw: the journal showed one
+   `autodetected … -> reac-capture` per segment and no second birth.
+
+**The invariant, stated so a test can measure it:** for every segment, the number of nodes on the
+graph carrying its `reac.segment` is **exactly 2 while a box is recognised on it and 0 while not**
+— never 4, never 1. A refusal door is the one declared exception the 0.5.1 ruling already carries
+(one capture node, carrying the refusal), and it belongs to a listener like any other pair.
+
+**Proven by** `tests/graph-state-follows-segment-state.sh`: arm A, a fresh segment coming up cold
+and then a box arriving; arm B, #107's capped-port fixture — a parent holding the budget with a
+sibling VLAN refused every 5 s, then the yield — with the count asserted at every step and a box
+that IS counted as the positive control.
+
+### b. A PIPEWIRE CLIENT NODE CANNOT REMOVE A PROPERTY — SO A GROUP THAT LEAVES TAKES THE NODE
+
+The third amendment's §B says "the groups past it are REMOVED from the props, not blanked", and
+`reac_roster_delta` emits those removals, and `reac_roster_node_publish` hands them to
+`pw_filter_update_properties` as NULL values in a `spa_dict`, which is the documented way to
+remove. **The removal is applied to the CLIENT's copy and never crosses.** Measured in the library
+this daemon links (pipewire 1.6.8/1.6.9):
+
+- `pw_properties_update` → `do_replace` deletes the item outright when the value is NULL
+  (`src/pipewire/properties.c:179`);
+- `pw_filter_update_properties` then publishes `impl->info.props = &filter->properties->dict`
+  (`src/pipewire/filter.c:1542,1548`) — the SURVIVING keys, with no trace of the removed one;
+- the server merges that dict into the node with `pw_properties_update_ignore`
+  (`src/pipewire/impl-node.c:1789`), and a key that is merely ABSENT from a merge is never removed.
+
+So `reac.roster.n = 0` (a SET) reached the graph and the four groups (REMOVALS) did not — exactly
+the shape the desk read. There is no property-removal method on the node interface either; this
+is not a bug to route around but a door that does not exist.
+
+**THE RULING: a roster group leaves by taking the NODE with it.** When a tick's roster is SHORTER
+than what the node carries, the daemon destroys the roster node, creates it again, and republishes
+the whole roster onto the fresh node; no tick ever hands a removal to the graph, and
+`reac_roster_node_publish` REFUSES one with a code rather than pretending it landed.
+
+**This narrows §B's "a change updates the PROPS, never the node" and does not withdraw it.** That
+rule was written against a per-tick property storm with a churning node id, and it still holds for
+every state change, every width, every model, every provenance — the overwhelming majority of
+ticks. A segment DROPPING is rare, is already a discovery event for every client on the graph, and
+is the only thing that moves the node now. The alternative — leaving the keys — is a console
+reading a box that is not there, which is the defect this whole spec family exists to remove.
+
+**Proven by** `tests/roster-keys-leave-with-their-segment.sh`: a segment drops and the node's props
+are read OFF pw-dump (never the daemon's own diff), asserting `reac.roster.n` AND the absence of
+every `reac.roster.<i>.*` key for the departed group agree, with a populated roster before the
+drop as the positive control.
