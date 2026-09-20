@@ -211,3 +211,86 @@ gap measured on the wire was this drop, not a cadence: a rate measured through a
 a measurement of the discard. Re-measure the announce cadence against a desk AFTER the budget
 refusal lands, and tighten it only if it is still slower than the M-200's clustered ~2/s (302
 announces in 149 s, never a gap over 1.003 s).
+
+## Amendment 2026-09-20 — the link budget is held by what CARRIES something, and an empty prober yields it
+
+**The live case, reac-pw#107**, home rig, reac-pw 1.0.21 / libreac 1.3.0. `enp131s0` links at
+**100 Mbit/s** and carries the show rig's VLAN sub-interfaces `.11`/`.12`/`.13`; the S-1608
+(`00:40:ab:c4:80:41`) sits on the UNTAGGED parent. Every segment starts `auto`, every one of them
+takes the wire as MASTER after §5d's 500 ms silence licence, and `enp131s0.11` — an **empty VLAN,
+nothing on it, ever** — won that race. One 96 kHz master commits 97 024 of the port's 100 000
+kbit/s, so §5d's admission then refused every later segment on the same port, including the only
+one with a box on it:
+
+```
+[enp131s0.13] heard, but the segment did not come up — sniffing again in 5 s
+         97024 kbit/s of enp131s0's 100 Mbit/s is already committed to other REAC masters
+```
+
+690 of those lines in 30 minutes; the box never enrolled. **Proof that it is the ORDERING and not
+the admission:** `[segment enp131s0.11] ignore = yes` (and `.12`) in `reac-pw.conf.d`, restart, and
+the parent took the port — `S_SEGMENT_HEARD [enp131s0] … S-1608 (16 in / 8 out)`, enrolled in 3 s.
+Nothing else changed.
+
+**§5d's admission stands, unamended.** Three masters on a 100 Mbit port lost 75% of every segment's
+frames; a quarter of a stream is a silent master with every health sign green, and refusing is the
+only honest answer. What §5d never said is WHO may hold the budget, and first-come was its stated
+(and, that night, wrong) answer: a segment PROBING with no box has nothing to carry, and it was
+keeping the port from a segment that had just heard one.
+
+### The rule
+
+**A segment that HEARS a box takes the port's budget from holders that are PROBING WITH NO
+RECOGNISED BOX. They yield; nothing else ever does.**
+
+- **A HOLDER is a segment with a master engine open on the same PHYSICAL port** — `link_port_of`'s
+  answer, so a parent and its VLAN children are one port, exactly as the admission already counts
+  them. A tap holds nothing (it opens no TX side at all) and a door holds nothing (it has no
+  engine).
+- **EMPTY means the same three facts `port_siblings_served` already trusts**, and no new
+  classifier: the master FSM is not past PROBING (`reac_sink_node_past_probing`), no box has been
+  recognised (`reac_sink_node_recognized_box`), and no frames are arriving (`reac_segment_heard`).
+  Any ONE of them makes the holder non-empty and the yield does not happen.
+- **ESTABLISHED, GRANTING, CARRYING, or a foreign master being TAPPED never yields.** Neither does
+  a holder **PINNED** by `reac-pw.conf` — the operator answered for that wire, and the one thing
+  that may act on a pin is the refusal (§2). That stays the operator's call, and the refusal line
+  now tells them it is theirs to make.
+- **ALL OR NOTHING.** The yield frees the port only when EVERY holder on it is empty. One
+  established holder and the hearing segment is refused, exactly as today — a port with a box
+  already on it is not opened up by a second box appearing.
+- **A YIELD IS NOT A FLAP.** The yielding segment goes back to LISTENING through the serve-failed
+  path the daemon already has (`reac_ifscan_serve_failed`: SEGMENT → LINKED with a retry window),
+  which does not touch the carrier-flap counter of the 2026-09-02 amendment (b) and bounces no
+  port. The hold-down is untouched.
+- **AND IT STAYS LISTENING UNTIL IT HEARS SOMETHING ITSELF.** A yielded segment does not re-elect
+  on the silence licence that won it the wire the first time: the licence is an argument about an
+  empty wire, and it is just as true five seconds later, so without this two empty segments would
+  hand the budget back and forth for ever. `reac_hunt_heard_anything` is the gate — the segment's
+  own evidence, not a timer.
+- **THE REFUSAL NAMES THE HOLDER.** `E_LINK_BUDGET` (the line was codeless until now), with every
+  holder on the port and what each one is: `probing, no box`, `probing, no box, pinned`,
+  `established` or `carrying frames`. The operator reading 690 of these should not need a roster
+  dump to see which segment to ignore.
+
+### The knob this needs, and why it is one
+
+`link_speed_mbit` reads `/sys/class/net/<port>/speed`, and §5d already rules that a speed it cannot
+read is **unknown, never full**. That is right on a rig and untestable in a namespace: a veth
+reports 10 000 Mbit/s (measured, private sysfs mount, 2026-09-20), so no arrangement of fake
+segments can fill a test port's budget. **`REACPW_LINK_MBIT[_<port>]`** declares a port's rate:
+announced at start like every other knob (2026-09-17 ruling), per-port through `reac_conf_lookup`'s
+segment layer, host-wide otherwise, and it OVERRIDES sysfs rather than only filling a gap — a NIC
+that negotiates 1 Gbit into a 100 Mbit uplink is the operator's to declare, and a knob whose effect
+is invisible in the journal would be the obscurity that ruling refuses.
+
+### What this does NOT decide
+
+Whether an empty master should start at all on a port whose budget cannot carry two. It should:
+probing is what captures a cold box (§5c, and `reac_knock`'s licence), and the issue leaves it
+open on that reasoning. What this amendment adds is that it must be EVICTABLE.
+
+**Proven by** `tests/empty-master-yields-the-budget.sh` (netns, serial): two VLANs on one capped
+port, the empty one wins the race, a box then speaks on the other, and the taker reaches
+`S_SEGMENT_UP` while the empty holder reads `S_BUDGET_YIELDED` + `S_SEGMENT_DROPPED`; the negative
+arm gives the first VLAN its own box, and the second is then refused with `E_LINK_BUDGET` naming
+the holder. **Not proven:** the real 100 Mbit trunk that produced the issue.
