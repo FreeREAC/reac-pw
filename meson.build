@@ -882,6 +882,14 @@ test('reac_refuses_root',
   args : [reac_pw_exe],
   timeout : 30)
 
+# The %posttrans auto-enable's DECISION (#104): exactly one real interactive user, or
+# nobody. loginctl/systemctl are mocked, so it needs no namespace, no daemon and no rpm --
+# it runs in the parallel pass. The tables are the real shape measured on a desk.
+test('reac_safe_enable_selects_one_user',
+  find_program('tests/safe-enable-selects-one-user.sh'),
+  args : [meson.current_source_dir() / 'packaging' / 'reac-pw-safe-enable.sh'],
+  timeout : 30)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c',],
