@@ -53,6 +53,15 @@ int reac_knobs_set_argv(const char *key, const char *value);
  * instead, so a command-line override reaches it too. */
 enum reac_conf_layer reac_knobs_resolve(const char *key, char *out, size_t cap);
 
+/* THE SAME RESOLVE, ASKED ABOUT ONE PORT OR SEGMENT. `reac_knobs_resolve` passes NULL
+ * for the segment, so it can never see a `<KEY>_<name>` layer; this one does — argv
+ * (which is host-wide by construction: --set names a bare key) first, then
+ * reac_conf_lookup's own precedence WITH the segment layer in it. `name` is whatever
+ * that key is keyed by at its read site, and for REACPW_LINK_MBIT that is the PHYSICAL
+ * port, never a VLAN child (#107). */
+enum reac_conf_layer reac_knobs_resolve_port(const char *key, const char *name,
+                                             char *out, size_t cap);
+
 /* reac_conf_flag's own shape, through reac_knobs_resolve instead of reac_conf_lookup —
  * a boolean knob that also honours --set. */
 int reac_knobs_resolve_flag(const char *key, int dflt);

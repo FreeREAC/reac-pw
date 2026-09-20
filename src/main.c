@@ -1698,6 +1698,20 @@ static unsigned link_speed_mbit(const char *ifname)
 	 * is the budget every segment on that trunk shares. */
 	const char *dev = reac_declared_vlan_split(ifname, parent, sizeof parent, &vid)
 	                  ? parent : ifname;
+	/* AND THE OPERATOR MAY DECLARE IT (#107, auto-role amendment 2026-09-20). sysfs
+	 * reports what the PHY negotiated, which is not always what the wire carries — a
+	 * 1 Gbit NIC into a 100 Mbit uplink — and in a network namespace it reports nothing
+	 * at all while a veth answers 10 Gbit, so the admission below is untestable without
+	 * this. Resolved through the knob table, so `--set` and every conf layer reach it
+	 * and `reac_knobs_announce` prints it at start; per PORT, never per VLAN. */
+	char declared[32];
+	if (reac_knobs_resolve_port("REACPW_LINK_MBIT", dev, declared, sizeof declared)
+	    != REAC_CONF_NONE) {
+		long d = strtol(declared, NULL, 10);
+		/* Out of range is UNKNOWN, which never refuses — never a silent clamp to
+		 * some plausible-looking rate. */
+		return (d > 0 && d <= 1000000) ? (unsigned)d : 0;
+	}
 	snprintf(path, sizeof path, "/sys/class/net/%s/speed", dev);
 	FILE *f = fopen(path, "r");
 	if (!f)

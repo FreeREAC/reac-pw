@@ -54,6 +54,14 @@ const struct reac_knob g_reac_knobs[] = {
 	{ "REAC_IFACES_ALLOW_WIRELESS", 1, NULL },
 	{ "REACPW_GUARD_FLOOR_FRAMES", 1, NULL },
 	{ "REACPW_NO_HEADAMP", 1, NULL },
+	/* WHAT THE PHYSICAL PORT ACTUALLY CARRIES, when sysfs cannot say or when the
+	 * operator knows better (#107, auto-role amendment 2026-09-20). The link-budget
+	 * admission reads /sys/class/net/<port>/speed; a veth reports 10 Gbit and a netns
+	 * has no such file at all, and a NIC that negotiates 1 Gbit into a 100 Mbit uplink
+	 * reports the negotiation and not the uplink. Per-port through the segment layer
+	 * (REACPW_LINK_MBIT_<port>, the PHYSICAL port's name — a VLAN's budget is its
+	 * parent's), host-wide otherwise. */
+	{ "REACPW_LINK_MBIT", 1, NULL },
 };
 
 const int g_reac_knobs_count = (int)(sizeof g_reac_knobs / sizeof g_reac_knobs[0]);
@@ -119,6 +127,17 @@ enum reac_conf_layer reac_knobs_resolve(const char *key, char *out, size_t cap)
 		return REAC_CONF_ARGV;
 	}
 	return reac_conf_lookup(key, NULL, NULL, out, cap);
+}
+
+enum reac_conf_layer reac_knobs_resolve_port(const char *key, const char *name,
+                                             char *out, size_t cap)
+{
+	const char *v = argv_lookup(key);
+	if (v) {
+		snprintf(out, cap, "%s", v);
+		return REAC_CONF_ARGV;
+	}
+	return reac_conf_lookup(key, name, NULL, out, cap);
 }
 
 int reac_knobs_resolve_flag(const char *key, int dflt)
