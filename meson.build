@@ -787,6 +787,23 @@ test('reac_no_box_no_node',
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
+# --- whole-binary test: the node COUNT follows the segment state (#108) ---------------
+#
+# The sibling above asks whether a pair is PRESENT; this one asks how many. A ghost is not
+# an absence, it is a surplus -- `>= 2` is true of a real pair and true of a real pair
+# beside a `box-model=none` twin on the same reac.segment, which is what the desk read on
+# 2026-09-20 and what made openmixer's segment scan drop an established S-1608. So this
+# asserts EXACTLY 2 while a box is recognised and EXACTLY 0 while not, across a box that
+# arrives, leaves and arrives again, and across #107's capped-port refusal loop -- the two
+# orderings the ghost was seen in. Needs libreac's fake_box; without it it SKIPS rather
+# than passing while proving nothing.
+test('reac_graph_state_follows_segment_state',
+  find_program('tests/graph-state-follows-segment-state.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 420)
+
 # --- whole-binary test: a box-role segment DECLARES ITS ROW on the wire ---------------
 test('box-declares-its-row',
   find_program('tests/box-declares-its-row.sh'),
