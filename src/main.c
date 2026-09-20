@@ -1739,6 +1739,12 @@ static void link_port_of(const char *ifname, char *out, size_t cap)
  * `struct hearing`), declared here because listener_open is what asks. */
 static uint64_t link_used_kbit(const struct listener *self);
 
+/* WHO HOLDS THIS LISTENER'S PORT, and what each holder is CARRYING — the refusal's own
+ * sentence, defined beside the table it walks for the same reason as above. #107: the
+ * 690 refusals of 2026-09-20 named the port and the kbit/s and left the holder to a
+ * roster dump, on a rig where the holder was an empty VLAN. */
+static void link_budget_holders(const struct listener *self, char *out, size_t cap);
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
@@ -1968,18 +1974,24 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		if (!reac_link_budget_fits(link_mbit, used_kbit, want_kbit)) {
 			char port[IFNAMSIZ];
 			link_port_of(c->tx_if, port, sizeof port);
-			fprintf(stderr,
-			    "reac-pw: %sREFUSING to master '%s' — it does not FIT on %s.\n"
+			/* AND WHO HAS IT (#107). A refusal that names a number and not a
+			 * holder made the operator dump the roster to find out that the
+			 * segment keeping the box off the wire was an empty VLAN. */
+			char holders[512];
+			link_budget_holders(L, holders, sizeof holders);
+			reac_code_emit(stderr, "reac-pw", RC_E_LINK_BUDGET,
+			    "%sREFUSING to master '%s' — it does not FIT on %s.\n"
 			    "         This master costs %llu kbit/s (%u pps x %d B at %u Hz);\n"
 			    "         %llu kbit/s of %s's %u Mbit/s is already committed to other\n"
 			    "         REAC masters. Transmitting anyway does not share the wire,\n"
 			    "         it fills it: the port's qdisc then discards frames from\n"
 			    "         EVERY segment on it and no box can sync to any of them.\n"
+			    "         Held by: %s.\n"
 			    "         Move this segment to another port, or lower a rate.\n",
 			    c->tag, c->tx_if, port,
 			    (unsigned long long)want_kbit, reac_link_master_pps(L->rx.sample_rate),
 			    REAC_FRAME_BYTES, L->rx.sample_rate,
-			    (unsigned long long)used_kbit, port, link_mbit);
+			    (unsigned long long)used_kbit, port, link_mbit, holders);
 			reac_rx_close(&L->rx);
 			reac_ring_free(&L->ring);
 			reac_ring_free(&L->tx_ring);
@@ -2521,6 +2533,15 @@ struct sniffer {
 	int watched;
 	/* HOW the wire was won, kept for the sentence the yield prints and nothing else. */
 	int driven_on_silence;
+	/* THIS SEGMENT GAVE ITS PORT'S LINK BUDGET UP (#107, auto-role amendment
+	 * 2026-09-20), and it does not take it back on the same evidence that won it the
+	 * first time. The silence licence is an argument about an empty wire and is just
+	 * as true five seconds later, so without this latch two empty segments on one
+	 * 100 Mbit port would hand the budget to each other for ever. It is cleared by
+	 * the segment's OWN evidence — reac_hunt_heard_anything, something actually heard
+	 * here — and by nothing else, not by a timer and not by the neighbour's state. */
+	int budget_yielded;
+	int budget_yield_said;      /* "still listening, yielded" — said once, never a spinner */
 };
 
 /* THE TOPOLOGY TAP, one per physical parent with carrier. ETH_P_ALL, BPF-filtered to
@@ -2624,6 +2645,65 @@ static uint64_t link_used_kbit(const struct listener *self)
 		                            REAC_FRAME_BYTES);
 	}
 	return used;
+}
+
+/* IS THIS BUDGET HOLDER CARRYING ANYTHING AT ALL? (#107, auto-role amendment 2026-09-20.)
+ *
+ * NO NEW CLASSIFIER: these are the same three facts `port_siblings_served` below already
+ * trusts to answer "would a bounce cost anybody anything", asked of one listener instead
+ * of a port. A master proves it is carrying something by being past PROBING (granting or
+ * established), by having RECOGNISED a box, or by the segment's own RX latch saying the
+ * frames are still arriving. None of the three, and the engine on that wire is flooding
+ * 97 Mbit/s of downstream at nobody — which is what held the 100 Mbit trunk of #107.
+ *
+ * A TAP AND A DOOR ARE NOT HOLDERS and never reach here: neither opens a sink, and
+ * `link_used_kbit` counts sinks. */
+static int listener_budget_empty(const struct listener *L)
+{
+	if (!L->opened || !L->sink || L->cfg.tap)
+		return 0;
+	if (L->heard.heard)
+		return 0;
+	if (reac_sink_node_past_probing(L->sink))
+		return 0;
+	if (reac_sink_node_recognized_box(L->sink))
+		return 0;
+	return 1;
+}
+
+static void link_budget_holders(const struct listener *self, char *out, size_t cap)
+{
+	char mine[IFNAMSIZ];
+	link_port_of(self->cfg.tx_if, mine, sizeof mine);
+	size_t n = 0;
+	out[0] = '\0';
+	for (int i = 0; i < g_hear.n_slots; i++) {
+		const struct listener *L = &g_hear.listeners[i];
+		if (L == self || !L->opened || !L->sink)
+			continue;
+		char theirs[IFNAMSIZ];
+		link_port_of(L->cfg.tx_if, theirs, sizeof theirs);
+		if (strcmp(mine, theirs) != 0)
+			continue;
+		const char *what = !listener_budget_empty(L)
+		                     ? (L->heard.heard ? "carrying frames" : "established")
+		                 : L->cfg.role_pinned ? "probing, no box, pinned by "
+		                                        REAC_SEGCONF_FILE
+		                                      : "probing, no box";
+		if (n + 1 >= cap)
+			break;           /* full: the list is truncated, never overrun */
+		int w = snprintf(out + n, cap - n, "%s%s (%s)",
+		                 n ? ", " : "", L->cfg.tx_if, what);
+		if (w < 0)
+			break;
+		n += (size_t)w > cap - n ? cap - n : (size_t)w;
+	}
+	if (!out[0])
+		/* NOT "nobody": the budget did not fit and no holder of OURS is on this
+		 * port, so the commitment is somebody else's — a second daemon, or a
+		 * declared rate this port cannot carry on its own. Saying "nobody" over a
+		 * refusal would read as a bug in the admission. */
+		snprintf(out, cap, "no master of this daemon's — the port's rate is the limit");
 }
 
 /* SAME PHYSICAL PORT, AND ACTUALLY CARRYING SOMETHING. `link_port_of` strips the VLAN
@@ -2981,6 +3061,24 @@ static struct listener *hearing_listener(struct hearing *h, const char *name)
  * segment gets, configured from the layered conf under the segment's own
  * name, with no first-is-bare exception — bare node names belong to the
  * --live dev shape alone, so two heard segments can never collide. */
+/* Defined below, beside hearing_drop, which is what it acts through. */
+static int link_budget_yield(struct hearing *h, const char *taker, const char *tx_if,
+                             uint64_t now);
+
+/* HAS THIS WIRE SHOWN US AN ACTUAL STAGEBOX? The discovery table's own classification,
+ * never a second reading of the frames: `role` is BOX exactly where libreac recognised a
+ * box's geometry, and #107 turns on the difference between a segment that has heard one
+ * and a segment that has heard nothing at all. */
+static int hunt_heard_a_box(const struct reac_hunt *hunt)
+{
+	if (!hunt)
+		return 0;
+	for (int i = 0; i < hunt->table.n; i++)
+		if (hunt->table.e[i].role == REAC_DISCO_ROLE_BOX)
+			return 1;
+	return 0;
+}
+
 static void hearing_serve(struct hearing *h, const char *name, const struct reac_hunt *hunt)
 {
 	struct listener *L = NULL;
@@ -3066,6 +3164,14 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		L->cfg.rate_layer = REAC_CONF_ARGV;
 	}
 	snprintf(L->cfg.tag, sizeof L->cfg.tag, "[%s] ", name);
+	/* AND THE PORT'S BUDGET IS TAKEN FROM WHOEVER IS ONLY PROBING AT NOBODY (#107,
+	 * auto-role amendment 2026-09-20). Asked HERE, before the engine opens, because
+	 * the admission inside listener_open is a pure predicate over what is already
+	 * running and tearing a neighbour down from inside it would make a refusal into
+	 * an act. A door and a tap ask nothing: neither opens a TX side, so neither needs
+	 * a budget, and a segment that has heard no box has no claim on anybody's. */
+	if (!L->cfg.tap && !L->cfg.door_only && hunt_heard_a_box(hunt))
+		link_budget_yield(h, name, L->cfg.tx_if, monotonic_ns());
 	reac_role_swap_init(&L->role_swap, L->cfg.role);
 	/* listener_open cleans up after its own refusal (its contract); a feeder
 	 * that will not start leaves an opened listener to close, as in main(). */
@@ -3135,6 +3241,72 @@ static void hearing_drop(struct hearing *h, const char *name, const char *why)
 	h->dropped++;
 	reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_DROPPED,
 	        "[%s] segment dropped — %s\n", name, why);
+}
+
+/* THE BUDGET YIELDS TO THE SEGMENT THAT HEARD A BOX (#107, auto-role amendment
+ * 2026-09-20). Placed here because it acts through hearing_drop.
+ *
+ * `taker` has just heard a stagebox and is about to open an engine on `tx_if`. If every
+ * master this daemon has on that PHYSICAL port is EMPTY — probing, no recognised box, no
+ * frames arriving — those masters are flooding 97 Mbit/s each at nobody while the one
+ * wire with a box on it is refused for lack of room. They drop back to listening and the
+ * taker gets the port.
+ *
+ * ALL OR NOTHING, and that is the safety of it: one holder that is established, carrying
+ * or PINNED and nothing yields, so a port with a box already on it is never opened up by
+ * a second box appearing, and a pin stays the operator's answer (§2). Two passes, decide
+ * then act, because the acting pass closes listeners and a decision taken over a table
+ * being mutated is a decision about neither state.
+ *
+ * NOT A FLAP. `reac_ifscan_serve_failed` is the existing SEGMENT -> LINKED path with a
+ * retry window; it bounces no port and does not touch the carrier-flap counter of the
+ * 2026-09-02 amendment (b). Returns how many segments yielded. */
+static int link_budget_yield(struct hearing *h, const char *taker, const char *tx_if,
+                             uint64_t now)
+{
+	char port[IFNAMSIZ];
+	link_port_of(tx_if, port, sizeof port);
+	char yielding[REAC_IFSCAN_MAX][IFNAMSIZ];
+	int n = 0, holders = 0;
+	for (int i = 0; i < h->n_slots; i++) {
+		const struct listener *L = &h->listeners[i];
+		if (!L->opened || !L->sink || !L->cfg.rxcfg.source)
+			continue;
+		if (strcmp(L->cfg.rxcfg.source, taker) == 0)
+			continue;                /* ourselves, on the retry path */
+		char theirs[IFNAMSIZ];
+		link_port_of(L->cfg.tx_if, theirs, sizeof theirs);
+		if (strcmp(port, theirs) != 0)
+			continue;
+		holders++;
+		if (!listener_budget_empty(L) || L->cfg.role_pinned)
+			return 0;                /* something real is on this port */
+		if (n < REAC_IFSCAN_MAX)
+			snprintf(yielding[n++], IFNAMSIZ, "%s", L->cfg.rxcfg.source);
+	}
+	if (!holders || !n)
+		return 0;
+	for (int i = 0; i < n; i++) {
+		reac_code_emit(stderr, "reac-pw", RC_S_BUDGET_YIELDED,
+		        "[%s] YIELDING %s's link budget to [%s], which has heard a box — this "
+		        "segment is probing with no box of its own, and one 96 kHz master is "
+		        "97%% of a 100 Mbit/s port: holding it here keeps the wire that HAS a "
+		        "box from coming up at all. Back to listening; it takes the wire again "
+		        "only if something is heard on it.\n",
+		        yielding[i], port, taker);
+		hearing_drop(h, yielding[i], "yielding the link budget to a segment that heard a box");
+		/* BACK TO LISTENING, THROUGH THE PATH THAT ALREADY EXISTS. The sniffer
+		 * re-opens (LISTEN is queued) and the segment is classified again; the
+		 * latch below is what stops the silence licence handing it the budget
+		 * straight back. */
+		reac_ifscan_serve_failed(&h->scan, yielding[i], now);
+		struct sniffer *sn = sniffer_find(h, yielding[i]);
+		if (sn) {
+			sn->budget_yielded = 1;
+			sn->budget_yield_said = 0;
+		}
+	}
+	return n;
 }
 
 /* The definition promised above the poll. Placed here because it needs hearing_drop. */
@@ -4087,6 +4259,26 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			 * its role. `driven_on_silence` survives as the wording of the yield. */
 			sn->watched = reac_watch_keep(REAC_HUNT_MASTER, sn->hunt.pinned);
 			sn->driven_on_silence = sn->hunt.silence_proven && !sn->hunt.pinned;
+			/* A SEGMENT THAT YIELDED ITS PORT'S BUDGET DOES NOT TAKE IT BACK ON
+			 * THE SAME SILENCE (#107). The licence that won this wire is an
+			 * argument about an EMPTY wire, and it is just as true after the
+			 * yield as before it — so re-serving here would refuse on the
+			 * budget every 5 s for ever, or, with two empty segments on one
+			 * port, hand it back and forth. The latch is cleared by this
+			 * segment's OWN evidence and by nothing else. */
+			if (sn->budget_yielded && !reac_hunt_heard_anything(&sn->hunt)) {
+				if (!sn->budget_yield_said) {
+					sn->budget_yield_said = 1;
+					fprintf(stderr, "reac-pw: [%s] still LISTENING — this "
+					        "segment yielded its port's link budget to a "
+					        "segment that heard a box, and nothing has been "
+					        "heard here since; it takes the wire again on the "
+					        "first frame of its own, never on silence\n",
+					        sn->name);
+				}
+				break;
+			}
+			sn->budget_yielded = 0;
 			reac_ifscan_heard(&h->scan, sn->name, now);
 			break;
 		case REAC_HUNT_REFUSED:
