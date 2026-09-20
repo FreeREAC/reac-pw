@@ -3188,6 +3188,22 @@ static int hunt_heard_reac_gear(const struct reac_hunt *hunt)
 
 static void hearing_serve(struct hearing *h, const char *name, const struct reac_hunt *hunt)
 {
+	/* ONE LISTENER PER SEGMENT, AND IT IS THE ONE THAT IS ALREADY RUNNING (#108, spec
+	 * amendment 2026-09-20 §a). A second listener on one wire is a second OWNER of that
+	 * segment's pair by construction: it takes the next free slot, opens its own engine and
+	 * publishes its own reac-capture / reac-playback carrying the SAME `reac.segment` —
+	 * which is the ghost a console's segment scan reads instead of the real box. The seglock
+	 * stops a second MASTER and nothing stopped the rest, so the guard belongs here, above
+	 * the role. Every legitimate re-serve in this file — the refusal ending, the yield, the
+	 * retake, a role reclassification — DROPS the segment first and reaches this with no
+	 * listener to find. */
+	if (hearing_listener(h, name)) {
+		reac_code_emit(stderr, "reac-pw", RC_E_ORPHAN_PAIR,
+		    "[%s] asked to serve a segment that is ALREADY served — refused, because a "
+		    "second listener on one wire publishes a second node pair on the same segment. "
+		    "A re-serve drops the segment first\n", name);
+		return;
+	}
 	struct listener *L = NULL;
 	for (int i = 0; i < h->n_slots; i++)
 		if (!h->listeners[i].opened) { L = &h->listeners[i]; break; }
