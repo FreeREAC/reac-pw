@@ -2685,8 +2685,13 @@ static void link_budget_holders(const struct listener *self, char *out, size_t c
 		link_port_of(L->cfg.tx_if, theirs, sizeof theirs);
 		if (strcmp(mine, theirs) != 0)
 			continue;
-		const char *what = !listener_budget_empty(L)
-		                     ? (L->heard.heard ? "carrying frames" : "established")
+		/* WHICH of the three facts makes it a holder, in the holder's own order of
+		 * evidence — not one word for all of them. A master that has RECOGNISED a
+		 * box but has not granted yet is neither empty nor established, and calling
+		 * it either would be a sentence that does not match the act. */
+		const char *what = L->heard.heard ? "carrying frames"
+		                 : reac_sink_node_past_probing(L->sink) ? "established"
+		                 : reac_sink_node_recognized_box(L->sink) ? "probing, box heard"
 		                 : L->cfg.role_pinned ? "probing, no box, pinned by "
 		                                        REAC_SEGCONF_FILE
 		                                      : "probing, no box";
@@ -3073,8 +3078,16 @@ static int hunt_heard_a_box(const struct reac_hunt *hunt)
 {
 	if (!hunt)
 		return 0;
+	/* A BOX STRAPPED TO MASTER IS STILL A BOX. libreac's arbitration has already read
+	 * the aggregate and says so (`REAC_RIVAL_BOX`, from the peer's box GEOMETRY while
+	 * it CLAIMS master) — reading the role field alone would miss exactly the peer the
+	 * 0.5.1 join path exists for. */
+	if (hunt->arb.rival == REAC_RIVAL_BOX)
+		return 1;
 	for (int i = 0; i < hunt->table.n; i++)
-		if (hunt->table.e[i].role == REAC_DISCO_ROLE_BOX)
+		/* `model` is the byte-exact config-block match and is NEVER guessed from a
+		 * width (reac_disco.h), so it is a recognised box wherever it is set. */
+		if (hunt->table.e[i].role == REAC_DISCO_ROLE_BOX || hunt->table.e[i].model)
 			return 1;
 	return 0;
 }
@@ -5406,6 +5419,15 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			n_headamps++;
+		} else if (!strcmp(argv[i], "--set") && i + 1 < argc) {
+			/* ALREADY RESOLVED, ABOVE. The knob pre-pass reads every --set before
+			 * a capability is touched, so all this arm owes is to step over the
+			 * KEY=VALUE it consumed. Without it the flag loop fell through to
+			 * `usage()` and the daemon EXITED 2 on the very flag --help documents:
+			 * `--set` was proven by a unit test that calls reac_knobs_set_argv()
+			 * and never ran the binary, so it had never once worked on a command
+			 * line (found 2026-09-20, by the first test that passed one). */
+			i++;
 		} else {
 			usage(argv[0]);
 			return 2;
