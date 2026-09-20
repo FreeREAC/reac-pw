@@ -262,6 +262,12 @@ are the ones driving, that carries the strict test.
   answer, so a parent and its VLAN children are one port, exactly as the admission already counts
   them. A tap holds nothing (it opens no TX side at all) and a door holds nothing (it has no
   engine).
+- **A YIELD IS NEVER A STANDING PREFERENCE.** It is asked for at exactly one point: inside the
+  admission, when the budget has ALREADY been found not to fit. On a port with room — a 1 Gbit
+  trunk, or any link whose speed cannot be read, which §5d rules is "unknown, never full" — the
+  question is not even asked and no neighbour is touched. Measured why: a first cut that yielded
+  wherever a segment heard something tore down a live VLAN on a trunk with plenty of room, and
+  `tests/hearing-finds-a-segment.sh`'s trunk phase went red on exactly that (2026-09-20).
 - **A TAKER must have HEARD something on its own wire** (`reac_hunt_heard_anything`). A segment
   that has heard nothing takes nobody's budget, so two empty segments can never trade a port.
 - **EMPTY means the same three facts `port_siblings_served` already trusts**, and no new
