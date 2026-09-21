@@ -54,24 +54,62 @@ int main(void)
 	for (uint64_t t = t0 + REAC_KNOCK_LISTEN_NS; t < t0 + 60 * SEC; t += 100 * MS)
 		CHK(reac_knock_step(&k, t) == REAC_KNOCK_ACT_NONE);
 
-	/* ---- C. ONE FRAME FROM ANYBODY CANCELS IT, and cancels it for good. A wire with
-	 * something on it was never the case this gate is for: the ordinary hunt joins a
-	 * desk, refuses a stagebox on M, and waits out its own window for a box. */
+	/* ---- C. ONE FRAME FROM ANYBODY CANCELS IT — and the cancellation lasts exactly as
+	 * long as the wire goes on carrying frames. A wire with something on it was never
+	 * the case this gate is for: the ordinary hunt joins a desk, refuses a stagebox on
+	 * M, and waits out its own window for a box. So nothing at all is licensed for a
+	 * full observation measured from THAT frame. */
 	reac_knock_init(&k, t0);
-	CHK(reac_knock_step(&k, t0 + REAC_KNOCK_LISTEN_NS / 2) == REAC_KNOCK_ACT_NONE);
-	reac_knock_heard(&k);
+	const uint64_t heard = t0 + REAC_KNOCK_LISTEN_NS / 2;
+	CHK(reac_knock_step(&k, heard) == REAC_KNOCK_ACT_NONE);
+	reac_knock_heard(&k, heard);
 	CHK(k.state == REAC_KNOCK_CANCELLED);
-	for (uint64_t t = t0; t < t0 + 300 * SEC; t += SEC)
+	for (uint64_t t = heard; t < heard + REAC_KNOCK_LISTEN_NS; t += 10 * MS)
 		CHK(reac_knock_step(&k, t) == REAC_KNOCK_ACT_NONE);
 	CHK(k.granted == 0);
 
-	/* ...even one frame in the very last instant of the window. The boundary is where a
-	 * gate like this fails, and "heard at all" is the bar, not "heard early". */
+	/* ---- C2. AND THEN IT RE-OPENS, because the observation is about the wire NOW.
+	 *
+	 * THE DEFECT, measured on the desk 2026-09-21 22:17:45 (docs/design/notes/
+	 * 2026-09-21-one-stray-frame-pinned-a-wire.md): a frame belonging to a box on
+	 * ANOTHER interface was misattributed to `enp128s20f0u6`'s sniffer in the moment it
+	 * opened. That one frame cancelled this licence for good; the wire then carried 0 RX
+	 * packets for nine minutes and the cold S-0808 on the far end of it was never
+	 * courted — the segment sat `listening — role auto`, `masterState none`, until a
+	 * human power-cycled the box. Ten minutes later, with no stray frame, the same build
+	 * took the same wire in 500 ms and the box enrolled in three seconds.
+	 *
+	 * The safety argument is untouched, and is why this is allowed: a master fills every
+	 * audio slot, so a wire that has carried NOT ONE frame across the observation has no
+	 * master on it — whether or not it once did. The clock starts again from the last
+	 * frame heard, and nothing else changes. */
+	CHK(reac_knock_step(&k, heard + REAC_KNOCK_LISTEN_NS) == REAC_KNOCK_ACT_DRIVE);
+	CHK(k.state == REAC_KNOCK_PROVEN);
+	CHK(k.granted == 1);
+
+	/* ---- C3. A WIRE THAT GOES ON BEING HEARD NEVER RE-ARMS, which is the other half of
+	 * the same law and the half that keeps it safe. A present master transmits every
+	 * 272 us at the slowest rate on the closed list, so it re-cancels this licence
+	 * thousands of times inside one window; stepped here at a tenth of the window, for
+	 * fifty windows, with one frame in each step. */
+	reac_knock_init(&k, t0);
+	for (uint64_t t = t0; t < t0 + 50 * REAC_KNOCK_LISTEN_NS;
+	     t += REAC_KNOCK_LISTEN_NS / 10) {
+		reac_knock_heard(&k, t);
+		CHK(reac_knock_step(&k, t) == REAC_KNOCK_ACT_NONE);
+	}
+	CHK(k.granted == 0);
+
+	/* ...and one frame in the very last instant of the window still costs a whole new
+	 * observation. The boundary is where a gate like this fails, and "heard at all" is
+	 * the bar, not "heard early". */
 	reac_knock_init(&k, t0);
 	CHK(reac_knock_step(&k, t0 + REAC_KNOCK_LISTEN_NS - 1) == REAC_KNOCK_ACT_NONE);
-	reac_knock_heard(&k);
+	reac_knock_heard(&k, t0 + REAC_KNOCK_LISTEN_NS - 1);
 	CHK(reac_knock_step(&k, t0 + REAC_KNOCK_LISTEN_NS) == REAC_KNOCK_ACT_NONE);
+	CHK(reac_knock_step(&k, t0 + 2 * REAC_KNOCK_LISTEN_NS - 2) == REAC_KNOCK_ACT_NONE);
 	CHK(k.granted == 0);
+	CHK(reac_knock_step(&k, t0 + 2 * REAC_KNOCK_LISTEN_NS - 1) == REAC_KNOCK_ACT_DRIVE);
 
 	/* ---- D. A FRAME AFTER THE LICENCE DOES NOT REVOKE IT HERE. Once the wire is taken
 	 * the segment exists, and giving it up is a drop-and-re-serve of two engines, a
@@ -79,8 +117,9 @@ int main(void)
 	 * a pure clock's business. This asserts the boundary of what this module claims. */
 	reac_knock_init(&k, t0);
 	CHK(reac_knock_step(&k, t0 + REAC_KNOCK_LISTEN_NS) == REAC_KNOCK_ACT_DRIVE);
-	reac_knock_heard(&k);
+	reac_knock_heard(&k, t0 + REAC_KNOCK_LISTEN_NS + SEC);
 	CHK(k.state == REAC_KNOCK_PROVEN);
+	CHK(reac_knock_step(&k, t0 + 600 * SEC) == REAC_KNOCK_ACT_NONE);
 
 	/* ---- E. THE WINDOW, STATED AS ITS DERIVATION rather than as a literal, so a later
 	 * edit to either end breaks a test instead of quietly breaking the reasoning.
@@ -101,7 +140,9 @@ int main(void)
 	CHK(REAC_KNOCK_LISTEN_NS < (uint64_t)REAC_FSM_FLOOD_BURST * 250000ULL);
 
 	printf("ok: silent for %llu ms of proof and then the wire may be DRIVEN, one frame "
-	       "from anybody cancels it, and nothing is licensed before the window closes\n",
+	       "from anybody cancels it for a whole new observation measured from that "
+	       "frame, a wire that goes on being heard never re-arms, and nothing is "
+	       "licensed before the window closes\n",
 	       (unsigned long long)(REAC_KNOCK_LISTEN_NS / MS));
 	return 0;
 }

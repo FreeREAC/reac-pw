@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.21',
+  version: '1.0.22',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -144,6 +144,7 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_watch.c',
   'src/reac_knock.c',
+  'src/reac_tapwait.c',
   'src/reac_wake.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
@@ -1330,6 +1331,19 @@ knock_test = executable('test_reac_knock',
   include_directories : [include_directories('src')],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_knock', knock_test)
+
+# --- unit test: the TAPWAIT, a sighting the topology tap has not placed yet --------
+# Two sockets over one netdev: the sniffer cannot tell a tagged frame from an untagged
+# one, so the hunt waits for the tap before electing a role — otherwise a trunk parent is
+# driven beside the masters on its own VLANs. The wait was two EVER questions, and on
+# 2026-09-21 one misattributed frame therefore suspended role election on a direct cable
+# for nine minutes with a cold box on the far end. Both halves: the wait that prevents the
+# trunk fault, and the expiry that hands a silent wire back. Pure; no socket.
+tapwait_test = executable('test_reac_tapwait',
+  ['tests/test_reac_tapwait.c', 'src/reac_tapwait.c'],
+  include_directories : [include_directories('src')],
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_tapwait', tapwait_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic

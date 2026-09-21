@@ -43,6 +43,24 @@
  * every interface it was given. Wireless is excluded from the scan entirely and never
  * reaches this module.
  *
+ * THE CANCELLATION IS NOT A LATCH, AND THAT COST NINE MINUTES OF A DESK (2026-09-21
+ * 22:17:45, docs/design/notes/2026-09-21-one-stray-frame-pinned-a-wire.md). A frame
+ * belonging to a box on ANOTHER interface was misattributed to `enp128s20f0u6`'s sniffer
+ * in the instant it opened. `REAC_KNOCK_CANCELLED` was terminal, so that one frame ended
+ * the observation for the life of the process: the wire then carried 0 RX packets for nine
+ * minutes, the cold S-0808 on the far end was never courted, and the segment sat
+ * `listening — role auto` until a human power-cycled the box. Ten minutes later, with no
+ * stray frame, the same build took the same wire in 500 ms and the box enrolled in three
+ * seconds — the courting works; the latch was the defect.
+ *
+ * So a cancelled observation RE-OPENS, measured from the last frame heard. The safety
+ * argument is not weakened by one word of this: a master fills every audio slot, so a wire
+ * that has carried NOT ONE frame across REAC_KNOCK_LISTEN_NS has no master on it, and that
+ * is as true of a wire that was heard a minute ago as of one that was never heard at all.
+ * A wire that really has a master on it re-cancels thousands of times inside one window
+ * and can never re-arm. It is #102's ruling — the hunt asks about the wire as it is NOW —
+ * applied to the licence as well as to the trunk verdict.
+ *
  * PURE: one clock and one verdict, no sockets, no frames. main.c turns the licence into a
  * reac_hunt verdict and the hunt into a served segment; a wire taken this way KEEPS ITS
  * SNIFFER, because a bet on silence is a bet that has to stay watched — see
@@ -83,6 +101,7 @@ struct reac_knock {
 	enum reac_knock_state state;
 	uint64_t opened_ns;       /* when this wire got carrier and we began listening */
 	uint64_t due_ns;          /* when the observation closes */
+	uint64_t heard_ns;        /* the last frame heard here (0 = none ever) */
 	int granted;              /* the licence was handed out; never handed out twice */
 };
 
@@ -93,11 +112,15 @@ void reac_knock_init(struct reac_knock *k, uint64_t now_ns);
  * licence is cancelled: whatever is out there, the ordinary hunt classifies it and rules
  * on it, and a wire with something on it was never the case this module is for. Safe to
  * call repeatedly, and safe to call after the licence was granted — it does not revoke a
- * segment, which is main.c's own watch over the retained sniffer. */
-void reac_knock_heard(struct reac_knock *k);
+ * segment, which is main.c's own watch over the retained sniffer.
+ *
+ * THE STAMP IS THE WHOLE OF THE CANCELLATION, and it is what keeps the cancellation from
+ * being a LATCH. `now_ns` is the poll's clock; the observation re-opens from it. */
+void reac_knock_heard(struct reac_knock *k, uint64_t now_ns);
 
-/* Advance the clock. Returns ACT_DRIVE exactly once, on the first step at or after the
- * observation closes on total silence, and ACT_NONE every other time. */
+/* Advance the clock. Returns ACT_DRIVE exactly once, on the first step at or after an
+ * observation closes on total silence — the one begun at link-up, or the one a heard
+ * frame began where it landed — and ACT_NONE every other time. */
 enum reac_knock_act reac_knock_step(struct reac_knock *k, uint64_t now_ns);
 
 #endif /* REAC_KNOCK_H */
