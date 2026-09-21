@@ -93,6 +93,7 @@
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */
+#include "reac_tapwait.h"    /* how long an unplaced sighting holds the hunt off a wire */
 #include "reac_wake.h"       /* waking a box that DROPPED, which no frame can do */
 #include <reac/transport/reac_carrier.h>    /* is there a cable in this interface */
 #include "reac_node_recover.h" /* what to do about a node we built that is not there */
@@ -2618,6 +2619,10 @@ struct sniffer {
 	 * A PINNED interface does not need it: it is already driving. */
 	struct reac_knock knock;
 	int watch_silence;          /* 0 = pinned, so the observation does not apply */
+	/* WHEN THIS SNIFFER LAST HEARD A REAC FRAME (0 = never). The tap-authority wait in
+	 * hearing_hunt is measured from it, so that "something was heard here" can expire
+	 * the way every other fact about a wire does — reac_tapwait.h. */
+	uint64_t last_heard_ns;
 	/* THIS SEGMENT IS PINNED `tap` (segment_tap_pin). Kept here because the hunt's
 	 * clock needs it for two things it cannot get from reac_hunt: a tap is SERVED ON
 	 * LINK like any other pin (the door ruling), and a tap's wire is NEVER driven —
@@ -2931,8 +2936,13 @@ static void on_sniff_io(void *data, int fd, uint32_t mask)
 		 * peer sent.) The classifier is given this NIC's address as well — the address
 		 * every emitting role of ours sources from, reac_mac.h — so a hub or a loopback
 		 * that really does return our frames still cannot make us a peer of ourselves. */
-		if (seen >= 0)
-			reac_knock_heard(&sn->knock);
+		if (seen >= 0) {
+			reac_knock_heard(&sn->knock, now);
+			/* AND THE SAME STAMP IS WHAT THE TAP-AUTHORITY WAIT IS MEASURED FROM:
+			 * "this wire has been heard" is a fact with a time on it, or it is a
+			 * latch. reac_tapwait.h has the nine minutes that cost. */
+			sn->last_heard_ns = now;
+		}
 		if (seen != 1)
 			continue;
 		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_HEARD,
@@ -4268,7 +4278,22 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		 * so it reads the same freshness topo_apply does. */
 		if (tp && tp->tagged > 0 && topo_trunk_now(h, sn->name, now))
 			continue;
-		if (tp && tp->untagged == 0 && reac_hunt_heard_anything(&sn->hunt))
+		/* AND THE WAIT IS BOUNDED, because the tap can only place a frame that KEEPS
+		 * ARRIVING. This was `reac_hunt_heard_anything`, an EVER question, and on
+		 * 2026-09-21 a frame belonging to the S-1608 on ANOTHER interface was
+		 * misattributed to this sniffer in the instant it opened: `untagged` stayed 0
+		 * because the tap never saw that frame, "heard anything" stayed 1 for the life
+		 * of the process, and a direct cable with a cold S-0808 on it was skipped here
+		 * for nine minutes while carrying 0 RX packets. reac_tapwait.h holds the
+		 * journal and the rule — a sighting binds while it is FRESH, and a wire that
+		 * has gone silent goes back to the masterless observation below. */
+		const struct reac_tapwait_in tw = {
+			.tapped = tp != NULL,
+			.untagged = tp ? tp->untagged : 0,
+			.last_heard_ns = sn->last_heard_ns,
+			.now_ns = now,
+		};
+		if (reac_tapwait_binds(&tw))
 			continue;
 		if (e->retry_after_ns != 0 && now < e->retry_after_ns)
 			continue;
