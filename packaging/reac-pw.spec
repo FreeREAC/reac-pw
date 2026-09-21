@@ -192,6 +192,20 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Sun Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.22-1
+- ONE STRAY FRAME NO LONGER PINS A WIRE FOR THE LIFE OF THE PROCESS. Two EVER-latches in
+  the autodetect path let a frame misattributed to a sniffer in the instant it opened
+  suspend role election on that segment permanently: on 2026-09-21 a direct cable with a
+  cold S-0808 on the far end carried 0 RX packets for nine minutes, reporting
+  "listening - role auto", until a human power-cycled the box.
+- reac_knock: a cancelled masterless observation RE-OPENS when the wire goes quiet again,
+  measured from the frame that cancelled it. The safety argument is unchanged - a master
+  fills every audio slot, so not one frame across the window still proves the wire has
+  none - and a wire carrying a real master re-cancels every 272 us and can never re-arm.
+- reac_tapwait (new, pure): the wait for the topology tap to place a sighting is bounded
+  by REAC_HUNT_WINDOW_NS, the same bar topo_trunk_now already uses. A sighting binds the
+  hunt while it is FRESH; a wire that has gone silent goes back to the observation and is
+  courted exactly as on a clean start.
 * Thu Sep 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.21-1
 - EVERY KNOB IS THE DAEMON'S (needs libreac 1.3.0): the eight knobs libreac used to read
   from the environment are resolved through the daemon's own table and pushed in with
