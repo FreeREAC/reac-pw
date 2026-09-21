@@ -18,8 +18,9 @@ void reac_knock_init(struct reac_knock *k, uint64_t now_ns)
 	k->due_ns = now_ns + REAC_KNOCK_LISTEN_NS;
 }
 
-void reac_knock_heard(struct reac_knock *k)
+void reac_knock_heard(struct reac_knock *k, uint64_t now_ns)
 {
+	k->heard_ns = now_ns;
 	/* Only the wire that is still being OBSERVED can be cancelled. Once the licence has
 	 * been granted the segment exists, and revoking it is a drop-and-re-serve that this
 	 * pure module has no business performing — main.c watches the retained sniffer and
@@ -30,6 +31,19 @@ void reac_knock_heard(struct reac_knock *k)
 
 enum reac_knock_act reac_knock_step(struct reac_knock *k, uint64_t now_ns)
 {
+	/* A CANCELLED OBSERVATION RE-OPENS WHEN THE WIRE GOES QUIET AGAIN, measured from the
+	 * frame that cancelled it. Not a second mechanism: the same window, the same proof,
+	 * started where the evidence against it last arrived. A wire carrying a real master
+	 * re-cancels every 272 us at worst and can never reach this. The compare is written
+	 * so it cannot wrap — unsigned time subtracts in the right order or not at all. */
+	if (k->state == REAC_KNOCK_CANCELLED) {
+		if (now_ns <= k->heard_ns)
+			return REAC_KNOCK_ACT_NONE;
+		if (now_ns - k->heard_ns < REAC_KNOCK_LISTEN_NS)
+			return REAC_KNOCK_ACT_NONE;
+		k->state = REAC_KNOCK_LISTENING;
+		k->due_ns = k->heard_ns + REAC_KNOCK_LISTEN_NS;
+	}
 	if (k->state != REAC_KNOCK_LISTENING)
 		return REAC_KNOCK_ACT_NONE;
 	if (now_ns < k->due_ns)
