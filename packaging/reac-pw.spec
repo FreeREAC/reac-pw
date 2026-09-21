@@ -17,11 +17,11 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.3.0
+BuildRequires:  pkgconfig(libreac) >= 1.3.1
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.3.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.3.1
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -192,6 +192,9 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Mon Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.23-1
+- Builds against libreac >= 1.3.1: the upstream parser test states the residue-refuse contract, which the released 1.3.0 did not carry (1.0.22's RPM %check failed on it; the 1.0.22 tag was never published).
+
 * Sun Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.22-1
 - ONE STRAY FRAME NO LONGER PINS A WIRE FOR THE LIFE OF THE PROCESS. Two EVER-latches in
   the autodetect path let a frame misattributed to a sniffer in the instant it opened
