@@ -103,10 +103,25 @@ host** until the bind lands. libreac's own `include/reac/transport/reac_topo.h:2
 this in as many words for the tap socket — *"DEAF UNTIL IT IS BOUND — the protocol is
 given to bind() and not to socket(), because a packet socket created with a protocol hears
 every interface on the host until the bind lands (#18)"*. The capture socket never got that
-fix. With an S-1608 mastering `enp131s0` at 8000 fps, a frame lands in that window about as
-often as the window is open, which is why 22:17 leaked and 22:26 did not. Filed against
-libreac; this daemon's fix stands on its own, because a daemon that can be pinned for ever
-by one misattributed frame is a defect whatever produced the frame.
+fix.
+
+**Measured**, not read off the code — an unprivileged user+net+pid namespace, two veth
+pairs, a 4000 fps 0x8819 flood on `loud` and nothing whatever on `quiet`, 200 open/close
+cycles per arm, one run:
+
+```
+POSITIVE CONTROL: a socket bound to loud for 200 ms       -> 666 frames queued
+quiet, protocol at socket()  (reac_capture_open's order)  -> 2/200 opens queued 12 frames
+                                                             that arrived on ANOTHER ifindex
+quiet, protocol at bind()    (reac_topo_tap_open's order) -> 0/200 opens, 0 frames
+```
+
+The control is in the same run because an absence measured by a probe that cannot detect
+presence is not a measurement. About 1 % of opens leak against a 4000 fps neighbour; the
+S-1608 runs 8000 fps and reac-pw opens five sniffers in one second, which is why 22:17
+leaked and 22:26 did not. **FreeREAC/libreac#19**, with the probe. This daemon's fix stands
+on its own: a daemon that can be pinned for ever by one misattributed frame is a defect
+whatever produced the frame.
 
 ## 5. Considered and refused: "a box has one wire"
 
