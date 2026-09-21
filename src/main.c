@@ -2618,6 +2618,10 @@ struct sniffer {
 	 * A PINNED interface does not need it: it is already driving. */
 	struct reac_knock knock;
 	int watch_silence;          /* 0 = pinned, so the observation does not apply */
+	/* WHEN THIS SNIFFER LAST HEARD A REAC FRAME (0 = never). The tap-authority wait in
+	 * hearing_hunt is measured from it, so that "something was heard here" can expire
+	 * the way every other fact about a wire does — reac_tapwait.h. */
+	uint64_t last_heard_ns;
 	/* THIS SEGMENT IS PINNED `tap` (segment_tap_pin). Kept here because the hunt's
 	 * clock needs it for two things it cannot get from reac_hunt: a tap is SERVED ON
 	 * LINK like any other pin (the door ruling), and a tap's wire is NEVER driven —
@@ -2931,8 +2935,13 @@ static void on_sniff_io(void *data, int fd, uint32_t mask)
 		 * peer sent.) The classifier is given this NIC's address as well — the address
 		 * every emitting role of ours sources from, reac_mac.h — so a hub or a loopback
 		 * that really does return our frames still cannot make us a peer of ourselves. */
-		if (seen >= 0)
-			reac_knock_heard(&sn->knock);
+		if (seen >= 0) {
+			reac_knock_heard(&sn->knock, now);
+			/* AND THE SAME STAMP IS WHAT THE TAP-AUTHORITY WAIT IS MEASURED FROM:
+			 * "this wire has been heard" is a fact with a time on it, or it is a
+			 * latch. reac_tapwait.h has the nine minutes that cost. */
+			sn->last_heard_ns = now;
+		}
 		if (seen != 1)
 			continue;
 		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_HEARD,
