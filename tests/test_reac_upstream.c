@@ -67,13 +67,20 @@ int main(void)
 	CHK(bad == 0);
 
 	/* 3. S-4000 32-ch OHRCA returns (1206 B = 52 + 32*36 + the +2 CRC trailer):
-	 * shape accepted with AND without the trailer, both captured frames decode
-	 * to the independently-computed PCM tables, and the trailer is NOT decoded
-	 * as audio — the 1206 B and 1204 B reads of the same frame are byte-equal. */
-	CHK(reac_upstream_channels(1206) == 32); /* +2 trailer stripped */
-	CHK(reac_upstream_channels(1204) == 32); /* trailerless variant */
+	 * ingest's door (reac_frame_clean_len(), <reac/reac.h>) strips the trailer
+	 * BEFORE the parser ever sees the bytes — this parser now REFUSES a raw
+	 * residue length instead of stripping it again (2026-09-21 ingest
+	 * contract: the capture path's +2 is stripped AT THE DOOR, and every
+	 * parser behind it refuses what ingest failed to strip). Both captured
+	 * frames decode, through the door, to the independently-computed PCM
+	 * tables, and the trailer is NOT decoded as audio — the 1206 B (cleaned)
+	 * and 1204 B reads of the same frame are byte-equal. */
+	CHK(reac_upstream_channels(1206) == -1); /* raw wire length — the residue is still on it */
+	CHK(reac_frame_clean_len(1206) == 1204); /* the door's job, not this parser's */
+	CHK(reac_upstream_channels(reac_frame_clean_len(1206)) == 32);
+	CHK(reac_upstream_channels(1204) == 32); /* trailerless variant, already clean */
 	CHK(reac_upstream_channels(1205) == -1);
-	ns = reac_upstream_decode(UP32A, sizeof UP32A, out);
+	ns = reac_upstream_decode(UP32A, reac_frame_clean_len(sizeof UP32A), out);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	CHK(reac_frame_counter(UP32A) == 0xff9c);
 	bad = 0;
@@ -87,8 +94,9 @@ int main(void)
 	uint8_t out2[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	CHK(reac_upstream_decode(UP32A, 1204, out2) == REAC_SAMPLES_PER_PKT);
 	CHK(memcmp(out, out2, (size_t)32 * 12 * 3) == 0);
-	/* the second consecutive frame (counter +1) pins the per-frame stability */
-	ns = reac_upstream_decode(UP32B, sizeof UP32B, out);
+	/* the second consecutive frame (counter +1) pins the per-frame stability,
+	 * through the same door */
+	ns = reac_upstream_decode(UP32B, reac_frame_clean_len(sizeof UP32B), out);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	CHK(reac_frame_counter(UP32B) == 0xff9d);
 	bad = 0;
