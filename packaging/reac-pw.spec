@@ -192,10 +192,8 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
-* Mon Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.23-1
-- Builds against libreac >= 1.3.1: the upstream parser test states the residue-refuse contract, which the released 1.3.0 did not carry (1.0.22's RPM %check failed on it; the 1.0.22 tag was never published).
-
 * Sun Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.22-1
+- Builds against libreac >= 1.3.1, which carries the residue-refuse contract the suite states (1.3.0 did not).
 - ONE STRAY FRAME NO LONGER PINS A WIRE FOR THE LIFE OF THE PROCESS. Two EVER-latches in
   the autodetect path let a frame misattributed to a sniffer in the instant it opened
   suspend role election on that segment permanently: on 2026-09-21 a direct cable with a
