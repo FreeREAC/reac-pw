@@ -416,6 +416,62 @@ operator's live trunk. Open for the lane that builds it: which switch-facing mec
 actually speaks (LLDP first candidate), and what a switch that does not answer it falls back to —
 silence there is not licence to flood.
 
+**HOW IT IS BUILT, 2026-09-22 — the switch names its VIDs by TAGGING, and we listen.** The
+operator's ruling that day: *"We must autodetect VLANs when plugged in a switch trunk."* The
+mechanism this amendment left open turns out not to need a dialogue at all. **A trunk port
+carries every VLAN's traffic tagged, whatever the boxes on it are doing** — STP/RSTP BPDUs, LLDP,
+ARP and broadcasts all ride their VID — and every one of those frames names a VID in the kernel's
+own `tp_vlan_tci`. Hearing one IS the switch naming that VID: passive, no frame transmitted, no
+VID presupposed, and strictly cheaper than an LLDP dialogue, which stays as the next mechanism
+for a switch whose port sends nothing tagged at all (a silent trunk is still not licence to
+flood). So the bar for "this VID exists on this parent" widens from *a tagged REAC frame* (§1,
+third bullet) to **a tagged frame of any ethertype**, and everything downstream is unchanged: the
+sub-interface is created by §1's own rule, and its role and declaration follow §2/§3 — a REAC
+master heard on it → we slave; silence → the masterless observation and the link-budget admission
+decide, with the courtship already bounded (libreac's 2026-09-12 spec: court 4 s, then 10 s of
+silence).
+
+**THE ONE THING THAT MUST NOT WIDEN WITH IT, and it is a live-rig regression if it does.** A
+parent carrying tagged REAC is never itself driven (trunk spec §3's ruling, §4f) — it receives
+every sub-interface's frames untagged and a master on it would be a second master for a box
+already served on its VLAN. That verdict, `reac_topo_is_trunk()`, goes on keying on **tagged REAC
+only**. The desk measures why: on 2026-09-10 enp131s0's S-4000 was heard UNTAGGED, because VLAN 11
+is that trunk port's NATIVE VLAN (openmixer `docs/design/notes/2026-09-10-continuation-for-tecman.md`).
+A trunk verdict drawn from one STP frame would stop that parent being driven and unserve a segment
+that is working today. **Hearing a VID and refusing to drive a parent are two different questions
+about the same frame, and only the second one is about REAC.**
+
+**Where each half lives** (the transport library owns the wire —
+libreac's `docs/design/specs/2026-09-11-reac-transport-library.md`): libreac's `reac_topo` hears
+the tags, classifies them, holds the per-parent VID table and emits the ENSURE/RELEASE verbs;
+reac-pw carries an ENSURE out on the host — `topo_ensure()` in `src/main.c`, over libreac's
+`reac_vlan_create` / `reac_vlan_query` / `reac_vlan_up` — and reports back with
+`reac_topo_ensured()`. That seam does not move: the wire decision (which VIDs exist, and when one
+has gone) is the library's, the OS object and its lifetime are the daemon's, because the daemon is
+the process that holds `CAP_NET_ADMIN` and owns the exit path that removes what it minted (trunk
+spec §4d).
+
+**What a heard VID costs when it is not REAC at all.** On a shared trunk this mints a netdev and
+opens a listener for an office VLAN, which is silent and free; what is not free is the courtship
+that follows on a segment nobody answers, and that is bounded by the daemon's existing rules and
+by nothing new here. The per-parent bound (`REAC_TOPO_MAX_VLANS`, 16) is unchanged and anything
+past it is still REPORTED, never silently untracked. The tap's filter stays narrow in the one way
+that matters for load: it passes a frame because it CARRIES A TAG or because it is REAC, and an
+untagged non-REAC frame — the bulk of a native VLAN's traffic — is still dropped in the kernel.
+
+**Proven by.** libreac `tests/test_topo_hears_vlans.c` — a veth trunk in a private user+net
+namespace, VLAN sub-interfaces on the FAR end only so the kernel inserts every tag: a tagged
+non-REAC frame on VID 12 is heard while the parent's trunk verdict stays 0; a tagged REAC frame on
+VID 11 is heard, emits ENSURE, and does set it; untagged REAC on the parent is classified (the
+presence control, without which the two silences below are unreadable); a VID nobody carried is
+never heard. Red against libreac 1.4.0 on the middle arm with the other three already green —
+which is also the first measurement anywhere that §1's third bullet holds against a kernel that
+really tags a frame.
+
+**Not proven here.** The live trunk. The desk's `enp131s0` is expected to hear VIDs 11/12/13 from
+the switch within seconds of a restart with no drop-in present; that is the main session's to run
+on the rig, and nothing in this lane touched the live daemon.
+
 ## Amendment 2026-09-20 — the graph FOLLOWS the segment: one owner per pair, and a roster key leaves only with its node
 
 Two defects of one family, both read off the live desk on 2026-09-20 (reac-pw#108, #106): the
