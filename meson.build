@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.23',
+  version: '1.0.24',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -89,7 +89,11 @@ m_dep        = cc.find_library('m', required : false)
 # deals with enrolled nodes). Against an older libreac this build dies at main.c's
 # #include, which is a loud enough failure; the floor is raised so it arrives at configure
 # time instead, and so tests/test_reac_enrolment_binding.c's own #error has a partner.
-libreac_dep = dependency('libreac', version : '>=1.4.0',
+# >=1.5.0 SINCE 1.0.24: REAC_TOPO_TAGGED_OTHER (a tag on any ethertype names a VLAN, which
+# is how a COLD one is found) and reac_topo_heard_vids() are 1.5.0 surface, and this daemon
+# reads both. An older header does not compile; the floor turns that into a configure-time
+# refusal.
+libreac_dep = dependency('libreac', version : '>=1.5.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -109,7 +113,10 @@ libreac_dep = dependency('libreac', version : '>=1.4.0',
 # >=1.2.2 SINCE 1.0.18: reac_topo.c lives in this library, and 1.2.2 is where its tap
 # stops hearing unbound-window traffic (libreac #18). Behaviour, not symbols, so nothing
 # below configure time would catch a 1.2.1.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.2.2', required : true)
+# >=1.5.0 SINCE 1.0.24: the tap's BPF is what admits a tagged non-REAC frame at all. A
+# 1.2.x transport has every symbol this daemon links and simply never hears a cold VLAN --
+# behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,

@@ -13,7 +13,10 @@
  *   (b) the IN-BUFFER tag — 0x8100 at offset 12 and the real ethertype behind it;
  *   (c) QinQ, where the kernel strips the outer tag and leaves the inner one in the bytes:
  *       the OUTER VID names the netdev the frame arrives on, so the accelerated tag wins;
- *   (d) VID 0 — a priority tag names no VLAN, and `<parent>.0` must never be minted.
+ *   (d) VID 0 — a priority tag names no VLAN, and `<parent>.0` must never be minted;
+ *   (e) a tag on SOME OTHER ethertype — the switch's own STP/LLDP/ARP, which is the only
+ *       thing a COLD VLAN ever puts on a trunk (ruling 2026-09-22). It names the VID and
+ *       nothing more, and it must never reach the trunk verdict.
  *
  * The table's job is the lifecycle §4d states line by line: a fresh VID asks to be ensured
  * ONCE, an adopted netdev is never released with `minted`, a minted one always is, silence
@@ -92,14 +95,29 @@ int main(void)
 	n = frame(b, ctag0, 3);
 	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_UNTAGGED);
 
-	/* ---- anything that is not REAC is refused, tagged or not, and so is a runt. The BPF
-	 * should have dropped these; the classifier does not rely on it. */
+	/* ---- A TAG NAMES A VLAN WHATEVER IT CARRIES; AN UNTAGGED NON-REAC FRAME IS NOTHING.
+	 * Since libreac 1.5.0 and the 2026-09-22 amendment to
+	 * docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md: on a cold rig
+	 * no REAC frame is ever tagged, so the switch's own STP/LLDP/broadcast traffic is the
+	 * only evidence a VLAN exists at all. It reads as TAGGED_OTHER — a strictly weaker
+	 * fact than TAGGED, and one that never reaches the trunk verdict. A runt is still
+	 * refused, and so is an untagged frame of any other ethertype. */
 	uint16_t ip[] = { 0x0800 };
 	n = frame(b, ip, 1);
-	CHK(reac_topo_classify(b, n, 1, 111, &vid) == REAC_TOPO_NOT_REAC);
+	CHK(reac_topo_classify(b, n, 1, 111, &vid) == REAC_TOPO_TAGGED_OTHER);
+	CHK(vid == 111);
+	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_NOT_REAC);
+	CHK(vid == 0);
 	uint16_t tagged_ip[] = { 0x8100, 11, 0x0800 };
 	n = frame(b, tagged_ip, 3);
-	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_NOT_REAC);
+	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_TAGGED_OTHER);
+	CHK(vid == 11);
+	/* An LLDP frame with its tag accelerated away — the exact shape a trunk's own switch
+	 * sends, and the one the old BPF never let through. */
+	uint16_t lldp[] = { 0x88cc };
+	n = frame(b, lldp, 1);
+	CHK(reac_topo_classify(b, n, 1, 12, &vid) == REAC_TOPO_TAGGED_OTHER);
+	CHK(vid == 12);
 	CHK(reac_topo_classify(b, 13, 1, 111, &vid) == REAC_TOPO_NOT_REAC);
 	CHK(reac_topo_classify(NULL, 64, 1, 111, &vid) == REAC_TOPO_NOT_REAC);
 
@@ -123,6 +141,24 @@ int main(void)
 	CHK(reac_topo_is_trunk(&t, "trunk0") == 0);    /* silence is never a topology */
 	CHK(reac_topo_is_trunk(&t, "nosuch") == 0);
 
+	/* A COLD VLAN IS ENSURED ON THE SWITCH'S WORD ALONE, AND MAKES NO TRUNK. This is the
+	 * whole of the 2026-09-22 ruling at the table: vid 13 is heard from a tagged frame
+	 * that is not REAC and gets its ENSURE like any other, while the parent's trunk
+	 * verdict stays 0 — because on the rig this parent's own box is heard UNTAGGED on the
+	 * trunk's native VLAN, and a trunk verdict would refuse it a master. It runs FIRST,
+	 * before any tagged REAC, which is the cold-rig order exactly. */
+	reac_topo_saw(&t, "trunk0", REAC_TOPO_TAGGED_OTHER, 13, 1 * SEC - 2);
+	CHK(reac_topo_is_trunk(&t, "trunk0") == 0);
+	CHK(reac_topo_vlan_find(&t, "trunk0", 13) != NULL);
+	CHK(reac_topo_next(&t, &ev) == 1);
+	CHK(ev.verb == REAC_TOPO_ENSURE && ev.vid == 13);
+	CHK(reac_topo_next(&t, &ev) == 0);
+	/* And the published list: what the daemon reports and derives segments from. */
+	uint16_t heard[REAC_TOPO_MAX_VLANS];
+	CHK(reac_topo_heard_vids(&t, "trunk0", heard, REAC_TOPO_MAX_VLANS) == 1);
+	CHK(heard[0] == 13);
+	CHK(reac_topo_heard_vids(&t, "nosuch", heard, REAC_TOPO_MAX_VLANS) == 0);
+
 	reac_topo_saw(&t, "trunk0", REAC_TOPO_TAGGED, 11, 1 * SEC);
 	reac_topo_saw(&t, "trunk0", REAC_TOPO_TAGGED, 11, 1 * SEC + 1);
 	reac_topo_saw(&t, "trunk0", REAC_TOPO_TAGGED, 12, 1 * SEC + 2);
@@ -131,8 +167,8 @@ int main(void)
 	CHK(reac_topo_next(&t, &ev) == 1);
 	CHK(ev.verb == REAC_TOPO_ENSURE && ev.vid == 12);
 	CHK(reac_topo_next(&t, &ev) == 0);
-	CHK(reac_topo_is_trunk(&t, "trunk0") == 1);
-	CHK(reac_topo_count(&t, "trunk0", REAC_TOPO_VLAN_HEARD) == 2);
+	CHK(reac_topo_is_trunk(&t, "trunk0") == 1);    /* tagged REAC, and only it, does this */
+	CHK(reac_topo_count(&t, "trunk0", REAC_TOPO_VLAN_HEARD) == 3);
 	CHK(reac_topo_vlan_find(&t, "trunk0", 11)->frames == 2);
 
 	/* ---- untagged REAC on a trunk is refused BY NAME, and said once (§4f). */
