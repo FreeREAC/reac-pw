@@ -17,11 +17,15 @@ BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(libspa-0.2)
-BuildRequires:  pkgconfig(libreac) >= 1.3.1
+# >=1.4.0 SINCE 1.0.23: <reac/reac_knock.h> and <reac/reac_tapwait.h> are the library's now
+# (operator ruling 2026-09-22 — deciding what a wire is belongs to libreac, this daemon deals
+# with enrolled nodes). Against an older libreac the build dies at the #include; the floor is
+# raised anyway so the refusal arrives at configure time with a sentence somebody can read.
+BuildRequires:  pkgconfig(libreac) >= 1.4.0
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.3.1
+BuildRequires:  pkgconfig(libreac-transport) >= 1.4.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -192,6 +196,23 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Tue Sep 22 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.23-1
+- DECIDING WHAT A WIRE IS IS NOT THIS DAEMON'S JOB (operator ruling 2026-09-22; libreac
+  docs/design/specs/2026-09-22-enrolment-decisions-belong-to-the-library.md). 1.0.22 had
+  added two wire state machines here -- src/reac_knock.{h,c} (the masterless observation
+  that licences driving a vacant wire) and src/reac_tapwait.{h,c} (how long a sighting the
+  topology tap has not placed binds the hunt). Both feed reac_hunt, which is libreac's, and
+  reac_hunt.h was already citing reac_knock.h at a header in this repository. They are
+  <reac/reac_knock.h> and <reac/reac_tapwait.h> now; libreac floor >= 1.4.0.
+- Behaviour unchanged: main.c calls the same three functions with the same arguments at the
+  same two call sites, and the moved sources are byte-identical but for their #include.
+- tests/test_reac_knock.c and tests/test_reac_tapwait.c move to libreac with their sources,
+  where a libreac change can see them go red. What replaces them here is
+  tests/test_reac_enrolment_binding.c -- a BINDING test that links the real library and
+  requires the two rules the poll depends on (a cancelled observation re-opens, measured
+  from the last frame heard; a stale unplaced sighting stops binding the hunt), with its
+  own positive controls so it cannot pass against a library whose functions do nothing.
+
 * Sun Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.22-1
 - Builds against libreac >= 1.3.1, which carries the residue-refuse contract the suite states (1.3.0 did not).
 - ONE STRAY FRAME NO LONGER PINS A WIRE FOR THE LIFE OF THE PROCESS. Two EVER-latches in

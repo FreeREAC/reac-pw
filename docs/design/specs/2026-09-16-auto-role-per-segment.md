@@ -31,7 +31,7 @@ byte, never from a signature nobody has captured (arbitration §4).
 
 | # | the wire | detected by | adopted | proven |
 |---|---|---|---|---|
-| a | nobody masters | `reac_knock` silence licence (no frame for the listening window), or a box heard with no master for `REAC_HUNT_WINDOW_NS` | we master | `tests/test_reac_hunt.c`, `tests/test_reac_knock.c` |
+| a | nobody masters | `reac_knock` silence licence (no frame for the listening window), or a box heard with no master for `REAC_HUNT_WINDOW_NS` | we master | `tests/test_reac_hunt.c`, `tests/test_reac_enrolment_binding.c` (the licence itself is libreac's since 1.4.0 — `libreac/tests/test_reac_knock.c`) |
 | b | a DESK masters | a foreign master whose frames carry the 40-channel downstream geometry (`REAC_RIVAL_DESK`) | defer — `auto` TAPS (courtship option C, 2026-09-14); an explicit `recorder` slaves | `tests/test_reac_hunt_captures.c` arm `desk`, real M-200 bytes |
 | c | a BOX in M masters | a foreign master whose frames carry a BOX width (`REAC_RIVAL_BOX`, `rival_channels` = the box's own width) | slave-join it; the segment is sized from `rival_channels` and the capture node carries the box's identity (`reac.box.mac`, DESIGN.md 0.5.2) | `tests/test_reac_hunt_captures.c` arms `box-master-auto` / `box-master-pinned`, real S-1608-on-M bytes |
 | d | a box in SP | **NOT DETECTABLE TODAY — see §3** | nothing; say so | §3 |
