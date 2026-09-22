@@ -1093,6 +1093,28 @@ down_pair pinm0 mbox1
 # box on it, and refuses to be a segment on the parent itself.
 peer ip link add link tbox0 name tbox0.11 type vlan id 11 || exit 90
 peer ip link add link tbox0 name tbox0.12 type vlan id 12 || exit 90
+# AND THE COLD ONE (ruling 2026-09-22). VLAN 14 carries NO REAC at all, ever: its only
+# traffic is a switch-shaped frame on an ethertype that is not ours, which is what a trunk
+# port carries for every VLAN whatever the boxes are doing. That is the whole case the
+# ruling is about -- a stagebox is a slave and says nothing until a master speaks, and the
+# master cannot speak until the netdev exists, so before this the VLAN was reachable only
+# by a hand-written declaration.
+peer ip link add link tbox0 name tbox0.14 type vlan id 14 || exit 90
+cat > "$RT/tagnoise.py" <<'PYEOF2'
+# The switch's own voice: an LLDP-shaped frame out of a VLAN sub-interface, so the KERNEL
+# inserts the tag (nothing here writes an 802.1Q header) and it reaches the trunk's parent
+# tagged and unmistakably not REAC. Slow on purpose: one frame is the whole fact.
+import socket, sys, time
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x88cc))
+s.bind((sys.argv[1], 0))
+f = b"\x01\x80\xc2\x00\x00\x0e" + b"\x02\x00\x00\x0e\x00\x14" + b"\x88\xcc" + bytes(50)
+while True:
+    try:
+        s.send(f)
+    except OSError:
+        pass
+    time.sleep(0.25)
+PYEOF2
 # AND THE ADOPTION CASE, set up before the daemon can ever hear vid 13: a host that keeps
 # its own network configuration pre-creates the sub-interface, and the daemon must take it
 # as it finds it. It carries no mint alias of ours, so it is not ours to remove.
@@ -1109,6 +1131,8 @@ sleep 0.5
 up_pair trunk0 tbox0
 up_pair trunk1 tbox1
 peer ip link set tbox0.11 up; peer ip link set tbox0.12 up; peer ip link set tbox1.13 up
+peer ip link set tbox0.14 up
+$in_peer python3 "$RT/tagnoise.py" tbox0.14 >"$RT/tag14.log" 2>&1 & TAGNOISE=$!
 ip link set trunk1.13 up
 
 # THE TAG IS HEARD, AND IT IS HEARD PER VID. This is the assertion that could not have
@@ -1124,6 +1148,30 @@ wait_for "\[trunk0\] vid 11: created trunk0.11 (marked reac-pw:minted)" 20 || {
 	echo "FAIL: vid 11 was heard and trunk0.11 was never created"; tail -30 "$LOG"; exit 1; }
 wait_for "\[trunk0\] vid 12: created trunk0.12 (marked reac-pw:minted)" 20 || {
 	echo "FAIL: vid 12 was heard and trunk0.12 was never created"; tail -30 "$LOG"; exit 1; }
+# ---- THE COLD VLAN: HEARD FROM A FRAME THAT IS NOT REAC, AND SERVED (ruling 2026-09-22).
+# Nothing has EVER spoken REAC on vid 14 in this run, and nothing will. All the daemon has
+# is the switch-shaped frame arriving tagged on the parent -- which is all it has on a cold
+# rig, where every box is a slave waiting for a master that cannot exist until its netdev
+# does. The frame COUNT in the line is the control: a detector that saw nothing cannot
+# print one.
+wait_for "\[trunk0\] tagged VLAN heard — vid 14" 20 || {
+	echo "FAIL: vid 14 carried tagged frames that were not REAC and the VLAN was never"
+	echo "      heard. On a cold trunk that is the only evidence there is, so the segment"
+	echo "      would exist only if someone hand-wrote it into reac-pw.conf."
+	tail -30 "$LOG"; tail -3 "$RT/tag14.log"; exit 1; }
+grep -a "\[trunk0\] tagged VLAN heard — vid 14" "$LOG" | grep -qaE '\(([1-9][0-9]*) frame' || {
+	echo "FAIL: vid 14 was named with NO frame count — a detector that saw nothing cannot"
+	echo "      have named it"; grep -a "vid 14" "$LOG" | head -3; exit 1; }
+wait_for "\[trunk0\] vid 14: created trunk0.14 (marked reac-pw:minted)" 20 || {
+	echo "FAIL: vid 14 was heard and no sub-interface was made for it, so a box arriving"
+	echo "      on that VLAN has nowhere to be heard"; tail -30 "$LOG"; exit 1; }
+# AND THE JOURNAL DOES NOT INVENT WHAT IT HEARD. "tagged REAC heard" over an LLDP frame
+# would be the #102 report again with the evidence fabricated rather than misattributed.
+# The claim is an ABSENCE and its positive control is the two REAC sightings asserted
+# above: the same grep, over the same log, matches vid 11 and vid 12.
+grep -qa "tagged REAC heard — vid 14" "$LOG" && {
+	echo "FAIL: nothing REAC has ever been on vid 14 and the daemon said it heard some"
+	grep -a "vid 14" "$LOG" | head -5; exit 1; }
 wait_for "\[trunk1\] vid 13: adopted trunk1.13 — the host made it" 20 || {
 	echo "FAIL: a pre-created sub-interface must be ADOPTED, not re-created"
 	# THE FIRST THING TO LOOK AT IS WHETHER THE PARENT WAS WATCHED AT ALL. Both bounds
@@ -1254,13 +1302,18 @@ echo "$LINKS" | grep -qx "trunk0.11" && {
 echo "$LINKS" | grep -qx "trunk0.12" && {
 	echo "FAIL: the daemon created trunk0.12 and left it behind on a clean exit"
 	echo "$LINKS"; tail -10 "$LOG"; exit 1; }
+echo "$LINKS" | grep -qx "trunk0.14" && {
+	echo "FAIL: the daemon created trunk0.14 for a VLAN it only HEARD and left it behind"
+	echo "      on a clean exit. A VID discovered from a switch's own traffic is minted on"
+	echo "      the same terms as any other: what we made, we take away."
+	echo "$LINKS"; tail -10 "$LOG"; exit 1; }
 grep -q "\[trunk0.11\] removed — we created it" "$LOG" || {
 	echo "FAIL: trunk0.11 is gone and the daemon never said it removed it"; tail -10 "$LOG"; exit 1; }
 grep -q "\[trunk1.13\] left alone — the host made it" "$LOG" || {
 	echo "FAIL: the adopted netdev survived, and the journal does not say it was left"
 	echo "      alone deliberately -- a survival nobody claimed is a leak that got lucky"
 	tail -10 "$LOG"; exit 1; }
-kill -TERM $TFAKE1 $TFAKE2 $TFAKE3 2>/dev/null; wait $TFAKE1 $TFAKE2 $TFAKE3 2>/dev/null
+kill -TERM $TFAKE1 $TFAKE2 $TFAKE3 $TAGNOISE 2>/dev/null; wait $TFAKE1 $TFAKE2 $TFAKE3 $TAGNOISE 2>/dev/null
 echo "OK: heard, joined a desk as slave, kept through a flap, dropped past the hold,
     heard again, took a vacant wire as master, established with the box and put BOTH of
     its nodes on the graph, served a per-segment pin without a hunt, DROVE A PINNED WIRE
