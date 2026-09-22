@@ -3585,27 +3585,35 @@ static int topo_tap_read(struct reac_topo_tap *tap, struct topo_frame *f)
 	return 1;
 }
 
-/* This VID has carried tagged REAC on this tap. Idempotent, bounded, and never a source
- * of truth about segments — see the field's note. */
-static void topo_note_reac_vid(struct topo_tap *tp, uint16_t vid)
+/* TAGGED REAC ON THIS VID, SAID WHERE IT BECOMES TRUE AND NOT WHERE A NETDEV IS MADE.
+ * Two facts arrive on a trunk now — this VLAN exists (any tag) and REAC rides it — and
+ * tying the second to the ENSURE would make the journal depend on WHICH FRAME WON A RACE:
+ * a sub-interface emits its own IPv6 multicast the moment it comes up, so on a live trunk
+ * the VID is very often discovered by something that is not REAC, and a line printed only
+ * at the ENSURE would then never say REAC was heard at all. Measured here on 2026-09-22:
+ * segments-autodetect's arm d, where the daemon's own master traffic on farA.33 is real
+ * tagged REAC and the VID was nonetheless first named by the netdev's multicast.
+ *
+ * So this says it once per (tap, VID), the first time a REAC frame carries that tag.
+ * Idempotent, bounded, and never a source of truth about segments — see the field's note. */
+static void topo_note_reac_vid(struct topo_tap *tp, uint16_t vid, const uint8_t *src)
 {
 	if (vid == 0)
 		return;
 	for (int i = 0; i < tp->reac_vids_n; i++)
 		if (tp->reac_vids[i] == vid)
 			return;
-	if (tp->reac_vids_n < (int)(sizeof tp->reac_vids / sizeof tp->reac_vids[0]))
-		tp->reac_vids[tp->reac_vids_n++] = vid;
-}
-
-static int topo_reac_on_vid(const struct topo_tap *tp, uint16_t vid)
-{
-	if (!tp)
-		return 0;
-	for (int i = 0; i < tp->reac_vids_n; i++)
-		if (tp->reac_vids[i] == vid)
-			return 1;
-	return 0;
+	if (tp->reac_vids_n >= (int)(sizeof tp->reac_vids / sizeof tp->reac_vids[0]))
+		return;
+	tp->reac_vids[tp->reac_vids_n++] = vid;
+	const struct reac_topo_vlan *v = reac_topo_vlan_find(&tp->h->topo, tp->parent, vid);
+	/* WHO SENT IT AND WHERE IT ARRIVED (#102). A verdict of one frame on a cable tcpdump
+	 * says is silent cost a night; the line carries the sender's MAC and the ifindex the
+	 * frame was attributed to, so the next such report is answered from the journal. */
+	fprintf(stderr, "reac-pw: [%s] tagged REAC heard — vid %u (%lu frame(s)) from "
+	        "%02x:%02x:%02x:%02x:%02x:%02x on ifindex %u: this parent is a TRUNK, its "
+	        "VLANs are the segments\n", tp->parent, (unsigned)vid, v ? v->frames : 0UL,
+	        src[0], src[1], src[2], src[3], src[4], src[5], tp->ifindex);
 }
 
 static void on_topo_io(void *data, int fd, uint32_t mask)
@@ -3651,9 +3659,13 @@ static void on_topo_io(void *data, int fd, uint32_t mask)
 			tp->last_tagged_ns = now;
 			tp->said_stale = 0;
 			memcpy(tp->last_tagged_src, f.src, sizeof tp->last_tagged_src);
-			topo_note_reac_vid(tp, f.vid);
 		}
 		reac_topo_saw(&tp->h->topo, tp->parent, f.kind, f.vid, now);
+		/* AFTER the table has counted this frame, so the line's own frame count
+		 * includes the frame it is reporting: a count of 0 beside "heard" is what a
+		 * detector that saw nothing would print, and a test reads it as the control. */
+		if (f.kind == REAC_TOPO_TAGGED)
+			topo_note_reac_vid(tp, f.vid, f.src);
 	}
 }
 
@@ -3974,33 +3986,22 @@ static void declared_release_all(struct hearing *h)
 static void topo_ensure(struct hearing *h, const char *parent, uint16_t vid, uint64_t now)
 {
 	const struct reac_topo_vlan *v = reac_topo_vlan_find(&h->topo, parent, vid);
-	/* WHO SENT IT AND WHERE IT ARRIVED (#102). A verdict of one frame on a cable
-	 * tcpdump says is silent cost a night; the line now carries the sender's MAC and
-	 * the ifindex the frame was attributed to, so the next such report is answered from
-	 * the journal. No tap (a parent past the tap bound) prints zeros, which is itself
-	 * the answer: nothing attributed it. */
-	const struct topo_tap *tp = tap_find(h, parent);
-	static const uint8_t NOMAC[6];
-	const uint8_t *src = tp ? tp->last_tagged_src : NOMAC;
-	/* AND SINCE libreac 1.5.0 THERE ARE TWO KINDS OF EVIDENCE, so there are two lines. A
-	 * tag on ANY ethertype names a VLAN — that is how a COLD one is found, and on a cold
-	 * rig it is the only evidence there is (the 2026-09-16 spec, amendment 2026-09-22).
-	 * Saying "tagged REAC heard" over an LLDP frame would be the #102 report again with
-	 * the evidence INVENTED this time instead of misattributed, so the REAC line is
-	 * printed only for a VID that has really carried REAC here. */
-	if (topo_reac_on_vid(tp, vid))
-		fprintf(stderr, "reac-pw: [%s] tagged REAC heard — vid %u (%lu frame(s)) from "
-		        "%02x:%02x:%02x:%02x:%02x:%02x on ifindex %u: this parent is a TRUNK, "
-		        "its VLANs are the segments\n", parent, (unsigned)vid,
-		        v ? v->frames : 0UL, src[0], src[1], src[2], src[3], src[4], src[5],
-		        tp ? tp->ifindex : 0u);
-	else
-		fprintf(stderr, "reac-pw: [%s] VLAN %u heard — %lu tagged frame(s), none of "
-		        "them REAC: the switch carries this VID on this trunk. A tag names a "
-		        "VLAN whatever it carries, so the segment is served and its role is "
-		        "decided on it like any other wire; a box that is only cold has "
-		        "somewhere to arrive now\n",
-		        parent, (unsigned)vid, v ? v->frames : 0UL);
+	/* THIS LINE IS ABOUT A VLAN EXISTING, AND SINCE libreac 1.5.0 THAT IS ALL IT MAY
+	 * CLAIM. A tag on ANY ethertype names a VLAN — that is how a COLD one is found, and on
+	 * a cold rig it is the only evidence there is (the 2026-09-16 spec, amendment
+	 * 2026-09-22). Whether REAC rides this VID is a different fact, said by
+	 * topo_note_reac_vid() at the frame that makes it true; saying it here would depend on
+	 * which frame won a race, and over an LLDP frame it would be the #102 report again with
+	 * the evidence INVENTED rather than misattributed.
+	 *
+	 * THE FRAME COUNT IS THE CONTROL AND IT STAYS: a detector that saw nothing cannot
+	 * print one, which is what segments-autodetect's arm d reads. */
+	fprintf(stderr, "reac-pw: [%s] tagged VLAN heard — vid %u (%lu frame(s)): a tag names "
+	        "a VLAN whatever carries it, so this VID is a segment of this trunk%s\n",
+	        parent, (unsigned)vid, v ? v->frames : 0UL,
+	        reac_topo_is_trunk(&h->topo, parent) ? ""
+	                : " — nothing REAC has been heard on this parent yet, which is exactly"
+	                  " what a cold rig looks like");
 
 	char name[IFNAMSIZ];
 	if (reac_vlan_name(parent, vid, name, sizeof name) != 0) {
