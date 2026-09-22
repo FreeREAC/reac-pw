@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.22',
+  version: '1.0.23',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -84,7 +84,12 @@ m_dep        = cc.find_library('m', required : false)
 # #18, measured at 88 632 foreign frames over 400 opens on 1.2.1). Against 1.2.1 this
 # daemon builds and runs and misclassifies a cold parent as a trunk on start, which is
 # the defect of 2026-09-14 — invisible to a symbol floor.
-libreac_dep = dependency('libreac', version : '>=1.2.2',
+# >=1.4.0 SINCE 1.0.23: <reac/reac_knock.h> and <reac/reac_tapwait.h> moved into libreac
+# (operator ruling 2026-09-22 — deciding what a wire is belongs to the library; reac-pw
+# deals with enrolled nodes). Against an older libreac this build dies at main.c's
+# #include, which is a loud enough failure; the floor is raised so it arrives at configure
+# time instead, and so tests/test_reac_enrolment_binding.c's own #error has a partner.
+libreac_dep = dependency('libreac', version : '>=1.4.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -143,8 +148,6 @@ reac_pw_src = [
   'src/reac_knobs.c',
   'src/reac_box_pin.c',
   'src/reac_watch.c',
-  'src/reac_knock.c',
-  'src/reac_tapwait.c',
   'src/reac_wake.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
@@ -1320,30 +1323,23 @@ wake_test = executable('test_reac_wake',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_wake', wake_test)
 
-# --- unit test: the KNOCK, which wakes a cold stagebox on a wire nobody pinned -----
-# A box in slave mode transmits nothing until a master announces to it, so hearing alone
-# can never wake one that was powered before the daemon (rig, 2026-09-08 22:10: two boxes
-# cabled and carrier-up, zero frames in eight seconds). This pins BOTH halves: nothing is
-# ever emitted before the wire has been observed masterless for the listening window, and
-# the first frame from anybody ends the knocking for good. Pure; no socket.
-knock_test = executable('test_reac_knock',
-  ['tests/test_reac_knock.c', 'src/reac_knock.c'],
-  include_directories : [include_directories('src')],
+# --- BINDING test: the enrolment decisions this daemon links against -------------
+# THE TWO STATE MACHINES MOVED TO libreac 1.4.0 (its own tests/test_reac_knock.c and
+# tests/test_reac_tapwait.c assert the arithmetic, where a libreac change can see them go
+# red). What is left here is the only question reac-pw can answer and libreac cannot: does
+# the library THIS BINARY IS LINKED AGAINST still carry the two rules main.c's poll depends
+# on? It calls the installed surface -- no reac-pw source, no local header -- and asserts
+# the pair the desk paid nine minutes for on 2026-09-21:
+#
+#   a cancelled masterless observation RE-OPENS, measured from the last frame heard
+#   an unplaced sighting stops binding the hunt once it is stale
+#
+# A floor bump that silently picked up a library without them, or a libreac that reverted
+# either latch, fails HERE, at reac-pw's own gate, instead of on a desk. Pure; no socket.
+enrolment_binding_test = executable('test_reac_enrolment_binding',
+  ['tests/test_reac_enrolment_binding.c'],
   dependencies : [libreac_dep, libreac_transport_dep])
-test('reac_knock', knock_test)
-
-# --- unit test: the TAPWAIT, a sighting the topology tap has not placed yet --------
-# Two sockets over one netdev: the sniffer cannot tell a tagged frame from an untagged
-# one, so the hunt waits for the tap before electing a role — otherwise a trunk parent is
-# driven beside the masters on its own VLANs. The wait was two EVER questions, and on
-# 2026-09-21 one misattributed frame therefore suspended role election on a direct cable
-# for nine minutes with a cold box on the far end. Both halves: the wait that prevents the
-# trunk fault, and the expiry that hands a silent wire back. Pure; no socket.
-tapwait_test = executable('test_reac_tapwait',
-  ['tests/test_reac_tapwait.c', 'src/reac_tapwait.c'],
-  include_directories : [include_directories('src')],
-  dependencies : [libreac_dep, libreac_transport_dep])
-test('reac_tapwait', tapwait_test)
+test('reac_enrolment_binding', enrolment_binding_test)
 
 # --- unit test: --role selection parsing (master default, slave needs --tx) -----
 # Compiles a tiny harness that exercises the same role-parse + validation logic
