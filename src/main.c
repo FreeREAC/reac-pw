@@ -2909,15 +2909,11 @@ static struct sniffer *sniffer_find(struct hearing *h, const char *name)
 	return NULL;
 }
 
-/* A sniffer's socket is readable: read it dry, classify, and tell the table
- * about the first frame that IS REAC gear. Never transmits, never touches a
- * listener. */
-static void on_sniff_io(void *data, int fd, uint32_t mask)
+/* Read a sniffer's socket dry, classify, and tell the table about the first frame that IS
+ * REAC gear. Never transmits, never touches a listener, so it is safe to call from the
+ * poll as well as from the socket's own callback. */
+static void sniffer_drain(struct sniffer *sn)
 {
-	(void)fd;
-	struct sniffer *sn = data;
-	if (!(mask & SPA_IO_IN))
-		return;
 	uint8_t frame[2048];
 	uint64_t now = monotonic_ns();
 	for (int i = 0; i < 64; i++) {
@@ -2963,6 +2959,15 @@ static void on_sniff_io(void *data, int fd, uint32_t mask)
 		        sight.model ? " " : "", sight.model ? sight.model->display : "",
 		        sight.channels);
 	}
+}
+
+/* A sniffer's socket is readable. */
+static void on_sniff_io(void *data, int fd, uint32_t mask)
+{
+	(void)fd;
+	if (!(mask & SPA_IO_IN))
+		return;
+	sniffer_drain(data);
 }
 
 static void sniffer_close(struct hearing *h, const char *name)
@@ -4310,6 +4315,21 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		const struct reac_ifscan_entry *e = reac_ifscan_find(&h->scan, sn->name);
 		if (!e || e->state != REAC_IFSCAN_LINKED)
 			continue;   /* already a segment, or on the serve-failed retry hold */
+		/* THE WIRE IS ASKED HERE, NOT THE SCHEDULER. Both questions below — the
+		 * tap-authority wait and the masterless licence — are answered from
+		 * `last_heard_ns`, a stamp only this socket's callback advances. Serving a
+		 * segment runs to completion inside this same loop, and serving one pinned box
+		 * takes about 530 ms: longer than REAC_KNOCK_LISTEN_NS. So the frames a busy
+		 * wire delivered during that work sit unread in the socket queue while the
+		 * licence's window closes over them, and the daemon takes a wire that a box
+		 * master is filling at 2000 fps (measured 2026-09-22: 349 frames read, then the
+		 * same 349 across a 530 ms poll gap, then DRIVE, then the yield back to SLAVE
+		 * the instant the queue was finally drained).
+		 *
+		 * Reading the socket at the point of decision closes it for good: every frame
+		 * that arrived is either already stamped by the callback or is still queued and
+		 * is stamped now, so silence here IS the wire's silence. */
+		sniffer_drain(sn);
 		/* A TRUNK PARENT IS NOT A SEGMENT. It receives every sub-interface's frames
 		 * with the tag gone (reac_topo.h, fact B), so a role elected here would be
 		 * elected over another VLAN's box and answered UNTAGGED onto the native
