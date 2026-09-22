@@ -1,6 +1,9 @@
 # build dirs
 /build/
 /builddir/
+# a lane builds beside the default one (tools/build-with-libreac.sh takes the name), so
+# `git status` in a worktree is not buried under an untracked build tree
+/build-*/
 
 # meson subproject checkouts (fetched by the wrap; packagefiles are tracked)
 /subprojects/libreac/
