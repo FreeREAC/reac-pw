@@ -21,11 +21,11 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # (operator ruling 2026-09-22 — deciding what a wire is belongs to libreac, this daemon deals
 # with enrolled nodes). Against an older libreac the build dies at the #include; the floor is
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
-BuildRequires:  pkgconfig(libreac) >= 1.4.0
+BuildRequires:  pkgconfig(libreac) >= 1.5.0
 # libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.4.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.5.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
