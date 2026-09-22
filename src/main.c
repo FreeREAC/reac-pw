@@ -92,8 +92,8 @@
 #include <reac/transport/reac_vlan.h>       /* the <parent>.<vid> netdevs the answer needs */
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
-#include "reac_knock.h"      /* waking a cold box on a wire nobody pinned */
-#include "reac_tapwait.h"    /* how long an unplaced sighting holds the hunt off a wire */
+#include <reac/reac_knock.h>      /* waking a cold box on a wire nobody pinned */
+#include <reac/reac_tapwait.h>    /* how long an unplaced sighting holds the hunt off a wire */
 #include "reac_wake.h"       /* waking a box that DROPPED, which no frame can do */
 #include <reac/transport/reac_carrier.h>    /* is there a cable in this interface */
 #include "reac_node_recover.h" /* what to do about a node we built that is not there */
