@@ -196,6 +196,20 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Tue Sep 22 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.24-1
+- A VLAN HEARD FROM ANY TAG IS A SEGMENT, AND THE JOURNAL SAYS WHICH (operator ruling
+  2026-09-22; docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amended
+  that date). libreac 1.5.0's topology tap now reports a VID from any tagged frame, so a
+  trunk's cold VLANs are minted from the switch's own STP/LLDP/ARP instead of declared;
+  "REAC heard on this vid" is said at the frame, not at the netdev. Floors: libreac and
+  libreac-transport >= 1.5.0.
+- The masterless licence reads the socket at the point of decision. hearing_hunt() judged
+  "no REAC heard in 500 ms" from a stamp only the sniffer callback advanced, while serving a
+  segment blocked the loop ~530 ms: a wire carrying 2000 fps read as silent, the daemon took
+  it as MASTER and yielded back. Measured, bisected to the knock re-open of 1.0.22, fixed by
+  draining the sniffer before the licence (docs/design/notes/2026-09-22-a-starved-poll-called-
+  a-busy-wire-silent.md). box-is-not-re-decided green; the loop block itself is still owed.
+
 * Tue Sep 22 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.23-1
 - DECIDING WHAT A WIRE IS IS NOT THIS DAEMON'S JOB (operator ruling 2026-09-22; libreac
   docs/design/specs/2026-09-22-enrolment-decisions-belong-to-the-library.md). 1.0.22 had
