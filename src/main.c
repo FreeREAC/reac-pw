@@ -2740,15 +2740,12 @@ struct topo_tap {
  * renegotiation and a switch port coming out of listening state. */
 #define REACPW_TRUNK_RECLASSIFY_NS REAC_HUNT_WINDOW_NS
 
-/* One declared segment and what the daemon did about it. `minted` is the whole exit
- * contract: what we created we remove, what we adopted we leave. */
+/* One declared segment: a name the operator wrote, reported at start. It mints nothing
+ * (2026-09-23); the role/ignore it pins are read by name from g_segconf when the VID is
+ * heard and minted by the heard table like any other. */
 struct declared_seg {
 	struct reac_declared_vlan d;
 	char name[IFNAMSIZ];        /* `<parent>.<vid>`, resolved once */
-	int  present;               /* the netdev is there and up */
-	int  minted;                /* WE created it, so the exit takes it away */
-	int  said_waiting;          /* the "parent is not here yet" line is printed once */
-	int  said_failed;           /* and so is the refusal, until it next succeeds */
 };
 
 struct hearing {
@@ -2763,13 +2760,12 @@ struct hearing {
 	struct pw_loop *loop;
 	int forced_rate;            /* a whole-invocation --rate, applied to every heard segment */
 	unsigned long served, dropped;
-	/* THE DECLARED SEGMENTS, which do not wait to be heard (reac_declared_vlan.h). A
-	 * separate ledger from reac_topo's on purpose: that one releases a VID silent for
-	 * 30 s, and silence is a declared segment's STARTING condition on a cold rig. */
+	/* THE DECLARED SEGMENTS (reac_declared_vlan.h): the names the operator wrote, for the
+	 * start-up report. Their netdevs are the heard table's — minted when the VID is heard,
+	 * released when it is silent — since 2026-09-23. */
 	struct declared_seg decl[REAC_DECLARED_VLAN_MAX];
 	int n_decl;
 	int decl_full;              /* the scan hit REAC_DECLARED_VLAN_MAX; reported, not hidden */
-	int decl_recheck;           /* an RTM_NEWLINK arrived: look at the parents again */
 };
 
 static struct hearing g_hear;
@@ -3866,110 +3862,23 @@ static void topo_forget_iface(struct hearing *h, const char *name, uint64_t now)
 
 /* ---- THE DECLARED SEGMENTS ------------------------------------------------ *
  *
- * A DECLARATION DOES NOT WAIT TO BE HEARD. reac_topo mints `<parent>.<vid>` when a tagged
- * REAC frame arrives on the trunk; on a cold boot no such frame can arrive, because every
- * box on the trunk is a SLAVE and a slave says nothing until a master speaks — and the
- * master cannot speak until its segment's netdev exists. Measured on the desk 2026-09-15,
- * after a reboot: every declared segment dead, every box unenrolled, no error anywhere.
- * So a segment the operator DECLARED is minted at start, and again whenever its parent
- * turns up, whatever the wire has or has not said. See reac_declared_vlan.h.
- *
- * THE PARENT MAY NOT BE THERE YET, AND THAT IS ORDINARY. The daemon can start before
- * NetworkManager has brought the trunk up, so "no such parent" is a state to come back
- * from, not a failure: it is said once and retried on every RTM_NEWLINK the interface
- * watch already delivers. */
-static int declared_find(struct hearing *h, const char *parent, uint16_t vid)
-{
-	for (int i = 0; i < h->n_decl; i++)
-		if (h->decl[i].d.vid == vid && strcmp(h->decl[i].d.parent, parent) == 0)
-			return i;
-	return -1;
-}
-
-static void declared_ensure_one(struct declared_seg *ds)
-{
-	if (ds->present)
-		return;
-	/* THE PARENT FIRST. A VLAN can be created over a parent that is DOWN — it only has
-	 * to EXIST — which is exactly why this does not wait for carrier: a trunk whose
-	 * switch port comes up a minute later must not cost the rig a minute of silence. */
-	if (!if_nametoindex(ds->d.parent)) {
-		if (!ds->said_waiting) {
-			fprintf(stderr, "reac-pw: [%s] declared, and its parent %s is not on "
-			        "this host yet — it is minted the moment the parent appears\n",
-			        ds->name, ds->d.parent);
-			ds->said_waiting = 1;
-		}
-		return;
-	}
-
-	int ours = 0;
-	int present = reac_vlan_query(ds->name, &ours);
-	if (present == 1) {
-		if (reac_vlan_up(ds->name) != 0) {
-			if (!ds->said_failed) {
-				fprintf(stderr, "reac-pw: [%s] declared and present, and could "
-				        "not be brought up: %s — the segment stays dead\n",
-				        ds->name, strerror(errno));
-				ds->said_failed = 1;
-			}
-			return;
-		}
-		ds->present = 1;
-		ds->minted  = ours;   /* a leaked mint is re-owned, never left to accumulate */
-		ds->said_failed = 0;
-		fprintf(stderr, "reac-pw: [%s] declared: %s — up and serving\n", ds->name,
-		        ours ? "re-owned, it carries our mint alias from a previous run"
-		             : "adopted, the host made it and it survives us");
-		return;
-	}
-	if (present == 0 && reac_vlan_create(ds->d.parent, ds->d.vid) == 0) {
-		ds->present = 1;
-		ds->minted  = 1;
-		ds->said_failed = 0;
-		fprintf(stderr, "reac-pw: [%s] declared and absent: created over %s "
-		        "(marked %s) — it goes when we do\n",
-		        ds->name, ds->d.parent, REAC_VLAN_ALIAS);
-		return;
-	}
-	/* REPORT, NEVER FAIL DEAF, and name the one command that fixes it. */
-	if (!ds->said_failed) {
-		int e = errno;
-		fprintf(stderr, "reac-pw: [%s] is DECLARED and cannot be created (%s)%s — "
-		        "this segment is dead until it is. Either grant the capability, or:\n"
-		        "         ip link add link %s name %s type vlan id %u && ip link set %s up\n",
-		        ds->name, strerror(e), e == EPERM ? " — CAP_NET_ADMIN is missing" : "",
-		        ds->d.parent, ds->name, (unsigned)ds->d.vid, ds->name);
-		ds->said_failed = 1;
-	}
-}
-
-/* Every declared segment, every time. Cheap: one if_nametoindex per entry that is not
- * already up, and nothing at all for one that is. */
-static void declared_ensure(struct hearing *h)
-{
-	for (int i = 0; i < h->n_decl; i++) {
-		struct declared_seg *ds = &h->decl[i];
-		/* A NETDEV THAT WENT AWAY IS NOT STILL PRESENT. The parent can be unplugged
-		 * and re-minted by the host, or someone can delete the sub-interface; the
-		 * cheap re-check is what makes the next pass put it back. */
-		if (ds->present && reac_vlan_query(ds->name, NULL) != 1) {
-			fprintf(stderr, "reac-pw: [%s] declared segment's netdev is GONE — "
-			        "re-ensuring it\n", ds->name);
-			ds->present = 0;
-			ds->said_waiting = 0;
-		}
-		declared_ensure_one(ds);
-	}
-}
-
-/* Read the declarations once, at start. */
+ * A DECLARATION MINTS NOTHING (operator ruling 2026-09-23, segments spec amendment of that
+ * date: "we don't carry any VLANs if we don't detect VLANs"). `[segment <parent>.<vid>]` is
+ * a statement about a VLAN IF IT EXISTS: its role and ignore apply the moment that VID is
+ * heard on the parent and topo_ensure() below mints it by the same rule as any other tag.
+ * Until 2026-09-23 the table was minted at start and whenever the parent appeared — the
+ * cold-boot reasoning of 2026-09-15 (a slave says nothing until a master speaks) — and the
+ * desk paid for it every boot: three VLANs minted on a parent that hears no tag, three
+ * vacant tap doors, three roster rows, re-created after every drop of the parent
+ * (docs/design/evidence/reac-pw-boot-2026-09-23.log lines 15-47, 101-131). The 2026-09-22
+ * rule hears a VID from ANY tagged frame, so a cold trunk names its VLANs by itself; what
+ * is left of "declared" is the report below and the role/ignore the file pins. */
 static void declared_load(struct hearing *h)
 {
 	/* A DECLARATION IS A SECTION IN THE OVERRIDE FILE, NOT A KEY NAME (spec §2).
 	 * reac_declared_vlan read `REAC_ROLE_<parent>.<vid>`'s NAME to mint a netdev before
-	 * anything was heard — the cold-boot fix of 2026-09-15, which is real and is kept —
-	 * but the declaration then outlived what declared it: three master VLANs were left
+	 * anything was heard — the cold-boot fix of 2026-09-15, withdrawn 2026-09-23 — but
+	 * the declaration then outlived what declared it: three master VLANs were left
 	 * standing on a 100 Mbit port with no box on any of them (auto-role §5d). Naming a
 	 * segment in this file is an explicit act; a role projection is a side effect. */
 	struct reac_declared_vlan tab[REAC_DECLARED_VLAN_MAX];
@@ -3981,7 +3890,7 @@ static void declared_load(struct hearing *h)
 		h->decl_full = 1;
 		n = REAC_DECLARED_VLAN_MAX;
 		fprintf(stderr, "reac-pw: more than %d declared VLAN segments — the rest are "
-		        "NOT minted (bounded, reported)\n", REAC_DECLARED_VLAN_MAX);
+		        "NOT reported (bounded, reported)\n", REAC_DECLARED_VLAN_MAX);
 	}
 	for (int i = 0; i < n && i < REAC_DECLARED_VLAN_MAX; i++) {
 		struct declared_seg *ds = &h->decl[h->n_decl];
@@ -4000,27 +3909,9 @@ static void declared_load(struct hearing *h)
 	fprintf(stderr, "reac-pw: %d declared VLAN segment(s):", h->n_decl);
 	for (int i = 0; i < h->n_decl; i++)
 		fprintf(stderr, " %s", h->decl[i].name);
-	fprintf(stderr, " — each is minted and brought up now, and again whenever its "
-	        "parent appears\n");
-}
-
-/* The exit's half of the contract, beside reac_topo's. */
-static void declared_release_all(struct hearing *h)
-{
-	for (int i = 0; i < h->n_decl; i++) {
-		struct declared_seg *ds = &h->decl[i];
-		if (!ds->minted)
-			continue;
-		if (reac_vlan_delete(ds->name) == 0)
-			fprintf(stderr, "reac-pw: [%s] removed — it was declared and we created "
-			        "it, so we take it away\n", ds->name);
-		else
-			fprintf(stderr, "reac-pw: [%s] was ours and could not be removed: %s — "
-			        "the next start re-owns it by its alias\n",
-			        ds->name, strerror(errno));
-		ds->minted = 0;
-		ds->present = 0;
-	}
+	fprintf(stderr, " — none is minted until a tagged frame with its VID is heard on its "
+	        "parent (we don't carry any VLANs if we don't detect VLANs, 2026-09-23); the "
+	        "declaration pins the segment's role when it is\n");
 }
 
 /* One ENSURE: adopt what is there, create what is not, and say which. */
@@ -4052,18 +3943,8 @@ static void topo_ensure(struct hearing *h, const char *parent, uint16_t vid, uin
 		reac_topo_ensure_failed(&h->topo, parent, vid, now);
 		return;
 	}
-	/* A DECLARED SEGMENT IS NOT THE HEARD TABLE'S TO OWN. Its netdev already exists —
-	 * declared_ensure made it before any frame arrived — and its lifetime is the
-	 * daemon's, not this VID's silence hold. Recorded as ADOPTED (`minted = 0`), which
-	 * is exactly the flag that stops reac_topo_release deleting it 30 s into a quiet
-	 * show; declared_release_all is what removes it, and only if we minted it. */
-	if (declared_find(h, parent, vid) >= 0) {
-		reac_topo_ensured(&h->topo, parent, vid, 0);
-		fprintf(stderr, "reac-pw: [%s] vid %u: %s was already up — it is DECLARED, so "
-		        "it is served and its netdev outlives any silence on this VID\n",
-		        parent, (unsigned)vid, name);
-		return;
-	}
+	/* A DECLARED VID IS MINTED HERE LIKE ANY OTHER (2026-09-23): the declaration pins
+	 * its role, not its lifetime. It is ours, and it goes when its silence hold says. */
 	int ours = 0;
 	int present = reac_vlan_query(name, &ours);
 	if (present == 1) {
@@ -4306,13 +4187,6 @@ static void hearing_apply(struct hearing *h)
 		        "NOT watched (bounded, reported)\n", h->scan.unbounded, REAC_IFSCAN_MAX);
 		h->scan.unbounded = 0;
 	}
-	/* THE PARENT MAY HAVE JUST APPEARED. The interface watch's own RTM_NEWLINK is the
-	 * event that says so, and it is already being drained here — a declared VLAN needs
-	 * no second netlink socket to be re-ensured on it. */
-	if (h->decl_recheck) {
-		h->decl_recheck = 0;
-		declared_ensure(h);
-	}
 }
 
 static void on_hearing_nl_io(void *data, int fd, uint32_t mask)
@@ -4321,10 +4195,6 @@ static void on_hearing_nl_io(void *data, int fd, uint32_t mask)
 	struct hearing *h = data;
 	if (mask & SPA_IO_IN) {
 		reac_ifscan_drain(&h->scan, monotonic_ns());
-		/* An RTM_NEWLINK arrived: a parent may have appeared. hearing_apply, on the
-		 * poll, is where the ensure is actually done — every verb this block owns is
-		 * applied from the poll, never from inside a callback. */
-		h->decl_recheck = 1;
 	}
 }
 
@@ -4904,9 +4774,8 @@ static int hearing_start(struct hearing *h, struct pw_loop *loop, struct listene
 		return -1;
 	}
 	h->enabled = 1;
-	/* THE DECLARED SEGMENTS, BEFORE ANYTHING IS HEARD — that is the whole point. */
+	/* THE DECLARED SEGMENTS — reported, and minted only when heard (2026-09-23). */
 	declared_load(h);
-	declared_ensure(h);
 	int eth = 0;
 	for (int i = 0; i < REAC_IFSCAN_MAX; i++)
 		if (h->scan.ifs[i].state != REAC_IFSCAN_ABSENT)
@@ -4933,7 +4802,6 @@ static void hearing_stop(struct hearing *h)
 	while (reac_topo_next(&h->topo, &ev))
 		if (ev.verb == REAC_TOPO_RELEASE)
 			topo_release(h, ev.parent, ev.vid, ev.minted);
-	declared_release_all(h);
 	for (int i = 0; i < REAC_TOPO_MAX_PARENTS; i++)
 		if (h->tap[i].parent[0])
 			topo_unwatch_iface(h, h->tap[i].parent);

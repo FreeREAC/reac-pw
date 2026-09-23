@@ -525,21 +525,20 @@ test('reac_segments_autodetect',
   args : [reac_pw_exe],
   timeout : 300)
 
-# --- whole-binary test: a DECLARED VLAN segment is minted before anything is heard ---
+# --- whole-binary test: a DECLARED VLAN waits for its tag (operator ruling 2026-09-23) ---
 #
-# reac_topo mints `<parent>.<vid>` when it HEARS a tagged REAC frame; on a cold boot no
-# such frame can arrive, because every box on the trunk is a slave and a slave says
-# nothing until a master speaks -- which needs the netdev that is not there. The desk met
-# exactly that after a reboot on 2026-09-15: every declared segment dead, every box
-# unenrolled, no error anywhere. This drives the real binary in a private user+net+pid
-# namespace with a declared segment whose netdev does NOT exist, and requires it to be
-# there and up with no frame ever sent; then with the PARENT missing at start, appearing
-# later; then requires the exit to take away exactly what it minted.
-test('reac_declared_vlan_is_minted',
-  find_program('tests/declared-vlan-is-minted.sh'),
+# "We don't carry any VLANs if we don't detect VLANs." Until 2026-09-23 a declared
+# `<parent>.<vid>` was minted at start; the desk paid three vacant tap doors per boot on a
+# parent that hears no tag. Now the real binary, in a private user+net+pid namespace, must
+# mint NOTHING for two declared VIDs on a present parent in four seconds of silence, leave a
+# host-made sub-interface alone, mint the declared VID the moment libreac's fake box master
+# transmits inside it on the far end (the kernel tags every frame), report the declared role
+# on it, and remove on exit only what it minted. Red on 1623184, which minted both at once.
+test('reac_declared_vlan_waits_for_its_tag',
+  find_program('tests/declared-vlan-waits-for-its-tag.sh'),
   suite : 'netns',
   is_parallel : false,
-  args : [reac_pw_exe],
+  args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
 # --- unit test: the ETF catch-up budget, and "unreadable is not zero" --------
