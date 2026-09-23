@@ -81,6 +81,7 @@ enum reac_wake_refusal {
 	REAC_WAKE_NO_CARRIER,        /* no link to break; only the cable fixes this     */
 	REAC_WAKE_CARRIER_UNKNOWN,   /* -1 is not 0; an unreadable probe is not evidence */
 	REAC_WAKE_BOX_IS_TALKING,    /* rx_box_frames > 0: the far end is alive         */
+	REAC_WAKE_NOTHING_SENT,      /* our own frames are not leaving the host          */
 	REAC_WAKE_PUSH_NOT_PROVEN,   /* the cheap rung has not been played to the end   */
 	REAC_WAKE_SETTLING,          /* inside the settle window of the last edge       */
 	REAC_WAKE_SIBLING_SERVED,    /* this device carries other served segments       */
@@ -96,6 +97,15 @@ struct reac_wake_obs {
 	uint64_t rx_box_frames;    /* frames received from any box, ever, this pacer    */
 	uint64_t scene_pushes;     /* scene transfers COMPLETED since PROBING opened    */
 	int      siblings_served;  /* other segments served over this same device       */
+	/* FRAMES THAT LEFT THE HOST since the last observation — sendto() succeeded, not
+	 * merely attempted. A "completed" push is counted by the master when it has HANDED
+	 * its chunks to the pacer; whether the kernel then put them on the wire is this
+	 * number. Desk 2026-09-23 13:43: an etf root qdisc under a thread-backend pacer
+	 * refused every frame (tx=0, tx_errors=8000/s, 3.46 M by the end), the master
+	 * counted 145 "COMPLETED" pushes over a wire that carried none of them, and the
+	 * ladder bounced a port twice and gave up on a box that had never heard us. Zero
+	 * here is a fact about US, and it refuses the edge before any fact about the box. */
+	uint64_t tx_frames;
 };
 
 struct reac_wake {
@@ -104,6 +114,7 @@ struct reac_wake {
 	unsigned bounces;          /* edges made on this segment                        */
 	int      spent_said;       /* ACT_EXHAUSTED has been returned; never twice      */
 	enum reac_wake_refusal refusal;  /* why the last step did nothing               */
+	enum reac_wake_refusal said;     /* the refusal last handed to the journal      */
 };
 
 /* Open on a segment whose master has just entered PROBING. */
@@ -119,6 +130,14 @@ void reac_wake_reopen(struct reac_wake *w, uint64_t now_ns);
  * behind every ACT_NONE. */
 enum reac_wake_act reac_wake_step(struct reac_wake *w, uint64_t now_ns,
                                   const struct reac_wake_obs *o);
+
+/* SAY IT ONCE PER CHANGE OF FACT. After an ACT_NONE, returns 1 exactly once for each
+ * NEW refusal — the caller prints reac_wake_refusal_text(w->refusal) — and 0 while the
+ * same fact keeps refusing. Spec §4: "the daemon says it once". Until 2026-09-23 main.c
+ * printed nothing at all for ACT_NONE, so a ladder that never acted was indistinguishable
+ * from one that had never been asked; a reopen (the box enrolled and dropped) resets
+ * this, because the refusal that follows is about a new spell. OK is never said. */
+int reac_wake_refusal_to_say(struct reac_wake *w);
 
 /* The refusal, as the operator reads it in the journal. Never NULL. */
 const char *reac_wake_refusal_text(enum reac_wake_refusal r);

@@ -19,6 +19,15 @@ void reac_wake_reopen(struct reac_wake *w, uint64_t now_ns)
 {
 	w->opened_ns = now_ns;
 	w->refusal = REAC_WAKE_OK;
+	w->said = REAC_WAKE_OK;
+}
+
+int reac_wake_refusal_to_say(struct reac_wake *w)
+{
+	if (w->refusal == REAC_WAKE_OK || w->refusal == w->said)
+		return 0;
+	w->said = w->refusal;
+	return 1;
 }
 
 enum reac_wake_act reac_wake_step(struct reac_wake *w, uint64_t now_ns,
@@ -48,6 +57,14 @@ enum reac_wake_act reac_wake_step(struct reac_wake *w, uint64_t now_ns,
 		/* The far end is alive. Whatever is wrong, a PHY edge is not the remedy and
 		 * the frames already arriving are the evidence against it. */
 		w->refusal = REAC_WAKE_BOX_IS_TALKING;
+		return REAC_WAKE_ACT_NONE;
+	}
+	if (o->tx_frames == 0) {
+		/* NOTHING OF OURS IS REACHING THE WIRE. A box cannot have ignored a push it
+		 * never received, and a PHY edge would only make it flood at a master that
+		 * still cannot answer. The fault is on this side of the socket — the qdisc,
+		 * the backend, the capability — and the edge is refused until a frame leaves. */
+		w->refusal = REAC_WAKE_NOTHING_SENT;
 		return REAC_WAKE_ACT_NONE;
 	}
 	if (o->siblings_served) {
@@ -93,6 +110,9 @@ const char *reac_wake_refusal_text(enum reac_wake_refusal r)
 	case REAC_WAKE_NO_CARRIER:      return "there is no carrier to break";
 	case REAC_WAKE_CARRIER_UNKNOWN: return "the carrier could not be read";
 	case REAC_WAKE_BOX_IS_TALKING:  return "a box is transmitting";
+	case REAC_WAKE_NOTHING_SENT:    return "our own frames are not leaving the host — "
+	                                       "every send has failed, so no push has reached "
+	                                       "the wire";
 	case REAC_WAKE_PUSH_NOT_PROVEN: return "our own scene push has not completed yet";
 	case REAC_WAKE_SETTLING:        return "the last edge is still settling";
 	case REAC_WAKE_SIBLING_SERVED:  return "other segments are served over this device";

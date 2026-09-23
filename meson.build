@@ -610,6 +610,22 @@ test('reac_box_wakes_on_a_phy_edge',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
+# --- whole-binary: frames the kernel refuses HOLD the ladder, said once (2026-09-23) ------
+#
+# The boot of 2026-09-23 13:43: the etf root qdisc the daemon had installed for the ETF
+# default stayed on the device when libreac refused ETF (TAI offset 0 before chrony), so
+# every thread-backend frame was dropped — tx=0, tx_errors=8000/s — while the master counted
+# "COMPLETED" pushes and the ladder spent two PHY edges on a box that had never heard us.
+# No box needed: the refusal is about us. The held arm adds the qdisc by hand under a
+# thread-backend daemon and requires NO edge in 40 s plus the refusal said exactly once;
+# the control arm is the same empty wire with frames leaving, which must be bounced.
+test('reac_wake_holds_when_nothing_is_sent',
+  find_program('tests/wake-holds-when-nothing-is-sent.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 240)
+
 # --- whole-binary: the split box enrols at its DECLARED width (2026-09-17) ---------
 #
 # The live defect of that morning: an S-4000H-0832 declaring 8 in / 32 out and returning
