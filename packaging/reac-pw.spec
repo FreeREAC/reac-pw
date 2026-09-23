@@ -196,6 +196,22 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Wed Sep 23 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.25-1
+- A NODE WHOSE SERVER DIED IS NOT ON THE GRAPH. A PipeWire restart two seconds after
+  enrolment (the 13:43 host boot) left the S-1608's streams UNCONNECTED with their node ids;
+  that read as on-graph, nothing was rebuilt, and the box stayed ESTABLISHED with no node for
+  49 minutes. UNCONNECTED now means absent: the pair is rebuilt together and the roster
+  lazily (tests/graph-survives-a-pipewire-restart.sh).
+- THE WAKE LADDER NEVER BOUNCES A WIRE IT IS NOT SENDING ON. Born with a TAI offset of 0,
+  the pacer lost ETF and dropped every frame under the etf qdisc while the master counted
+  pushes as COMPLETED, so the ladder bounced dead wires. New refusal NOTHING_SENT; every
+  refusal is said once per change ("the wake ladder on '<if>' holds: ..."); a refused ETF
+  removes its qdisc at once (docs/design/specs/2026-09-16-a-dropped-box-wakes-on-a-phy-edge.md
+  §4, §7).
+- DECLARED VLANS WAIT FOR THEIR TAG (operator ruling 2026-09-23: "we don't carry any VLANs
+  if we don't detect VLANs"). A declared segment mints nothing until its VID is heard; the
+  declaration only pins the role (segments spec, amended 2026-09-23).
+
 * Tue Sep 22 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.24-1
 - A VLAN HEARD FROM ANY TAG IS A SEGMENT, AND THE JOURNAL SAYS WHICH (operator ruling
   2026-09-22; docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amended
