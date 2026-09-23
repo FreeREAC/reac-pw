@@ -85,7 +85,8 @@ intent live over `reac.cfg.role` once the segment has announced. Stated and gate
 side in openmixer's `2026-08-20-reac-master-arbitration.md`, ninth amendment (2026-09-16).
 
 Writing `auto` still DECLARES the segment: `reac_declared_vlan.h` reads the KEY's name, never its
-value, so a declared VLAN is still minted at start.
+value. (A declared VLAN was minted at start until 2026-09-23; since the segments spec's amendment
+of that date it is minted only when its VID is heard, and the declaration pins its role then.)
 
 ## 5. Amendment, same day — two operator rulings
 

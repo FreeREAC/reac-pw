@@ -101,8 +101,12 @@ role = auto         # legal, and exactly the same as saying nothing
 
 - **`[segment <name>]`** — `<name>` is the interface name, which §5 of the trunk spec already
   rules IS the segment's identity. `[segment enp131s0.11]` names a VLAN sub-interface, and by
-  naming it DECLARES it: it is minted at start and whenever its parent appears, whether or not
-  anything has ever been heard on it (§2, and `reac_declared_vlan.h`'s cold-boot reason).
+  naming it DECLARES it. **Since the 2026-09-23 amendment a declaration mints nothing**: the
+  sub-interface is created by §1's own rule when a tagged frame with that VID is heard on the
+  parent, and the declaration is what pins its `role` / `ignore` when it is. (Until then it was
+  minted at start and whenever its parent appeared — the cold-boot reason in
+  `reac_declared_vlan.h` — which the operator withdrew: "we don't carry any VLANs if we don't
+  detect VLANs".)
 - **`role`** — the intent vocabulary `reac_role.h` already defines. It is the only thing that can
   pin a segment. `tap` remains a per-segment fact only; there is no host-wide role.
 - **`ignore`** — the segment is never sniffed, never served, never minted, and its netdev is left
@@ -548,3 +552,49 @@ reading a box that is not there, which is the defect this whole spec family exis
 are read OFF pw-dump (never the daemon's own diff), asserting `reac.roster.n` AND the absence of
 every `reac.roster.<i>.*` key for the departed group agree, with a populated roster before the
 drop as the positive control.
+
+## Amendment 2026-09-23 — a declared VLAN is not carried until it is detected
+
+**RULED by the operator, 2026-09-23:** *"we don't carry any VLANs if we don't detect VLANs."*
+
+**What it withdraws.** §3a's rule that naming `[segment <parent>.<vid>]` mints the sub-interface at
+start and whenever the parent appears, and the cold-boot reasoning behind it (2026-09-15,
+`reac_declared_vlan.h`: a slave says nothing until a master speaks, so a VLAN nobody has heard would
+never be minted, so nothing could be heard). That reasoning is superseded twice over: the
+2026-09-22 rule above hears a VID from ANY tagged frame the trunk port carries, not only REAC, so a
+cold trunk names its VLANs by itself; and the wake ladder (`2026-09-16-a-dropped-box-wakes-on-a-phy-
+edge.md`) is the answer to a box that is silent because it is waiting for a PHY edge. What the
+old rule cost, measured on the desk this morning (`docs/design/evidence/reac-pw-boot-2026-09-23.log`
+lines 15-47, 101-131): three declared VLANs minted on a parent that hears no tag at all — the S-1608
+on `enp131s0` is untagged — each published as a vacant tap door, each re-created after every drop of
+the parent, three roster rows reading `tap 0/0` on a console, for nothing.
+
+**The rule now.**
+
+- A `[segment <parent>.<vid>]` section is a statement about a VLAN **if it exists**: its `role` and
+  `ignore` apply the moment that VID is heard on that parent and its sub-interface is minted by §1's
+  rule (any tagged frame names the VID; tagged REAC makes the parent a trunk). Nothing is minted
+  at start, nothing when the parent appears, nothing on the strength of the file alone.
+- A minted VLAN's lifetime is the heard table's, declared or not: libreac's `reac_topo` releases a
+  VID silent for its hold and the daemon removes what it minted; the exit removes what it minted.
+  A declaration no longer makes a sub-interface "adopted" — that flag was the one thing keeping a
+  declared netdev alive through silence, and silence is exactly when the operator does not want it
+  carried.
+- A sub-interface the **host** made (NetworkManager, a hand `ip link add`) is an interface like any
+  other: the daemon hears on it, serves it if something is there, and never removes it. Unchanged.
+- The daemon still says at start how many segments are declared, and says that none is minted
+  until its tag is heard. A declaration that never meets its VID is a line in the journal and a
+  section in the file, which is where the operator put it.
+
+**Proven by.** `tests/declared-vlan-waits-for-its-tag.sh` — the real binary in a private
+user+net+pid namespace: two declared VIDs on a present parent and four seconds of silence leave
+NO netdev (red on `1623184`, which minted both at once); a host-made sub-interface on the same
+parent is untouched; then libreac's fake box master transmits inside VID 11 on the far end (the
+kernel tags every frame) and `<parent>.11` appears, up and carrying the mint alias, with the
+`role` from its section reported — the positive control that detection still mints a declared
+VID; and the exit removes what was minted and leaves the host's alone.
+
+**Not proven here.** The live trunk: whether the desk's switch port ever tags anything toward
+`enp131s0` today (this boot's journal says it does not), and therefore that the three declared
+VLANs in `50-openmixer.conf` are simply never carried after this lands. That is the main session's
+to read off the next settle: `reac.roster.n` should fall from 5 to 2.
