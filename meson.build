@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.24',
+  version: '1.0.25',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -525,21 +525,20 @@ test('reac_segments_autodetect',
   args : [reac_pw_exe],
   timeout : 300)
 
-# --- whole-binary test: a DECLARED VLAN segment is minted before anything is heard ---
+# --- whole-binary test: a DECLARED VLAN waits for its tag (operator ruling 2026-09-23) ---
 #
-# reac_topo mints `<parent>.<vid>` when it HEARS a tagged REAC frame; on a cold boot no
-# such frame can arrive, because every box on the trunk is a slave and a slave says
-# nothing until a master speaks -- which needs the netdev that is not there. The desk met
-# exactly that after a reboot on 2026-09-15: every declared segment dead, every box
-# unenrolled, no error anywhere. This drives the real binary in a private user+net+pid
-# namespace with a declared segment whose netdev does NOT exist, and requires it to be
-# there and up with no frame ever sent; then with the PARENT missing at start, appearing
-# later; then requires the exit to take away exactly what it minted.
-test('reac_declared_vlan_is_minted',
-  find_program('tests/declared-vlan-is-minted.sh'),
+# "We don't carry any VLANs if we don't detect VLANs." Until 2026-09-23 a declared
+# `<parent>.<vid>` was minted at start; the desk paid three vacant tap doors per boot on a
+# parent that hears no tag. Now the real binary, in a private user+net+pid namespace, must
+# mint NOTHING for two declared VIDs on a present parent in four seconds of silence, leave a
+# host-made sub-interface alone, mint the declared VID the moment libreac's fake box master
+# transmits inside it on the far end (the kernel tags every frame), report the declared role
+# on it, and remove on exit only what it minted. Red on 1623184, which minted both at once.
+test('reac_declared_vlan_waits_for_its_tag',
+  find_program('tests/declared-vlan-waits-for-its-tag.sh'),
   suite : 'netns',
   is_parallel : false,
-  args : [reac_pw_exe],
+  args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
 # --- unit test: the ETF catch-up budget, and "unreadable is not zero" --------
@@ -608,6 +607,22 @@ test('reac_box_wakes_on_a_phy_edge',
   suite : 'netns',
   is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
+  timeout : 240)
+
+# --- whole-binary: frames the kernel refuses HOLD the ladder, said once (2026-09-23) ------
+#
+# The boot of 2026-09-23 13:43: the etf root qdisc the daemon had installed for the ETF
+# default stayed on the device when libreac refused ETF (TAI offset 0 before chrony), so
+# every thread-backend frame was dropped — tx=0, tx_errors=8000/s — while the master counted
+# "COMPLETED" pushes and the ladder spent two PHY edges on a box that had never heard us.
+# No box needed: the refusal is about us. The held arm adds the qdisc by hand under a
+# thread-backend daemon and requires NO edge in 40 s plus the refusal said exactly once;
+# the control arm is the same empty wire with frames leaving, which must be bounced.
+test('reac_wake_holds_when_nothing_is_sent',
+  find_program('tests/wake-holds-when-nothing-is-sent.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
   timeout : 240)
 
 # --- whole-binary: the split box enrols at its DECLARED width (2026-09-17) ---------
@@ -793,6 +808,22 @@ test('reac_master_gone_is_re_decided',
 # without it the test SKIPS rather than passing while proving nothing.
 test('reac_no_box_no_node',
   find_program('tests/no-box-no-node.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 300)
+
+# --- whole-binary test: the pair and the roster OUTLIVE A PIPEWIRE RESTART ---------------
+#
+# Desk 2026-09-23 13:44 (docs/design/evidence/reac-pw-boot-2026-09-23.log): pipewire.service
+# was restarted two seconds after an S-1608 enrolled on enp131s0. libpipewire leaves a
+# stream whose server went away UNCONNECTED, with the node id it remembers, and the
+# node-recover ladder read that as "on the graph" — twelve minutes of a box whose LED said
+# enrolled, a roster row reading established, and no node for it anywhere. The same
+# fixture as its siblings; the server is killed and restarted under the enrolled box, and
+# the pair AND the roster node must come back as new ids, announced.
+test('reac_graph_survives_a_pipewire_restart',
+  find_program('tests/graph-survives-a-pipewire-restart.sh'),
   suite : 'netns',
   is_parallel : false,
   args : [reac_pw_exe, fake_box_path],

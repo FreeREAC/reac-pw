@@ -73,6 +73,13 @@ uint32_t reac_roster_node_id(const struct reac_roster_node *n);
 int reac_roster_node_publish(struct reac_roster_node *n,
                              const struct reac_roster_kv *kv, int n_kv);
 
+/* Is the roster node STILL on the graph? 0 once its filter is in error or UNCONNECTED —
+ * which is what libpipewire leaves behind when the server goes away under it (desk,
+ * 2026-09-23 13:44: pipewire.service restarted, the roster stayed a dead handle for seven
+ * minutes until a segment happened to leave). The caller's road is the same as for a
+ * departed group: destroy, and let the lazy path build a fresh one. */
+int reac_roster_node_on_graph(const struct reac_roster_node *n);
+
 void reac_roster_node_destroy(struct reac_roster_node *n);
 
 #endif /* REAC_ROSTER_NODE_H */
