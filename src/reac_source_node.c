@@ -653,6 +653,17 @@ int reac_source_node_on_graph(const struct reac_source_node *n, const char **why
 		uint32_t id = pw_stream_get_node_id(n->stream);
 		if (st == PW_STREAM_STATE_ERROR)
 			reason = err ? err : "the stream is in error";
+		else if (st == PW_STREAM_STATE_UNCONNECTED)
+			/* THE SERVER WENT AWAY UNDER IT. libpipewire answers a lost connection
+			 * by putting the stream back to UNCONNECTED — not ERROR, and it keeps
+			 * the node id it was given — so the two tests around this one both
+			 * PASSED a node that no longer existed. Desk, 2026-09-23 13:44:
+			 * pipewire.service was restarted two seconds after an S-1608 enrolled,
+			 * and for twelve minutes the box's LED said enrolled, the roster said
+			 * established, and the graph had nothing for it, with no line anywhere.
+			 * A stream that is not connected is on no graph, whatever id it
+			 * remembers (tests/graph-survives-a-pipewire-restart.sh). */
+			reason = "the stream is not connected — the PipeWire server went away";
 		else if (id == SPA_ID_INVALID)
 			reason = "the daemon has given it no node id";
 		else {

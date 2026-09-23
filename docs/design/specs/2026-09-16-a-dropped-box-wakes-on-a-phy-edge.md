@@ -68,6 +68,7 @@ the daemon can produce, on its OWN port, and it is the last rung of a ladder:
 | `NO_CARRIER` | there is no link to break; the cable is out and only the cable fixes it |
 | `CARRIER_UNKNOWN` | an unreadable probe is not evidence; -1 is not 0 (libreac's own rule) |
 | `BOX_IS_TALKING` | `rx_box_frames > 0`: the far end is alive and the fault is elsewhere |
+| `NOTHING_SENT` | (2026-09-23) no frame of ours left the host since the last step: a box cannot have ignored a push it never received, and an edge would make it flood at a master that still cannot answer — the fault is on this side of the socket |
 | `PUSH_NOT_PROVEN` | fewer than `REAC_WAKE_MIN_PUSHES` completed transfers: the cheap rung has not been played, and an incomplete push is measured to produce nothing (libreac §1's negative control) |
 | `SETTLING` | inside `REAC_WAKE_SETTLE_NS` of a bounce: the box needs its flood (~1.36 s), its cold-connect and our grant dwell (~1.7 s) before it has failed to answer |
 | `NOT_PROBING` | the master is granting or established; a bounce would tear down what works |
@@ -96,3 +97,67 @@ the daemon can produce, on its OWN port, and it is the last rung of a ladder:
 - What neither proves: that a REAL S-1608 answers the edge. That is one rig run — stop the
   daemon beside the dropped box, start it, and require `rx_box_frames > 0` and an enrolment with
   no cable touched — and it belongs to the main session.
+
+## 7. Amendment 2026-09-23 — the boot that spent its edges on a wire carrying nothing
+
+**The evidence** is `docs/design/evidence/reac-pw-boot-2026-09-23.log`, the user journal of the
+13:43 boot, and it corrects the question this lane was opened on. The ladder DID fire: edge 1 of 2
+on both `enp131s0` and `enp128s20f0u6` at 13:43:52 (lines 85, 87), edge 2 on `enp128s20f0u6` at
+13:44:13 and "did not answer 2 PHY edges … nothing left to try" at 13:44:14 (lines 176-187). The
+`reac-master:` lines carry no segment tag, and the `[N.442564]` watchdog that ran to "145
+COMPLETED scene push(es)" belongs to the `enp128s20f0u6` master (its LINK-UP at `[82.442693]`
+follows "'enp128s20f0u6' is back up", line 185-186), not to `enp131s0`. The S-1608
+(`00:40:ab:c4:80:41`) is on `enp131s0` and joined at 13:44:01 (lines 148-169); the S-0808
+(`00:40:ab:c4:dc:9c`) is on `enp128s20f0u6` and joined at 13:50:58 (lines 447-458) after the
+operator's replug at 13:50:53.
+
+**What the edges were made over.** The daemon started before chrony had set the kernel's TAI
+offset; libreac refused the ETF backend ("the kernel's TAI offset is 0", lines 58, 69) and ran the
+thread backend — under the etf root qdisc the daemon had ALREADY installed for the ETF default
+(lines 54, 65; the arm precedes the open). With `skip_sock_check` that qdisc drops every unstamped
+frame: `tx=0 tx_errors=81552` ten seconds in (lines 80, 83), 3 460 957 by the `enp128s20f0u6`
+master's shutdown (line 425). The master's push counter counts chunks handed to the pacer, not
+frames the kernel launched, so `scene_pushes` climbed over a wire carrying nothing of ours; the
+ladder read the cheap rung as played, bounced twice, and gave up on a box that had never heard a
+master. `enp131s0` recovered by ACCIDENT: its edge overshot the 3 s hold (a PCIe PHY renegotiates
+slowly), the segment was dropped and re-served at 13:43:59 with a fresh pacer — by then TAI 37,
+ETF ran, `tx_errors=0` (line 147) — and the S-1608 flooded and joined within two seconds. The
+USB NIC's edge stayed inside the hold, so its dead pacer lived on until the replug re-served it
+the same way and the S-0808 enrolled in one second.
+
+**Three changes, one defect seen from three layers** (commit `wake: frames the kernel refuses
+hold the ladder …`):
+
+1. `reac_wake_obs.tx_frames` — frames that LEFT the host since the last step — joins the
+   observation, and zero refuses the edge as `NOTHING_SENT` (§4 table) before any fact about the
+   box is consulted. Proven pure in `tests/test_reac_wake.c` §I (an hour of pushes "completing"
+   with `tx_frames` 0 makes no edge; the first frame leaving bounces).
+2. **Refusals are now really said once.** §4 always read "the daemon says it once"; until today
+   `main.c`'s `ACT_NONE` arm printed nothing, so a ladder holding for seven minutes was
+   indistinguishable from one never asked. `reac_wake_refusal_to_say()` answers once per CHANGE
+   of refusal (again after a reopen; never for OK), and the journal line is
+   `the wake ladder on '<if>' holds: <refusal>`. Proven pure in §J.
+3. **The qdisc follows the backend that actually opened.** If ETF was wanted and the pacer is
+   not running it, the etf qdisc the daemon installed is removed again at once, with libreac's
+   refusal quoted (`reac-qdisc: ETF was wanted on '<if>' and the pacer refused it (…) — the etf
+   qdisc this daemon just installed is REMOVED again`). A thread-backend pacer then transmits with
+   its looser cadence instead of transmitting nothing.
+
+**Proven whole-binary** by `tests/wake-holds-when-nothing-is-sent.sh`: a thread-backend daemon on
+an empty wire gets an etf root qdisc by hand three seconds in — `tx_errors` 300 890, no edge in
+40 s, the refusal said exactly once; the control arm without the qdisc bounces the same wire
+twice after "our own scene push has not completed yet" said once. Red on `1623184` (two edges,
+the refusal said 0 times, 300 833 errors).
+
+**Not proven here, for the desk.** (a) Whether an administrative down/up of the ax88179 USB NIC
+(`enp128s20f0u6`) is a PHY edge the S-0808 sees at all: two edges were made and nothing was heard
+back — but nothing of ours was on the wire either, so the box's flood after a real edge would
+have been the only signal, and `rx_box_frames` stayed 0. One measurement settles it: with the
+box enrolled, `ip link set enp128s20f0u6 down; sleep 1.2; ip link set enp128s20f0u6 up` and read
+whether the box's REAC LED drops and the master logs `box presence GAINED (BCAST-FILLER …)`. (b)
+The first-boot window itself: reac-pw starting before the TAI offset is set will still run the
+thread backend for that process's life on those segments; the qdisc no longer eats the frames,
+but the pacer does not re-try ETF later. A unit ordering (`After=chronyd.service` /
+`time-sync.target`) or a periodic re-open is a separate ruling. (c) The S-1608's periodic
+re-JOIN while established (`rx_joins=569` beside 30 M box frames in the 12:17-13:19 process, the
+S-0808 at 2) is not this spec's subject and is not explained by anything here.

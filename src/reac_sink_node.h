@@ -256,6 +256,13 @@ int reac_sink_node_wake_obs(struct reac_sink_node *n, struct reac_wake_obs *o);
  * something, and nothing is broken to wake something else. 0 for a node with no engine. */
 int reac_sink_node_past_probing(struct reac_sink_node *n);
 
+/* Is the reac-playback node REALLY on the graph — connected, with a node id, not in
+ * error? The mirror of reac_source_node_on_graph, asked on the same tick, because the pair
+ * dies together when the PipeWire server does and a rebuild that took only the capture
+ * side would leave a segment with one node (2026-09-23). `*why` names the reason when it
+ * is not; NULL is accepted. */
+int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why);
+
 void reac_sink_node_destroy(struct reac_sink_node *n);
 
 /* Bound on the correction handed to PipeWire's resampler, in ppm. Sized so the
