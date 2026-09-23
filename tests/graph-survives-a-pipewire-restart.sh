@@ -109,6 +109,10 @@ seg_nodes $PID gpr0 | sed 's/^/  box-node /'
 grep -a "autodetected" "$LOG" | sed 's/^/  box-log /' | head -2
 BEFORE_IDS=$(seg_nodes $PID gpr0 | awk '{print $1}' | sort | tr '\n' ' ')
 echo "before-ids $BEFORE_IDS"
+# THE ROSTER NODE IS THE SAME KIND OF CASUALTY: it lives on its own core, and on the desk
+# it stayed a dead handle for seven minutes after the restart, until a segment happened to
+# leave. Counted by node.name on this daemon's own client, before and after.
+echo "before-roster $(nodes_of $PID | awk '$2 == "reac-pw"' | wc -l)"
 
 # ---- 2. THE SERVER GOES AND COMES BACK ----------------------------------------------------
 kill -TERM $PWPID 2>/dev/null; sleep 0.5; kill -9 $PWPID 2>/dev/null; wait $PWPID 2>/dev/null
@@ -131,7 +135,12 @@ seg_nodes $PID gpr0 | sed 's/^/  after-node /'
 AFTER_IDS=$(seg_nodes $PID gpr0 | awk '{print $1}' | sort | tr '\n' ' ')
 echo "after-ids $AFTER_IDS"
 echo "daemon-alive $(kill -0 $PID 2>/dev/null && echo 1 || echo 0)"
-grep -a "rebuilding it\|back on the graph\|went away\|stream ERROR" "$LOG" | sed 's/^/  restart-log /' | head -6
+for ((i = 0; i < 40; i++)); do
+	[ "$(nodes_of $PID | awk '$2 == "reac-pw"' | wc -l)" -ge 1 ] && break
+	sleep 0.5
+done
+echo "after-roster $(nodes_of $PID | awk '$2 == "reac-pw"' | wc -l)"
+grep -a "rebuilding it\|back on the graph\|went away\|stream ERROR" "$LOG" | sed 's/^/  restart-log /' | head -8
 kill -TERM $PID 2>/dev/null; sleep 0.5; kill -9 $PID 2>/dev/null
 exit 0
 INNER
@@ -162,7 +171,12 @@ echo "$OUT" | grep -qa 'box-log.*autodetected' \
 [ "$(val before-ids)" != "$(val after-ids)" ] \
 	|| fail "the node ids after the restart are the ids before it ($(val after-ids)) — a stale dump, not a rebuilt pair"
 
-# 3. AND THE DAEMON SAID SO — a rebuild nobody announces is the next silent failure.
+# 3. THE ROSTER NODE IS BACK TOO — the console derives its segments from it.
+[ "$(val before-roster)" = "1" ] || fail "no roster node before the restart (got $(val before-roster)) — the fixture never showed one, so its return cannot be measured"
+[ "$(val after-roster)" = "1" ] \
+	|| fail "PipeWire restarted and the roster node did not come back (got $(val after-roster) after 20 s) — on the desk it stayed a dead handle until a segment happened to leave"
+
+# 4. AND THE DAEMON SAID SO — a rebuild nobody announces is the next silent failure.
 echo "$OUT" | grep -qa 'restart-log.*rebuilding it' \
 	|| fail "the pair was rebuilt and the journal never said 'rebuilding it'"
 echo "$OUT" | grep -qa 'restart-log.*back on the graph' \

@@ -798,6 +798,22 @@ test('reac_no_box_no_node',
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
+# --- whole-binary test: the pair and the roster OUTLIVE A PIPEWIRE RESTART ---------------
+#
+# Desk 2026-09-23 13:44 (docs/design/evidence/reac-pw-boot-2026-09-23.log): pipewire.service
+# was restarted two seconds after an S-1608 enrolled on enp131s0. libpipewire leaves a
+# stream whose server went away UNCONNECTED, with the node id it remembers, and the
+# node-recover ladder read that as "on the graph" — twelve minutes of a box whose LED said
+# enrolled, a roster row reading established, and no node for it anywhere. The same
+# fixture as its siblings; the server is killed and restarted under the enrolled box, and
+# the pair AND the roster node must come back as new ids, announced.
+test('reac_graph_survives_a_pipewire_restart',
+  find_program('tests/graph-survives-a-pipewire-restart.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 300)
+
 # --- whole-binary test: the node COUNT follows the segment state (#108) ---------------
 #
 # The sibling above asks whether a pair is PRESENT; this one asks how many. A ghost is not
