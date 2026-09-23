@@ -159,6 +159,14 @@ int reac_roster_node_publish(struct reac_roster_node *n,
 	return 0;
 }
 
+int reac_roster_node_on_graph(const struct reac_roster_node *n)
+{
+	if (!n || !n->filter)
+		return 0;
+	enum pw_filter_state st = pw_filter_get_state(n->filter, NULL);
+	return st != PW_FILTER_STATE_ERROR && st != PW_FILTER_STATE_UNCONNECTED;
+}
+
 void reac_roster_node_destroy(struct reac_roster_node *n)
 {
 	if (!n)

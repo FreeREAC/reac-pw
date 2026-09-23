@@ -969,6 +969,17 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		 * width, and no capture node, for as long as nobody looks at the graph. */
 		const char *why = "no node was ever created";
 		int on_graph = reac_source_node_on_graph(*c->src, &why);
+		/* THE PAIR IS JUDGED TOGETHER. When the PipeWire server goes away both
+		 * streams lose it at once, and a rebuild that took only the capture side
+		 * would leave reac-playback as a stream that remembers a node id on a graph
+		 * that no longer has it (desk 2026-09-23, pipewire.service restarted under
+		 * an enrolled S-1608: no node, no line, for twelve minutes). */
+		const char *sink_why = NULL;
+		int sink_on_graph = reac_sink_node_on_graph(c->sink, &sink_why);
+		if (on_graph && !sink_on_graph) {
+			on_graph = 0;
+			why = sink_why;
+		}
 		/* Read BEFORE the step, which resets the ladder the moment the node is back. */
 		int attempts = c->recover.attempts;
 		switch (reac_node_recover_step(&c->recover, on_graph)) {
@@ -997,16 +1008,21 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 			return;
 		case REAC_RECOVER_REBUILD:
 			fprintf(stderr, "reac-pw: %sreac-capture is NOT on the graph %.1f s after it "
-			        "was sized to %s (%s) — rebuilding it (attempt %d of %d). A segment "
+			        "was sized to %s (%s) — rebuilding it (attempt %d of %d)%s. A segment "
 			        "without its capture node has no input patches at all.\n",
 			        c->tag, reac_node_recover_spent(&c->recover) * 0.2, bm->display, why,
-			        c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS);
+			        c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS,
+			        sink_on_graph ? "" : ", and reac-playback with it");
 			/* FORCE IT. reac_source_node_ensure rebuilds on a CHANGE of width or
 			 * label, and neither moved — the node it would compare against is the one
 			 * that failed, at exactly the width we want. Tearing it down first is what
-			 * makes the next ensure() build rather than agree. */
+			 * makes the next ensure() build rather than agree. The playback side is
+			 * torn down only when IT is the one that is gone: a capture node that
+			 * failed alone must not cost the segment its outputs. */
 			reac_source_node_destroy(*c->src);
 			*c->src = NULL;
+			if (!sink_on_graph)
+				reac_sink_node_unpublish(c->sink);
 			c->restamp = 1;   /* the new node starts blank; see below */
 			break;
 		}
@@ -5069,6 +5085,21 @@ static void on_roster_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
 	struct roster_ctx *rc = data;
+	if (g_roster_node && !reac_roster_node_on_graph(g_roster_node)) {
+		/* THE SERVER WENT AWAY UNDER IT. The filter is UNCONNECTED, the node it
+		 * exported is gone, and every later delta would be published into a dead
+		 * handle and read as success. Desk 2026-09-23: pipewire.service restarted at
+		 * 13:44:04 and there was no roster on the graph until 13:50:56, when a segment
+		 * leaving happened to force a rebuild. Destroy it and let the lazy path below
+		 * build a fresh one; forgetting what was published makes the next delta the
+		 * WHOLE roster as sets, which is what a new node needs. */
+		fprintf(stderr, "reac-pw: the `reac-pw` roster node is no longer on the graph — "
+		        "its PipeWire server went away — rebuilding it\n");
+		reac_roster_node_destroy(g_roster_node);
+		g_roster_node = NULL;
+		reac_roster_forget(&g_roster);
+		g_roster_said = 0;
+	}
 	if (!g_roster_node) {
 		/* LAZY AND RETRIED, because a daemon can be up before PipeWire is. Every
 		 * tenth tick so a graph-less run costs one connect attempt every 5 s, and the
