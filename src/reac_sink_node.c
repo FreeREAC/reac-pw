@@ -2063,13 +2063,14 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * the device for itself, and an ETF DEFAULT that finds no qdisc falls back to
 	 * the thread backend and publishes the refusal. Refusing to carry audio because
 	 * a kernel has no sch_etf would be a worse answer than a looser cadence. */
+	int want_etf = 0;
 	{
 		enum reac_conf_layer qlay = REAC_CONF_NONE;
 		int qunderstood = 1;
 		enum reac_pacer_backend want =
 			reac_pacer_backend_resolve(cfg->ifname, NULL, &qlay, &qunderstood);
-		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname,
-		                     want == REAC_PACER_BACKEND_ETF);
+		want_etf = want == REAC_PACER_BACKEND_ETF;
+		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, want_etf);
 
 		/* THE CATCH-UP BUDGET IS MEASURED AGAINST A REFERENCE THE BACKEND MOVED.
 		 * libreac's default is 1000 us of measured worst wake tail, which is the
@@ -2111,6 +2112,28 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	}
 	n->pacer_open = 1;
+
+	/* THE QDISC FOLLOWS THE BACKEND THAT ACTUALLY OPENED, NOT THE ONE THAT WAS WANTED.
+	 * The arm above installed etf for the default; reac_pacer_open may still REFUSE
+	 * ETF (the kernel's TAI offset is 0 on a machine chrony has not disciplined yet —
+	 * every cold boot, for the first seconds) and run the thread backend under it.
+	 * That is reac_qdisc.h's "thread backend, leftover qdisc", made by our own hand:
+	 * skip_sock_check drops every unstamped frame. Desk 2026-09-23 13:43:40, both
+	 * masters: tx=0, tx_errors=8000/s, 3.46 M frames refused on enp128s20f0u6 over
+	 * seven minutes while the journal counted 145 "COMPLETED" pushes, the wake ladder
+	 * spent two PHY edges on a box that had never heard us, and only the operator's
+	 * cable replug (a re-serve, a fresh pacer, by then TAI 37) brought the S-0808 back.
+	 * So: ETF wanted and not running means the etf qdisc we installed goes again, now. */
+	if (want_etf && reac_pacer_backend(&n->pacer) != REAC_PACER_BACKEND_ETF) {
+		const char *why = reac_pacer_backend_refusal(&n->pacer);
+		fprintf(stderr, "reac-qdisc: ETF was wanted on '%s' and the pacer refused it "
+		        "(%s) — the etf qdisc this daemon just installed is REMOVED again, "
+		        "because a thread-backend frame carries no launch time and "
+		        "skip_sock_check would drop every one of them: the wire would carry "
+		        "nothing and the journal would count pushes anyway\n",
+		        cfg->ifname, why ? why : "no reason given");
+		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, 0);
+	}
 
 	/* AND THE READBACK STARTS WHERE THE SEND TABLE DOES. The CLI/conf table
 	 * (--headamp, REAC_HEADAMP) went into the pacer's send table in the open
@@ -2354,6 +2377,9 @@ int reac_sink_node_wake_obs(struct reac_sink_node *n, struct reac_wake_obs *o)
 	 * SEGVs on this rig (libreac spec 2026-09-14 §5). A relaxed load of a counter that
 	 * only ever grows is all the ladder needs — it compares against 3. */
 	o->scene_pushes = __atomic_load_n(&n->pacer.master.scene_complete, __ATOMIC_RELAXED);
+	/* CUMULATIVE frames that left the host; the caller turns it into "since the last
+	 * observation", because the ladder wants to know whether we are sending NOW. */
+	o->tx_frames = atomic_load_explicit(&n->pacer.tx_frames, memory_order_relaxed);
 	return 1;
 }
 

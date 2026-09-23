@@ -815,6 +815,7 @@ struct autodetect_ctx {
 	struct reac_wake        wake;
 	uint64_t                up_at_ns;   /* the link is down until here (0 = no edge) */
 	int                     wake_open;  /* the ladder is open for this PROBING spell */
+	uint64_t                tx_seen;    /* the pacer's tx_frames at the last step */
 };
 
 /* Other segments served over the same physical port — a bounce takes them all down with
@@ -888,6 +889,14 @@ static void wake_step(struct autodetect_ctx *c)
 	 * what else this daemon is serving over the same port. */
 	o.carrier = reac_link_carrier(c->ifname);
 	o.siblings_served = port_siblings_served(c->ifname);
+	/* And the one fact about US the engine reports cumulatively: frames that left the
+	 * host SINCE THE LAST STEP. 200 ms at any rate this daemon serves is hundreds of
+	 * frames; zero is a pacer whose every sendto() fails, or one that is not running. */
+	{
+		const uint64_t tx_now = o.tx_frames;
+		o.tx_frames = tx_now - c->tx_seen;
+		c->tx_seen = tx_now;
+	}
 	/* A master that is granting or established re-opens the ladder's GRACE, so a box
 	 * that enrols and drops again is pushed to before it is ever bounced again. The
 	 * bounce COUNT deliberately survives it (reac_wake_reopen). */
@@ -896,6 +905,17 @@ static void wake_step(struct autodetect_ctx *c)
 
 	switch (reac_wake_step(&c->wake, now, &o)) {
 	case REAC_WAKE_ACT_NONE:
+		/* SAID ONCE PER CHANGE OF FACT (spec §4). Until 2026-09-23 this arm was
+		 * silent, so a ladder holding on NOTHING_SENT for seven minutes read exactly
+		 * like one that had never been asked. */
+		if (reac_wake_refusal_to_say(&c->wake))
+			fprintf(stderr, "reac-pw: %sthe wake ladder on '%s' holds: %s%s\n",
+			        c->tag, c->ifname, reac_wake_refusal_text(c->wake.refusal),
+			        c->wake.refusal == REAC_WAKE_NOTHING_SENT
+			            ? " — a PHY edge cannot wake a box that hears no master; "
+			              "read tx_errors on this segment's reac-pacer line and the "
+			              "root qdisc on this device"
+			            : "");
 		return;
 	case REAC_WAKE_ACT_BOUNCE:
 		fprintf(stderr, "reac-pw: %sthe box on '%s' has answered nothing through %llu "

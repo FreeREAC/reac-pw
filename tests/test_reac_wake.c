@@ -36,6 +36,7 @@ static struct reac_wake_obs silent_at(uint64_t t0, uint64_t now)
 	o.rx_box_frames = 0;
 	o.scene_pushes = (now - t0) / (2694500ULL);   /* one completed transfer per cycle */
 	o.siblings_served = 0;
+	o.tx_frames = 1600;                          /* 200 ms of frames at 8000 fps left the host */
 	return o;
 }
 
@@ -179,6 +180,66 @@ int main(void)
 	 * described in a comment that a later edit would not read. */
 	CHK((uint64_t)REAC_WAKE_DOWN_MS * MS < REAC_IFSCAN_DOWN_HOLD_NS);
 
+	/* ---- I. NOTHING OF OURS REACHED THE WIRE, SO NOTHING IS BOUNCED. The boot of
+	 * 2026-09-23: pushes "completing" by the master's count, carrier up, box silent —
+	 * and tx_frames 0 with 8000 send errors a second, because an etf root qdisc was
+	 * refusing every unstamped frame of a thread-backend pacer. Two edges and an
+	 * exhaustion were spent on a box that had never heard a master. An hour of that
+	 * shape must produce no edge and name the fact; the same hour with frames leaving
+	 * is the control and must bounce. */
+	{
+		reac_wake_init(&w, t0);
+		int edges = 0;
+		for (t = t0; t < t0 + 3600 * SEC; t += SEC) {
+			struct reac_wake_obs o = silent_at(t0, t);
+			o.tx_frames = 0;
+			if (reac_wake_step(&w, t, &o) != REAC_WAKE_ACT_NONE) edges++;
+			CHK(w.refusal == REAC_WAKE_NOTHING_SENT);
+		}
+		CHK(edges == 0);
+		CHK(w.bounces == 0);
+		/* And a first frame leaving the host reopens the question at once. */
+		struct reac_wake_obs o = silent_at(t0, t0 + 3600 * SEC);
+		CHK(reac_wake_step(&w, t0 + 3600 * SEC, &o) == REAC_WAKE_ACT_BOUNCE);
+	}
+
+	/* ---- J. A REFUSAL IS SAID ONCE, AND AGAIN ONLY WHEN THE FACT CHANGES. Before
+	 * 2026-09-23 nothing was ever said for ACT_NONE, so 145 pushes of "still PROBING"
+	 * carried no word about what the ladder was waiting for. */
+	{
+		reac_wake_init(&w, t0);
+		struct reac_wake_obs o = silent_at(t0, t0 + SEC);
+		CHK(reac_wake_step(&w, t0 + SEC, &o) == REAC_WAKE_ACT_NONE);
+		CHK(w.refusal == REAC_WAKE_PUSH_NOT_PROVEN);
+		CHK(reac_wake_refusal_to_say(&w) == 1);
+		for (int i = 0; i < 10; i++) {
+			o = silent_at(t0, t0 + 2 * SEC + i * 100 * MS);
+			CHK(reac_wake_step(&w, t0 + 2 * SEC + i * 100 * MS, &o) == REAC_WAKE_ACT_NONE);
+			CHK(reac_wake_refusal_to_say(&w) == 0);   /* same fact: silent */
+		}
+		o = silent_at(t0, t0 + 4 * SEC);
+		o.tx_frames = 0;                                /* the fact changed */
+		CHK(reac_wake_step(&w, t0 + 4 * SEC, &o) == REAC_WAKE_ACT_NONE);
+		CHK(w.refusal == REAC_WAKE_NOTHING_SENT);
+		CHK(reac_wake_refusal_to_say(&w) == 1);
+		CHK(reac_wake_refusal_to_say(&w) == 0);
+		/* An act is not a refusal and is never "said" here: the act has its own line. */
+		o = silent_at(t0, t0 + 60 * SEC);
+		CHK(reac_wake_step(&w, t0 + 60 * SEC, &o) == REAC_WAKE_ACT_BOUNCE);
+		CHK(reac_wake_refusal_to_say(&w) == 0);
+		o = silent_at(t0, t0 + 61 * SEC);
+		CHK(reac_wake_step(&w, t0 + 61 * SEC, &o) == REAC_WAKE_ACT_NONE);
+		CHK(w.refusal == REAC_WAKE_SETTLING);
+		CHK(reac_wake_refusal_to_say(&w) == 1);
+		CHK(reac_wake_refusal_to_say(&w) == 0);
+		/* A reopen is a new spell: the same refusal is worth saying again. */
+		reac_wake_reopen(&w, t0 + 700 * SEC);
+		o = silent_at(t0 + 700 * SEC, t0 + 701 * SEC);
+		CHK(reac_wake_step(&w, t0 + 701 * SEC, &o) == REAC_WAKE_ACT_NONE);
+		CHK(w.refusal == REAC_WAKE_PUSH_NOT_PROVEN);
+		CHK(reac_wake_refusal_to_say(&w) == 1);
+	}
+
 	/* ---- H. EVERY REFUSAL HAS WORDS. A code the journal cannot print is a code the
 	 * operator never reads. */
 	for (int r = REAC_WAKE_OK; r <= REAC_WAKE_SPENT; r++) {
@@ -187,6 +248,6 @@ int main(void)
 	}
 
 	printf("reac_wake: the live window bounces %u times and no more; %s\n",
-	       REAC_WAKE_MAX_BOUNCES, "eight refusals, each with its control");
+	       REAC_WAKE_MAX_BOUNCES, "nine refusals, each with its control, each said once");
 	return 0;
 }
