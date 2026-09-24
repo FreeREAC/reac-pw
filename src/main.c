@@ -2765,7 +2765,6 @@ struct hearing {
 	 * released when it is silent — since 2026-09-23. */
 	struct declared_seg decl[REAC_DECLARED_VLAN_MAX];
 	int n_decl;
-	int decl_full;              /* the scan hit REAC_DECLARED_VLAN_MAX; reported, not hidden */
 };
 
 static struct hearing g_hear;
@@ -3887,10 +3886,13 @@ static void declared_load(struct hearing *h)
 	if (n >= 0)
 		n = count;
 	if (n < 0) {
-		h->decl_full = 1;
+		/* BOUNDED, AND SAID ONCE. The table holds the first REAC_DECLARED_VLAN_MAX
+		 * declarations and nothing else is served: this line is the only notice the
+		 * ones past the bound ever get, so it names the bound and what it costs. */
 		n = REAC_DECLARED_VLAN_MAX;
-		fprintf(stderr, "reac-pw: more than %d declared VLAN segments — the rest are "
-		        "NOT reported (bounded, reported)\n", REAC_DECLARED_VLAN_MAX);
+		fprintf(stderr, "reac-pw: more than %d declared VLAN segments — only the first "
+		        "%d are served; the rest are NOT served, and this line is the only "
+		        "notice of them\n", REAC_DECLARED_VLAN_MAX, REAC_DECLARED_VLAN_MAX);
 	}
 	for (int i = 0; i < n && i < REAC_DECLARED_VLAN_MAX; i++) {
 		struct declared_seg *ds = &h->decl[h->n_decl];
