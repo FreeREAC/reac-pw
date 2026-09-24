@@ -16,13 +16,89 @@
  *    answers -errno. Reporting 0 drops from a read that never happened is the
  *    absence-looks-like-silence failure this whole lane is about.
  *
+ * 3. THE RECORD OF WHAT THIS DAEMON INSTALLED IS THE VERDICT, AND IT SURVIVES A
+ *    REMOVAL THAT FAILED (#109). Two defects of one shape: the sink node discarded
+ *    reac_qdisc_arm's answer and later announced "the etf qdisc this daemon just
+ *    installed is REMOVED again" after an install that had been refused (no
+ *    CAP_NET_ADMIN — nothing was ever installed); and reac_qdisc_arm's unconditional
+ *    memset cleared `installed` even when taking OUR qdisc back failed, so the exit's
+ *    reac_qdisc_release skipped a live etf that then dropped every unstamped frame.
+ *    Neither can be provoked on a real device without privileges, so the three
+ *    libreac-transport doors the policy calls are replaced at LINK time
+ *    (-Wl,--wrap in meson.build): the policy under test is the real reac_qdisc.c,
+ *    the kernel is a script. The wrap changes nothing about what the daemon links.
+ *
  * No socket beyond one netlink dump of the host's own qdisc table, which is a read
- * and changes nothing. Safe beside a live rig. */
+ * and changes nothing; the arm/disarm cases touch no device at all. Safe beside a
+ * live rig. */
 #include "reac_qdisc.h"
+
+#include <reac/transport/reac_etf_qdisc.h>
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+/* ---- the scripted kernel (link seam) --------------------------------------- */
+static enum reac_etf_qdisc_state fake_state = REAC_ETF_QDISC_NONE;
+static int fake_install_rc, fake_remove_rc;
+static int installs, removes;
+
+enum reac_etf_qdisc_state __wrap_reac_etf_qdisc_state(int ifindex, char *kind, size_t cap)
+{
+	(void)ifindex;
+	if (kind && cap)
+		kind[0] = '\0';
+	return fake_state;
+}
+
+int __wrap_reac_etf_qdisc_install(int ifindex, uint32_t delta_ns)
+{
+	(void)ifindex; (void)delta_ns;
+	installs++;
+	if (fake_install_rc == 0)
+		fake_state = REAC_ETF_QDISC_PRESENT;
+	return fake_install_rc;
+}
+
+int __wrap_reac_etf_qdisc_remove(int ifindex)
+{
+	(void)ifindex;
+	removes++;
+	if (fake_remove_rc == 0)
+		fake_state = REAC_ETF_QDISC_NONE;
+	return fake_remove_rc;
+}
+
+/* ---- stderr, captured: the LINE is part of the contract -------------------- */
+static FILE *cap_file;
+static int cap_saved = -1;
+
+static void capture_begin(void)
+{
+	fflush(stderr);
+	cap_file = tmpfile();
+	cap_saved = dup(STDERR_FILENO);
+	dup2(fileno(cap_file), STDERR_FILENO);
+}
+
+/* Returns what stderr said since capture_begin (malloc'd), and restores it. */
+static char *capture_end(void)
+{
+	fflush(stderr);
+	dup2(cap_saved, STDERR_FILENO);
+	close(cap_saved);
+	long n = ftell(cap_file);
+	rewind(cap_file);
+	char *buf = calloc(1, (size_t)n + 1);
+	if (n > 0 && fread(buf, 1, (size_t)n, cap_file) != (size_t)n)
+		buf[0] = '\0';
+	fclose(cap_file);
+	cap_file = NULL;
+	return buf;
+}
 
 static int fails;
 #define CHECK(cond, ...) do { \
@@ -82,6 +158,122 @@ int main(void)
 		printf("note: no rtnetlink in this environment (errno %d); the dump arm "
 		       "did not run\n", -rc);
 	}
+
+	/* ---- 3. the record, under a scripted kernel. "lo" exists in every namespace. */
+	struct reac_qdisc q;
+	char *said;
+
+	/* The control: an install the kernel ACKs and the read-back confirms IS recorded.
+	 * Without this every "not installed" below could be a seam that never fired. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; fake_install_rc = 0; fake_remove_rc = 0;
+	installs = removes = 0;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == 0 && installs == 1, "a scripted install is seen by the seam (rc %d, installs %d)", rc, installs);
+	CHECK(q.installed == 1 && q.ifindex > 0, "an ACKed, read-back install is recorded");
+	CHECK(strstr(said, "installed etf") != NULL, "and said");
+	free(said);
+
+	/* A REMOVAL OF OUR OWN QDISC THAT FAILS KEEPS THE RECORD (the leak): the qdisc is
+	 * still on the device and still ours, so the exit must try again — and does. */
+	fake_remove_rc = -EPERM;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 0);
+	said = capture_end();
+	CHECK(rc == -EPERM && removes == 1, "the removal ran and answered -EPERM (rc %d, removes %d)", rc, removes);
+	CHECK(q.installed == 1 && q.ifindex > 0,
+	      "the record of OUR install survives a removal that failed (installed=%d ifindex=%d)",
+	      q.installed, q.ifindex);
+	CHECK(strstr(said, "tried again on exit") != NULL, "and the line says the exit retries it");
+	free(said);
+	fake_remove_rc = 0;
+	capture_begin();
+	reac_qdisc_release(&q);
+	said = capture_end();
+	CHECK(removes == 2, "release RETRIED the removal (removes %d)", removes);
+	CHECK(fake_state == REAC_ETF_QDISC_NONE && q.installed == 0, "and the device is clean");
+	free(said);
+
+	/* A REMOVAL OF OUR OWN QDISC THAT SUCCEEDS clears it, said as ours, not a leftover. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = 0;
+	capture_begin();
+	(void)reac_qdisc_arm(&q, "lo", 1);
+	rc = reac_qdisc_arm(&q, "lo", 0);
+	said = capture_end();
+	CHECK(rc == 0 && removes == 1 && q.installed == 0, "our qdisc taken back clears the record");
+	CHECK(strstr(said, "removed the etf qdisc this daemon installed") != NULL, "and is named as ours");
+	CHECK(strstr(said, "LEFTOVER") == NULL, "never as a leftover");
+	free(said);
+
+	/* NEVER ADOPT WHAT WE DID NOT INSTALL: a leftover that cannot be removed is reported
+	 * and stays somebody else's — the record stays empty and the exit does not touch it. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_PRESENT; fake_remove_rc = -EPERM; removes = 0;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 0);
+	said = capture_end();
+	CHECK(rc == -EPERM && q.installed == 0 && q.ifindex == 0,
+	      "a leftover that cannot be removed is never recorded as ours");
+	CHECK(strstr(said, "LEFTOVER") != NULL, "and is named a leftover");
+	free(said);
+	capture_begin();
+	reac_qdisc_release(&q);
+	said = capture_end();
+	CHECK(removes == 1, "release does not touch what is not ours (removes %d)", removes);
+	free(said);
+
+	/* THE FALLBACK SAYS WHAT IS TRUE OF THIS DAEMON. Install refused (no CAP_NET_ADMIN),
+	 * the pacer then refuses ETF: the line must NOT claim a qdisc was "just installed",
+	 * and nothing is removed, because nothing of ours is there. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; fake_install_rc = -EPERM; fake_remove_rc = 0;
+	installs = removes = 0;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == -EPERM && installs == 1 && q.installed == 0, "the refused install is not recorded");
+	free(said);
+	capture_begin();
+	rc = reac_qdisc_disarm(&q, "lo", "TAI offset is 0");
+	said = capture_end();
+	CHECK(rc == 0 && removes == 0, "nothing of ours to remove, nothing removed (rc %d, removes %d)", rc, removes);
+	CHECK(strstr(said, "just installed is REMOVED again") == NULL,
+	      "a refused install is never announced as 'just installed is REMOVED again'");
+	CHECK(strstr(said, "installed NO etf qdisc") != NULL,
+	      "the line says this daemon installed nothing: got \"%s\"", said);
+	CHECK(strstr(said, "TAI offset is 0") != NULL, "and quotes the pacer's refusal");
+	free(said);
+
+	/* And when it WAS installed, the fallback says so and takes it back. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; fake_install_rc = 0; installs = removes = 0;
+	capture_begin();
+	(void)reac_qdisc_arm(&q, "lo", 1);
+	rc = reac_qdisc_disarm(&q, "lo", "TAI offset is 0");
+	said = capture_end();
+	CHECK(rc == 0 && removes == 1 && q.installed == 0, "an installed qdisc is taken back by the fallback");
+	CHECK(strstr(said, "just installed is REMOVED again") != NULL, "and announced as just installed");
+	free(said);
+
+	/* And a fallback whose removal fails keeps the record for the exit, like arm(0). */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = 0;
+	capture_begin();
+	(void)reac_qdisc_arm(&q, "lo", 1);
+	fake_remove_rc = -EPERM;
+	rc = reac_qdisc_disarm(&q, "lo", NULL);
+	said = capture_end();
+	CHECK(rc == -EPERM && q.installed == 1, "a fallback whose removal failed keeps the record");
+	free(said);
+	fake_remove_rc = 0;
+	capture_begin();
+	reac_qdisc_release(&q);
+	said = capture_end();
+	CHECK(removes == 2 && q.installed == 0, "and the exit takes it back");
+	free(said);
 
 	printf(fails ? "FAIL %d\n" : "OK\n", fails);
 	return fails ? 1 : 0;

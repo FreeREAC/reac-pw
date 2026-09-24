@@ -18,6 +18,7 @@
 #include "reac_node_recover.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -103,7 +104,80 @@ int main(void)
 	/* ---- A NULL is not a crash and not a rebuild. */
 	CHK(reac_node_recover_step(NULL, 0) == REAC_RECOVER_WAIT);
 
+	/* ---- THE PAIR: JUDGED TOGETHER, TORN DOWN ALONE (#109). One ladder for the
+	 * segment's two nodes, because they lose the server together — but a REBUILD names
+	 * ONLY the side(s) that are gone. The defect: a playback node that failed alone
+	 * forced the pair verdict to "not on the graph" with the sink's own reason, and the
+	 * rebuild destroyed a healthy reac-capture for it. The mirror (capture alone) was
+	 * already protected; both directions are pinned here so neither drifts again. */
+	const char *SRC_WHY = "capture: the daemon has given it no node id";
+	const char *SNK_WHY = "playback: the stream is not connected";
+	struct reac_node_pair_verdict v;
+
+	/* A whole pair is a WAIT with nothing gone, a thousand times over. */
+	reac_node_recover_init(&r);
+	for (int i = 0; i < 1000; i++) {
+		v = reac_node_recover_step_pair(&r, 1, "on the graph", 1, "on the graph");
+		CHK(v.act == REAC_RECOVER_WAIT && !v.src_gone && !v.sink_gone);
+	}
+	CHK(r.attempts == 0);
+
+	/* SINK ALONE: the ladder runs (the segment is not whole), and the rebuild takes
+	 * reac-playback ONLY, quoting reac-playback's OWN reason. reac-capture is healthy
+	 * and stays. */
+	reac_node_recover_init(&r);
+	for (int i = 1; i < REAC_RECOVER_GRACE_TICKS; i++) {
+		v = reac_node_recover_step_pair(&r, 1, "on the graph", 0, SNK_WHY);
+		CHK(v.act == REAC_RECOVER_WAIT);
+		CHK(!v.src_gone && v.sink_gone);        /* the sides are named on every tick */
+	}
+	v = reac_node_recover_step_pair(&r, 1, "on the graph", 0, SNK_WHY);
+	CHK(v.act == REAC_RECOVER_REBUILD);
+	CHK(v.src_gone == 0);                        /* THE FINDING: never the healthy one */
+	CHK(v.sink_gone == 1);
+	CHK(v.why == SNK_WHY);                       /* its own reason, not its sibling's */
+	CHK(strcmp(reac_node_pair_name(&v), "reac-playback") == 0);
+
+	/* CAPTURE ALONE: the mirror, already protected before #109 and pinned so it stays. */
+	reac_node_recover_init(&r);
+	for (int i = 1; i < REAC_RECOVER_GRACE_TICKS; i++)
+		v = reac_node_recover_step_pair(&r, 0, SRC_WHY, 1, "on the graph");
+	v = reac_node_recover_step_pair(&r, 0, SRC_WHY, 1, "on the graph");
+	CHK(v.act == REAC_RECOVER_REBUILD);
+	CHK(v.src_gone == 1 && v.sink_gone == 0);
+	CHK(v.why == SRC_WHY);
+	CHK(strcmp(reac_node_pair_name(&v), "reac-capture") == 0);
+
+	/* BOTH GONE (the server went away): both sides, the capture side's reason, the pair
+	 * named. This is the 2026-09-23 case and the reason there is one ladder. */
+	reac_node_recover_init(&r);
+	for (int i = 1; i < REAC_RECOVER_GRACE_TICKS; i++)
+		v = reac_node_recover_step_pair(&r, 0, SRC_WHY, 0, SNK_WHY);
+	v = reac_node_recover_step_pair(&r, 0, SRC_WHY, 0, SNK_WHY);
+	CHK(v.act == REAC_RECOVER_REBUILD);
+	CHK(v.src_gone == 1 && v.sink_gone == 1);
+	CHK(v.why == SRC_WHY);
+	CHK(strcmp(reac_node_pair_name(&v), "reac-capture and reac-playback") == 0);
+
+	/* THE GIVE-UP NAMES WHAT IS STILL MISSING. Sink alone to the end of the ladder:
+	 * the terminal line is about reac-playback, and reac-capture is never named gone. */
+	reac_node_recover_init(&r);
+	for (;;) {
+		v = reac_node_recover_step_pair(&r, 1, "on the graph", 0, SNK_WHY);
+		CHK(v.src_gone == 0);
+		if (v.act == REAC_RECOVER_GIVE_UP)
+			break;
+		CHK(r.attempts <= REAC_RECOVER_MAX_ATTEMPTS);
+	}
+	CHK(v.sink_gone == 1 && v.why == SNK_WHY);
+	CHK(strcmp(reac_node_pair_name(&v), "reac-playback") == 0);
+
+	/* AND THE PAIR COMING BACK RESETS THE LADDER, exactly as one node does. */
+	v = reac_node_recover_step_pair(&r, 1, "on the graph", 1, "on the graph");
+	CHK(v.act == REAC_RECOVER_WAIT && r.attempts == 0 && r.gave_up == 0);
+
 	printf("ok: a missing node is rebuilt after a grace, with a doubling window, at most "
-	       "%d times, and reported exactly once\n", REAC_RECOVER_MAX_ATTEMPTS);
+	       "%d times, and reported exactly once; a pair is judged together and each side "
+	       "is torn down alone\n", REAC_RECOVER_MAX_ATTEMPTS);
 	return 0;
 }
