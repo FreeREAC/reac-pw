@@ -196,6 +196,16 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Sep 24 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.26-1
+- A SINK THAT FAILS ALONE NO LONGER TEARS DOWN A HEALTHY CAPTURE NODE. Recovery now judges each
+  side of the pair: one ladder still runs on the segment's absence, but only the side that is
+  gone is destroyed and rebuilt, and each rebuild line names its own node and reason (#109).
+- The ETF qdisc fallback tells the truth: "just installed ... REMOVED" only when this daemon
+  installed it; after a refused install it says none was installed and only sweeps for a
+  leftover. A failed removal of our own qdisc keeps its record, so the exit retries it (#109).
+- One on-graph helper for the capture and playback nodes; the VLAN-overflow log line says the
+  extra segments are not served (#109).
+
 * Wed Sep 23 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.25-1
 - A NODE WHOSE SERVER DIED IS NOT ON THE GRAPH. A PipeWire restart two seconds after
   enrolment (the 13:43 host boot) left the S-1608's streams UNCONNECTED with their node ids;
