@@ -253,7 +253,7 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
   from the last frame heard; a stale unplaced sighting stops binding the hunt), with its
   own positive controls so it cannot pass against a library whose functions do nothing.
 
-* Sun Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.22-1
+* Mon Sep 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.22-1
 - Builds against libreac >= 1.3.1, which carries the residue-refuse contract the suite states (1.3.0 did not).
 - ONE STRAY FRAME NO LONGER PINS A WIRE FOR THE LIFE OF THE PROCESS. Two EVER-latches in
   the autodetect path let a frame misattributed to a sniffer in the instant it opened
