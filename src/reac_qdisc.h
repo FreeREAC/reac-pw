@@ -51,8 +51,30 @@ struct reac_qdisc {
  * FATAL AND IS NOT SILENT: the ETF default falls back to the thread backend when the
  * pacer's own probe then finds no qdisc, so the caller logs and continues — but the
  * errno and its fix are named here, once, loudly, because "cannot install" and "will
- * not run ETF" are the same event seen from two layers. */
+ * not run ETF" are the same event seen from two layers.
+ *
+ * THE RECORD IS THE VERDICT. `q->installed` is set only by an install the kernel ACKed
+ * and the read-back confirmed, so a caller that later needs to know whether THIS
+ * daemon put an etf on the device reads `q`, not a remembered return value. And a
+ * record of our own install SURVIVES a `want_etf == 0` call whose removal FAILED: the
+ * qdisc is still there and still ours, so reac_qdisc_release must try again at exit
+ * rather than skip a qdisc it thinks is gone (#109). Only ours — an etf we found and
+ * could not remove is never adopted. */
 int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf);
+
+/* THE BACKEND THAT OPENED IS NOT THE ONE THE QDISC WAS ARMED FOR. ETF was wanted, the
+ * arm ran for it, and reac_pacer_open then REFUSED ETF (the kernel's TAI offset is 0 on
+ * a machine chrony has not disciplined yet — every cold boot, for the first seconds)
+ * and runs the thread backend. Under an etf qdisc that backend transmits nothing:
+ * skip_sock_check drops every unstamped frame (desk 2026-09-23 13:43:40, both masters:
+ * tx=0, tx_errors=8000/s, 3.46 M frames refused over seven minutes while the journal
+ * counted 145 "COMPLETED" pushes). So the device is made to match the thread backend
+ * NOW, not at exit — and the line says what is true of THIS daemon: an etf it installed
+ * is "REMOVED again"; when the install itself had been refused (no CAP_NET_ADMIN) it
+ * installed nothing and says so, and only sweeps for somebody else's leftover (#109).
+ * `refusal` is the pacer's reason, for the line; NULL is accepted. Returns 0 when the
+ * device now carries no etf, or -errno — and then `q` keeps its record for the exit. */
+int reac_qdisc_disarm(struct reac_qdisc *q, const char *ifname, const char *refusal);
 
 /* Take away what reac_qdisc_arm installed, if anything, and clear `q`. Safe on a
  * zeroed struct and safe to call twice. A device that has gone since (the cable, the
