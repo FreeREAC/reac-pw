@@ -57,3 +57,27 @@ enum reac_node_recover_act reac_node_recover_step(struct reac_node_recover *r, i
 	r->attempts++;
 	return REAC_RECOVER_REBUILD;
 }
+
+struct reac_node_pair_verdict reac_node_recover_step_pair(struct reac_node_recover *r,
+                                                          int src_on_graph, const char *src_why,
+                                                          int sink_on_graph, const char *sink_why)
+{
+	struct reac_node_pair_verdict v;
+	v.src_gone  = !src_on_graph;
+	v.sink_gone = !sink_on_graph;
+	/* THE MISSING SIDE'S OWN REASON. Both gone is the server-went-away shape and the
+	 * two reasons agree; quote the capture side's, as the line always has. */
+	v.why = v.src_gone ? src_why : v.sink_gone ? sink_why : src_why;
+	/* The ladder counts the SEGMENT's absence: whole only when both sides are there. */
+	v.act = reac_node_recover_step(r, src_on_graph && sink_on_graph);
+	return v;
+}
+
+const char *reac_node_pair_name(const struct reac_node_pair_verdict *v)
+{
+	if (v && v->src_gone && !v->sink_gone)
+		return "reac-capture";
+	if (v && v->sink_gone && !v->src_gone)
+		return "reac-playback";
+	return "reac-capture and reac-playback";
+}
