@@ -26,6 +26,7 @@
 #include "reac_sink_node.h"
 #include <reac/transport/reac_segment_ident.h> /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
+#include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
 #include <reac/transport/reac_tx.h>
 #include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
@@ -2070,6 +2071,9 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		enum reac_pacer_backend want =
 			reac_pacer_backend_resolve(cfg->ifname, NULL, &qlay, &qunderstood);
 		want_etf = want == REAC_PACER_BACKEND_ETF;
+		/* ITS VERDICT IS THE RECORD. The errno was said inside; what the fallback
+		 * below needs to know — did THIS daemon install an etf here? — is
+		 * n->qdisc.installed, which only a confirmed install sets (reac_qdisc.h). */
 		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, want_etf);
 
 		/* THE CATCH-UP BUDGET IS MEASURED AGAINST A REFERENCE THE BACKEND MOVED.
@@ -2123,17 +2127,13 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * seven minutes while the journal counted 145 "COMPLETED" pushes, the wake ladder
 	 * spent two PHY edges on a box that had never heard us, and only the operator's
 	 * cable replug (a re-serve, a fresh pacer, by then TAI 37) brought the S-0808 back.
-	 * So: ETF wanted and not running means the etf qdisc we installed goes again, now. */
-	if (want_etf && reac_pacer_backend(&n->pacer) != REAC_PACER_BACKEND_ETF) {
-		const char *why = reac_pacer_backend_refusal(&n->pacer);
-		fprintf(stderr, "reac-qdisc: ETF was wanted on '%s' and the pacer refused it "
-		        "(%s) — the etf qdisc this daemon just installed is REMOVED again, "
-		        "because a thread-backend frame carries no launch time and "
-		        "skip_sock_check would drop every one of them: the wire would carry "
-		        "nothing and the journal would count pushes anyway\n",
-		        cfg->ifname, why ? why : "no reason given");
-		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, 0);
-	}
+	 * So: ETF wanted and not running means the etf qdisc we installed goes again, now
+	 * — and reac_qdisc_disarm says what is true of THIS daemon: "just installed" only
+	 * when it was (an install refused for want of CAP_NET_ADMIN installed nothing), and
+	 * a removal that fails keeps the record so the exit retries it (#109). */
+	if (want_etf && reac_pacer_backend(&n->pacer) != REAC_PACER_BACKEND_ETF)
+		(void)reac_qdisc_disarm(&n->qdisc, cfg->ifname,
+		                        reac_pacer_backend_refusal(&n->pacer));
 
 	/* AND THE READBACK STARTS WHERE THE SEND TABLE DOES. The CLI/conf table
 	 * (--headamp, REAC_HEADAMP) went into the pacer's send table in the open
@@ -2296,30 +2296,11 @@ void reac_sink_node_unpublish(struct reac_sink_node *n)
 
 int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why)
 {
-	/* THE SAME THREE READINGS reac_source_node_on_graph TAKES, for the same reasons,
-	 * and above all the same UNCONNECTED one: the pair died together with the server
-	 * on 2026-09-23 and only the capture side was ever asked. A playback node whose
-	 * server has gone is not on the graph either, and the rebuild must take both. */
-	const char *reason = "no node was ever created";
-	if (n && n->stream) {
-		const char *err = NULL;
-		enum pw_stream_state st = pw_stream_get_state(n->stream, &err);
-		uint32_t id = pw_stream_get_node_id(n->stream);
-		if (st == PW_STREAM_STATE_ERROR)
-			reason = err ? err : "the stream is in error";
-		else if (st == PW_STREAM_STATE_UNCONNECTED)
-			reason = "the stream is not connected — the PipeWire server went away";
-		else if (id == SPA_ID_INVALID)
-			reason = "the daemon has given it no node id";
-		else {
-			if (why)
-				*why = "on the graph";
-			return 1;
-		}
-	}
-	if (why)
-		*why = reason;
-	return 0;
+	/* THE SAME READING reac_source_node_on_graph TAKES, from the same function
+	 * (reac_node_graph.h): the pair died together with the server on 2026-09-23 and
+	 * only the capture side was ever asked. A playback node whose server has gone is
+	 * not on the graph either, and the rebuild must take it too. */
+	return reac_node_on_graph(n ? n->stream : NULL, why);
 }
 
 const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n)

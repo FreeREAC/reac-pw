@@ -803,6 +803,8 @@ struct autodetect_ctx {
 	 * (reac_node_recover.h). Separate from `last` because a rebuild is not a model
 	 * change and must not re-announce one. */
 	struct reac_node_recover     recover;
+	const char                  *rebuilt; /* what the last rebuild took, for the line that
+	                                       * says it is back (reac_node_pair_name) */
 	int                          restamp; /* a rebuilt peer needs the sink's badges again */
 	const struct reac_box_model *announced;  /* the model the "autodetected" line named */
 	/* THE WAKE LADDER (reac_wake.h, spec 2026-09-16-a-dropped-box-wakes-on-a-phy-edge).
@@ -947,6 +949,19 @@ static void wake_step(struct autodetect_ctx *c)
 	}
 }
 
+/* WHAT A SEGMENT IS WITHOUT THE NODE(S) A PAIR VERDICT NAMES — the tail of the rebuild
+ * and give-up lines, so an operator reads the cost of the side that is actually gone. */
+static const char *pair_cost(const struct reac_node_pair_verdict *v)
+{
+	if (v->src_gone && !v->sink_gone)
+		return "A segment without its capture node has no input patches at all; "
+		       "the box's outputs are unaffected.";
+	if (v->sink_gone && !v->src_gone)
+		return "A segment without its playback node has no output patches at all; "
+		       "the box's inputs are unaffected.";
+	return "A segment without both its nodes has no patches at all.";
+}
+
 static void on_autodetect_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
@@ -987,63 +1002,70 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		 * SAID we built is really there. Announcing a resize and never checking is
 		 * how a segment can hold a playback node, a log line naming its capture
 		 * width, and no capture node, for as long as nobody looks at the graph. */
-		const char *why = "no node was ever created";
+		const char *why = NULL;
 		int on_graph = reac_source_node_on_graph(*c->src, &why);
-		/* THE PAIR IS JUDGED TOGETHER. When the PipeWire server goes away both
-		 * streams lose it at once, and a rebuild that took only the capture side
-		 * would leave reac-playback as a stream that remembers a node id on a graph
-		 * that no longer has it (desk 2026-09-23, pipewire.service restarted under
-		 * an enrolled S-1608: no node, no line, for twelve minutes). */
+		/* THE PAIR IS JUDGED TOGETHER, AND EACH SIDE IS TORN DOWN ALONE
+		 * (reac_node_recover.h). When the PipeWire server goes away both streams
+		 * lose it at once, and a rebuild that took only the capture side would leave
+		 * reac-playback as a stream that remembers a node id on a graph that no
+		 * longer has it (desk 2026-09-23, pipewire.service restarted under an
+		 * enrolled S-1608: no node, no line, for twelve minutes). One ladder, then —
+		 * but the verdict names WHICH node(s) are gone, and only those are rebuilt: a
+		 * node that failed alone must never cost the segment its healthy sibling. */
 		const char *sink_why = NULL;
 		int sink_on_graph = reac_sink_node_on_graph(c->sink, &sink_why);
-		if (on_graph && !sink_on_graph) {
-			on_graph = 0;
-			why = sink_why;
-		}
-		/* Read BEFORE the step, which resets the ladder the moment the node is back. */
+		/* Read BEFORE the step, which resets the ladder the moment the pair is back. */
 		int attempts = c->recover.attempts;
-		switch (reac_node_recover_step(&c->recover, on_graph)) {
+		struct reac_node_pair_verdict v =
+			reac_node_recover_step_pair(&c->recover, on_graph, why, sink_on_graph, sink_why);
+		switch (v.act) {
 		case REAC_RECOVER_WAIT:
 			/* A REBUILD THAT WORKED SAYS SO. Without this the journal reads
 			 * "rebuilding it (attempt 1 of 5)" and then nothing at all, which is
 			 * exactly what a still-broken segment reads like — the failure this whole
 			 * path exists to stop being silent about, moved one line down. Only after
-			 * an attempt: a node that was never missing has nothing to report. */
-			if (on_graph && attempts > 0)
-				fprintf(stderr, "reac-pw: %sreac-capture is back on the graph "
-				        "(attempt %d) — this segment's input patches can be made "
-				        "again.\n", c->tag, attempts);
+			 * an attempt: a node that was never missing has nothing to report. The
+			 * subject is the node(s) the last rebuild took, remembered for this. */
+			if (on_graph && sink_on_graph && attempts > 0)
+				fprintf(stderr, "reac-pw: %s%s is back on the graph "
+				        "(attempt %d) — this segment's patches can be made "
+				        "again.\n", c->tag,
+				        c->rebuilt ? c->rebuilt : "reac-capture and reac-playback",
+				        attempts);
 			/* Healthy, inside the window, or already reported. The announcement lives
 			 * here too: the node is CONNECTING when it is built, so "it is there" is
 			 * only ever true on a later tick. */
 			autodetect_announce(c, bm);
 			return;
 		case REAC_RECOVER_GIVE_UP:
-			fprintf(stderr, "reac-pw: %sreac-capture for %s is STILL not on the graph "
-			        "after %d rebuilds (%s) — giving up on it. This segment has no input "
-			        "patches and nothing here will change that; the box's outputs are "
-			        "unaffected. It is retried the moment the node appears or the box "
+			fprintf(stderr, "reac-pw: %s%s for %s is STILL not on the graph "
+			        "after %d rebuilds (%s) — giving up on it. %s Nothing here will "
+			        "change that; it is retried the moment the node appears or the box "
 			        "is re-recognized.\n",
-			        c->tag, bm->display, REAC_RECOVER_MAX_ATTEMPTS, why);
+			        c->tag, reac_node_pair_name(&v), bm->display,
+			        REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v));
 			return;
 		case REAC_RECOVER_REBUILD:
-			fprintf(stderr, "reac-pw: %sreac-capture is NOT on the graph %.1f s after it "
-			        "was sized to %s (%s) — rebuilding it (attempt %d of %d)%s. A segment "
-			        "without its capture node has no input patches at all.\n",
-			        c->tag, reac_node_recover_spent(&c->recover) * 0.2, bm->display, why,
-			        c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS,
-			        sink_on_graph ? "" : ", and reac-playback with it");
+			c->rebuilt = reac_node_pair_name(&v);
+			fprintf(stderr, "reac-pw: %s%s is NOT on the graph %.1f s after it "
+			        "was sized to %s (%s) — rebuilding it (attempt %d of %d). %s\n",
+			        c->tag, c->rebuilt, reac_node_recover_spent(&c->recover) * 0.2,
+			        bm->display, v.why, c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS,
+			        pair_cost(&v));
 			/* FORCE IT. reac_source_node_ensure rebuilds on a CHANGE of width or
 			 * label, and neither moved — the node it would compare against is the one
 			 * that failed, at exactly the width we want. Tearing it down first is what
-			 * makes the next ensure() build rather than agree. The playback side is
-			 * torn down only when IT is the one that is gone: a capture node that
-			 * failed alone must not cost the segment its outputs. */
-			reac_source_node_destroy(*c->src);
-			*c->src = NULL;
-			if (!sink_on_graph)
+			 * makes the next ensure() build rather than agree. EACH SIDE ONLY WHEN IT
+			 * IS THE ONE THAT IS GONE: a capture node that failed alone must not cost
+			 * the segment its outputs, and a playback node that failed alone must not
+			 * cost it its inputs (#109). */
+			if (v.src_gone) {
+				reac_source_node_destroy(*c->src);
+				*c->src = NULL;
+				c->restamp = 1;   /* the new node starts blank; see below */
+			}
+			if (v.sink_gone)
 				reac_sink_node_unpublish(c->sink);
-			c->restamp = 1;   /* the new node starts blank; see below */
 			break;
 		}
 	} else {
@@ -2765,7 +2787,6 @@ struct hearing {
 	 * released when it is silent — since 2026-09-23. */
 	struct declared_seg decl[REAC_DECLARED_VLAN_MAX];
 	int n_decl;
-	int decl_full;              /* the scan hit REAC_DECLARED_VLAN_MAX; reported, not hidden */
 };
 
 static struct hearing g_hear;
@@ -3887,10 +3908,13 @@ static void declared_load(struct hearing *h)
 	if (n >= 0)
 		n = count;
 	if (n < 0) {
-		h->decl_full = 1;
+		/* BOUNDED, AND SAID ONCE. The table holds the first REAC_DECLARED_VLAN_MAX
+		 * declarations and nothing else is served: this line is the only notice the
+		 * ones past the bound ever get, so it names the bound and what it costs. */
 		n = REAC_DECLARED_VLAN_MAX;
-		fprintf(stderr, "reac-pw: more than %d declared VLAN segments — the rest are "
-		        "NOT reported (bounded, reported)\n", REAC_DECLARED_VLAN_MAX);
+		fprintf(stderr, "reac-pw: more than %d declared VLAN segments — only the first "
+		        "%d are served; the rest are NOT served, and this line is the only "
+		        "notice of them\n", REAC_DECLARED_VLAN_MAX, REAC_DECLARED_VLAN_MAX);
 	}
 	for (int i = 0; i < n && i < REAC_DECLARED_VLAN_MAX; i++) {
 		struct declared_seg *ds = &h->decl[h->n_decl];

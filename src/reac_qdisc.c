@@ -25,6 +25,9 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 {
 	if (!q)
 		return -EINVAL;
+	/* WHAT THIS DAEMON ALREADY OWNS HERE. Cleared with the rest, and put back in
+	 * exactly one case below: a removal of OUR OWN etf that failed. */
+	struct reac_qdisc ours = *q;
 	memset(q, 0, sizeof *q);
 	if (!ifname || !ifname[0])
 		return -EINVAL;
@@ -53,8 +56,21 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 				        ifname, ifname);
 			return 0;
 		}
+		int mine = ours.installed && ours.ifindex == (int)idx;
 		int rc = reac_etf_qdisc_remove((int)idx);
 		if (rc != 0) {
+			if (mine) {
+				/* STILL THERE AND STILL OURS. The record goes back so the exit
+				 * retries it; a cleared record here is a qdisc nobody ever takes
+				 * away, dropping every unstamped frame on this device (#109). */
+				*q = ours;
+				fprintf(stderr, "reac-qdisc: the etf qdisc this daemon installed on "
+				        "%s could not be taken back now (errno %d) — %s. It stays "
+				        "on record and is tried again on exit; until it is gone, "
+				        "every frame sent here without a launch time is dropped.\n",
+				        ifname, -rc, reac_etf_qdisc_fix(rc));
+				return rc;
+			}
 			fprintf(stderr, "reac-qdisc: %s carries a LEFTOVER etf qdisc and it "
 			        "could not be removed (errno %d) — %s. On the thread backend "
 			        "that qdisc drops every frame this daemon sends, because "
@@ -62,9 +78,14 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 			        ifname, -rc, reac_etf_qdisc_fix(rc));
 			return rc;
 		}
-		fprintf(stderr, "reac-qdisc: removed a LEFTOVER etf qdisc from %s — the "
-		        "thread backend is running and that qdisc would have dropped every "
-		        "frame it sends\n", ifname);
+		if (mine)
+			fprintf(stderr, "reac-qdisc: removed the etf qdisc this daemon installed "
+			        "on %s — the thread backend is running and that qdisc would have "
+			        "dropped every frame it sends\n", ifname);
+		else
+			fprintf(stderr, "reac-qdisc: removed a LEFTOVER etf qdisc from %s — the "
+			        "thread backend is running and that qdisc would have dropped "
+			        "every frame it sends\n", ifname);
 		return 0;
 	}
 
@@ -97,6 +118,29 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 	        "again on exit\n", REAC_ETF_QDISC_DELTA_NS, ifname,
 	        kind[0] ? kind : "nothing");
 	return 0;
+}
+
+int reac_qdisc_disarm(struct reac_qdisc *q, const char *ifname, const char *refusal)
+{
+	if (!q)
+		return -EINVAL;
+	if (!refusal)
+		refusal = "no reason given";
+	if (q->installed)
+		fprintf(stderr, "reac-qdisc: ETF was wanted on '%s' and the pacer refused it "
+		        "(%s) — the etf qdisc this daemon just installed is REMOVED again, "
+		        "because a thread-backend frame carries no launch time and "
+		        "skip_sock_check would drop every one of them: the wire would carry "
+		        "nothing and the journal would count pushes anyway\n",
+		        ifname ? ifname : "?", refusal);
+	else
+		fprintf(stderr, "reac-qdisc: ETF was wanted on '%s' and the pacer refused it "
+		        "(%s) — this daemon had installed NO etf qdisc there (the install "
+		        "was refused above), so there is nothing of its own to take back; "
+		        "the device is checked for a leftover etf from elsewhere, because "
+		        "one would drop every thread-backend frame all the same\n",
+		        ifname ? ifname : "?", refusal);
+	return reac_qdisc_arm(q, ifname, 0);
 }
 
 void reac_qdisc_release(struct reac_qdisc *q)

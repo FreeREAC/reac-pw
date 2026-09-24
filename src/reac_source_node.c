@@ -4,6 +4,7 @@
 #include "reac_source_node.h"
 #include <reac/reac_link_state.h>
 #include "reac_node_ensure.h"  /* the shared same-box-or-rebuild decision */
+#include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
                                  * (task #4.3 extension: "one wire, one rate" — see
                                  * reac_sink_format.h's revised SCOPE note) */
@@ -646,35 +647,9 @@ void reac_source_node_drain_log(struct reac_source_node *n, FILE *out)
 
 int reac_source_node_on_graph(const struct reac_source_node *n, const char **why)
 {
-	const char *reason = "no node was ever created";
-	if (n && n->stream) {
-		const char *err = NULL;
-		enum pw_stream_state st = pw_stream_get_state(n->stream, &err);
-		uint32_t id = pw_stream_get_node_id(n->stream);
-		if (st == PW_STREAM_STATE_ERROR)
-			reason = err ? err : "the stream is in error";
-		else if (st == PW_STREAM_STATE_UNCONNECTED)
-			/* THE SERVER WENT AWAY UNDER IT. libpipewire answers a lost connection
-			 * by putting the stream back to UNCONNECTED — not ERROR, and it keeps
-			 * the node id it was given — so the two tests around this one both
-			 * PASSED a node that no longer existed. Desk, 2026-09-23 13:44:
-			 * pipewire.service was restarted two seconds after an S-1608 enrolled,
-			 * and for twelve minutes the box's LED said enrolled, the roster said
-			 * established, and the graph had nothing for it, with no line anywhere.
-			 * A stream that is not connected is on no graph, whatever id it
-			 * remembers (tests/graph-survives-a-pipewire-restart.sh). */
-			reason = "the stream is not connected — the PipeWire server went away";
-		else if (id == SPA_ID_INVALID)
-			reason = "the daemon has given it no node id";
-		else {
-			if (why)
-				*why = "on the graph";
-			return 1;
-		}
-	}
-	if (why)
-		*why = reason;
-	return 0;
+	/* ONE READING FOR BOTH DIRECTIONS (reac_node_graph.h) — the UNCONNECTED case of
+	 * 2026-09-23 lives there, once, for this node and reac-playback alike. */
+	return reac_node_on_graph(n ? n->stream : NULL, why);
 }
 
 int reac_source_node_ensure(struct reac_source_node **slot,
