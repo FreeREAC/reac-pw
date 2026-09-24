@@ -269,6 +269,14 @@ echo "$OUT" | grep -aq 'CANNOT INSTALL the etf qdisc' \
 	|| fail "the refusal arm installed nothing and said nothing — a silent fallback is the defect this backend exists to avoid"
 echo "$OUT" | grep -aq 'ETF IS THE DEFAULT AND THIS MACHINE CANNOT RUN IT' \
 	|| fail "the pacer fell back to the thread backend without one loud line naming the refusal"
+# AND THE FALLBACK SAYS WHAT IS TRUE OF THIS DAEMON (#109). Nothing was installed, so
+# the line that follows the refusal must not claim a qdisc was "just installed" and
+# removed again; it says the daemon installed nothing. The positive line is asserted
+# first so the negative cannot pass on a daemon that said nothing at all.
+echo "$OUT" | grep -aq 'installed NO etf qdisc' \
+	|| fail "the refusal arm's fallback never said that this daemon installed no qdisc"
+echo "$OUT" | grep -aq 'just installed is REMOVED again' \
+	&& fail "the refusal arm claimed to remove a qdisc it 'just installed' — the install was refused, nothing was installed"
 [ "$(reac refusal)" -gt 1000 ] 2>/dev/null \
 	|| fail "the refusal arm carried only $(reac refusal) frames (any $(anyf refusal)) — a machine that cannot do ETF must still carry audio"
 

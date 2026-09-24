@@ -542,11 +542,18 @@ test('reac_declared_vlan_waits_for_its_tag',
   args : [reac_pw_exe, fake_box_master],
   timeout : 300)
 
-# --- unit test: the ETF catch-up budget, and "unreadable is not zero" --------
-# Pure arithmetic plus one rtnetlink dump of the host's own qdisc table (a read).
+# --- unit test: the ETF catch-up budget, "unreadable is not zero", and the qdisc record --
+# Pure arithmetic plus one rtnetlink dump of the host's own qdisc table (a read). The
+# record cases (#109: a refused install is never "just installed"; our own qdisc whose
+# removal failed stays on record for the exit) run the real reac_qdisc.c policy over a
+# SCRIPTED kernel: the three libreac-transport doors it calls are wrapped at link time,
+# so no device is touched and a failing removal can be arranged without privileges.
 qdisc_test = executable('test_reac_qdisc',
   ['tests/test_reac_qdisc.c', 'src/reac_qdisc.c'],
   include_directories : [include_directories('src')],
+  link_args : ['-Wl,--wrap=reac_etf_qdisc_state',
+               '-Wl,--wrap=reac_etf_qdisc_install',
+               '-Wl,--wrap=reac_etf_qdisc_remove'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
 

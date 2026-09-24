@@ -2071,6 +2071,9 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		enum reac_pacer_backend want =
 			reac_pacer_backend_resolve(cfg->ifname, NULL, &qlay, &qunderstood);
 		want_etf = want == REAC_PACER_BACKEND_ETF;
+		/* ITS VERDICT IS THE RECORD. The errno was said inside; what the fallback
+		 * below needs to know — did THIS daemon install an etf here? — is
+		 * n->qdisc.installed, which only a confirmed install sets (reac_qdisc.h). */
 		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, want_etf);
 
 		/* THE CATCH-UP BUDGET IS MEASURED AGAINST A REFERENCE THE BACKEND MOVED.
@@ -2124,17 +2127,13 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * seven minutes while the journal counted 145 "COMPLETED" pushes, the wake ladder
 	 * spent two PHY edges on a box that had never heard us, and only the operator's
 	 * cable replug (a re-serve, a fresh pacer, by then TAI 37) brought the S-0808 back.
-	 * So: ETF wanted and not running means the etf qdisc we installed goes again, now. */
-	if (want_etf && reac_pacer_backend(&n->pacer) != REAC_PACER_BACKEND_ETF) {
-		const char *why = reac_pacer_backend_refusal(&n->pacer);
-		fprintf(stderr, "reac-qdisc: ETF was wanted on '%s' and the pacer refused it "
-		        "(%s) — the etf qdisc this daemon just installed is REMOVED again, "
-		        "because a thread-backend frame carries no launch time and "
-		        "skip_sock_check would drop every one of them: the wire would carry "
-		        "nothing and the journal would count pushes anyway\n",
-		        cfg->ifname, why ? why : "no reason given");
-		(void)reac_qdisc_arm(&n->qdisc, cfg->ifname, 0);
-	}
+	 * So: ETF wanted and not running means the etf qdisc we installed goes again, now
+	 * — and reac_qdisc_disarm says what is true of THIS daemon: "just installed" only
+	 * when it was (an install refused for want of CAP_NET_ADMIN installed nothing), and
+	 * a removal that fails keeps the record so the exit retries it (#109). */
+	if (want_etf && reac_pacer_backend(&n->pacer) != REAC_PACER_BACKEND_ETF)
+		(void)reac_qdisc_disarm(&n->qdisc, cfg->ifname,
+		                        reac_pacer_backend_refusal(&n->pacer));
 
 	/* AND THE READBACK STARTS WHERE THE SEND TABLE DOES. The CLI/conf table
 	 * (--headamp, REAC_HEADAMP) went into the pacer's send table in the open
