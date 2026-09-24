@@ -68,4 +68,40 @@ int reac_node_recover_window(const struct reac_node_recover *r);
  * the node had been missing twice as long as it had. */
 int reac_node_recover_spent(const struct reac_node_recover *r);
 
+/* ---- the pair ---------------------------------------------------------------- *
+ *
+ * THE PAIR IS JUDGED TOGETHER, AND EACH SIDE IS TORN DOWN ALONE.
+ *
+ * One segment holds two nodes on ONE ladder, because they lose the server at the same
+ * instant (desk 2026-09-23: pipewire.service restarted under an enrolled S-1608, and a
+ * rebuild that took only the capture side would have left reac-playback remembering a
+ * node id on a graph that no longer had it). So the absence that runs the ladder is the
+ * SEGMENT's — either side gone is the segment not whole.
+ *
+ * What the ladder must never do is spend a healthy node on its sibling's failure. A
+ * capture node that failed alone must not cost the segment its outputs — and, the
+ * mirror the first cut missed (#109), a playback node that failed alone must not cost it
+ * its inputs: tearing down a healthy reac-capture for a lost reac-playback is a segment
+ * with dead input patches for nothing, and a journal line blaming the wrong node with
+ * the other one's reason. So the verdict names its SIDES, and the caller destroys those
+ * and only those. */
+struct reac_node_pair_verdict {
+	enum reac_node_recover_act act;
+	int src_gone;      /* reac-capture is not on the graph: a REBUILD takes it */
+	int sink_gone;     /* reac-playback is not on the graph: a REBUILD takes it */
+	const char *why;   /* the reason to quote — the missing side's OWN, never its
+	                    * sibling's; both gone quotes the capture side's */
+};
+
+/* One poll tick over a segment's pair. `*_on_graph` are the two presence checks
+ * (reac_node_graph.h) and `*_why` their reasons. WAIT and GIVE_UP carry the sides
+ * too (a give-up line names what is still missing); only a REBUILD acts on them. */
+struct reac_node_pair_verdict reac_node_recover_step_pair(struct reac_node_recover *r,
+                                                          int src_on_graph, const char *src_why,
+                                                          int sink_on_graph, const char *sink_why);
+
+/* The subject of the journal line: "reac-capture", "reac-playback", or both. A verdict
+ * with nothing gone (a WAIT on a whole segment) names both — there is no line to print. */
+const char *reac_node_pair_name(const struct reac_node_pair_verdict *v);
+
 #endif /* REAC_NODE_RECOVER_H */
