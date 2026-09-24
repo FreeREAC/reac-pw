@@ -163,6 +163,7 @@ reac_pw_src = [
   'src/reac_role_cfg.c',
   'src/reac_sink_format.c',
   'src/reac_node_ensure.c',
+  'src/reac_node_graph.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
   'src/reac_lat.c',

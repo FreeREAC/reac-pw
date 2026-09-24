@@ -26,6 +26,7 @@
 #include "reac_sink_node.h"
 #include <reac/transport/reac_segment_ident.h> /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
+#include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
 #include <reac/transport/reac_tx.h>
 #include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
@@ -2296,30 +2297,11 @@ void reac_sink_node_unpublish(struct reac_sink_node *n)
 
 int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why)
 {
-	/* THE SAME THREE READINGS reac_source_node_on_graph TAKES, for the same reasons,
-	 * and above all the same UNCONNECTED one: the pair died together with the server
-	 * on 2026-09-23 and only the capture side was ever asked. A playback node whose
-	 * server has gone is not on the graph either, and the rebuild must take both. */
-	const char *reason = "no node was ever created";
-	if (n && n->stream) {
-		const char *err = NULL;
-		enum pw_stream_state st = pw_stream_get_state(n->stream, &err);
-		uint32_t id = pw_stream_get_node_id(n->stream);
-		if (st == PW_STREAM_STATE_ERROR)
-			reason = err ? err : "the stream is in error";
-		else if (st == PW_STREAM_STATE_UNCONNECTED)
-			reason = "the stream is not connected — the PipeWire server went away";
-		else if (id == SPA_ID_INVALID)
-			reason = "the daemon has given it no node id";
-		else {
-			if (why)
-				*why = "on the graph";
-			return 1;
-		}
-	}
-	if (why)
-		*why = reason;
-	return 0;
+	/* THE SAME READING reac_source_node_on_graph TAKES, from the same function
+	 * (reac_node_graph.h): the pair died together with the server on 2026-09-23 and
+	 * only the capture side was ever asked. A playback node whose server has gone is
+	 * not on the graph either, and the rebuild must take it too. */
+	return reac_node_on_graph(n ? n->stream : NULL, why);
 }
 
 const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n)
