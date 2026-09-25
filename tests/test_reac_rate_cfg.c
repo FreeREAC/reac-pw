@@ -227,7 +227,7 @@ static const uint8_t ZONEA_JOIN[32] = {
 };
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 
 /* Mirrors test_reac_master_no_enroll.c's helper of the same name: stand in the
  * quiet window between scene transfers so the JOIN below is not held. */

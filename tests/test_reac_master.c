@@ -44,7 +44,7 @@
  * written out here rather than computed from in_ch on purpose — a helper
  * mapping width to base is the very table this law retired, and it would agree
  * with the wire on exactly the chassis we own. */
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 #define S0808_BASE 0x00
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -327,12 +327,12 @@ int main(void)
 
 		reac_master_init(&mg, SRC, &idle, FPS);
 		reac_master_set_box(&mg, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);                 /* a real S-1608 links */
-		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
-		CHK(mg.grant_burst_len == 56);                   /* 8 + 16*3 */
+		CHK(mg.alloc.base == REACPW_S1608_HEADAMP_BASE && mg.alloc.width == REAC_BOX_S1608_IN);
+		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));                   /* 8 + 16*3 */
 
 		reac_master_set_box(&mg, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);                  /* an S-0808 instead */
 		CHK(mg.alloc.base == 0x00 && mg.alloc.width == 8);
-		CHK(mg.grant_burst_len == 32);                   /* 8 + 8*3 — sweep RESIZED */
+		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));   /* sweep RESIZED */
 
 		/* Every group-A record the sweep emits addresses a slot inside the
 		 * allocation. This is the invariant the replayed table violated. */
@@ -346,7 +346,7 @@ int main(void)
 			CHK(r[20] >= mg.alloc.base);
 			CHK(r[20] < mg.alloc.base + mg.alloc.width);
 		}
-		CHK(groupa == 16 * 3);
+		CHK(groupa == REAC_BOX_S1608_IN * REAC_HEADAMP_SWEEP_RECORDS_PER_CH);
 
 		/* A width we cannot place must not HALF-apply: the allocation, the ENROLL
 		 * group map and the cfea width byte move together or not at all. The
@@ -356,8 +356,8 @@ int main(void)
 		memcpy(enroll_before, mg.enroll_blk, 34);
 		uint8_t cfea_before = mg.cfg.out_channels;
 		reac_master_set_box(&mg, 999, 8, S1608_BASE);                /* nonsense recognition */
-		CHK(mg.grant_burst_len == 56);                   /* previous sweep retained */
-		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
+		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));                   /* previous sweep retained */
+		CHK(mg.alloc.base == REACPW_S1608_HEADAMP_BASE && mg.alloc.width == REAC_BOX_S1608_IN);
 		CHK(memcmp(enroll_before, mg.enroll_blk, 34) == 0);
 		CHK(mg.cfg.out_channels == cfea_before);
 	}
@@ -539,7 +539,7 @@ int main(void)
 	CHK(reac_master_has_box(&m) == 0);
 	CHK(m.grant_burst_len == 0);
 	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
-	CHK(m.grant_burst_len == 56);
+	CHK(m.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 
 	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the ~1.6 s
 	 * grant_dwell hold (matching the measured M-200 ENROLL->grant gap: Δ1.503 s
@@ -822,7 +822,7 @@ int main(void)
 		reac_master_set_box(&mb, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);
 		CHK(reac_master_has_box(&mb) == 1);
 		CHK(mb.alloc.base == 0x00 && mb.alloc.width == 8);
-		CHK(mb.grant_burst_len == 32);              /* 8 + 8*3 */
+		CHK(mb.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
 		CHK(mb.grant_ticks == 0);                   /* window restarted */
 		int ga_records = 0;
 		emitted_grants = 0;
@@ -840,8 +840,8 @@ int main(void)
 				CHK(f[36] <= 0x07);                 /* the S-0808's own slots */
 			}
 		}
-		CHK(emitted_grants == 32);
-		CHK(ga_records == 8 * 3);                   /* phantom+pad+sens per input */
+		CHK(emitted_grants == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
+		CHK(ga_records == REAC_BOX_S0808_IN * REAC_HEADAMP_SWEEP_RECORDS_PER_CH);                   /* phantom+pad+sens per input */
 		CHK(mb.state == REAC_M_ESTABLISHED);
 
 		/* (d) A BOX SWAP RE-DERIVES EVERYTHING. The 8-wide box goes; the master
@@ -856,12 +856,12 @@ int main(void)
 		deliver_scene(&mb, &bc);
 		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
 		reac_master_set_box(&mb, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
-		CHK(mb.alloc.base == 0x20 && mb.alloc.width == 16);
-		CHK(mb.grant_burst_len == 56);
+		CHK(mb.alloc.base == REACPW_S1608_HEADAMP_BASE && mb.alloc.width == REAC_BOX_S1608_IN);
+		CHK(mb.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		for (int i = 0; i < mb.grant_burst_len; i++) {
 			const uint8_t *r = mb.grant_burst[i];
 			if (r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01)
-				CHK(r[20] >= 0x20 && r[20] <= 0x2f);   /* NOT the old box's slots */
+				CHK(r[20] >= REACPW_S1608_HEADAMP_BASE && r[20] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);   /* NOT the old box's slots */
 		}
 
 		/* (e) A BOX THAT NEVER DECLARES ITSELF is not guessed at. The hold expires

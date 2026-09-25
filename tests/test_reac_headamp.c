@@ -94,7 +94,7 @@ int main(void)
 
 	/* 3b. S-1608 wire channels (model_base 0x20): ch1 = 0x20, ch16 = 0x2f;
 	 * the general record-sum rule holds at every CH. */
-	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0x2f, REAC_HEADAMP_PAD, 0x01);
+	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 1, REACPW_HEADAMP_TOP_CH, REAC_HEADAMP_PAD, 0x01);
 	CHK(n == REAC_FRAME_BYTES && reac_ctrl_checksum_verify(f) == 0);
 	{
 		unsigned rec = 0;
@@ -102,7 +102,7 @@ int main(void)
 		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
 	}
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
-	CHK(p.ch == 0x2f && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
+	CHK(p.ch == REACPW_HEADAMP_TOP_CH && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
 
 	/* 3c. STAMP overlay (the MASTER emit path, task #155/C.7): stamping a head-amp
 	 * record over an already-built FILLER frame reproduces the SAME control block
@@ -139,7 +139,7 @@ int main(void)
 		{
 			uint8_t before[REAC_FRAME_BYTES];
 			memcpy(before, frame, sizeof before);
-			CHK(reac_ctrl_stamp_headamp(frame, 0x00, 0x03, 0x00) == -1);
+			CHK(reac_ctrl_stamp_headamp(frame, 0x00, REAC_HEADAMP_SWEEP_RECORDS_PER_CH, 0x00) == -1);
 			CHK(memcmp(before, frame, sizeof before) == 0);
 		}
 	}
@@ -174,7 +174,7 @@ int main(void)
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, 0x03, 0x00) == 0);
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_PHANTOM, 0x02) == 0);
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_PAD, 0x02) == 0);
-	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_SENS, 0x38) == 0);
+	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_SENS, REAC_HEADAMP_SENS_STEPS) == 0);
 
 	/* 6. SENS dB codec at all anchors: dB = -10 - value + (pad ? 20 : 0).
 	 * Pad off 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on 0x00 = +10 .. 0x37 = -45.
@@ -205,14 +205,14 @@ int main(void)
 	 * Changing the scale is a contract change — the conversion runs both ways,
 	 * reac_slave.c derives virtual preamp gain from it, and openmixer publishes
 	 * sensDbu — so these assertions exist to make the next change deliberate. */
-	CHK(reac_headamp_sens_cdb(0x00, 0) == -1000);
-	CHK(reac_headamp_sens_cdb(0x37, 0) == -6500);
-	CHK(reac_headamp_sens_cdb(0x00, 1) ==  1000);
-	CHK(reac_headamp_sens_cdb(0x37, 1) == -4500);
-	CHK(reac_headamp_sens_db(0x00, 0) == -10);
-	CHK(reac_headamp_sens_db(0x37, 0) == -65);
-	CHK(reac_headamp_sens_value_cdb(-1000, 0) == 0x00);
-	CHK(reac_headamp_sens_value_cdb(-6500, 0) == 0x37);
+	CHK(reac_headamp_sens_cdb(0x00, 0) == REAC_HEADAMP_SENS_REF_CDB);
+	CHK(reac_headamp_sens_cdb(REAC_HEADAMP_SENS_MAX, 0) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0));
+	CHK(reac_headamp_sens_cdb(0x00, 1) == REACPW_SENS_CDB(0, 1));
+	CHK(reac_headamp_sens_cdb(REAC_HEADAMP_SENS_MAX, 1) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 1));
+	CHK(reac_headamp_sens_db(0x00, 0) == REACPW_SENS_CDB(0, 0) / 100);
+	CHK(reac_headamp_sens_db(REAC_HEADAMP_SENS_MAX, 0) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0) / 100);
+	CHK(reac_headamp_sens_value_cdb(REAC_HEADAMP_SENS_REF_CDB, 0) == 0x00);
+	CHK(reac_headamp_sens_value_cdb(REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0), 0) == REAC_HEADAMP_SENS_MAX);
 
 	/* EVERY step is 100 cdB, including the three the firmware's stage breaks sit
 	 * on. Those breaks were put to a rapid A/B/A alternation twice each, at two
@@ -229,7 +229,7 @@ int main(void)
 	 * was specifically about three of them. */
 	for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++)
 		CHK(reac_headamp_sens_cdb((uint8_t)v, 0) -
-		    reac_headamp_sens_cdb((uint8_t)(v + 1), 0) == 100);
+		    reac_headamp_sens_cdb((uint8_t)(v + 1), 0) == REAC_HEADAMP_SENS_STEP_CDB);
 
 	/* ROUND TRIP, both units, no exceptions. The map is injective now that the
 	 * three twins are gone, so step -> dB -> step is the identity for all 56
@@ -253,7 +253,7 @@ int main(void)
 	}
 
 	CHK(reac_headamp_sens_value(99, 0) == 0x00);      /* hotter than min gain */
-	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */
+	CHK(reac_headamp_sens_value(-99, 0) == REAC_HEADAMP_SENS_MAX);     /* below max gain */
 
 	printf("OK: head-amp record byte-exact vs the M-200 capture (inner 0x80 / "
 	       "outer sum-0), TAG dispatch grant-safe, SENS codec is one dB per step\n"

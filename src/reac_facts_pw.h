@@ -51,6 +51,19 @@
 #define REACPW_SAMPLE_MASK  ((1LL << REACPW_SAMPLE_BITS) - 1)
 
 /* A big-endian u16 at p: the type word, the opcode (link, segment) and the length. */
+/* Head-amp channel space: the highest wire channel, and the S-1608's base —
+ * its strap (2; the per-model strap is not declared in reac-protocol) times the
+ * declared multiplier. */
+#define REACPW_HEADAMP_TOP_CH      (REAC_HEADAMP_CH_SPAN - 1)
+#define REACPW_S1608_HEADAMP_BASE  (2 * REAC_HEADAMP_BASE_MULTIPLIER)
+/* A w-wide box's grant sweep: 2 head frames + 6 group-B records (neither count
+ * is declared in reac-protocol yet) + one group-A record per input per param. */
+#define REACPW_GRANT_SWEEP_LEN(w)  (8 + (w) * REAC_HEADAMP_SWEEP_RECORDS_PER_CH)
+/* The declared sensitivity rule, in centi-dB: step 0 is the reference, each
+ * step one STEP_CDB lower, the pad adds PAD_CDB. */
+#define REACPW_SENS_CDB(step, pad) (REAC_HEADAMP_SENS_REF_CDB - (step) * REAC_HEADAMP_SENS_STEP_CDB \
+                                    + ((pad) ? REAC_HEADAMP_PAD_CDB : 0))
+
 /* Where a scene-body offset lands on the wire: which chunk (0-based, step - 1)
  * and how far into that chunk's payload. */
 #define REACPW_SCENE_CHUNK_OF(off) (((off) - REAC_SCENE_HEAD_BYTES) / REAC_SCENE_CHUNK_BYTES)

@@ -78,7 +78,7 @@ static int box_bye(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 {
 	uint8_t f[2048];
-	size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, 0x20, 0 /* phantom */, 1);
+	size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1);
 	if (n == 0)
 		return -2;
 	return reac_hunt_observe(h, f, n, now, NULL);
@@ -91,7 +91,7 @@ static int box_on_m(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
 	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, REAC_BOX_S4000S_3208_IN, NULL, REAC_SAMPLES_PER_PKT);
-	if (n == 0 || reac_ctrl_stamp_headamp(f, 0x20, 0 /* phantom */, 1) != 0)
+	if (n == 0 || reac_ctrl_stamp_headamp(f, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1) != 0)
 		return -2;
 	reac_ctrl_checksum_apply(f);
 	return reac_hunt_observe(h, f, n, now, NULL);
@@ -103,7 +103,7 @@ static int box_on_m(struct reac_hunt *h, uint64_t now)
 static int rival_no_geometry(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
-	size_t n = reac_ctrl_build_headamp(f, BCAST, BOXM, 0x30, 0x20, 0 /* phantom */, 1);
+	size_t n = reac_ctrl_build_headamp(f, BCAST, BOXM, 0x30, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1);
 	if (n == 0)
 		return -2;
 	return reac_hunt_observe(h, f, 64, now, NULL);
