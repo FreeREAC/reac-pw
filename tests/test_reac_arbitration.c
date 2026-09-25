@@ -138,13 +138,13 @@ int main(void)
 	 * master — so arbitration reads the length, not only the control plane. The
 	 * widths are the chassis we own; 1494 carries the FCS residue and is no geometry. */
 	CHK(reac_frame_is_master_downstream(REAC_FRAME_BYTES));
-	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(32)));
-	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(16)));
-	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(8)));
+	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN)));
+	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(REAC_BOX_S1608_IN)));
+	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(REAC_BOX_S0808_IN)));
 	CHK(!reac_frame_is_master_downstream(REAC_FRAME_BYTES_OHRCA));
-	CHK(reac_frame_channels(REACPW_FRAME_LEN(32)) == 32);   /* S-4000S */
-	CHK(reac_frame_channels(REACPW_FRAME_LEN(16)) == 16);    /* S-1608  */
-	CHK(reac_frame_channels(REACPW_FRAME_LEN(8)) == 8);     /* S-0808  */
+	CHK(reac_frame_channels(REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN)) == REAC_BOX_S4000S_3208_IN);   /* S-4000S */
+	CHK(reac_frame_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN)) == REAC_BOX_S1608_IN);    /* S-1608  */
+	CHK(reac_frame_channels(REACPW_FRAME_LEN(REAC_BOX_S0808_IN)) == REAC_BOX_S0808_IN);     /* S-0808  */
 	CHK(reac_frame_channels(REAC_FRAME_BYTES) == REAC_MAX_CHANNELS);
 	CHK(reac_frame_channels(REAC_FRAME_BYTES_OHRCA) == 0);
 
@@ -155,9 +155,9 @@ int main(void)
 	 * a 32-channel BOX upstream. A master never joins another master, so that peer is a
 	 * misconfigured box to REPORT, not a master to follow. */
 	CHK(reac_rival_kind_from_channels(REAC_MAX_CHANNELS) == REAC_RIVAL_DESK);
-	CHK(reac_rival_kind_from_channels(32) == REAC_RIVAL_BOX);   /* S-4000S */
-	CHK(reac_rival_kind_from_channels(16) == REAC_RIVAL_BOX);   /* S-1608  */
-	CHK(reac_rival_kind_from_channels(8)  == REAC_RIVAL_BOX);   /* S-0808  */
+	CHK(reac_rival_kind_from_channels(REAC_BOX_S4000S_3208_IN) == REAC_RIVAL_BOX);   /* S-4000S */
+	CHK(reac_rival_kind_from_channels(REAC_BOX_S1608_IN) == REAC_RIVAL_BOX);   /* S-1608  */
+	CHK(reac_rival_kind_from_channels(REAC_BOX_S0808_IN)  == REAC_RIVAL_BOX);   /* S-0808  */
 	CHK(reac_rival_kind_from_channels(0)  == REAC_RIVAL_UNKNOWN); /* no legal geometry heard */
 
 	/* The names ARE the published prop values, so they are pinned here. */
@@ -191,11 +191,11 @@ int main(void)
 	 * caller reading the table a second time. */
 	reac_disco_table_init(&t);
 	put(&t, BOX, REAC_DISCO_ROLE_MASTER, now);
-	t.e[0].channels = 8;                            /* an S-0808 on M: 340 B frames */
+	t.e[0].channels = REAC_BOX_S0808_IN;                            /* an S-0808 on M: 340 B frames */
 	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
 	CHK(a.state == REAC_SEGMENT_FOREIGN);
 	CHK(a.rival == REAC_RIVAL_BOX);
-	CHK(a.rival_channels == 8);
+	CHK(a.rival_channels == REAC_BOX_S0808_IN);
 	/* A desk publishes its own 40 the same way. */
 	reac_disco_table_init(&t);
 	put(&t, DESK, REAC_DISCO_ROLE_MASTER, now);

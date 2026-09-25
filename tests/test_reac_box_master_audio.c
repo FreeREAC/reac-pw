@@ -50,7 +50,7 @@ static int fails;
 	if (!(cond)) { fails++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } \
 } while (0)
 
-#define BOX_CH 8
+#define BOX_CH REAC_BOX_S0808_IN
 
 /* ---- minimal classic-pcap writer (LE, linktype 1), as test_reac_rx_gate.c ---- */
 static void pcap_hdr(FILE *f)

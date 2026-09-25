@@ -131,9 +131,9 @@ peer ip link set tpeer0.21 up
 # namespace, at the top rate the emulator paces; and one real box on M behind the trunk.
 # All four run BEFORE the daemon, so its very first tap open happens under the traffic.
 for v in 11 12 13; do
-	"$FAKE" noise0.$v 00:40:ab:c4:$v:21 8 "$FACT_PKT_RATE_96K" >"$RT/noise$v.log" 2>&1 &
+	"$FAKE" noise0.$v 00:40:ab:c4:$v:21 "$FACT_BOX_S0808_IN" "$FACT_PKT_RATE_96K" >"$RT/noise$v.log" 2>&1 &
 done
-$in_peer "$FAKE" tpeer0.21 00:40:ab:c4:21:21 8 2000 >"$RT/tag21.log" 2>&1 &
+$in_peer "$FAKE" tpeer0.21 00:40:ab:c4:21:21 "$FACT_BOX_S0808_IN" 2000 >"$RT/tag21.log" 2>&1 &
 sleep 1
 
 HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$LOG" 2>&1 &

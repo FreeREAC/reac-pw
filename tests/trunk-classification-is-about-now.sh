@@ -24,6 +24,7 @@
 # Isolation is part of the test (tests/hearing-finds-a-segment.sh's header has the
 # reasoning). Skips (77) where the namespaces, iproute2 or PipeWire are unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -85,7 +86,7 @@ peer ip link add link pmir0 name pmir0.11 type vlan id 11 || exit 90
 mkdir -p "$CONF/.config/reac-pw"
 printf '[segment repat0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
-$in_peer "$FAKE" pmir0.11 00:40:ab:c4:11:21 8 2000 >"$RT/tag.log" 2>&1 &
+$in_peer "$FAKE" pmir0.11 00:40:ab:c4:11:21 "$FACT_BOX_S0808_IN" 2000 >"$RT/tag.log" 2>&1 &
 TAGPID=$!
 sleep 0.5
 ip link set repat0 up; peer ip link set pmir0 up; peer ip link set pmir0.11 up

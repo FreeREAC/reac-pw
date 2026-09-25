@@ -183,7 +183,7 @@ int main(void)
 	CHK(reac_hunt_role(&r.h) == REAC_ROLE_SLAVE);
 	CHK(r.h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(r.h.arb.rival == REAC_RIVAL_BOX);
-	CHK(r.h.arb.rival_channels == 16);      /* the S-1608's own width, not a desk's 40 */
+	CHK(r.h.arb.rival_channels == REAC_BOX_S1608_IN);      /* the S-1608's own width, not a desk's 40 */
 	CHK(r.h.arb.have_mac);
 	CHK(memcmp(r.h.arb.mac, S1608_ON_M, 6) == 0);
 	/* A box mastering is JOINED on an unpinned wire, so the daemon asserts the SLAVE end
@@ -202,7 +202,7 @@ int main(void)
 	saw_a_wire(&r, "box-master-pinned");
 	CHK(r.h.verdict == REAC_HUNT_SLAVE);
 	CHK(r.h.arb.rival == REAC_RIVAL_BOX);
-	CHK(r.h.arb.rival_channels == 16);
+	CHK(r.h.arb.rival_channels == REAC_BOX_S1608_IN);
 	CHK(memcmp(r.h.arb.mac, S1608_ON_M, 6) == 0);
 	/* THE ONE REFUSAL LEFT — a rival whose geometry has never been captured — is pinned by
 	 * `test_reac_hunt.c`'s own unreadable-rival arm, on built frames, because the corpus

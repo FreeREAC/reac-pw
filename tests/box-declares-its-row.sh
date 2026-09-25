@@ -250,7 +250,7 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	return 0
 }
 
-arm A s1608 bxa0 8 || exit $?
+arm A s1608 bxa0 "$FACT_BOX_S1608_OUT" || exit $?
 arm B fr4000 bxb0 || exit $?
 exit 0
 INNER
@@ -316,7 +316,7 @@ JOINS=$(get B master-joins); JOINS=${JOINS:-0}
 [ "$JOINS" -ge 1 ] 2>/dev/null || say "the mixer counted $JOINS joins from the 40-channel row — its cold-connect never reached a master at all"
 [ "$(get A roster-role)" = "box" ] || say "arm A's roster reads role '$(get A roster-role)', not box"
 [ "$(get B roster-role)" = "box" ] || say "arm B's roster reads role '$(get B roster-role)', not box"
-[ "$(get A roster-width)" = "16/8" ] || say "arm A's roster width is '$(get A roster-width)', not 16/8"
+[ "$(get A roster-width)" = "$FACT_BOX_S1608_IN/$FACT_BOX_S1608_OUT" ] || say "arm A's roster width is '$(get A roster-width)', not $FACT_BOX_S1608_IN/$FACT_BOX_S1608_OUT"
 [ "$(get B roster-width)" = "$FACT_MAX_CHANNELS/0" ] || say "arm B's roster width is '$(get B roster-width)', not $FACT_MAX_CHANNELS/0"
 [ "$(get A roster-model)" = "s1608" ] || say "arm A's roster model is '$(get A roster-model)'"
 # ---- AND THE ENV DID NOT GET A VOTE ----------------------------------------------------

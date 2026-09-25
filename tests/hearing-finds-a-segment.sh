@@ -353,7 +353,7 @@ peer ip link set desk0 up; sleep 5
 kill -TERM $PPID2 2>/dev/null; wait $PPID2 2>/dev/null
 peer ip link set desk0 down; sleep 4.5   # both ends of a veth lose carrier together
 peer ip link set desk0 up;   sleep 1
-$in_peer "$BIN" --live desk0 --tx desk0 --role slave --box-channels 16 --name box \
+$in_peer "$BIN" --live desk0 --tx desk0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name box \
        --src-mac 00:40:ab:c4:80:41 >"$PEER" 2>&1 &
 BOXPID=$!
 # EITHER ROUTE TO THE WIRE IS CORRECT HERE and which one runs is a race we do not need to
@@ -400,7 +400,7 @@ play=$(echo "$NODES" | awk '$1 == "reac-playback.hear0"')
 	echo "FAIL: the capture node names no segment: $cap"; exit 1; }
 [ "$(echo "$play" | awk '{print $2}')" = "hear0" ] || {
 	echo "FAIL: the playback node names the wrong segment: $play"; exit 1; }
-[ "$(echo "$cap" | awk '{print $3}')" = "16x8" ] || {
+[ "$(echo "$cap" | awk '{print $3}')" = "${FACT_BOX_S1608_IN}x$FACT_BOX_S1608_OUT" ] || {
 	echo "FAIL: the capture node is not sized to the box: $cap"; exit 1; }
 [ "$(echo "$cap" | awk '{print $4}')" = "$(echo "$play" | awk '{print $4}')" ] || {
 	echo "FAIL: the two nodes of one segment carry different box MACs"; echo "$NODES"; exit 1; }
@@ -445,7 +445,7 @@ wait_for "reac-capture is back on the graph (attempt 1)" 10 || {
 	echo "FAIL: the node came back and the daemon never said so"; tail -10 "$LOG"; exit 1; }
 # ...and it is a whole node again, not a stub: same segment, same box, same width.
 NODES=$(daemon_nodes $PID)
-[ "$(echo "$NODES" | awk '$1 == "reac-capture.hear0" {print $2" "$3}')" = "hear0 16x8" ] || {
+[ "$(echo "$NODES" | awk '$1 == "reac-capture.hear0" {print $2" "$3}')" = "hear0 ${FACT_BOX_S1608_IN}x$FACT_BOX_S1608_OUT" ] || {
 	echo "FAIL: the rebuilt capture node lost its identity"; echo "$NODES"; exit 1; }
 
 # WHAT THIS RIG CANNOT PROVE, said here rather than left as a gap: the graph-clock
@@ -467,7 +467,7 @@ printf '[segment hear0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 kill -TERM $BOXPID 2>/dev/null; wait $BOXPID 2>/dev/null
 peer ip link set desk0 down; sleep 4.5
 peer ip link set desk0 up;   sleep 1
-$in_peer "$BIN" --live desk0 --tx desk0 --role slave --box-channels 16 --name box \
+$in_peer "$BIN" --live desk0 --tx desk0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name box \
        --src-mac 00:40:ab:c4:80:41 >"$PEER" 2>&1 &
 BOXPID=$!
 wait_for "\[hear0\] reac-pw.conf \[segment hear0\] role pins this segment as MASTER — driving on link" 15 || {
@@ -495,7 +495,7 @@ for i in $(seq 20); do [ "$(seen x "$RT/pin0.cnt" "")" -gt 0 ] && break; sleep 0
 	echo "      link -- which is the 2026-09-08 outage: it is waiting to be spoken to by"
 	echo "      a box that cannot speak first."; tail -20 "$LOG"; exit 1; }
 # ...and the box that could not have spoken first now answers, and establishes.
-$in_peer "$BIN" --live pbox0 --tx pbox0 --role slave --box-channels 16 --name pbox \
+$in_peer "$BIN" --live pbox0 --tx pbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name pbox \
        --src-mac 00:40:ab:c4:80:42 >"$PEER" 2>&1 &
 PBOXPID=$!
 wait_for "\[pin0\] segment up (master, pinned by reac-pw.conf)" 15 || {
@@ -536,7 +536,7 @@ D0=$(seen x "$RT/cold0.cnt" ""); sleep 1; D1=$(seen x "$RT/cold0.cnt" "")
 # THE COLD BOX ANSWERS THE STREAM. It is started only now, so it could not have begun this
 # exchange; and it is started with its PHY already up on a wire that is ALREADY being
 # driven, which is the rig's own case (boxes powered before the daemon).
-$in_peer "$BIN" --live kbox0 --tx kbox0 --role slave --box-channels 16 --name kbox \
+$in_peer "$BIN" --live kbox0 --tx kbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name kbox \
        --src-mac 00:40:ab:c4:80:43 >"$PEER" 2>&1 &
 KBOXPID=$!
 wait_for "reac-master: .* -> ESTABLISHED" 25 || {
@@ -644,7 +644,7 @@ wait_for "\[venue0\] segment up (master, chosen by hearing the wire)" 15 || {
 # only order in which a stagebox enrols: it leaves BOOT for ANNOUNCE on ITS OWN PHY-up
 # edge and cold-connects then, so a box already up when we start driving floods once and
 # is never heard from again (measured here: rx_box_frames climbing with rx_joins=0).
-$in_peer "$BIN" --live vbox0 --tx vbox0 --role slave --box-channels 16 --name vbox \
+$in_peer "$BIN" --live vbox0 --tx vbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name vbox \
        --src-mac $VBOXMAC >"$RT/venue-box.log" 2>&1 &
 VBOXPID=$!
 # AND THE BOX IS OURS: granted, enrolled, established. "The box is no longer granted by
@@ -831,7 +831,7 @@ down_pair venue0 vbox0
 # licence is not in the race at all.
 BOXMAC=00:40:ab:c4:08:bc
 BOXM_FLOOR=$(LINE0)
-$in_peer "$FAKE" mbox0 "$BOXMAC" 8 2000 >"$RT/boxm.log" 2>&1 &
+$in_peer "$FAKE" mbox0 "$BOXMAC" "$FACT_BOX_S0808_IN" 2000 >"$RT/boxm.log" 2>&1 &
 FAKEPID=$!
 sleep 0.5
 up_pair boxm0 mbox0
@@ -860,7 +860,7 @@ BP=$(daemon_node_props $PID reac-capture.boxm0)
 # but the DESCRIPTION is what a console shows the operator, and a joined box read the generic
 # "REAC 8ch capture" where a served one names the model.
 case "$(fld "$BP" 6)" in
-  "S-0808 (8 in / 8 out)"*"8 ch"*) : ;;
+  "S-0808 ($FACT_BOX_S0808_IN in / $FACT_BOX_S0808_OUT out)"*"$FACT_BOX_S0808_IN ch"*) : ;;
   *) echo "FAIL: the joined segment should name the box and its own geometry: $BP"; exit 1 ;;
 esac
 [ "$(fld "$BP" 1)" = "foreign" ] || { echo "FAIL: master.state is not foreign: $BP"; exit 1; }
@@ -882,7 +882,7 @@ esac
 [ "$(fld "$BP" 8)" = "s0808" ] || {
 	echo "FAIL: an 8-ch box master is the S-0808 row of the matrix and must say so"
 	echo "      (reac.box-model): $BP"; exit 1; }
-[ "$(fld "$BP" 9)" = "8x8" ] || {
+[ "$(fld "$BP" 9)" = "${FACT_BOX_S0808_IN}x$FACT_BOX_S0808_OUT" ] || {
 	echo "FAIL: reac.box-width must be the recognised model's own geometry: $BP"; exit 1; }
 # THE LAMP IS THE PAIRING (0.5.6, operator ruling): established means ENROLLED — granted,
 # unicasting and heartbeating — not merely heard. The rig published `established` off the
@@ -965,7 +965,7 @@ down_pair boxm0 mbox0
 # END STATE: the segment comes down as a master and goes back up as that box's slave, at the
 # box's own width, carrying the box's identity.
 printf '[segment pinm0]\nrole = master\n' >> "$CONF/.config/reac-pw/reac-pw.conf"
-$in_peer "$FAKE" mbox1 "$BOXMAC" 8 2000 >"$RT/boxm1.log" 2>&1 &
+$in_peer "$FAKE" mbox1 "$BOXMAC" "$FACT_BOX_S0808_IN" 2000 >"$RT/boxm1.log" 2>&1 &
 FAKEPID2=$!
 sleep 0.5
 up_pair pinm0 mbox1
@@ -1129,9 +1129,9 @@ peer ip link add link tbox1 name tbox1.13 type vlan id 13 || exit 90
 TBOX11=00:40:ab:c4:11:11
 TBOX12=00:40:ab:c4:12:12
 TBOX13=00:40:ab:c4:13:13
-$in_peer "$FAKE" tbox0.11 "$TBOX11" 8 2000 >"$RT/tb11.log" 2>&1 & TFAKE1=$!
-$in_peer "$FAKE" tbox0.12 "$TBOX12" 16 2000 >"$RT/tb12.log" 2>&1 & TFAKE2=$!
-$in_peer "$FAKE" tbox1.13 "$TBOX13" 8 2000 >"$RT/tb13.log" 2>&1 & TFAKE3=$!
+$in_peer "$FAKE" tbox0.11 "$TBOX11" "$FACT_BOX_S0808_IN" 2000 >"$RT/tb11.log" 2>&1 & TFAKE1=$!
+$in_peer "$FAKE" tbox0.12 "$TBOX12" "$FACT_BOX_S1608_IN" 2000 >"$RT/tb12.log" 2>&1 & TFAKE2=$!
+$in_peer "$FAKE" tbox1.13 "$TBOX13" "$FACT_BOX_S0808_IN" 2000 >"$RT/tb13.log" 2>&1 & TFAKE3=$!
 sleep 0.5
 up_pair trunk0 tbox0
 up_pair trunk1 tbox1
@@ -1234,11 +1234,11 @@ T13=$(daemon_node_props $PID reac-capture.trunk1.13)
 # Each VLAN's door is sized to ITS OWN box and named after it (0.5.6-9), which is also how
 # two segments on one cable are told apart at a glance.
 case "$(fld "$T11" 6)" in
-  "S-0808 (8 in / 8 out)"*"8 ch"*) : ;;
+  "S-0808 ($FACT_BOX_S0808_IN in / $FACT_BOX_S0808_OUT out)"*"$FACT_BOX_S0808_IN ch"*) : ;;
   *) echo "FAIL: vid 11's box is 8 ch and its node reads '$(fld "$T11" 6)'"; exit 1 ;;
 esac
 case "$(fld "$T12" 6)" in
-  "S-1608 (16 in / 8 out)"*"16 ch"*) : ;;
+  "S-1608 ($FACT_BOX_S1608_IN in / $FACT_BOX_S1608_OUT out)"*"$FACT_BOX_S1608_IN ch"*) : ;;
   *) echo "FAIL: vid 12's box is 16 ch and its node reads '$(fld "$T12" 6)' -- two VLANs"
      echo "      served through one listener would read the same width twice"; exit 1 ;;
 esac

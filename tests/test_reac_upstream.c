@@ -45,11 +45,11 @@ static int32_t s24_at(const uint8_t *out, int nch, int ch, int s)
 int main(void)
 {
 	/* 1. shape: nch from frame length (len = 52 + nch*36) */
-	CHK(reac_upstream_channels(REACPW_FRAME_LEN(16)) == 16);  /* S-1608 */
-	CHK(reac_upstream_channels(REACPW_FRAME_LEN(8)) == 8);   /* S-0808 */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN)) == REAC_BOX_S1608_IN);  /* S-1608 */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S0808_IN)) == REAC_BOX_S0808_IN);   /* S-0808 */
 	CHK(reac_upstream_channels(REAC_FRAME_BYTES) == -1); /* the desk's DOWNSTREAM shape is not upstream */
-	CHK(reac_upstream_channels(REACPW_FRAME_LEN(16) - 1) == -1);
-	CHK(reac_upstream_channels(REACPW_FRAME_LEN(16) + 1) == -1);
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN) - 1) == -1);
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN) + 1) == -1);
 	CHK(reac_upstream_channels(REAC_FRAME_OVERHEAD) == -1);   /* nch 0 */
 	CHK(reac_upstream_channels(REACPW_FRAME_LEN(3)) == -1);  /* odd nch (3): braid needs channel pairs */
 	CHK(reac_upstream_channels(0) == -1);
@@ -79,8 +79,8 @@ int main(void)
 	CHK(reac_upstream_channels(sizeof UP32A) == -1); /* raw wire length — the residue is still on it */
 	CHK(reac_frame_clean_len(sizeof UP32A) == REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN)); /* the door's job, not this parser's */
 	CHK(reac_upstream_channels(reac_frame_clean_len(1206)) == 32);
-	CHK(reac_upstream_channels(REACPW_FRAME_LEN(32)) == 32); /* trailerless variant, already clean */
-	CHK(reac_upstream_channels(REACPW_FRAME_LEN(32) + 1) == -1);
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN)) == REAC_BOX_S4000S_3208_IN); /* trailerless variant, already clean */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN) + 1) == -1);
 	ns = reac_upstream_decode(UP32A, reac_frame_clean_len(sizeof UP32A), out);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	CHK(reac_frame_counter(UP32A) == 0xff9c);
@@ -93,7 +93,7 @@ int main(void)
 	/* the trailer bytes never reach the audio: decoding the same real frame at
 	 * its clean 1204 B length yields the identical planar PCM */
 	uint8_t out2[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
-	CHK(reac_upstream_decode(UP32A, REACPW_FRAME_LEN(32), out2) == REAC_SAMPLES_PER_PKT);
+	CHK(reac_upstream_decode(UP32A, REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN), out2) == REAC_SAMPLES_PER_PKT);
 	CHK(memcmp(out, out2, (size_t)32 * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION) == 0);
 	/* the second consecutive frame (counter +1) pins the per-frame stability,
 	 * through the same door */

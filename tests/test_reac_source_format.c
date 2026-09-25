@@ -58,7 +58,8 @@
  * 8 out). Prove the pod round-trips the NEW rate at each real box width. */
 static int test_build_at_capture_widths_after_a_rate_change(void)
 {
-	const int widths[] = { 8, 16, 32, REAC_MAX_CHANNELS };
+	const int widths[] = { REAC_BOX_S0808_IN, REAC_BOX_S1608_IN, REAC_BOX_S4000S_3208_IN,
+	                       REAC_MAX_CHANNELS };
 	for (size_t i = 0; i < sizeof widths / sizeof widths[0]; i++) {
 		uint8_t buf[4096];
 		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);

@@ -160,13 +160,13 @@ int main(void)
 	 * GRANT — 0014 carries TAG 01 00, 0013 carries TAG 03 02 — while only
 	 * TAG 01 01 is HEADAMP. A live M-200 emits ~628 head-amp records per 14
 	 * grants; a joining slave must NOT read a knob-turn as its grant. */
-	n = reac_ctrl_build_coldconnect(f, MASTER, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
 	CHK(f[34] == 0x01 && f[35] == 0x00);              /* TAG 01 00 */
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
-	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
 	CHK(f[34] == 0x03 && f[35] == 0x02);              /* TAG 03 02 */
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
-	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
 	CHK(f[34] == 0x05 && f[35] == 0x00);              /* TAG 05 00 (identity) */
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
 

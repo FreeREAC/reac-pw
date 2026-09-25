@@ -54,8 +54,8 @@ int main(void)
 	 * gate. "Discover by protocol frame only, never pin or spoof a MAC" (operator's
 	 * ruling, 2026-09-03): a valid checksummed control frame is real regardless of source
 	 * OUI, and the sighting carries the real (non-Roland) source MAC verbatim. */
-	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
-	CHK(n == REACPW_FRAME_LEN(16));
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, REAC_BOX_S1608_IN);
+	CHK(n == REACPW_FRAME_LEN(REAC_BOX_S1608_IN));
 	uint8_t nonRoland[6] = { 0xde, 0xad, 0xbe, 0xef, 0x00, 0x01 };
 	memcpy(f + 6, nonRoland, 6);
 	reac_ctrl_checksum_apply(f);                 /* the source moved; keep it VALID */
@@ -63,11 +63,11 @@ int main(void)
 	CHK(memcmp(s.mac, nonRoland, 6) == 0);
 
 	/* Our own echo is never a discovery of someone else. */
-	n = reac_ctrl_build_box_hb(f, MASTER, OURS, 0x11, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, OURS, 0x11, REAC_BOX_S1608_IN);
 	CHK(reac_disco_classify(f, n, OURS, &s) == -1);
 
 	/* A corrupt control block is evidence of NOTHING — not a device with a bad byte. */
-	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, REAC_BOX_S1608_IN);
 	f[49] ^= 0xff;                               /* break the checksum */
 	CHK(reac_ctrl_checksum_verify(f) != 0);
 	CHK(reac_disco_classify(f, n, OURS, &s) == -1);
@@ -85,27 +85,27 @@ int main(void)
 	/* Before ANY control frame validates a peer, a FILLER is accepted exactly as the
 	 * unlocked classifier already accepted it — the lock only closes the window AFTER a
 	 * real peer is known. */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x20, 16, NULL, REAC_SAMPLES_PER_PKT);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x20, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n > 0);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);
 	CHK(lock.locked == 0);                      /* a FILLER never latches the lock itself */
 
 	/* The box's real heartbeat (checksum-verified, non-FILLER) latches the lock to BOX. */
-	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x21, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x21, REAC_BOX_S1608_IN);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
 	CHK(lock.locked == 1);
 	CHK(memcmp(lock.mac, BOX, 6) == 0);
 
 	/* Now a FILLER from the SAME box still passes. */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x22, 16, NULL, REAC_SAMPLES_PER_PKT);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x22, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
 	CHK(memcmp(s.mac, BOX, 6) == 0);
 
 	/* A FILLER claiming to be a DIFFERENT box on the SAME (now-locked) segment is refused —
 	 * this is the sabotage target: reverting classify_core's lock check must turn this red. */
 	static const uint8_t IMPOSTOR[6] = { 0x00, 0x40, 0xab, 0xbe, 0xef, 0x01 };
-	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x23, 16, NULL, REAC_SAMPLES_PER_PKT);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x23, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == -1);
 	/* The SAME frame is real evidence through the unlocked classifier — the refusal is the
 	 * lock's, not the frame's. */
@@ -114,27 +114,27 @@ int main(void)
 	/* A LATER checksum-verified control frame from a different MAC is still accepted
 	 * unchanged — the lock never restricts a VERIFIED frame, and it does not re-latch
 	 * either (the first-proven peer holds for the lock's lifetime). */
-	n = reac_ctrl_build_box_hb(f, MASTER, IMPOSTOR, 0x24, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, IMPOSTOR, 0x24, REAC_BOX_S1608_IN);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
 	CHK(memcmp(s.mac, IMPOSTOR, 6) == 0);
 	CHK(memcmp(lock.mac, BOX, 6) == 0);          /* still BOX — not re-latched */
 
 	/* And the impostor's FILLER is STILL refused after that — proving a checksum-verified
 	 * sighting from a new MAC does not quietly relax the lock. */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x25, 16, NULL, REAC_SAMPLES_PER_PKT);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x25, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == -1);
 
 	/* A fresh lock (a segment drop/reopen) starts unlocked again, so the box's own FILLER
 	 * is not permanently orphaned by a stale lock from a departed peer. */
 	struct reac_disco_peer_lock lock2;
 	reac_disco_peer_lock_init(&lock2);
-	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x26, 16, NULL, REAC_SAMPLES_PER_PKT);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x26, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock2, f, n, OURS, &s) == 0);
 
 	/* ---- (b) role from the signature, not the kind. */
 
 	/* The box keep-alive (cdea 01 03 0001 81) — unambiguously a box. */
-	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, REAC_BOX_S1608_IN);
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);
 	CHK(memcmp(s.mac, BOX, 6) == 0);
@@ -147,7 +147,7 @@ int main(void)
 	 * dug back out of the length by hand — or every box that declares itself filed as
 	 * a rival master. */
 	struct reac_ctrl_parsed p;
-	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, 8);   /* 8 in_ch = the S-0808 row */
+	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, REAC_BOX_S0808_IN);   /* 8 in_ch = the S-0808 row */
 	CHK(n > 0);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_CONFIG_ANNOUNCE);
 	CHK(p.link == REAC_LINK_CTRL && p.opcode == 0x84);   /* the 0x84 family */
@@ -161,7 +161,7 @@ int main(void)
 
 	/* A config-announce whose block matches no row stays unidentified rather than
 	 * defaulting to S-1608. */
-	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, 8);
+	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, REAC_BOX_S0808_IN);
 	f[30] ^= 0xff;                                       /* perturb inside the block */
 	reac_ctrl_checksum_apply(f);                         /* keep it a VALID frame */
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
@@ -170,7 +170,7 @@ int main(void)
 
 	/* A broadcast FILLER is AMBIGUOUS: a box's presence-flood and a master's downstream
 	 * audio are both type 0000 broadcast. Neither guess is honest. */
-	n = reac_ctrl_build_flood_filler(f, BCAST, BOX, 0x13, 16, NULL, REAC_SAMPLES_PER_PKT);   /* NULL = silent */
+	n = reac_ctrl_build_flood_filler(f, BCAST, BOX, 0x13, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);   /* NULL = silent */
 	CHK(n > 0);
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_UNKNOWN);
@@ -239,12 +239,12 @@ int main(void)
 	 * this merge for the box-master join: the widening branch sat inside the model branch. */
 	reac_disco_table_init(&t);
 	struct reac_disco_sighting narrow = { .role = REAC_DISCO_ROLE_UNKNOWN, .model = NULL,
-	                                      .channels = 8 };
+	                                      .channels = REAC_BOX_S0808_IN };
 	memcpy(narrow.mac, MASTER, 6);
 	CHK(reac_disco_table_observe(&t, &narrow, 0, S_(1)) == 1);   /* a new MAC */
-	CHK(t.e[0].channels == 8);
+	CHK(t.e[0].channels == REAC_BOX_S0808_IN);
 	struct reac_disco_sighting wide = narrow;
-	wide.channels = 32;
+	wide.channels = REAC_BOX_S4000S_3208_IN;
 	CHK(reac_disco_table_observe(&t, &wide, 0, S_(2)) == 1);     /* wider IS a change */
 	CHK(t.e[0].channels == 32);
 	CHK(t.seq == 2);
@@ -391,7 +391,7 @@ int main(void)
 	 * master mode (its own, smaller width) — the two want opposite responses, and no control
 	 * frame distinguishes them. 0 means the frame carried no legal geometry, which is a fact,
 	 * not a zero width. */
-	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, REAC_BOX_S1608_IN);
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.channels == reac_frame_channels((size_t)n));
 

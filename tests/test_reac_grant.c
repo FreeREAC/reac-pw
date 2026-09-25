@@ -52,13 +52,13 @@ int main(void)
 	 * ---------------------------------------------------------------- */
 	struct reac_grant_alloc a;
 
-	CHK(reac_grant_allocate(&a, 0x20, 16) == 0);
+	CHK(reac_grant_allocate(&a, 0x20, REAC_BOX_S1608_IN) == 0);
 	CHK(a.base == 0x20 && a.width == 16);   /* S-1608 */
 
-	CHK(reac_grant_allocate(&a, 0x00, 8) == 0);
+	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S0808_IN) == 0);
 	CHK(a.base == 0x00 && a.width == 8);    /* S-0808 */
 
-	CHK(reac_grant_allocate(&a, 0x00, 32) == 0);
+	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S4000S_3208_IN) == 0);
 	CHK(a.base == 0x00 && a.width == 32);   /* S-4000S */
 
 	/* 1a. THE BASE IS NOT A FUNCTION OF THE WIDTH, and these are the cases the
@@ -66,11 +66,11 @@ int main(void)
 	 * admitted at 0x10 — the table said every 16-wide box sits at 0x20. And two
 	 * boxes of different widths on the same strap land on the same base, which
 	 * is the observation that rules out an allocation keyed on width. */
-	CHK(reac_grant_allocate(&a, 0x10, 16) == 0);
+	CHK(reac_grant_allocate(&a, 0x10, REAC_BOX_S1608_IN) == 0);
 	CHK(a.base == 0x10);
-	CHK(reac_grant_allocate(&a, 0x00, 8) == 0);
+	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S0808_IN) == 0);
 	uint8_t base_8 = a.base;
-	CHK(reac_grant_allocate(&a, 0x00, 32) == 0);
+	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S4000S_3208_IN) == 0);
 	CHK(a.base == base_8);
 
 	/* 1b. The 0x2f HEAD-AMP CEILING (REAC_HEADAMP_CEILING, reac_slots.h — NOT the
@@ -89,7 +89,7 @@ int main(void)
 	/* 1c. Unplaceable widths are refused rather than silently truncated. */
 	CHK(reac_grant_allocate(&a, 0x00, 0) == -1);
 	CHK(reac_grant_allocate(&a, 0x00, REAC_GRANT_MAX_WIDTH + 1) == -1);
-	CHK(reac_grant_allocate(NULL, 0x00, 8) == -1);
+	CHK(reac_grant_allocate(NULL, 0x00, REAC_BOX_S0808_IN) == -1);
 
 	/* 1d. A BOX WHOSE ANNOUNCED BASE DOES NOT FIT IS REFUSED, never quietly
 	 * moved to one that does. The old allocator fell back to "the lowest base
@@ -97,9 +97,9 @@ int main(void)
 	 * read the slots it strapped for, so a grant at any other base writes
 	 * head-amp records nothing will ever apply. Refusing is the only honest
 	 * answer, and the caller logs it. */
-	CHK(reac_grant_allocate(&a, 0x20, 32) == -1);   /* 0x20..0x3f, past 0x2f */
+	CHK(reac_grant_allocate(&a, 0x20, REAC_BOX_S4000S_3208_IN) == -1);   /* 0x20..0x3f, past 0x2f */
 	CHK(reac_grant_allocate(&a, 0x30, 1)  == -1);   /* one past the ceiling */
-	CHK(reac_grant_allocate(&a, -1,   8)  == -1);   /* not a base at all */
+	CHK(reac_grant_allocate(&a, -1,   REAC_BOX_S0808_IN)  == -1);   /* not a base at all */
 
 	/* A width nobody has captured is still admitted at the base it announces —
 	 * geometry comes from the declaration, not from a model list. */
@@ -112,7 +112,7 @@ int main(void)
 	 *    frame-for-frame.
 	 * ---------------------------------------------------------------- */
 	uint8_t sweep[REAC_GRANT_SWEEP_MAX][34];
-	struct reac_grant_alloc s1608 = { .base = 0x20, .width = 16 };
+	struct reac_grant_alloc s1608 = { .base = 0x20, .width = REAC_BOX_S1608_IN };
 	int n = reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s1608, NULL);
 	CHK(n == 56);
 	CHK(n == REAC_GRANT_SWEEP_LEN(16));
@@ -142,13 +142,13 @@ int main(void)
 	}
 
 	/* 2b. Widths scale, and each matches its golden's frame count exactly. */
-	struct reac_grant_alloc s0808 = { .base = 0x00, .width = 8 };
+	struct reac_grant_alloc s0808 = { .base = 0x00, .width = REAC_BOX_S0808_IN };
 	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s0808, NULL) == 32);
-	struct reac_grant_alloc s4000 = { .base = 0x00, .width = 32 };
+	struct reac_grant_alloc s4000 = { .base = 0x00, .width = REAC_BOX_S4000S_3208_IN };
 	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s4000, NULL) == 104);
 
 	/* 2c. Bad args + capacity are refused, never truncated. */
-	struct reac_grant_alloc over = { .base = 0x20, .width = 32 };   /* past the ceiling */
+	struct reac_grant_alloc over = { .base = 0x20, .width = REAC_BOX_S4000S_3208_IN };   /* past the ceiling */
 	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &over, NULL) == -1);
 	CHK(reac_grant_build_sweep(sweep, 10, &s1608, NULL) == -1);     /* too small */
 	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, NULL, NULL) == -1);
@@ -326,7 +326,7 @@ int main(void)
 			                        GOLD_S1608_CELLS[i][2]) == 0);
 
 		struct reac_grant_alloc ga;
-		CHK(reac_grant_allocate(&ga, 0x20, 16) == 0);  /* the box announced strap 2 */
+		CHK(reac_grant_allocate(&ga, 0x20, REAC_BOX_S1608_IN) == 0);  /* the box announced strap 2 */
 
 		uint8_t gen[REAC_GRANT_SWEEP_MAX][34];
 		int gn = reac_grant_build_sweep(gen, REAC_GRANT_SWEEP_MAX, &ga, &gtx);
@@ -367,7 +367,7 @@ int main(void)
 	 * really does address that top channel with all three params. */
 	CHK(reac_grant_alloc_fits(0x20, 16) == 1);
 	{
-		struct reac_grant_alloc s1608_top = { .base = 0x20, .width = 16 };
+		struct reac_grant_alloc s1608_top = { .base = 0x20, .width = REAC_BOX_S1608_IN };
 		uint8_t top[REAC_GRANT_SWEEP_MAX][34];
 		int tn = reac_grant_build_sweep(top, REAC_GRANT_SWEEP_MAX, &s1608_top, NULL);
 		CHK(tn == 56);
@@ -398,9 +398,9 @@ int main(void)
 		CHK(REAC_BOXREG_FABRIC == REAC_AUDIO_FABRIC_SLOTS);
 
 		/* pinned at the S-1608's HEAD-AMP base: audio 32..47 — REFUSED */
-		CHK(reac_boxreg_declare(&r, 16, "S-1608", 32) == -1);
+		CHK(reac_boxreg_declare(&r, REAC_BOX_S1608_IN, "S-1608", 32) == -1);
 		/* the last legal 16-wide audio placement is 24..39, one slot lower */
-		CHK(reac_boxreg_declare(&r, 16, "S-1608", 24) >= 0);
+		CHK(reac_boxreg_declare(&r, REAC_BOX_S1608_IN, "S-1608", 24) >= 0);
 
 		/* automatic allocation cannot cross 40 either: 32 + 16 = 48 slots asked
 		 * of a 40-slot fabric, so the second box has nowhere to go. */
@@ -408,10 +408,10 @@ int main(void)
 		const uint8_t A[6] = { 0x00,0x40,0xab,0xc4,0x06,0x80 };
 		const uint8_t B[6] = { 0x00,0x40,0xab,0xc4,0x80,0x3b };
 		reac_boxreg_init(&q, 0);
-		CHK(reac_boxreg_add(&q, A, 32) == 0);          /* S-4000S -> 0..31 */
+		CHK(reac_boxreg_add(&q, A, REAC_BOX_S4000S_3208_IN) == 0);          /* S-4000S -> 0..31 */
 		CHK(q.box[0].base == 0 && q.box[0].nch == 32);
-		CHK(reac_boxreg_add(&q, B, 16) == -1);         /* would end at 47 — NO */
-		CHK(reac_boxreg_add(&q, B, 8)  == 1);          /* 32..39 fits exactly */
+		CHK(reac_boxreg_add(&q, B, REAC_BOX_S1608_IN) == -1);         /* would end at 47 — NO */
+		CHK(reac_boxreg_add(&q, B, REAC_BOX_S0808_IN)  == 1);          /* 32..39 fits exactly */
 		CHK(q.box[1].base == 32 && q.box[1].base + q.box[1].nch == REAC_MAX_CHANNELS);
 	}
 

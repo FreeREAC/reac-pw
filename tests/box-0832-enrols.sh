@@ -130,7 +130,7 @@ far_end_is() {   # far_end_is <arm output> <expected display> <arm label>
 	return 1
 }
 
-far_end_is "$A1" "S-4000S-0832 (8 in / 32 out)" ""
+far_end_is "$A1" "S-4000S-0832 ($FACT_BOX_S4000S_0832_IN in / $FACT_BOX_S4000S_0832_OUT out)" ""
 echo "$A1" | grep -q "BOXRC=0" || { say "FAIL: the 0832 split never enrolled (fake_box exit != 0)"; FAIL=1; }
 echo "$A1" | grep -q "ESTABLISHED" || { say "FAIL: the master never reached ESTABLISHED"; FAIL=1; }
 # THE LINE THE DAEMON REALLY EMITS. This assertion used to grep `recognized box =
@@ -139,7 +139,7 @@ echo "$A1" | grep -q "ESTABLISHED" || { say "FAIL: the master never reached ESTA
 # not even carry the word through. The test could not have failed on this fact and read
 # as proof of it for as long as it lived — so the expected text is now the row's own
 # display string, and arm 2 asserts its DIFFERENT display through the same grep.
-echo "$A1" | grep -q "autodetected S-4000S-0832 (8 in / 32 out)" || { say "FAIL: the box was not NAMED from its declaration"; FAIL=1; }
+echo "$A1" | grep -q "autodetected S-4000S-0832 ($FACT_BOX_S4000S_0832_IN in / $FACT_BOX_S4000S_0832_OUT out)" || { say "FAIL: the box was not NAMED from its declaration"; FAIL=1; }
 echo "$A1" | grep -q "reac\.box-width.*8x32" || { say "FAIL: the published width is not 8x32 — the declaration did not reach the graph"; FAIL=1; }
 # ONE MAC, ONE VERDICT: the sniffer's line may appear, but never as `unknown` for a box
 # that has declared itself.
@@ -150,11 +150,11 @@ echo "$A1" | grep -E "REAC heard — unknown" >/dev/null && { say "FAIL: the sam
 A2=$(run_arm s4000s 2>&1) || true
 case "$A2" in *"SKIP: "*) say "SKIP: the control arm could not run"; exit $SKIP;; esac
 say "$A2"
-far_end_is "$A2" "S-4000S-3208 (32 in / 8 out)" " (control)"
+far_end_is "$A2" "S-4000S-3208 ($FACT_BOX_S4000S_3208_IN in / $FACT_BOX_S4000S_3208_OUT out)" " (control)"
 echo "$A2" | grep -q "BOXRC=0" || { say "FAIL (control): the S-4000S did not enrol"; FAIL=1; }
 echo "$A2" | grep -q "reac\.box-width.*32x8" || { say "FAIL (control): the S-4000S did not publish 32x8 — this harness cannot tell two chassis apart"; FAIL=1; }
 # AND THE NAMING GREP TELLS THE TWO APART TOO: the same pattern, the other row's display.
-echo "$A2" | grep -q "autodetected S-4000S-3208 (32 in / 8 out)" || { say "FAIL (control): the S-4000S was not named from its declaration — the naming grep proves nothing about arm 1"; FAIL=1; }
+echo "$A2" | grep -q "autodetected S-4000S-3208 ($FACT_BOX_S4000S_3208_IN in / $FACT_BOX_S4000S_3208_OUT out)" || { say "FAIL (control): the S-4000S was not named from its declaration — the naming grep proves nothing about arm 1"; FAIL=1; }
 echo "$A2" | grep -q "autodetected S-4000S-0832" && { say "FAIL (control): the 32/8 chassis was named as the 8/32 one — the naming grep cannot tell them apart"; FAIL=1; }
 
 [ "$FAIL" = 0 ] && say "PASS: an S-4000H-0832 enrols at its DECLARED 8x32 while returning 32 channels, and the same harness reads 32x8 for an S-4000S"

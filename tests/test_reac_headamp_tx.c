@@ -97,7 +97,7 @@ int main(void)
 	 * one record per REAC_HEADAMP_SWEEP_STRIDE frames. An S-0808 at base 0. */
 	struct reac_headamp_tx rp;
 	reac_headamp_tx_init(&rp);
-	reac_headamp_tx_arm_scene(&rp, 0x00, 8);
+	reac_headamp_tx_arm_scene(&rp, 0x00, REAC_BOX_S0808_IN);
 	int records = 0, calls = 0;
 	uint8_t last_ch = 0xff, last_p = 0xff;
 	while (records < 8 * REAC_HEADAMP_NPARAMS && calls < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 8) {
@@ -113,7 +113,7 @@ int main(void)
 		records++;
 	}
 	CHK(records == 8 * REAC_HEADAMP_NPARAMS);
-	CHK(last_ch == 7 && last_p == REAC_HEADAMP_SENS);
+	CHK(last_ch == REAC_BOX_S0808_IN - 1 && last_p == REAC_HEADAMP_SENS);
 	CHK(reac_headamp_default(REAC_HEADAMP_PHANTOM) == 0x00);  /* never 48V by default */
 	CHK(reac_headamp_default(REAC_HEADAMP_SENS) != 0x00);     /* non-zero = enrols */
 	/* the stride really spreads the burst: strictly more calls than records */
@@ -127,7 +127,7 @@ int main(void)
 	CHK(reac_headamp_tx_set(&rp, 2, REAC_HEADAMP_PHANTOM, 1) == 0);
 	CHK(reac_headamp_tx_set(&rp, 3, REAC_HEADAMP_SENS, 0x00) == 0);  /* deliberate 0 */
 	while (reac_headamp_tx_next(&rp, &ch, &p, &v)) {} /* drain the two edges */
-	reac_headamp_tx_arm_scene(&rp, 0x00, 8);
+	reac_headamp_tx_arm_scene(&rp, 0x00, REAC_BOX_S0808_IN);
 	int seen_ph2 = -1, seen_s3 = -1;
 	records = 0;
 	for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 8 && records < 24; i++) {
@@ -143,7 +143,7 @@ int main(void)
 
 	/* 10. An operator EDGE preempts a replay in progress (phantom-off must not
 	 * wait out the burst), and the replay still completes afterwards. */
-	reac_headamp_tx_arm_scene(&rp, 0x00, 8);
+	reac_headamp_tx_arm_scene(&rp, 0x00, REAC_BOX_S0808_IN);
 	CHK(reac_headamp_tx_next(&rp, &ch, &p, &v) == 1);   /* replay record 1 */
 	CHK(reac_headamp_tx_set(&rp, 7, REAC_HEADAMP_PHANTOM, 0) == 0);
 	CHK(reac_headamp_tx_next(&rp, &ch, &p, &v) == 1);   /* the edge, immediately */
@@ -158,7 +158,7 @@ int main(void)
 	 * only the slots that exist; width 0 arms nothing. */
 	struct reac_headamp_tx cl;
 	reac_headamp_tx_init(&cl);
-	reac_headamp_tx_arm_scene(&cl, REAC_HEADAMP_MAX_CH - 2, 16);
+	reac_headamp_tx_arm_scene(&cl, REAC_HEADAMP_MAX_CH - 2, REAC_BOX_S1608_IN);
 	records = 0;
 	for (int i = 0; i < 16 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 16; i++)
 		if (reac_headamp_tx_next(&cl, &ch, &p, &v)) {
@@ -196,7 +196,7 @@ int main(void)
 			(uint32_t)REAC_PKT_RATE_96K * REAC_HEADAMP_RESWEEP_SECONDS);
 		CHK(ship.resweep_period == 0);
 		CHK(reac_headamp_tx_set(&ship, 2, REAC_HEADAMP_PHANTOM, 1) == 0);
-		reac_headamp_tx_arm_scene(&ship, 0x00, 8);
+		reac_headamp_tx_arm_scene(&ship, 0x00, REAC_BOX_S0808_IN);
 		int shipped = 0;
 		for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 32; i++)
 			if (reac_headamp_tx_next(&ship, &ch, &p, &v))
@@ -224,7 +224,7 @@ int main(void)
 
 	/* (c) Establishment arms the COMPLETE scene — every cell of an 8-channel box,
 	 * enrolling defaults included, because a channel armed all-zero never enrols. */
-	reac_headamp_tx_arm_scene(&rs, 0x00, 8);
+	reac_headamp_tx_arm_scene(&rs, 0x00, REAC_BOX_S0808_IN);
 	int scene = 0;
 	for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 32 && scene < 24; i++)
 		if (reac_headamp_tx_next(&rs, &ch, &p, &v))
@@ -286,7 +286,7 @@ int main(void)
 	struct reac_headamp_tx empty;
 	reac_headamp_tx_init(&empty);
 	reac_headamp_tx_set_resweep(&empty, PERIOD);
-	reac_headamp_tx_arm_scene(&empty, 0x00, 8);
+	reac_headamp_tx_arm_scene(&empty, 0x00, REAC_BOX_S0808_IN);
 	scene = 0;
 	for (int i = 0; i < 8 * 3 * REAC_HEADAMP_SWEEP_STRIDE + 32 && scene < 24; i++)
 		if (reac_headamp_tx_next(&empty, &ch, &p, &v))

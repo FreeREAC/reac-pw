@@ -141,7 +141,7 @@ static void establish(struct reac_master *m, uint16_t *cnt, const uint8_t box[6]
 	 * this call. Nothing can be enrolled before it: the cold-connect JOIN carries no
 	 * width and the master no longer holds a fabricated one to fall back on. Every
 	 * re-join re-declares, because a drop forgets the box (reac_master_forget_box). */
-	reac_master_set_box(m, 16, 8, S1608_BASE);
+	reac_master_set_box(m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 	/* +1 for the leading ENROLL slot, +grant_dwell for the ENROLL->grant dwell
 	 * (~1.6 s, matching the measured M-200 gap), before the 32-block burst. */
 	for (int i = 0; i < m->grant_dwell + m->grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
@@ -212,12 +212,12 @@ int main(void)
 		struct reac_master mw;
 		reac_master_init(&mw, SRC, &idle, FPS);
 
-		reac_master_set_box(&mw, 16, 8, S1608_BASE);             /* S-1608: 16 in / 8 out */
+		reac_master_set_box(&mw, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);             /* S-1608: 16 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
 		CHK(f[16 + 18] == 0x10);                     /* width byte tracks the box */
 		CHK(reac_ctrl_checksum_verify(f) == 0);       /* re-stamped, still valid */
 
-		reac_master_set_box(&mw, 8, 8, S0808_BASE);              /* S-0808: 8 in / 8 out */
+		reac_master_set_box(&mw, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);              /* S-0808: 8 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
 		CHK(f[16 + 18] == 0x08);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
@@ -257,7 +257,7 @@ int main(void)
 		}
 		CHK(mw.join_held == 0);                   /* released on the final chunk */
 		CHK(mw.state == REAC_M_GRANTING);
-		reac_master_set_box(&mw, 8, 8, S0808_BASE);              /* recognized mid-grant */
+		reac_master_set_box(&mw, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);              /* recognized mid-grant */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
 		CHK(f[16 + 18] == 0x08);                       /* the width follows at once */
 		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x00); /* ungranted: count still 0 */
@@ -289,7 +289,7 @@ int main(void)
 
 		/* a warm relink (a DIFFERENT model recognized while established) moves the
 		 * width and keeps the 1 — the count must not fall back to the idle 0. */
-		reac_master_set_box(&mw, 16, 8, S1608_BASE);
+		reac_master_set_box(&mw, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
 		CHK(f[16 + 18] == 0x10);
 		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01);
@@ -298,7 +298,7 @@ int main(void)
 
 	/* The box declares itself (what reac_pacer does on the config-announce). Only
 	 * now is there an enrollment to grant. */
-	reac_master_set_box(&m, 16, 8, S1608_BASE);
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 	CHK(reac_master_has_box(&m) == 1);
 
 	/* 3. the grant is the master's OWN burst sweep (byte-exact M-200 cdea 04 03),
@@ -324,17 +324,17 @@ int main(void)
 		struct reac_master mg;
 
 		reac_master_init(&mg, SRC, &idle, FPS);
-		reac_master_set_box(&mg, 16, 8, S1608_BASE);                 /* a real S-1608 links */
+		reac_master_set_box(&mg, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);                 /* a real S-1608 links */
 		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
 		CHK(mg.grant_burst_len == 56);                   /* 8 + 16*3 */
 
-		reac_master_set_box(&mg, 8, 8, S0808_BASE);                  /* an S-0808 instead */
+		reac_master_set_box(&mg, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);                  /* an S-0808 instead */
 		CHK(mg.alloc.base == 0x00 && mg.alloc.width == 8);
 		CHK(mg.grant_burst_len == 32);                   /* 8 + 8*3 — sweep RESIZED */
 
 		/* Every group-A record the sweep emits addresses a slot inside the
 		 * allocation. This is the invariant the replayed table violated. */
-		reac_master_set_box(&mg, 16, 8, S1608_BASE);
+		reac_master_set_box(&mg, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 		int groupa = 0;
 		for (int i = 0; i < mg.grant_burst_len; i++) {
 			const uint8_t *r = mg.grant_burst[i];
@@ -536,7 +536,7 @@ int main(void)
 	 * GRANTING, see reac_pacer.c) and THAT is what fills the enrollment in. */
 	CHK(reac_master_has_box(&m) == 0);
 	CHK(m.grant_burst_len == 0);
-	reac_master_set_box(&m, 16, 8, S1608_BASE);
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 	CHK(m.grant_burst_len == 56);
 
 	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the ~1.6 s
@@ -624,7 +624,7 @@ int main(void)
 	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
-	reac_master_set_box(&m, 16, 8, S1608_BASE);              /* the box declares itself */
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);              /* the box declares itself */
 	for (int i = 0; i < m.grant_dwell + m.grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
 		slot(&m, NULL, &cnt);
 	CHK(m.state == REAC_M_ESTABLISHED);          /* self-completed after dwell + full burst */
@@ -817,7 +817,7 @@ int main(void)
 
 		/* (c) THE BOX DECLARES ITSELF — an S-0808, 8 inputs. The window restarts
 		 * and the burst that reaches the wire enrolls 0x00..0x07, every record. */
-		reac_master_set_box(&mb, 8, 8, S0808_BASE);
+		reac_master_set_box(&mb, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);
 		CHK(reac_master_has_box(&mb) == 1);
 		CHK(mb.alloc.base == 0x00 && mb.alloc.width == 8);
 		CHK(mb.grant_burst_len == 32);              /* 8 + 8*3 */
@@ -853,7 +853,7 @@ int main(void)
 		/* a DIFFERENT box joins and declares 16 inputs: base moves to 0x20 */
 		deliver_scene(&mb, &bc);
 		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
-		reac_master_set_box(&mb, 16, 8, S1608_BASE);
+		reac_master_set_box(&mb, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 		CHK(mb.alloc.base == 0x20 && mb.alloc.width == 16);
 		CHK(mb.grant_burst_len == 56);
 		for (int i = 0; i < mb.grant_burst_len; i++) {

@@ -54,7 +54,7 @@ static struct reac_ctrl_parsed master_frame(enum reac_ctrl_kind k, const uint8_t
 
 int main(void)
 {
-	struct reac_slave_cfg cfg = { .ifname = "lo", .box_channels = 16,
+	struct reac_slave_cfg cfg = { .ifname = "lo", .box_channels = REAC_BOX_S1608_IN,
 	                              .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = NULL };
 	struct reac_slave s;
 	struct reac_slave_decision d;

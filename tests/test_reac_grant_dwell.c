@@ -67,7 +67,7 @@ int main(void)
 
 	/* Recognition lands while GRANTING — the window-restart path. 32 in / 8 out is the
 	 * S-4000S the rig declared; the head-amp base is the one its announce carries. */
-	reac_master_set_box(&m, 32, 8, 0x00);
+	reac_master_set_box(&m, REAC_BOX_S4000S_3208_IN, REAC_BOX_S4000S_3208_OUT, 0x00);
 	CHK(reac_master_has_box(&m));
 
 	const int dwell_slots = (FPS * DWELL_MS) / 1000;
@@ -87,7 +87,7 @@ int main(void)
 		int i0;
 		reac_master_next(&m, &c0, &i0);
 	}
-	reac_master_set_box(&m, 32, 8, 0x00);
+	reac_master_set_box(&m, REAC_BOX_S4000S_3208_IN, REAC_BOX_S4000S_3208_OUT, 0x00);
 	CHK(m.enroll_pending == 1);               /* re-armed, window NOT restarted */
 
 	/* Drive slots until the master reaches ESTABLISHED — the thing the rig measures and
