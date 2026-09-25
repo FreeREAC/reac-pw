@@ -42,24 +42,30 @@ int main(void)
 	                                   0x00, REAC_HEADAMP_PHANTOM, 0x01);
 	CHK(n == REAC_FRAME_BYTES);                       /* master/downstream width */
 	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
-	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER && f[20] == 0x00 && f[21] == 0x13);
-	CHK(f[22] == 0x00 && f[23] == 0x02 && f[24] == 0x00 && f[25] == 0xfe);
-	CHK(f[26] == 0x0e);                               /* preamble echo: oplen - 5 */
-	CHK(f[27] == 0xf0 && f[28] == 0x41 && f[29] == 0x0a && f[30] == 0x00 && f[31] == 0x00);
-	CHK(f[32] == 0x12 && f[33] == 0x12);              /* record marker */
-	CHK(f[34] == 0x01 && f[35] == 0x01);              /* TAG 01 01 */
-	CHK(f[36] == 0x00 && f[37] == 0x00 && f[38] == 0x01);
-	CHK(f[39] == 0x7d);                               /* inner cks (worked example) */
-	CHK(f[40] == 0xf7);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER &&
+	    REACPW_BE16(f + REACPW_FRAME_OF(REAC_HDR_LEN_OFF)) == REAC_DT1_DATA_OVERHEAD + REAC_IDENTITY_ADDR_LO_BYTES + 1);
+	CHK(((uint32_t)f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF)] << 24 | (uint32_t)f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF) + 1] << 16 |
+	     (uint32_t)f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF) + 2] << 8 | f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF) + 3]) == REAC_DT1_WRAPPER);
+	CHK(f[REACPW_FRAME_OF(REAC_DT1_LEN_ECHO_OFF)] == REACPW_BE16(f + REACPW_FRAME_OF(REAC_HDR_LEN_OFF)) - (REAC_DT1_SYSEX_OFF - REAC_HDR_OPCODE_OFF));   /* oplen - 5 */
+	CHK(f[REACPW_FRAME_OF(REAC_DT1_SYSEX_OFF)] == REAC_SYSEX_START && f[REACPW_FRAME_OF(REAC_DT1_SYSEX_OFF) + 1] == REAC_ROLAND_ID &&
+	    f[REACPW_FRAME_OF(REAC_DT1_SYSEX_OFF) + 2] == REAC_DT1_DEVICE_ID);
+	CHK(f[REACPW_FRAME_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && f[REACPW_FRAME_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1);
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP);
+	CHK(f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] == 0x00 && f[REACPW_FRAME_OF(REACPW_HA_PARAM_OFF)] == REAC_HEADAMP_PARAM_PHANTOM &&
+	    f[REACPW_FRAME_OF(REACPW_HA_VALUE_OFF)] == 0x01);
+	CHK(f[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)] == 0x7d);         /* inner cks (worked example) */
+	CHK(f[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF) + 1] == REAC_SYSEX_END);
 	CHK(f[n - 2] == REAC_END_MARKER_0 && f[n - 1] == REAC_END_MARKER_1);
 	/* both checksum rules, computed not assumed: record TAG..CKSUM sums to 0x80,
 	 * CH+PARAM+VALUE+CKSUM == 0x7e, and the 32-byte block sums to 0 mod 256. */
 	{
 		unsigned rec = 0, blk = 0;
-		for (int i = 34; i <= 39; i++) rec += f[i];
+		for (int i = REACPW_FRAME_OF(REAC_DT1_TAG_OFF); i <= REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF); i++) rec += f[i];
 		for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i++)  blk += f[i];
 		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
-		CHK(((f[36] + f[37] + f[38] + f[39]) & 0xff) == 0x7e);
+		CHK(((f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] + f[REACPW_FRAME_OF(REACPW_HA_PARAM_OFF)] + f[REACPW_FRAME_OF(REACPW_HA_VALUE_OFF)] +
+		       f[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)]) & 0xff) ==
+		    ((REAC_CTRL_RECORD_SUM - (REAC_DT1_TAG_HEAD_AMP >> 8) - (REAC_DT1_TAG_HEAD_AMP & 0xff)) & 0xff));
 		CHK((blk & 0xff) == REAC_CTRL_BLOCK_SUM);
 	}
 	CHK(reac_ctrl_checksum_verify(f) == 0);
@@ -98,7 +104,7 @@ int main(void)
 	CHK(n == REAC_FRAME_BYTES && reac_ctrl_checksum_verify(f) == 0);
 	{
 		unsigned rec = 0;
-		for (int i = 34; i <= 39; i++) rec += f[i];
+		for (int i = REACPW_FRAME_OF(REAC_DT1_TAG_OFF); i <= REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF); i++) rec += f[i];
 		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
 	}
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
@@ -161,13 +167,13 @@ int main(void)
 	 * TAG 01 01 is HEADAMP. A live M-200 emits ~628 head-amp records per 14
 	 * grants; a joining slave must NOT read a knob-turn as its grant. */
 	n = reac_ctrl_build_coldconnect(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
-	CHK(f[34] == 0x01 && f[35] == 0x00);              /* TAG 01 00 */
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_JOIN_GRANT);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
 	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
-	CHK(f[34] == 0x03 && f[35] == 0x02);              /* TAG 03 02 */
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_BOX_READY);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
 	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
-	CHK(f[34] == 0x05 && f[35] == 0x00);              /* TAG 05 00 (identity) */
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_IDENTITY);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
 
 	/* 5. bad args are rejected: unknown param, out-of-range values */

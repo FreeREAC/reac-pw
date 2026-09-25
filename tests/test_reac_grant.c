@@ -33,12 +33,18 @@
 /* A sweep row's record fields, for readability. Row is [type|block] = frame[16:50],
  * so a frame offset f maps to row index f-16. */
 #define ROW(f) ((f) - REAC_TYPED_BLOCK_OFF)
-static int row_is_groupa(const uint8_t r[34]) { return r[ROW(32)] == 0x12 && r[ROW(33)] == 0x12 &&
-                                                       r[ROW(34)] == 0x01 && r[ROW(35)] == 0x01; }
-static int row_is_groupb(const uint8_t r[34]) { return r[ROW(32)] == 0x12 && r[ROW(33)] == 0x11; }
-static uint8_t row_ch(const uint8_t r[34])    { return r[ROW(36)]; }
-static uint8_t row_param(const uint8_t r[34]) { return r[ROW(37)]; }
-static uint8_t row_value(const uint8_t r[34]) { return r[ROW(38)]; }
+static int row_is_groupa(const uint8_t r[REAC_TYPED_BLOCK_LEN])
+{
+	return r[REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && r[REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+	       REACPW_BE16(r + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP;
+}
+static int row_is_groupb(const uint8_t r[REAC_TYPED_BLOCK_LEN])
+{
+	return r[REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && r[REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_RQ1;
+}
+static uint8_t row_ch(const uint8_t r[REAC_TYPED_BLOCK_LEN])    { return r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)]; }
+static uint8_t row_param(const uint8_t r[REAC_TYPED_BLOCK_LEN]) { return r[REACPW_TYPED_OF(REACPW_HA_PARAM_OFF)]; }
+static uint8_t row_value(const uint8_t r[REAC_TYPED_BLOCK_LEN]) { return r[REACPW_TYPED_OF(REACPW_HA_VALUE_OFF)]; }
 
 int main(void)
 {

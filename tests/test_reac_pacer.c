@@ -223,9 +223,10 @@ int main(void)
 		CHK(p3.master.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		for (int i = 0; i < p3.master.grant_burst_len; i++) {
 			const uint8_t *r = p3.master.grant_burst[i];
-			if (!(r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01))
+			if (!(r[REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && r[REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+		      REACPW_BE16(r + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP))
 				continue;                       /* not a group-A head-amp record */
-			CHK(r[20] >= REACPW_S1608_HEADAMP_BASE && r[20] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);
+			CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] >= REACPW_S1608_HEADAMP_BASE && r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);
 		}
 
 		/* the event ring contains a JOIN event with the exact 32-byte block */
@@ -331,14 +332,7 @@ int main(void)
 			memcpy((FR), OUR, 6); memcpy((FR) + 6, BOX, 6); \
 			(FR)[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; (FR)[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff; (FR)[REAC_TYPED_BLOCK_OFF] = REAC_TYPE_CONTROL >> 8; \
 			(FR)[REAC_TYPED_BLOCK_OFF + 1] = REAC_TYPE_CONTROL & 0xff; \
-			uint8_t *_b = (FR) + REAC_CTRL_BLOCK_OFF; unsigned _sx = (unsigned)(13 + _n); \
-			_b[REAC_HDR_LINK_OFF] = REAC_LINK_RECORD; _b[REAC_HDR_SEG_OFF] = REAC_SEG_SINGLE; _b[3] = (uint8_t)(_sx + 5); \
-			_b[5] = 0x02; _b[7] = 0xfe; _b[8] = (uint8_t)_sx; \
-			_b[9] = 0xf0; _b[10] = 0x41; _b[11] = 0x0a; _b[14] = 0x12; _b[15] = 0x12; \
-			_b[16] = 0x05; _b[17] = 0x00; \
-			_b[18] = (uint8_t)((ADDR) >> 8); _b[19] = (uint8_t)((ADDR) & 0xff); \
-			for (size_t _i = 0; _i < _n; _i++) _b[20 + _i] = _pl[_i]; \
-			_b[20 + _n] = 0x7f; _b[21 + _n] = 0xf7; \
+			reacpw_dt1_record((FR) + REAC_CTRL_BLOCK_OFF, REAC_DT1_TAG_IDENTITY, (ADDR), _pl, _n); \
 		} while (0)
 
 		/* firmware addr 0x0000: 01 00 00 03 -> 1.003 */

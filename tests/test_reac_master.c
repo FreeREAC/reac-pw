@@ -340,11 +340,12 @@ int main(void)
 		int groupa = 0;
 		for (int i = 0; i < mg.grant_burst_len; i++) {
 			const uint8_t *r = mg.grant_burst[i];
-			if (!(r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01))
+			if (!(r[REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && r[REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+		      REACPW_BE16(r + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP))
 				continue;
 			groupa++;
-			CHK(r[20] >= mg.alloc.base);
-			CHK(r[20] < mg.alloc.base + mg.alloc.width);
+			CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] >= mg.alloc.base);
+			CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] < mg.alloc.base + mg.alloc.width);
 		}
 		CHK(groupa == REAC_BOX_S1608_IN * REAC_HEADAMP_SWEEP_RECORDS_PER_CH);
 
@@ -835,9 +836,10 @@ int main(void)
 			build_and_stamp(&mb, f, e, gi, planar);
 			CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);    /* a real cdea grant frame */
 			CHK(reac_ctrl_checksum_verify(f) == 0);
-			if (f[32] == 0x12 && f[33] == 0x12 && f[34] == 0x01 && f[35] == 0x01) {
+			if (f[REACPW_FRAME_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && f[REACPW_FRAME_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+			    REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP) {
 				ga_records++;
-				CHK(f[36] <= 0x07);                 /* the S-0808's own slots */
+				CHK(f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] <= REAC_BOX_S0808_IN - 1);   /* the S-0808's own slots */
 			}
 		}
 		CHK(emitted_grants == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
@@ -861,7 +863,7 @@ int main(void)
 		for (int i = 0; i < mb.grant_burst_len; i++) {
 			const uint8_t *r = mb.grant_burst[i];
 			if (r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01)
-				CHK(r[20] >= REACPW_S1608_HEADAMP_BASE && r[20] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);   /* NOT the old box's slots */
+				CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] >= REACPW_S1608_HEADAMP_BASE && r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);   /* NOT the old box's slots */
 		}
 
 		/* (e) A BOX THAT NEVER DECLARES ITSELF is not guessed at. The hold expires

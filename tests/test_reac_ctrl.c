@@ -54,7 +54,8 @@ static int check_record_cksum_order(void)
 		size_t n = reac_ctrl_build_headamp(f, BCAST, SRC, 0x77,
 		                                   RECS[i].ch, RECS[i].param, RECS[i].value);
 		CHK(n == REAC_FRAME_BYTES);
-		CHK(f[36] == RECS[i].ch && f[37] == RECS[i].param && f[38] == RECS[i].value);
+		CHK(f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] == RECS[i].ch && f[REACPW_FRAME_OF(REACPW_HA_PARAM_OFF)] == RECS[i].param &&
+		    f[REACPW_FRAME_OF(REACPW_HA_VALUE_OFF)] == RECS[i].value);
 		CHK(reac_ctrl_headamp_record_verify(f) == 0);   /* INNER: sum-to-0x80 */
 		CHK(reac_ctrl_checksum_verify(f) == 0);         /* OUTER: sum-to-0    */
 
@@ -62,11 +63,11 @@ static int check_record_cksum_order(void)
 		 * byte the outer sum has already counted, so the block no longer sums
 		 * to 0 — the frame the box would reject. */
 		memcpy(wrong, f, n);
-		wrong[39] = 0x00;                            /* un-stamp the inner byte  */
+		wrong[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)] = 0x00;                            /* un-stamp the inner byte  */
 		reac_ctrl_checksum_apply(wrong);             /* OUTER first (the bug)    */
-		reac_ctrl_record_cksum_stamp(wrong + 34, 6); /* INNER after it           */
+		reac_ctrl_record_cksum_stamp(wrong + REACPW_FRAME_OF(REAC_DT1_TAG_OFF), REACPW_HA_REC_LEN); /* INNER after it           */
 		CHK(reac_ctrl_headamp_record_verify(wrong) == 0);    /* record looks fine */
-		if (wrong[39] != 0x00) {          /* a zero inner byte clobbers nothing */
+		if (wrong[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)] != 0x00) {          /* a zero inner byte clobbers nothing */
 			CHK(reac_ctrl_checksum_verify(wrong) != 0);  /* ...the block does not */
 			CHK(memcmp(wrong, f, n) != 0);
 			traps++;
@@ -197,7 +198,7 @@ int main(void)
 	static const uint8_t LENS[] = { 0x13, 0x15, 0x1f, 0x00 };
 	for (size_t li = 0; li < sizeof LENS / sizeof LENS[0]; li++) {
 		n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
-		f[21] = LENS[li];
+		f[REACPW_FRAME_OF(REAC_HDR_LEN_OFF) + 1] = LENS[li];
 		reac_ctrl_checksum_apply(f);
 		CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 		CHK(ev == REAC_M_RX_BOX_JOIN && p.blk_len == LENS[li]);
@@ -210,7 +211,7 @@ int main(void)
 	f[REAC_CTRL_CKSUM_OFF] ^= 0x5a;                          /* break the checksum */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
-	f[34] = 0x07; f[35] = 0x77;                              /* an uncaptured tag */
+	f[REACPW_FRAME_OF(REAC_DT1_TAG_OFF)] = 0x07; f[REACPW_FRAME_OF(REAC_DT1_TAG_OFF) + 1] = 0x77;   /* an uncaptured tag */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT && p.dt1_tag == 0x0777);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
