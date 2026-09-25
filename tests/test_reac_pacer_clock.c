@@ -30,17 +30,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
-#define NOMINAL_NS 125000L      /* 96 kHz downstream = 8000 fps */
+#define NOMINAL_NS (1000000000L / REAC_PKT_RATE_96K)      /* the 96 kHz downstream period */
 
 /* Stand in for reac_pacer_open's clock half without touching a socket. */
 static void pacer_clock_init(struct reac_pacer *p, int follow)
 {
 	memset(p, 0, sizeof *p);
 	p->period_ns = NOMINAL_NS;
-	p->fps = 8000;
+	p->fps = REAC_PKT_RATE_96K;
 	p->clock_follow = follow;
 	p->slot_period_ns = p->period_ns;
 	reac_clock_disc_init(&p->clock, REAC_ROLE_MASTER, p->period_ns);
@@ -138,7 +139,7 @@ int main(void)
 		CHK(p.clock.src == REAC_CLOCK_SRC_GRAPH);
 		CHK(p.clock.state == REAC_CLOCK_LOCKED);
 		CHK(p.slot_period_ns < NOMINAL_NS);        /* fast reference -> shorter */
-		CHK(p.slot_period_ns == 124998L);          /* 125000 / 1.000018 */
+		CHK(p.slot_period_ns == (long)(NOMINAL_NS / 1.000018 + 0.5));
 		/* AND THE SEGMENT'S PUBLISHED PACE SAYS SO (0.5.4). This is the rig's own
 		 * state, measured 2026-09-08/09: the journal read "locked to graph clock
 		 * (api.alsa.0)" and reac.pace.source read "free-run", because the playback
@@ -161,7 +162,9 @@ int main(void)
 			/* the correction and both periods are on the line, so an operator can
 			 * see HOW FAR we are being pulled, not just that we are locked */
 			CHK(strstr(buf, " ppm, period ") != NULL);
-			CHK(strstr(buf, "vs nominal 125000 ns") != NULL);
+			char nominal[48];
+			snprintf(nominal, sizeof nominal, "vs nominal %ld ns", (long)NOMINAL_NS);
+			CHK(strstr(buf, nominal) != NULL);
 			free(buf);
 		}
 
@@ -226,7 +229,7 @@ int main(void)
 		CHK(p.clock.src == REAC_CLOCK_SRC_BOX);
 		CHK(p.clock.state == REAC_CLOCK_LOCKED);
 		CHK(p.slot_period_ns > NOMINAL_NS);        /* slow reference -> longer */
-		CHK(p.slot_period_ns == 125003L);          /* 125000 / 0.999977 */
+		CHK(p.slot_period_ns == (long)(NOMINAL_NS / 0.999977 + 0.5));
 		CHK(reac_pacer_pace_source(&p) == REAC_PACE_BOX_SLOPE);
 		{
 			char *buf = NULL;

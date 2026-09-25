@@ -100,6 +100,7 @@
 
 #include <pipewire/pipewire.h>
 #include <reac/reac.h>
+#include "reac_facts_pw.h"   /* every protocol number, from its one declaration */
 #include <reac/reac_capture.h>
 #include <sys/ioctl.h>
 #include <time.h>
@@ -644,7 +645,7 @@ static void usage(const char *p)
 	  "                reac-capture.<segment>.<mac6>. Useful on a switch MIRROR port\n"
 	  "                beside a real desk, where anything we transmit stops that\n"
 	  "                desk's own box from enrolling.)\n"
-	  "  --rate R      the REAC sample rate: 44100, 48000 or 96000.\n"
+	  "  --rate R      the REAC sample rate: " REACPW_RATES_OR ".\n"
 	  "                Default 96000 in the MASTER role (a master DEFINES the rate;\n"
 	  "                there is nothing to detect on a segment nobody is driving).\n"
 	  "                As a SLAVE, auto-detected from the wire cadence. Given on the\n"
@@ -743,8 +744,10 @@ static void usage(const char *p)
 	  "                pacer repays by staying on its grid instead of re-basing the\n"
 	  "                phase and losing them. Unset = backend-dependent, because the\n"
 	  "                two backends measure lateness against different references:\n"
-	  "                thread = 1000 us of measured wake tail (4 slots at 4000 fps),\n"
-	  "                etf = the LEAD less the qdisc delta (17 slots at 8000 fps on\n"
+	  "                thread = 1000 us of measured wake tail (4 slots at "
+	  REACPW_STR(REAC_PKT_RATE_48K) " fps),\n"
+	  "                etf = the LEAD less the qdisc delta (17 slots at "
+	  REACPW_STR(REAC_PKT_RATE_96K) " fps on\n"
 	  "                the default 2500 us lead), because everything inside the lead\n"
 	  "                is repayable by construction. -1 = never repay.\n"
 	  "  REACPW_RATE_MATCH=1  master role: OPT IN to publishing io_rate_match on\n"
@@ -1437,14 +1440,14 @@ static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_la
 	enum reac_conf_layer got = reac_conf_lookup("REAC_RATE", seg, NULL, v, sizeof v);
 	if (got != REAC_CONF_NONE) {
 		int r = atoi(v);
-		if (r == 44100 || r == 48000 || r == 96000) {
+		if (reac_rate_is_closed(r)) {
 			*out_layer = got;
 			return r;
 		}
 		/* A layer that answered with nonsense must SAY so and be skipped, not
 		 * silently drop us to the built-in with no explanation. */
 		fprintf(stderr, "reac-pw: %signoring REAC_RATE='%s' from %s — REAC "
-		        "runs at 44100, 48000 or 96000 Hz and nothing else\n",
+		        "runs at " REACPW_RATES_OR " Hz and nothing else\n",
 		        c->tag, v, reac_conf_layer_name(got));
 	}
 	*out_layer = REAC_CONF_BUILTIN;
@@ -5511,9 +5514,9 @@ int main(int argc, char **argv)
 			 * cannot do, having no TX resampler. This used to accept anything
 			 * from 8000 to 192000 and put it on the wire, a cadence no box can
 			 * follow, called configuration. */
-			if (rate != 44100 && rate != 48000 && rate != 96000) {
+			if (!reac_rate_is_closed(rate)) {
 				fprintf(stderr, "reac-pw: illegal --rate '%s'. REAC runs at "
-				        "44100, 48000 or 96000 Hz and nothing else; anything "
+				        REACPW_RATES_OR " Hz and nothing else; anything "
 				        "else needs re-pacing, which reac-pw cannot do.\n",
 				        argv[i]);
 				return 2;

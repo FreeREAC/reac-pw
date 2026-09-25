@@ -39,6 +39,7 @@
 #
 # Skips (77) without the namespaces, iproute2, sch_etf, tcpdump or PipeWire.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/etf_wire_probe}"
 PROBE="${2:?usage: $0 /path/to/reac-pw /path/to/etf_wire_probe}"
 SKIP=77
@@ -82,7 +83,7 @@ echo "private-graph-socket $RT"
 ip link add etfa type veth peer name etfb || exit 90
 ip link set etfa up
 ip link set etfb up
-DAEMON="--live etfa --tx etfa --mixer m5000 --rate 96000"
+DAEMON="--live etfa --tx etfa --mixer m5000 --rate $FACT_SAMPLE_RATE_96K"
 
 # One arm: capture the far end, run the daemon under $2's environment for $SECS,
 # read the qdisc counters through the daemon's own door, then read the wire.
@@ -127,8 +128,8 @@ arm() {
 	if [ -n "$HIST" ]; then
 		# The daemon's own MAC is the talker at the REAC pace; the far end also
 		# carries the emulated box's upstream, which pace_hist reports separately.
-		"$HIST" --fps 8000 "$RT/$label.pcap" 2>&1 \
-			| grep -aA3 'rate_hz=96000' | sed "s/^/$label-wire /"
+		"$HIST" --fps "$FACT_PKT_RATE_96K" "$RT/$label.pcap" 2>&1 \
+			| grep -aA3 "rate_hz=$FACT_SAMPLE_RATE_96K" | sed "s/^/$label-wire /"
 	else
 		echo "$label-wire NOT-RUN"
 	fi
@@ -197,9 +198,9 @@ echo "$OUT" | grep -a '^thread-health' | grep -q 'launch-miss' \
 	&& fail "the thread backend has no qdisc and no lead; it must not report launch misses"
 
 # 2. THE ETF CATCH-UP BUDGET IS THE LEAD, not the thread backend's wake tail.
-echo "$OUT" | grep -a '^etfdefault-budget' | grep -q '17 slots = 2125 us at 8000 fps' \
+echo "$OUT" | grep -a '^etfdefault-budget' | grep -q "17 slots = 2125 us at $FACT_PKT_RATE_96K fps" \
 	|| fail "the ETF arm's catch-up budget is not the lead-derived 17 slots: $(line etfdefault-budget)"
-echo "$OUT" | grep -a '^thread-budget' | grep -q '8 slots = 1000 us at 8000 fps' \
+echo "$OUT" | grep -a '^thread-budget' | grep -q "8 slots = 1000 us at $FACT_PKT_RATE_96K fps" \
 	|| fail "the thread arm's budget must stay libreac's measured 1000 us: $(line thread-budget)"
 
 # 3. THE INSTRUMENT CAN SEE. A qdisc reading that found no etf qdisc would make every

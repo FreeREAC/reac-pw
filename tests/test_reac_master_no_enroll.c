@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -40,7 +41,7 @@ static const uint8_t ZONEA_JOIN[32] = {
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 /* The S-1608's head-amp base: the chassis strap the box ANNOUNCES (config
  * announce block[7]) times 0x10. It is a required argument now — the per-width

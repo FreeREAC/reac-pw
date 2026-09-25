@@ -43,6 +43,7 @@
 #include <stdio.h>
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHK(cond) do { \
@@ -80,7 +81,7 @@ int main(void)
 
 	struct reac_rx_cfg cfg = { .kind = REAC_RX_LIVE,
 	                           .source = "reacpw-test-does-not-exist-9182",
-	                           .forced_rate = 96000,   /* the deployed --rate case */
+	                           .forced_rate = REAC_SAMPLE_RATE_96K,   /* the deployed --rate case */
 	                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 	struct reac_ring ring;
 	struct reac_rx rx;

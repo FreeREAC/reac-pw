@@ -4,6 +4,7 @@
 #include "reac_lat.h"
 
 #include <reac/reac.h>   /* REAC_SAMPLES_PER_PKT */
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 void reac_lat_init(struct reac_lat *s)
 {

@@ -57,6 +57,7 @@
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
 #include <reac/reac_upstream.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #include "upstream_fixtures.inc"
 
@@ -190,7 +191,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -225,11 +226,11 @@ int main(void)
 		for (int i = 0; i < NFRAMES; i++)
 			for (int c = 0; c < 16; c++)
 				for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-					const uint8_t *p = &pcm[i][(size_t)(c * 12 + s) * 3];
+					const uint8_t *p = &pcm[i][(size_t)(c * REAC_SAMPLES_PER_PKT + s) * 3];
 					int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 					                      ((uint32_t)p[2] << 16));
 					if (v & 0x00800000) v |= ~0x00FFFFFF;
-					if (fabsf(ch[c][i * 12 + s] - (float)v / 8388608.0f) > 1e-7f)
+					if (fabsf(ch[c][i * REAC_SAMPLES_PER_PKT + s] - (float)v / 8388608.0f) > 1e-7f)
 						bad++;
 				}
 		CHK(bad == 0);
@@ -263,7 +264,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -290,11 +291,11 @@ int main(void)
 		for (int i = 0; i < NFRAMES; i++)
 			for (int c = 0; c < 16; c++)
 				for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-					const uint8_t *p = &pcm[i][(size_t)(c * 12 + s) * 3];
+					const uint8_t *p = &pcm[i][(size_t)(c * REAC_SAMPLES_PER_PKT + s) * 3];
 					int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 					                      ((uint32_t)p[2] << 16));
 					if (v & 0x00800000) v |= ~0x00FFFFFF;
-					if (fabsf(ch[c][i * 12 + s] - (float)v / 8388608.0f) > 1e-7f)
+					if (fabsf(ch[c][i * REAC_SAMPLES_PER_PKT + s] - (float)v / 8388608.0f) > 1e-7f)
 						bad++;
 				}
 		CHK(bad == 0);
@@ -325,7 +326,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_DOWNSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -364,7 +365,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 96000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_96K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;

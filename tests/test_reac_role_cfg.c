@@ -19,6 +19,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -106,7 +107,7 @@ static int test_prop_parse(void)
 		struct spa_pod_frame obj, st;
 		begin_props(&b, &obj, &st);
 		spa_pod_builder_string(&b, "reac.cfg.rate");
-		spa_pod_builder_int(&b, 48000);
+		spa_pod_builder_int(&b, REAC_SAMPLE_RATE_48K);
 		spa_pod_builder_string(&b, REAC_CFG_PROP_ROLE);
 		spa_pod_builder_int(&b, REAC_CFG_ROLE_VALUE_MASTER);
 		const struct spa_pod *pod = end_props(&b, &obj, &st);

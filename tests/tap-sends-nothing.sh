@@ -27,6 +27,7 @@
 # REAC segment. Skips (77) where the namespaces are unavailable or the master could not
 # hold its pacing — a measurement that could not be taken is not a pass.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 CP="${1:?usage: $0 /path/to/courtship-probe /path/to/tap-probe}"
 TP="${2:?usage: $0 /path/to/courtship-probe /path/to/tap-probe}"
 SKIP=77
@@ -37,7 +38,7 @@ command -v ip      >/dev/null 2>&1 || { echo "SKIP: no iproute2"; exit $SKIP; }
 unshare -r -n --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net namespaces unavailable"; exit $SKIP; }
 
-FPS=4000        # 48 kHz: 48000 / 12
+FPS=$FACT_PKT_RATE_48K   # 48 kHz: SAMPLE_RATE_48K / SAMPLES_PER_PKT
 RUN=10
 
 OUT=$(unshare -r -n --map-root-user bash -s -- "$CP" "$TP" "$FPS" "$RUN" <<'INNER'
@@ -86,7 +87,7 @@ run_arm() {   # $1 = arm name, $2... = the command to run on OUR end
 	sed "s/^/${name}_ours /" "$RT/$name.ours"
 }
 
-run_arm control "$CP" slave tps0 "$OURMAC" 48000 $((RUN - 2))
+run_arm control "$CP" slave tps0 "$OURMAC" "$FACT_SAMPLE_RATE_48K" $((RUN - 2))
 run_arm tap     "$TP" tps0 $((RUN - 2))
 exit 0
 INNER
@@ -128,7 +129,7 @@ done
 
 # 2. THE TAP DID ITS JOB. Silence from a program that died at open proves nothing.
 [ "$STREAMS" -ge 1 ] || fail "the tap found $STREAMS streams — it heard nothing, so its silence says nothing"
-[ "$RATE" -eq 48000 ] || fail "the tap measured $RATE Hz off a ${FPS} pps master; it should read 48000"
+[ "$RATE" -eq "$FACT_SAMPLE_RATE_48K" ] || fail "the tap measured $RATE Hz off a ${FPS} pps master; it should read $FACT_SAMPLE_RATE_48K"
 [ "$SERVED" -gt 500 ] || fail "the tap served only $SERVED frames — it was not running"
 
 # 3. AND IT PUT NOTHING ON THE WIRE. The whole claim, in one number.

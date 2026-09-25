@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CH 4
 
@@ -29,15 +30,16 @@ int main(void)
 	assert(reac_ring_init(&bad, CH, 0x80000001u) == -1);  /* rounds past UINT32_MAX */
 
 	/* write 12 frames/ch (a REAC quantum), planar src[c*n + s] = c*100 + s */
-	float src[CH * 12];
+	float src[CH * REAC_SAMPLES_PER_PKT];
 	for (int c = 0; c < CH; c++)
-		for (int s = 0; s < 12; s++)
-			src[c * 12 + s] = (float)(c * 100 + s);
-	assert(reac_ring_write(&r, src, 12, CH) == 12);
-	assert(reac_ring_readable(&r) == 12);
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
+			src[c * REAC_SAMPLES_PER_PKT + s] = (float)(c * 100 + s);
+	assert(reac_ring_write(&r, src, REAC_SAMPLES_PER_PKT, CH) == REAC_SAMPLES_PER_PKT);
+	assert(reac_ring_readable(&r) == REAC_SAMPLES_PER_PKT);
 
 	/* read 8 frames/ch back into planar dst, check values. dst buffers are sized
 	 * 16 so the later 10-frame read can't overflow them. */
+	const uint32_t LEFT = REAC_SAMPLES_PER_PKT - 8;   /* what the 8-frame read leaves */
 	float d0[16], d1[16], d2[16], d3[16];
 	float *dst[CH] = { d0, d1, d2, d3 };
 	uint32_t got = reac_ring_read_planar(&r, dst, CH, 8);
@@ -45,18 +47,18 @@ int main(void)
 	for (int c = 0; c < CH; c++)
 		for (int s = 0; s < 8; s++)
 			assert(fabsf(dst[c][s] - (float)(c * 100 + s)) < 1e-6f);
-	assert(reac_ring_readable(&r) == 4);
+	assert(reac_ring_readable(&r) == LEFT);
 
-	/* underrun: ask for 10 with only 4 left -> 6 zeros, underrun bumped */
+	/* underrun: ask for 10 with only LEFT (4) left -> the rest zeros, underrun bumped */
 	got = reac_ring_read_planar(&r, dst, CH, 10);
-	assert(got == 4);
+	assert(got == LEFT);
 	for (int c = 0; c < CH; c++) {
-		for (int s = 0; s < 4; s++)
+		for (int s = 0; s < (int)LEFT; s++)
 			assert(fabsf(dst[c][s] - (float)(c * 100 + 8 + s)) < 1e-6f);
-		for (int s = 4; s < 10; s++)
+		for (int s = (int)LEFT; s < 10; s++)
 			assert(dst[c][s] == 0.0f);
 	}
-	assert(atomic_load(&r.underruns) == 6);
+	assert(atomic_load(&r.underruns) == 10 - LEFT);
 
 	/* over-capacity write: request 200 into an empty 128-slot ring. The write
 	 * count is bounded to writable (mask == 127) and the remainder is dropped as
@@ -121,8 +123,8 @@ int main(void)
 #define CYCLES 8                    /* 8 x 12 = 96 frames through a 64-slot ring */
 	struct reac_ring nr;
 	assert(reac_ring_init(&nr, CH, 64) == 0);
-	float nbuf[CH * 12];
-	float n0[12], n1[12], n2[12], n3[12];
+	float nbuf[CH * REAC_SAMPLES_PER_PKT];
+	float n0[REAC_SAMPLES_PER_PKT], n1[REAC_SAMPLES_PER_PKT], n2[REAC_SAMPLES_PER_PKT], n3[REAC_SAMPLES_PER_PKT];
 	float *ndst[CH] = { n0, n1, n2, n3 };
 
 	/* 1. AN UNTOUCHED ROW READS AS SILENCE -- the allocator's guarantee.
@@ -131,12 +133,12 @@ int main(void)
 	 *    reac_ring_init used calloc. Sabotage: swap that calloc for a malloc and
 	 *    this case is the one that fails. */
 	for (int c = 0; c < CH; c++)
-		for (int s = 0; s < 12; s++)
-			nbuf[c * 12 + s] = (float)(c + 1) * 10.0f;
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
+			nbuf[c * REAC_SAMPLES_PER_PKT + s] = (float)(c + 1) * 10.0f;
 	for (int k = 0; k < CYCLES; k++) {
-		assert(reac_ring_write(&nr, nbuf, 12, 2) == 12);
-		assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
-		for (int s = 0; s < 12; s++) {
+		assert(reac_ring_write(&nr, nbuf, REAC_SAMPLES_PER_PKT, 2) == REAC_SAMPLES_PER_PKT);
+		assert(reac_ring_read_planar(&nr, ndst, CH, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
 			assert(fabsf(n0[s] - 10.0f) < 1e-6f);
 			assert(fabsf(n1[s] - 20.0f) < 1e-6f);
 			assert(n2[s] == 0.0f);          /* never written -- allocator silence */
@@ -152,19 +154,19 @@ int main(void)
 	 *    box does not have, fading in as the ring came round. Sabotage: delete the
 	 *    memset loop in reac_ring_write and this case fails. */
 	for (int c = 0; c < CH; c++)
-		for (int s = 0; s < 12; s++)
-			nbuf[c * 12 + s] = 77.0f;
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
+			nbuf[c * REAC_SAMPLES_PER_PKT + s] = 77.0f;
 	for (int k = 0; k < CYCLES; k++) {
-		assert(reac_ring_write(&nr, nbuf, 12, CH) == 12);
-		assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
+		assert(reac_ring_write(&nr, nbuf, REAC_SAMPLES_PER_PKT, CH) == REAC_SAMPLES_PER_PKT);
+		assert(reac_ring_read_planar(&nr, ndst, CH, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
 	}
-	for (int s = 0; s < 12; s++)
+	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 		assert(fabsf(n3[s] - 77.0f) < 1e-6f);   /* the wide source really landed */
 
 	for (int k = 0; k < CYCLES; k++) {
-		assert(reac_ring_write(&nr, nbuf, 12, 2) == 12);
-		assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
-		for (int s = 0; s < 12; s++) {
+		assert(reac_ring_write(&nr, nbuf, REAC_SAMPLES_PER_PKT, 2) == REAC_SAMPLES_PER_PKT);
+		assert(reac_ring_read_planar(&nr, ndst, CH, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
 			assert(fabsf(n0[s] - 77.0f) < 1e-6f);  /* rows still written */
 			assert(n2[s] == 0.0f);                 /* retired on the shrink */
 			assert(n3[s] == 0.0f);
@@ -174,9 +176,9 @@ int main(void)
 	/* 3. A source claiming more rows than the ring holds is CLAMPED, not an
 	 *    overflow. reac_upstream_channels is contract-bound below 40, but the ring
 	 *    is the last line and must not lean on that. */
-	assert(reac_ring_write(&nr, nbuf, 12, CH + 99) == 12);
-	assert(reac_ring_read_planar(&nr, ndst, CH, 12) == 12);
-	for (int s = 0; s < 12; s++)
+	assert(reac_ring_write(&nr, nbuf, REAC_SAMPLES_PER_PKT, CH + 99) == REAC_SAMPLES_PER_PKT);
+	assert(reac_ring_read_planar(&nr, ndst, CH, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
+	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 		assert(fabsf(n3[s] - 77.0f) < 1e-6f);
 
 	reac_ring_free(&nr);

@@ -44,6 +44,7 @@
  * option, dev-only, which is why this target is not build_by_default any more. */
 #include "reac_rx.c"
 #include <reac/transport/reac_pacer.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 #include "upstream_fixtures.inc"
 
 #define FRAMES  20000   /* per pass */
@@ -104,9 +105,9 @@ static double case_rx_feed(int ring_channels, const char *label)
 	struct reac_rx rx;
 	memset(&rx, 0, sizeof rx);
 	rx.ring = &ring;
-	rx.sample_rate = 48000;
+	rx.sample_rate = REAC_SAMPLE_RATE_48K;
 	rx.cfg.accept = REAC_RX_ACCEPT_DOWNSTREAM;
-	const struct reac_mode *mode = reac_mode_for(48000);
+	const struct reac_mode *mode = reac_mode_for(REAC_SAMPLE_RATE_48K);
 
 	uint64_t pass[REPS];
 	for (int rep = 0; rep < REPS + 1; rep++) {
@@ -147,9 +148,9 @@ static double case_rx_feed_upstream(int ring_channels, const char *label)
 	struct reac_rx rx;
 	memset(&rx, 0, sizeof rx);
 	rx.ring = &ring;
-	rx.sample_rate = 48000;
+	rx.sample_rate = REAC_SAMPLE_RATE_48K;
 	rx.cfg.accept = REAC_RX_ACCEPT_UPSTREAM;
-	const struct reac_mode *mode = reac_mode_for(48000);
+	const struct reac_mode *mode = reac_mode_for(REAC_SAMPLE_RATE_48K);
 
 	uint64_t pass[REPS];
 	for (int rep = 0; rep < REPS + 1; rep++) {

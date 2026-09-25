@@ -32,6 +32,9 @@ Every mode prints the size of what it measured before the result it derives, so
 an empty scan can never be mistaken for a clean one.
 """
 import argparse, struct, sys, time
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
 
 
 def ref(card, dev, dur):
@@ -156,8 +159,8 @@ def main():
     r = sub.add_parser("ref"); r.add_argument("--card", default="card0")
     r.add_argument("--dev", default="0"); r.add_argument("--seconds", type=float, default=30)
     w = sub.add_parser("wire"); w.add_argument("iface", nargs="+")
-    w.add_argument("--seconds", type=float, default=180); w.add_argument("--fps", type=float, default=4000)
-    g = sub.add_parser("gaps"); g.add_argument("pcap"); g.add_argument("--fps", type=float, default=4000)
+    w.add_argument("--seconds", type=float, default=180); w.add_argument("--fps", type=float, default=FACTS["PKT_RATE_48K"])
+    g = sub.add_parser("gaps"); g.add_argument("pcap"); g.add_argument("--fps", type=float, default=FACTS["PKT_RATE_48K"])
     a = ap.parse_args()
     if a.mode == "ref":
         ref(a.card, a.dev, a.seconds)

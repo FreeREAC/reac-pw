@@ -34,6 +34,7 @@
 # with its own PipeWire on a private runtime dir, the peer end of the veth in a NESTED
 # network namespace. Nothing here touches the live graph.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
 FAKE="${2:-}"
 SKIP=77
@@ -78,7 +79,7 @@ ip link set spl0 up; $in_peer ip link set splb0 up
 $in_peer "$FAKE" splb0 "$SECS" "$MODEL" >"$RT/box.log" 2>&1 &
 FAKEPID=$!
 
-HOME="$CONF" REAC_DEBUG=1 "$BIN" --live spl0 --tx spl0 --mixer m5000 --rate 96000 \
+HOME="$CONF" REAC_DEBUG=1 "$BIN" --live spl0 --tx spl0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" \
 	--name split >"$LOG" 2>&1 &
 PID=$!
 sleep 3

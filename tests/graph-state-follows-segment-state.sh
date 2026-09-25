@@ -45,6 +45,7 @@
 # `unshare -n` isolates the wire and not the graph. HOME is redirected at every daemon so
 # the only conf any of them can read is the one written here -- never the operator's.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw [/path/to/fake_box]}"
 # ABSOLUTE, ALWAYS: nsenter into a mount namespace starts at /, so a relative path runs one
 # side of the wire and silently fails to start the other.
@@ -135,7 +136,7 @@ ip link set gs0 up; $in_peer ip link set pgs0 up
 
 if [ "$ARM" = "cold" ]; then
 	# ---- ARM A: COLD, THEN A BOX, THEN A BOUNCE --------------------------------------
-	HOME="$CONF" "$BIN" --live gs0 --tx gs0 --name gs0 --rate 96000 >"$LOG" 2>&1 &
+	HOME="$CONF" "$BIN" --live gs0 --tx gs0 --name gs0 --rate "$FACT_SAMPLE_RATE_96K" >"$LOG" 2>&1 &
 	PID=$!
 	sleep 4
 	kill -0 $PID 2>/dev/null || { echo "daemon-died"; tail -8 "$LOG"; exit 91; }

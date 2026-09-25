@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -32,9 +33,12 @@ static uint64_t mono_ns(void)
 int main(void)
 {
 	/* 1. per-rate slot period (the 125 us @96k contract). */
-	CHK(reac_pacer_period_ns(8000) == 125000);   /* 96 kHz */
-	CHK(reac_pacer_period_ns(4000) == 250000);   /* 48 kHz */
-	CHK(reac_pacer_period_ns(3675) == 272109);   /* 44.1 kHz (rounded) */
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_96K) ==
+	    (1000000000 + REAC_PKT_RATE_96K / 2) / REAC_PKT_RATE_96K);   /* 96 kHz */
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_48K) ==
+	    (1000000000 + REAC_PKT_RATE_48K / 2) / REAC_PKT_RATE_48K);   /* 48 kHz */
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_44K1) ==
+	    (1000000000 + REAC_PKT_RATE_44K1 / 2) / REAC_PKT_RATE_44K1);   /* 44.1 kHz (rounded) */
 
 	/* 2. the SPSC frame ring. */
 	struct reac_frame_ring r;
@@ -108,8 +112,8 @@ int main(void)
 		struct reac_pacer pg;
 		memset(&pg, 0, sizeof pg);
 		pg.handle = NULL;
-		pg.fps = 4000;
-		pg.period_ns = reac_pacer_period_ns(4000);
+		pg.fps = REAC_PKT_RATE_48K;
+		pg.period_ns = reac_pacer_period_ns(REAC_PKT_RATE_48K);
 		atomic_store(&pg.ring_depth_min, UINT32_MAX);
 		CHK(reac_frame_ring_init(&pg.ring, 2048, 2048) == 0);
 		uint8_t gpf[REAC_FRAME_BYTES];
@@ -152,28 +156,28 @@ int main(void)
 		struct reac_pacer p3;
 		memset(&p3, 0, sizeof p3);
 		p3.handle = NULL;
-		p3.fps = 8000;
+		p3.fps = REAC_PKT_RATE_96K;
 		memcpy(p3.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p3.ring, 8, 2048) == 0);
-		reac_master_init(&p3.master, OUR, NULL, 8000);   /* S-1608 default */
+		reac_master_init(&p3.master, OUR, NULL, REAC_PKT_RATE_96K);   /* S-1608 default */
 		p3.prev_state = REAC_M_IDLE;
 
 		uint8_t bf[2048];
 
 		/* a broadcast presence FILLER: counted, no state change, presence event */
 		static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-		size_t bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, 12);
+		size_t bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_box_frames == 1 && p3.rx_box_ctrl == 0 && p3.rx_joins == 0);
 		CHK(p3.master.state == REAC_M_PROBING);   /* promoted, but NOT granting */
 
 		/* our own echo must be ignored (the software self-filter) */
-		bn = reac_ctrl_build_upstream_filler(bf, BCAST, OUR, 1, 16, NULL, 12);
+		bn = reac_ctrl_build_upstream_filler(bf, BCAST, OUR, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_box_frames == 1);
 
 		/* the JOIN: fsm mirror flips to GRANTING, the ring holds the block */
-		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, 12);
+		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, REAC_SAMPLES_PER_PKT);
 		uint8_t join_blk[32];
 		memcpy(join_blk, bf + 18, 32);
 		reac_pacer_rx_ingest(&p3, bf, bn);
@@ -285,7 +289,7 @@ int main(void)
 		/* overflow: flood JOINs (each always logs) -> ring caps at EVRING,
 		 * drop-newest counts ev_drops, a full drain returns exactly EVRING */
 		for (int i = 0; i < REAC_PACER_EVRING * 2; i++) {
-			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i, 16, NULL, 12);
+			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i, 16, NULL, REAC_SAMPLES_PER_PKT);
 			reac_pacer_rx_ingest(&p3, bf, bn);
 		}
 		CHK(p3.ev_drops > 0);
@@ -308,10 +312,10 @@ int main(void)
 		struct reac_pacer p4;
 		memset(&p4, 0, sizeof p4);
 		p4.handle = NULL;
-		p4.fps = 8000;
+		p4.fps = REAC_PKT_RATE_96K;
 		memcpy(p4.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p4.ring, 8, 2048) == 0);
-		reac_master_init(&p4.master, OUR, NULL, 8000);
+		reac_master_init(&p4.master, OUR, NULL, REAC_PKT_RATE_96K);
 
 		struct reac_identity id0;
 		reac_pacer_read_identity(&p4, &id0);
@@ -376,10 +380,10 @@ int main(void)
 		struct reac_pacer p5;
 		memset(&p5, 0, sizeof p5);
 		p5.handle = NULL;
-		p5.fps = 8000;
+		p5.fps = REAC_PKT_RATE_96K;
 		memcpy(p5.src, OUR, 6);
 		CHK(reac_frame_ring_init(&p5.ring, 8, 2048) == 0);
-		reac_master_init(&p5.master, OUR, NULL, 8000);
+		reac_master_init(&p5.master, OUR, NULL, REAC_PKT_RATE_96K);
 		p5.prev_state = REAC_M_IDLE;
 
 		uint8_t bf[2048];
@@ -407,14 +411,14 @@ int main(void)
 	 * S-4000S returned 4000 pps under a 3675 pps cadence. Pin the mapping and the byte
 	 * placement without a socket. */
 	{
-		CHK(reac_pace_code(3675) == 2);   /* 44.1 kHz */
-		CHK(reac_pace_code(4000) == 0);   /* 48 kHz */
-		CHK(reac_pace_code(8000) == 1);   /* 96 kHz */
+		CHK(reac_pace_code(REAC_PKT_RATE_44K1) == REAC_PACE_CODE_44K1);   /* 44.1 kHz */
+		CHK(reac_pace_code(REAC_PKT_RATE_48K) == REAC_PACE_CODE_48K);   /* 48 kHz */
+		CHK(reac_pace_code(REAC_PKT_RATE_96K) == REAC_PACE_CODE_96K);   /* 96 kHz */
 		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-		struct reac_console_cfg cfg = { .out_channels = 16, .console_field = reac_pace_code(3675) };
+		struct reac_console_cfg cfg = { .out_channels = 16, .console_field = reac_pace_code(REAC_PKT_RATE_44K1) };
 		struct reac_master m;
-		reac_master_init(&m, OUR, &cfg, 3675);
-		CHK(m.announce_blk[19] == 2);     /* the byte a box paces by */
+		reac_master_init(&m, OUR, &cfg, REAC_PKT_RATE_44K1);
+		CHK(m.announce_blk[19] == REAC_PACE_CODE_44K1);     /* the byte a box paces by */
 	}
 
 	/* ---- the sustained-discard detector --------------------------------- *
@@ -503,7 +507,7 @@ int main(void)
 
 	/* 4. live cadence on lo (best-effort; needs CAP_NET_RAW). */
 	struct reac_pacer p;
-	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = 8000, .prio = 0, .cpu = -1,
+	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = REAC_PKT_RATE_96K, .prio = 0, .cpu = -1,
 	                              .src_mac = NULL };
 	if (reac_pacer_open(&p, &cfg) != 0) {
 		/* Name what RAN. "parts 1-2" undersold it by five sections and made a
@@ -517,7 +521,7 @@ int main(void)
 		       "the live emit on lo, is skipped\n");
 		return 77;   /* meson: test SKIP */
 	}
-	CHK(reac_pacer_period_ns(8000) == p.period_ns);
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_96K) == p.period_ns);
 
 	/* prime the ring so the pacer emits queued frames (not only silent FILLER). */
 	memset(in, 0, sizeof in);

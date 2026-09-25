@@ -36,8 +36,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
-#define FPS 8000                     /* 96 kHz: 8000 downstream frames/s */
+#define FPS REAC_PKT_RATE_96K                     /* 96 kHz: 8000 downstream frames/s */
 #define DWELL_MS 5000                /* the cap both arms are given */
 static const uint8_t M_SRC[6] = { 0x34, 0x5a, 0x60, 0x9f, 0x9e, 0xbe };
 static const uint8_t B_SRC[6] = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };  /* the rig's S-4000S */

@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { \
 	fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -123,10 +124,10 @@ int main(void)
 	struct reac_pacer p;
 	memset(&p, 0, sizeof p);
 	p.handle = NULL;
-	p.fps = 8000;
+	p.fps = REAC_PKT_RATE_96K;
 	memcpy(p.src, OUR, 6);
 	CHK(reac_frame_ring_init(&p.ring, 8, 2048) == 0);
-	reac_master_init(&p.master, OUR, NULL, 8000);
+	reac_master_init(&p.master, OUR, NULL, REAC_PKT_RATE_96K);
 	p.prev_state = REAC_M_IDLE;
 
 	struct fake_props f = { 0 };
@@ -136,7 +137,7 @@ int main(void)
 	/* (a) A box FLOODING presence is not a box we have joined. Hearing a chassis
 	 * and enrolling it are different facts, and the badge answers only the second
 	 * — the segment's discovery list is where a mere sighting belongs. */
-	bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, 12);
+	bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
@@ -144,7 +145,7 @@ int main(void)
 	/* (b) The cold-connect. Its forward edge is HELD until the scene push
 	 * completes (reac_master.c), so drive the cadence to the end of a transfer
 	 * the way a box that joins between two pushes stands. */
-	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, 12);
+	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, REAC_SAMPLES_PER_PKT);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	{
 		uint16_t c; int ix;
@@ -192,7 +193,7 @@ int main(void)
 	 * ever seen — a swapped stagebox that inherited its predecessor's name is the
 	 * same class of fault as a stale model or a stale head-amp base. */
 	static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
-	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX2, 5, 16, NULL, 12);
+	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX2, 5, 16, NULL, REAC_SAMPLES_PER_PKT);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	{
 		uint16_t c; int ix;

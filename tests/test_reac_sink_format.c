@@ -45,6 +45,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -53,14 +54,14 @@ static int test_build_round_trips_the_rate(void)
 	uint8_t buf[1024];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 
-	const struct spa_pod *pod = reac_sink_format_build(&b, 8, 48000);
+	const struct spa_pod *pod = reac_sink_format_build(&b, 8, REAC_SAMPLE_RATE_48K);
 	CHK(pod != NULL);
 
 	struct spa_audio_info_raw info;
 	memset(&info, 0, sizeof info);
 	CHK(spa_format_audio_raw_parse(pod, &info) >= 0);
 	CHK(info.format == SPA_AUDIO_FORMAT_F32P);
-	CHK(info.rate == 48000);
+	CHK(info.rate == REAC_SAMPLE_RATE_48K);
 	CHK(info.channels == 8);
 	for (int c = 0; c < 8; c++)
 		CHK(info.position[c] == (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c));
@@ -76,13 +77,13 @@ static int test_build_after_a_rate_change(void)
 	uint8_t buf[1024];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 
-	const struct spa_pod *pod = reac_sink_format_build(&b, 16, 96000);
+	const struct spa_pod *pod = reac_sink_format_build(&b, 16, REAC_SAMPLE_RATE_96K);
 	CHK(pod != NULL);
 
 	struct spa_audio_info_raw info;
 	memset(&info, 0, sizeof info);
 	CHK(spa_format_audio_raw_parse(pod, &info) >= 0);
-	CHK(info.rate == 96000);
+	CHK(info.rate == REAC_SAMPLE_RATE_96K);
 	CHK(info.channels == 16);
 	return 0;
 }
@@ -94,7 +95,7 @@ static int test_channel_count_clamps(void)
 	/* A caller value past the fabric width clamps to REAC_MAX_CHANNELS rather
 	 * than walking spa_audio_info_raw.position out of bounds. */
 	struct spa_pod_builder b1 = SPA_POD_BUILDER_INIT(buf, sizeof buf);
-	const struct spa_pod *pod = reac_sink_format_build(&b1, REAC_MAX_CHANNELS + 100, 48000);
+	const struct spa_pod *pod = reac_sink_format_build(&b1, REAC_MAX_CHANNELS + 100, REAC_SAMPLE_RATE_48K);
 	CHK(pod != NULL);
 	struct spa_audio_info_raw info;
 	memset(&info, 0, sizeof info);
@@ -103,7 +104,7 @@ static int test_channel_count_clamps(void)
 
 	/* A negative count clamps to zero, not to a huge unsigned wrap. */
 	struct spa_pod_builder b2 = SPA_POD_BUILDER_INIT(buf, sizeof buf);
-	pod = reac_sink_format_build(&b2, -3, 48000);
+	pod = reac_sink_format_build(&b2, -3, REAC_SAMPLE_RATE_48K);
 	CHK(pod != NULL);
 	memset(&info, 0, sizeof info);
 	CHK(spa_format_audio_raw_parse(pod, &info) >= 0);
@@ -118,8 +119,8 @@ static int test_channel_count_clamps(void)
  * t=0. */
 static int test_no_update_on_matching_rate(void)
 {
-	CHK(reac_sink_format_needs_update(48000, 48000) == 0);
-	CHK(reac_sink_format_needs_update(96000, 96000) == 0);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_48K) == 0);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_96K) == 0);
 	return 0;
 }
 
@@ -129,8 +130,8 @@ static int test_no_update_on_matching_rate(void)
  * renegotiation. */
 static int test_update_fires_on_accepted_change(void)
 {
-	CHK(reac_sink_format_needs_update(48000, 96000) == 1);
-	CHK(reac_sink_format_needs_update(96000, 44100) == 1);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_96K) == 1);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_44K1) == 1);
 	return 0;
 }
 
@@ -141,8 +142,8 @@ static int test_update_fires_on_accepted_change(void)
  * stay false, proving a refusal renegotiates nothing. */
 static int test_no_update_after_a_refusal(void)
 {
-	int node_rate = 48000;
-	int pacer_rate_after_refusal = 48000;   /* reac_rate_cfg_decide refused; unchanged */
+	int node_rate = REAC_SAMPLE_RATE_48K;
+	int pacer_rate_after_refusal = REAC_SAMPLE_RATE_48K;   /* reac_rate_cfg_decide refused; unchanged */
 	CHK(reac_sink_format_needs_update(node_rate, pacer_rate_after_refusal) == 0);
 	return 0;
 }
@@ -153,8 +154,8 @@ static int test_no_update_after_a_refusal(void)
  * garbage into the graph. */
 static int test_no_update_on_non_positive_pacer_rate(void)
 {
-	CHK(reac_sink_format_needs_update(48000, 0) == 0);
-	CHK(reac_sink_format_needs_update(48000, -1) == 0);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, 0) == 0);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, -1) == 0);
 	return 0;
 }
 
@@ -167,12 +168,12 @@ static int test_no_update_on_non_positive_pacer_rate(void)
  * than trusting the comparison operator visually. */
 static int test_sabotage_inverted_comparison_would_fail(void)
 {
-	int inverted_matching = (48000 == 48000);      /* what an inverted fn would answer */
-	int inverted_changed  = (48000 == 96000);
+	int inverted_matching = (REAC_SAMPLE_RATE_48K == REAC_SAMPLE_RATE_48K);      /* what an inverted fn would answer */
+	int inverted_changed  = (REAC_SAMPLE_RATE_48K == REAC_SAMPLE_RATE_96K);
 	CHK(inverted_matching == 1);   /* the WRONG answer for the matching case (want 0) */
 	CHK(inverted_changed  == 0);   /* the WRONG answer for the changed case (want 1) */
-	CHK(reac_sink_format_needs_update(48000, 48000) != inverted_matching);
-	CHK(reac_sink_format_needs_update(48000, 96000) != inverted_changed);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_48K) != inverted_matching);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_96K) != inverted_changed);
 	return 0;
 }
 
@@ -181,8 +182,8 @@ static int test_sabotage_inverted_comparison_would_fail(void)
  * successful reconnect adopts the requested (new) rate. */
 static int test_rate_after_attempt_success_adopts_requested(void)
 {
-	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 1) == 96000);
-	CHK(reac_sink_format_rate_after_attempt(44100, 96000, 1) == 44100);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_48K, 1) == REAC_SAMPLE_RATE_96K);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_44K1, REAC_SAMPLE_RATE_96K, 1) == REAC_SAMPLE_RATE_44K1);
 	return 0;
 }
 
@@ -194,8 +195,8 @@ static int test_rate_after_attempt_success_adopts_requested(void)
  * needs_update comparison) believe a renegotiation that never happened. */
 static int test_rate_after_attempt_failure_keeps_previous(void)
 {
-	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 0) == 48000);
-	CHK(reac_sink_format_rate_after_attempt(44100, 96000, 0) == 96000);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_48K, 0) == REAC_SAMPLE_RATE_48K);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_44K1, REAC_SAMPLE_RATE_96K, 0) == REAC_SAMPLE_RATE_96K);
 	return 0;
 }
 
@@ -205,10 +206,10 @@ static int test_rate_after_attempt_failure_keeps_previous(void)
  * disagrees with that inversion on both arms, by hand. */
 static int test_sabotage_inverted_rate_after_attempt_would_fail(void)
 {
-	int inverted_success = 48000;   /* the WRONG answer for success (want 96000) */
-	int inverted_failure = 96000;   /* the WRONG answer for failure (want 48000) */
-	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 1) != inverted_success);
-	CHK(reac_sink_format_rate_after_attempt(96000, 48000, 0) != inverted_failure);
+	int inverted_success = REAC_SAMPLE_RATE_48K;   /* the WRONG answer for success (want 96000) */
+	int inverted_failure = REAC_SAMPLE_RATE_96K;   /* the WRONG answer for failure (want 48000) */
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_48K, 1) != inverted_success);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_48K, 0) != inverted_failure);
 	return 0;
 }
 

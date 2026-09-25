@@ -23,6 +23,7 @@
 
 #include <reac/reac.h>
 #include <reac/reac_upstream.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #include "upstream_fixtures.inc"
 
@@ -61,7 +62,7 @@ int main(void)
 	CHK(reac_frame_counter(UP16) == 0xd9b1); /* same byte-14/15 LE counter as downstream */
 	int bad = 0;
 	for (int ch = 0; ch < 16; ch++)
-		for (int s = 0; s < 12; s++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			if (s24_at(out, 16, ch, s) != UP16_PCM[ch][s])
 				bad++;
 	CHK(bad == 0);
@@ -85,7 +86,7 @@ int main(void)
 	CHK(reac_frame_counter(UP32A) == 0xff9c);
 	bad = 0;
 	for (int ch = 0; ch < 32; ch++)
-		for (int s = 0; s < 12; s++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			if (s24_at(out, 32, ch, s) != UP32A_PCM[ch][s])
 				bad++;
 	CHK(bad == 0);
@@ -93,7 +94,7 @@ int main(void)
 	 * its clean 1204 B length yields the identical planar PCM */
 	uint8_t out2[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	CHK(reac_upstream_decode(UP32A, 1204, out2) == REAC_SAMPLES_PER_PKT);
-	CHK(memcmp(out, out2, (size_t)32 * 12 * 3) == 0);
+	CHK(memcmp(out, out2, (size_t)32 * REAC_SAMPLES_PER_PKT * 3) == 0);
 	/* the second consecutive frame (counter +1) pins the per-frame stability,
 	 * through the same door */
 	ns = reac_upstream_decode(UP32B, reac_frame_clean_len(sizeof UP32B), out);
@@ -101,7 +102,7 @@ int main(void)
 	CHK(reac_frame_counter(UP32B) == 0xff9d);
 	bad = 0;
 	for (int ch = 0; ch < 32; ch++)
-		for (int s = 0; s < 12; s++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			if (s24_at(out, 32, ch, s) != UP32B_PCM[ch][s])
 				bad++;
 	CHK(bad == 0);
@@ -111,7 +112,7 @@ int main(void)
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	bad = 0;
 	for (int ch = 0; ch < 8; ch++)
-		for (int s = 0; s < 12; s++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			if (s24_at(out, 8, ch, s) != UP8_PCM[ch][s])
 				bad++;
 	CHK(bad == 0);

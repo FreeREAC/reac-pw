@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* ---- the scripted kernel (link seam) --------------------------------------- */
 static enum reac_etf_qdisc_state fake_state = REAC_ETF_QDISC_NONE;
@@ -108,32 +109,33 @@ static int fails;
 int main(void)
 {
 	/* The shipped default: 2500 us lead, 300 us qdisc delta -> 2200 us repayable. */
-	CHECK(reac_qdisc_etf_catchup_slots(2500, 8000) == 17,
-	      "2500 us lead at 8000 fps is 17 slots, got %d",
-	      reac_qdisc_etf_catchup_slots(2500, 8000));
-	CHECK(reac_qdisc_etf_catchup_slots(2500, 4000) == 8,
-	      "2500 us lead at 4000 fps is 8 slots, got %d",
-	      reac_qdisc_etf_catchup_slots(2500, 4000));
-	CHECK(reac_qdisc_etf_catchup_slots(2500, 3675) == 8,
-	      "2500 us lead at 3675 fps is 8 slots, got %d",
-	      reac_qdisc_etf_catchup_slots(2500, 3675));
+#define LEAD_SLOTS(fps) ((int)((2500u - REAC_ETF_QDISC_DELTA_NS / 1000u) * (unsigned long long)(fps) / 1000000u))
+	CHECK(reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_96K) == LEAD_SLOTS(REAC_PKT_RATE_96K),
+	      "2500 us lead at %d fps is %d slots, got %d", REAC_PKT_RATE_96K, LEAD_SLOTS(REAC_PKT_RATE_96K),
+	      reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_96K));
+	CHECK(reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_48K) == LEAD_SLOTS(REAC_PKT_RATE_48K),
+	      "2500 us lead at %d fps is %d slots, got %d", REAC_PKT_RATE_48K, LEAD_SLOTS(REAC_PKT_RATE_48K),
+	      reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_48K));
+	CHECK(reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_44K1) == LEAD_SLOTS(REAC_PKT_RATE_44K1),
+	      "2500 us lead at %d fps is %d slots, got %d", REAC_PKT_RATE_44K1, LEAD_SLOTS(REAC_PKT_RATE_44K1),
+	      reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_44K1));
 
 	/* THE BUDGET IT REPLACES. libreac's rate-derived default is 1000 us — 8 slots at
 	 * 8000 fps — and the whole finding is that it is SMALLER than what the lead can
 	 * absorb, so a wake the lead covers still re-based the launch grid. If this ever
 	 * stops being true the fix has stopped being a fix. */
-	CHECK(reac_qdisc_etf_catchup_slots(2500, 8000) > 8,
+	CHECK(reac_qdisc_etf_catchup_slots(2500, REAC_PKT_RATE_96K) > 1000 * REAC_PKT_RATE_96K / 1000000,
 	      "the ETF budget must exceed the thread backend's 1000 us default, "
 	      "or nothing changed");
 
 	/* A lead at or inside the qdisc's delta absorbs nothing — but 0 means "use the
 	 * library default" to the cfg field this feeds, so the floor is one slot. */
-	CHECK(reac_qdisc_etf_catchup_slots(300, 8000) == 1,
+	CHECK(reac_qdisc_etf_catchup_slots(300, REAC_PKT_RATE_96K) == 1,
 	      "a lead equal to the qdisc delta floors at 1 slot, got %d",
-	      reac_qdisc_etf_catchup_slots(300, 8000));
-	CHECK(reac_qdisc_etf_catchup_slots(50, 8000) == 1,
+	      reac_qdisc_etf_catchup_slots(300, REAC_PKT_RATE_96K));
+	CHECK(reac_qdisc_etf_catchup_slots(50, REAC_PKT_RATE_96K) == 1,
 	      "a lead inside the qdisc delta floors at 1 slot, got %d",
-	      reac_qdisc_etf_catchup_slots(50, 8000));
+	      reac_qdisc_etf_catchup_slots(50, REAC_PKT_RATE_96K));
 	CHECK(reac_qdisc_etf_catchup_slots(2500, 0) == 1,
 	      "a zero rate cannot divide: floor at 1 slot, got %d",
 	      reac_qdisc_etf_catchup_slots(2500, 0));

@@ -19,6 +19,7 @@
 
 #include <stdio.h>
 #include <math.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(cond) do { if (!(cond)) { \
 	fprintf(stderr, "FAIL: %s (line %d)\n", #cond, __LINE__); return 1; } } while (0)
@@ -75,11 +76,11 @@ int main(void)
 	const float in_ch0 = 0.8f, in_ch1 = -0.6f;   /* distinct per-channel signals */
 	float c0_last = 1.0f;
 	for (int blk = 0; blk < 16; blk++) {
-		float b0[12], b1[12];
-		for (int i = 0; i < 12; i++) { b0[i] = in_ch0; b1[i] = in_ch1; }
-		cur0 = reac_gain_ramp_block(b0, 12, cur0, 0.25f, STEP);
-		cur1 = reac_gain_ramp_block(b1, 12, cur1, 1.0f, STEP);
-		for (int i = 0; i < 12; i++) {
+		float b0[REAC_SAMPLES_PER_PKT], b1[REAC_SAMPLES_PER_PKT];
+		for (int i = 0; i < REAC_SAMPLES_PER_PKT; i++) { b0[i] = in_ch0; b1[i] = in_ch1; }
+		cur0 = reac_gain_ramp_block(b0, REAC_SAMPLES_PER_PKT, cur0, 0.25f, STEP);
+		cur1 = reac_gain_ramp_block(b1, REAC_SAMPLES_PER_PKT, cur1, 1.0f, STEP);
+		for (int i = 0; i < REAC_SAMPLES_PER_PKT; i++) {
 			/* ch1 untouched by ch0's ramp: exact input * unity */
 			CHK(b1[i] == in_ch1);
 			/* ch0 gain is monotone non-increasing across the whole run */

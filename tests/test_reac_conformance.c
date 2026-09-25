@@ -35,6 +35,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -51,7 +52,7 @@
 #define S1608_BASE 0x20
 #define S0808_BASE 0x00
 
-#define FPS 4000   /* irrelevant to the assertions below: we stamp directly,
+#define FPS REAC_PKT_RATE_48K   /* irrelevant to the assertions below: we stamp directly,
                     * never drive the pacer/cadence, so no cycle timing is
                     * exercised here (that is test_reac_master.c's job). */
 

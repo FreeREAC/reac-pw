@@ -13,6 +13,8 @@ The pcap format is four fields and a payload, so this reads and writes it direct
 than depending on a capture library that would have to be installed on the rig.
 """
 import os, struct, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
 
 GRANTED = "s1608-enrol-replay.pcap"      # the file that WAS granted
 OURS    = "rig-0.5.6-5-box.pcap"         # a daemon run that was refused
@@ -103,7 +105,7 @@ def main(tmp):
     flood = [r for r in base if is_bcast(r[2])]
     rest = [r for r in base if not is_bcast(r[2])]
     v = []
-    step_us = 125            # 8000 pps, the cadence the rest of the file keeps
+    step_us = 1_000_000 // FACTS["PKT_RATE_96K"]   # the 96 kHz slot period, the cadence the rest of the file keeps
     ts, tu = flood[0][0], flood[0][1]
     for i in range(11599):
         f = flood[i % len(flood)]
@@ -444,7 +446,7 @@ def join_variants(tmp):
 
     # V9c — our timing: the burst 200 ms after the announce, and the pair again every 2 s.
     v = [[ts, tu, bytearray(d)] for ts, tu, d in base]
-    fps = 8000
+    fps = FACTS["PKT_RATE_96K"]
     step = fps // 5                       # 200 ms at the wire rate
     _blank(v[rec1][2]); _blank(v[rec2][2])
     ann_blk = bytearray(base[ann][2][16:50])

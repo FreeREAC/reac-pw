@@ -22,6 +22,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -47,7 +48,7 @@ static int box_heartbeat(struct reac_hunt *h, uint64_t now)
 static int box_flood(struct reac_hunt *h, const uint8_t src[6], int n_ch, uint64_t now)
 {
 	uint8_t f[2048];
-	size_t n = reac_ctrl_build_flood_filler(f, BCAST, src, 0x20, n_ch, NULL, 12);
+	size_t n = reac_ctrl_build_flood_filler(f, BCAST, src, 0x20, n_ch, NULL, REAC_SAMPLES_PER_PKT);
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
@@ -89,7 +90,7 @@ static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 static int box_on_m(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
-	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, 32, NULL, 12);
+	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, 32, NULL, REAC_SAMPLES_PER_PKT);
 	if (n == 0 || reac_ctrl_stamp_headamp(f, 0x20, 0 /* phantom */, 1) != 0)
 		return -2;
 	reac_ctrl_checksum_apply(f);

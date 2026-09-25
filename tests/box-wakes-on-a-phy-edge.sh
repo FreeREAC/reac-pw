@@ -31,6 +31,7 @@
 # No wireplumber and no audio here — this proof is about enrolment, and a link that goes
 # down and up is not a thing to measure a tone across.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
 # NOT `${2:?}`: the meson `fake_box` option is empty by default, so this file HARD-FAILED
 # in every run where the knob was not set — a red about the machine wearing the clothes of
@@ -96,7 +97,7 @@ FAKEPID=$!
 # its 12 s grace. A hunt would reach the same MASTER role by the masterless licence (the
 # path the live desk took at 14:38:56); this says it outright so the arm does not also
 # depend on the hunt's timing.
-HOME="$CONF" REAC_DEBUG=1 "$BIN" --live wke0 --tx wke0 --mixer m5000 --rate 96000 \
+HOME="$CONF" REAC_DEBUG=1 "$BIN" --live wke0 --tx wke0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" \
 	--name wake >"$LOG" 2>&1 &
 PID=$!
 sleep 3

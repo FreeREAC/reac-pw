@@ -20,6 +20,7 @@
 #define REAC_LAT_H
 
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* EMA smoothing factor applied per 200 ms depth poll (~2 s time constant). Small
  * enough that the aliased per-burst sawtooth ripples the EMA by well under the

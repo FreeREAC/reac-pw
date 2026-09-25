@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_rate_cfg.h"
+#include "reac_facts_pw.h"   /* REAC_SAMPLE_RATE_*: the legal paces, declared once */
 
 #include <spa/param/props.h>
 #include <spa/pod/pod.h>
@@ -25,15 +26,16 @@ const char *reac_rate_refuse_code(enum reac_rate_refuse r)
 
 int reac_rate_is_closed(int hz)
 {
-	return hz == 44100 || hz == 48000 || hz == 96000;
+	return hz == REAC_SAMPLE_RATE_44K1 || hz == REAC_SAMPLE_RATE_48K ||
+	       hz == REAC_SAMPLE_RATE_96K;
 }
 
 unsigned reac_rate_bit(int hz)
 {
 	switch (hz) {
-	case 44100: return REAC_RATE_BIT_44100;
-	case 48000: return REAC_RATE_BIT_48000;
-	case 96000: return REAC_RATE_BIT_96000;
+	case REAC_SAMPLE_RATE_44K1: return REAC_RATE_BIT_44100;
+	case REAC_SAMPLE_RATE_48K:  return REAC_RATE_BIT_48000;
+	case REAC_SAMPLE_RATE_96K:  return REAC_RATE_BIT_96000;
 	default:    return 0;
 	}
 }
@@ -41,19 +43,20 @@ unsigned reac_rate_bit(int hz)
 int reac_rate_best_drivable(unsigned drivable_mask)
 {
 	/* Highest first: "the default must be the best one that we can drive." */
-	if (drivable_mask & REAC_RATE_BIT_96000) return 96000;
-	if (drivable_mask & REAC_RATE_BIT_48000) return 48000;
-	if (drivable_mask & REAC_RATE_BIT_44100) return 44100;
+	if (drivable_mask & REAC_RATE_BIT_96000) return REAC_SAMPLE_RATE_96K;
+	if (drivable_mask & REAC_RATE_BIT_48000) return REAC_SAMPLE_RATE_48K;
+	if (drivable_mask & REAC_RATE_BIT_44100) return REAC_SAMPLE_RATE_44K1;
 	return 0;
 }
 
 size_t reac_rate_drivable_csv(unsigned drivable_mask, char *buf, size_t buflen)
 {
-	static const int ordered[3] = { 44100, 48000, 96000 };
+	static const int ordered[] = { REAC_SAMPLE_RATE_44K1, REAC_SAMPLE_RATE_48K,
+	                               REAC_SAMPLE_RATE_96K };
 	char tmp[32];
 	size_t len = 0;
 	tmp[0] = '\0';
-	for (int i = 0; i < 3; i++) {
+	for (size_t i = 0; i < sizeof ordered / sizeof ordered[0]; i++) {
 		if (!(drivable_mask & reac_rate_bit(ordered[i])))
 			continue;
 		char cell[16];

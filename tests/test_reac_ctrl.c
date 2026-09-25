@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static const uint8_t MASTER[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }; /* stand-in */
 static const uint8_t SRC[6]    = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 }; /* our stand-in */
@@ -73,7 +74,7 @@ static int check_record_cksum_order(void)
 
 		/* (c) the in-place stamp path finishes in the same order — it overlays
 		 * the record on a built FILLER and must leave both checksums valid. */
-		size_t m = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x88, 16, NULL, 12);
+		size_t m = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x88, 16, NULL, REAC_SAMPLES_PER_PKT);
 		CHK(m == 628);
 		CHK(reac_ctrl_stamp_headamp(f, RECS[i].ch, RECS[i].param, RECS[i].value) == 0);
 		CHK(reac_ctrl_headamp_record_verify(f) == 0);
@@ -117,23 +118,23 @@ int main(void)
 	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips
 	 * through the capture-verified upstream decoder — i.e. we emit the same
 	 * BRAIDED layout a real box does (task #108), not plain LE. */
-	float chbuf[16][12]; float *pl[16];
+	float chbuf[16][REAC_SAMPLES_PER_PKT]; float *pl[16];
 	for (int c = 0; c < 16; c++) {
 		pl[c] = chbuf[c];
-		for (int s = 0; s < 12; s++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			chbuf[c][s] = (float)c / 64.0f - 0.1f + (float)s / 1024.0f;
 	}
-	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 16, pl, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 16, pl, REAC_SAMPLES_PER_PKT);
 	CHK(n == 628);
 	CHK(f[16] == 0x00 && f[17] == 0x00);
 	for (int k = 0; k < 16; k++) CHK(f[18 + 2 * k] == 0x00 && f[18 + 2 * k + 1] == 0x7a);
 	CHK(f[626] == 0xc2 && f[627] == 0xea);
-	uint8_t pcm[16 * 12 * 3];
-	CHK(reac_upstream_decode(f, n, pcm) == 12);
+	uint8_t pcm[16 * REAC_SAMPLES_PER_PKT * 3];
+	CHK(reac_upstream_decode(f, n, pcm) == REAC_SAMPLES_PER_PKT);
 	float maxerr = 0;
 	for (int ch = 0; ch < 16; ch++)
-		for (int s = 0; s < 12; s++) {
-			const uint8_t *p3 = &pcm[(size_t)(ch * 12 + s) * 3];
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+			const uint8_t *p3 = &pcm[(size_t)(ch * REAC_SAMPLES_PER_PKT + s) * 3];
 			int32_t v = p3[0] | (p3[1] << 8) | (p3[2] << 16);
 			if (v & 0x800000) v |= ~0xffffff;
 			float got = (float)v / 8388608.0f, e = fabsf(got - chbuf[ch][s]);
@@ -141,28 +142,28 @@ int main(void)
 		}
 	CHK(maxerr < 1e-6f);
 	/* odd widths don't exist on-wire (the braid packs pairs) -> rejected */
-	CHK(reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 15, pl, 12) == 0);
+	CHK(reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 15, pl, REAC_SAMPLES_PER_PKT) == 0);
 
 	/* 3. experimental JOIN builders: checksum invariant holds */
 	reac_ctrl_build_config_announce(f, MASTER, SRC, 1, 16);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, 16, NULL, 12);
+	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_ctrl_checksum_verify(f) == 0 && f[18] == 0x04 && f[19] == 0x03);
 
 	/* 3b. the full cold-connect escalation 0014->0013->0016->001a, byte-matched to
 	 * a real S-1608 (2026-07-11). block[31] = frame[49] is the per-variant trailer. */
-	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 1, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x13 && f[49] == 0x02);  /* was 0x00 (bug) */
-	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x16 && f[49] == 0xfc);
-	n = reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x1a && f[49] == 0xf4);
 	/* 8-ch width -> 340 B; odd widths rejected */
-	CHK(reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 8, NULL, 12) == 340);
-	CHK(reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 15, NULL, 12) == 0);
+	CHK(reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 8, NULL, REAC_SAMPLES_PER_PKT) == 340);
+	CHK(reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 15, NULL, REAC_SAMPLES_PER_PKT) == 0);
 
 	/* 4. 8-channel box width -> 340 B */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, 8, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, 8, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n == 340);
 
 	/* 5. master-side box-frame classifier truth table -----------------------
@@ -173,7 +174,7 @@ int main(void)
 	enum reac_master_rx_event ev;
 
 	/* (a) the canonical cold-connect matches as JOIN, unicast AND broadcast */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x14 &&
 	    f[22] == 0x00 && f[23] == 0x02);                     /* zoneA block head */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
@@ -190,7 +191,7 @@ int main(void)
 	 * is what a container that is not full breaks. */
 	static const uint8_t LENS[] = { 0x13, 0x15, 0x1f, 0x00 };
 	for (size_t li = 0; li < sizeof LENS / sizeof LENS[0]; li++) {
-		n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+		n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, REAC_SAMPLES_PER_PKT);
 		f[21] = LENS[li];
 		reac_ctrl_checksum_apply(f);
 		CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
@@ -200,23 +201,23 @@ int main(void)
 	/* (c) rejects: corrupted checksum / an unknown DT1 tag / our own echo /
 	 * non-Roland. The tag is the field that can refuse now — a link-4 record whose
 	 * register page we have never captured must not close a grant window. */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, REAC_SAMPLES_PER_PKT);
 	f[49] ^= 0x5a;                                           /* break the checksum */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, REAC_SAMPLES_PER_PKT);
 	f[34] = 0x07; f[35] = 0x77;                              /* an uncaptured tag */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT && p.dt1_tag == 0x0777);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7, 16, NULL, 12); /* src == our_mac */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7, 16, NULL, REAC_SAMPLES_PER_PKT); /* src == our_mac */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, REAC_SAMPLES_PER_PKT);
 	f[6] = 0xde; f[7] = 0xad;                                /* non-Roland OUI */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 
 	/* (d) NOT keyed on the tail: mutated inventory byte still matches (the 0x41
 	 * is device inventory, never a MAC tail) */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, REAC_SAMPLES_PER_PKT);
 	f[28] = 0x99;                                            /* block[10]: 0x41->0x99 */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
@@ -236,10 +237,10 @@ int main(void)
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_SCENE_TRANSFER);   /* the collision */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_BYE);
-	n = reac_ctrl_build_upstream_filler(f, BCAST, SRC, 9, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, BCAST, SRC, 9, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_BCAST_FILLER);
-	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_UNICAST);
 	/* a config-announce (cdea 01 03 0010) is the box's SETUP DECLARATION — its

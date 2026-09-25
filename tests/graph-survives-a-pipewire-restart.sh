@@ -30,6 +30,7 @@
 # ISOLATION as in no-box-no-node.sh: a user+net+mount+pid namespace with its own veth,
 # its own sysfs and its own PipeWire on a private runtime dir.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
 FAKE="${2:-}"
 SKIP=77
@@ -91,7 +92,7 @@ in_peer="nsenter -t $NSPID -n -m"
 ip link set gprb0 netns $NSPID || exit 90
 ip link set gpr0 up; $in_peer ip link set gprb0 up
 
-HOME="$CONF" "$BIN" --live gpr0 --tx gpr0 --name gpr0 --rate 96000 >"$LOG" 2>&1 &
+HOME="$CONF" "$BIN" --live gpr0 --tx gpr0 --name gpr0 --rate "$FACT_SAMPLE_RATE_96K" >"$LOG" 2>&1 &
 PID=$!
 sleep 4
 kill -0 $PID 2>/dev/null || { echo "daemon-died"; tail -8 "$LOG"; exit 91; }

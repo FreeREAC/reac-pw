@@ -25,6 +25,7 @@
 # cannot perturb a live REAC segment. Skips (77) where the namespace or PipeWire is
 # unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 SKIP=77
 
@@ -49,7 +50,7 @@ trap 'rm -f "$LOG"' EXIT
 ip link add reac-t0 type dummy || exit 90
 ip link set reac-t0 up
 
-"$BIN" --live reac-t0 --tx reac-t0 --mixer m5000 --rate 96000 >"$LOG" 2>&1 &
+"$BIN" --live reac-t0 --tx reac-t0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" >"$LOG" 2>&1 &
 PID=$!
 sleep 5
 kill -0 $PID 2>/dev/null || {
