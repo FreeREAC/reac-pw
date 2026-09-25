@@ -79,8 +79,9 @@ run_arm() {   # $1 = arm name, $2... = the command to run on OUR end
 	local OPID=$!
 	wait $MPID; local mrc=$?
 	kill -TERM $OPID 2>/dev/null; wait $OPID 2>/dev/null
-	[ $mrc -eq 0 ] || { echo "SKIP: the $name master end could not run (rc=$mrc)";
-	                    tail -n 3 "$RT/$name.master.err"; exit 77; }
+	# our own probe dying is a FAIL, not a SKIP (audit 2026-09-24, H3)
+	[ $mrc -eq 0 ] || { echo "FAIL: the $name master end exited rc=$mrc";
+	                    tail -n 3 "$RT/$name.master.err"; exit 94; }
 	sed "s/^/$name /" "$RT/$name.master"
 	sed "s/^/${name}_ours /" "$RT/$name.ours"
 }
@@ -91,7 +92,11 @@ exit 0
 INNER
 )
 rc=$?
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"; echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$OUT" | grep -qa 'daemon-died' && { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && { echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+[ $rc -eq 0 ] || { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 echo "$OUT" | grep -q '^SKIP:' && { echo "$OUT" | grep '^SKIP:'; exit $SKIP; }
 
 echo "$OUT" | sed 's/^/  /'
