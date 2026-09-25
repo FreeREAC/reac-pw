@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -40,13 +41,13 @@ static const uint8_t ZONEA_JOIN[32] = {
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 /* The S-1608's head-amp base: the chassis strap the box ANNOUNCES (config
  * announce block[7]) times 0x10. It is a required argument now — the per-width
  * table it used to be inferred from is deleted, and a box that has not announced
  * is not a box. Same value the sibling master tests use. */
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 
 /* Stand in the quiet window between scene transfers, the way a box that joins
  * between two pushes does. A JOIN landing mid-push is HELD (reac_master_rx
@@ -95,13 +96,13 @@ int main(void)
 	/* The box declares itself FIRST — this is what reac_pacer does on the
 	 * config-announce. There is no fabricated box to fall back to any more, so a
 	 * JOIN arriving with no declaration in force has no enrollment to grant. */
-	reac_master_set_box(&m, 16, 8, S1608_BASE);  /* S-1608: 16 in / 8 out */
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);  /* S-1608: 16 in / 8 out */
 	CHK(reac_master_has_box(&m) == 1);
 
 	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
-	CHK(m.grant_burst_len == 56);
+	CHK(m.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 
 	int grants = 0, last_grant_slot = -1, saw_enroll = 0;
 	int idx;

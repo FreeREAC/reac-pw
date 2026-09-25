@@ -26,6 +26,7 @@
 # hardware monitor disabled — the namespace owns no devices and the ones it can see through
 # /dev are the operator's live rig.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -189,7 +190,7 @@ ip link set mbx0 netns $NSPID || exit 90
 BOXMAC=00:40:ab:c4:08:bc
 # The box is transmitting before the carrier exists, so the wire carries a box master from
 # the first instant of link and the masterless licence is never in the race.
-$in_peer "$FAKE" mbx0 "$BOXMAC" 8 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
+$in_peer "$FAKE" mbx0 "$BOXMAC" "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
 FAKEPID=$!
 sleep 0.5
 ip link set bmx0 up; peer ip link set mbx0 up
@@ -221,8 +222,9 @@ FL=$(rep_f flood 3 "$RT/box.rep"); FLEN=$(rep_f flood 5 "$RT/box.rep")
 # after the grant. REACPW_BOX_MASTER_FRAME=box is the other corner the two rig runs left
 # open: an exact S-1608 imitation at 340 B. The proof measures whichever it was told to run,
 # and asserts the geometry it asked for rather than a constant.
-WANT_LEN=1492; WANT_WHAT="the mixer's 40 slots"
-[ "${REACPW_BOX_MASTER_FRAME:-mixer}" = "box" ] && { WANT_LEN=340; WANT_WHAT="the box's own 8 slots"; }
+BOX_LEN=$((FACT_FRAME_OVERHEAD + FACT_BOX_S0808_IN * FACT_BYTES_PER_CHANNEL))
+WANT_LEN=$FACT_FRAME_BYTES; WANT_WHAT="the mixer's $FACT_MAX_CHANNELS slots"
+[ "${REACPW_BOX_MASTER_FRAME:-mixer}" = "box" ] && { WANT_LEN=$BOX_LEN; WANT_WHAT="the box's own 8 slots"; }
 [ "$FLEN" = "$WANT_LEN" ] || {
 	echo "FAIL: the flood frames are $FLEN B; REACPW_BOX_MASTER_FRAME=${REACPW_BOX_MASTER_FRAME:-mixer}"
 	echo "      asks for $WANT_LEN B ($WANT_WHAT)"; exit 1; }
@@ -359,7 +361,7 @@ for o in d:
         if int(p.get("node.id", -1)) == want and p.get("port.direction") == "in":
             n += 1
 print(n)' "$PLAY")
-[ "$NPORT" = "8" ] || {
+[ "$NPORT" = "$FACT_BOX_S0808_OUT" ] || {
 	echo "FAIL: reac-playback.bmx0 has $NPORT input ports; the box master declared 8"; exit 1; }
 # Played TWICE, 20 dB apart: a graph has gain staging this proof does not own (the session
 # manager alone puts 8 dB between a player's full scale and a node's input, measured), so
@@ -408,7 +410,7 @@ PYEOF
 		echo "UNLINKED"; kill -TERM $CATPID 2>/dev/null; return
 	fi
 	sleep 1
-	if [ "$WANT_LEN" = "340" ]; then
+	if [ "$WANT_LEN" = "$BOX_LEN" ]; then
 		echo "$(up_ch 0 rms) $(up_ch 1 rms) $(up_ch 0 peak) $(up_ch 5 rms)"
 	else
 		echo "$(rep_ch 0 rms) $(rep_ch 1 rms) $(rep_ch 0 peak) $(rep_ch 5 rms)"
@@ -526,7 +528,7 @@ echo "MEASURED: re-enrolled, link-state established $(python3 -c "print('%.1f' %
 # which is what a console shows the operator.
 ip link add bmx1 type veth peer name mbx1 || exit 90
 ip link set mbx1 netns $NSPID || exit 90
-$in_peer "$FAKE" mbx1 00:40:ab:c4:80:41 16 2000 "$RT/box16.rep" >"$RT/box16.log" 2>&1 &
+$in_peer "$FAKE" mbx1 00:40:ab:c4:80:41 "$FACT_BOX_S1608_IN" 2000 "$RT/box16.rep" >"$RT/box16.log" 2>&1 &
 FAKE16=$!
 sleep 0.5
 ip link set bmx1 up; peer ip link set mbx1 up
@@ -544,7 +546,7 @@ for o in d:
         if int(p.get("node.id", -1)) == want and p.get("port.direction") == "in":
             n += 1
 print(n)' "$PLAY16")
-[ "$NP16" = "8" ] || {
+[ "$NP16" = "$FACT_BOX_S1608_OUT" ] || {
 	echo "FAIL: the 16-input box's playback door has $NP16 channels; an S-1608 has EIGHT"
 	echo "      outputs, and what we send feeds its outputs"; exit 1; }
 CAPD=$(node_prop reac-capture.bmx1 node.description)
@@ -566,7 +568,7 @@ ip link set bmx1 down
 # one, so a daemon that announces on its own clock fails here as it failed on the rig.
 ip link add bmx2 type veth peer name mbx2 || exit 90
 ip link set mbx2 netns $NSPID || exit 90
-$in_peer "$FAKE" mbx2 00:40:ab:c4:08:cd 8 2000 "$RT/box2.rep" announcing >"$RT/box2.log" 2>&1 &
+$in_peer "$FAKE" mbx2 00:40:ab:c4:08:cd "$FACT_BOX_S0808_IN" 2000 "$RT/box2.rep" announcing >"$RT/box2.log" 2>&1 &
 FAKE2=$!
 sleep 0.5
 ip link set bmx2 up; peer ip link set mbx2 up
@@ -594,7 +596,7 @@ FL2=$(rep_f flood 3 "$RT/box2.rep")
 # not a flood at all and counting them as one would assert against the ruling. What both
 # shapes share — the cfea noticed, the announce accepted, none of it inside the transfer — is
 # asserted above for either.
-[ "$WANT_LEN" = "340" ] || FL2=0
+[ "$WANT_LEN" = "$BOX_LEN" ] || FL2=0
 [ "${FL2:-0}" -lt 500 ] || {
 	echo "FAIL: we broadcast $FL2 flood frames at a master that announces itself; a flood is"
 	echo "      how a SILENT master is found, and noise at one that is calling"

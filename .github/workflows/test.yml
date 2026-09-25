@@ -40,6 +40,9 @@ concurrency:
 
 env:
   LIBREAC_REF: v1.5.0
+  # reac-protocol's facts, pinned to the commit facts/ was vendored from (tools/facts.py
+  # drift checks the copy against it; tools/facts-perturb-check.sh perturbs it).
+  REAC_PROTOCOL_REF: 34e8a85c3c530d34edd3e2aef707e593fbb8cc9d
 
 jobs:
   suite:
@@ -51,6 +54,12 @@ jobs:
 
       - name: libreac ${{ env.LIBREAC_REF }}
         run: git clone --depth 1 --branch "$LIBREAC_REF" https://github.com/FreeREAC/libreac.git ../libreac
+
+      - name: reac-protocol ${{ env.REAC_PROTOCOL_REF }}
+        run: |
+          git init -q ../reac-protocol
+          git -C ../reac-protocol fetch -q --depth 1 https://github.com/FreeREAC/reac-protocol.git "$REAC_PROTOCOL_REF"
+          git -C ../reac-protocol checkout -q FETCH_HEAD
 
       - name: Prepare the host for namespace tests
         run: |
@@ -74,12 +83,12 @@ jobs:
             -v "$GITHUB_WORKSPACE/..:/w" -w /w/"$(basename "$GITHUB_WORKSPACE")" \
             fedora:44 bash -euxo pipefail -c '
               dnf install -y -q --setopt=install_weak_deps=False \
-                gcc make git meson ninja-build pkgconf-pkg-config python3 \
+                gcc make git meson ninja-build pkgconf-pkg-config python3 python3-pyyaml \
                 pipewire pipewire-devel pipewire-utils wireplumber \
                 iproute iproute-tc tcpdump libcap procps-ng util-linux which findutils \
                 diffutils gawk sed grep coreutils
               git config --global --add safe.directory "*"
-              tools/ci-suite.sh ../libreac build-ci
+              tools/ci-suite.sh ../libreac build-ci ../reac-protocol
             '
 
       - name: Keep the test logs

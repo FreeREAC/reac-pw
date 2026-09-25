@@ -26,6 +26,7 @@
 # with its own PipeWire on a private runtime dir, the peer ends in a nested network
 # namespace. Skips (77) where the namespaces, iproute2 or PipeWire are unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 BIN=$(readlink -f "$BIN"); FAKE=$(readlink -f "$FAKE")
@@ -79,7 +80,7 @@ mkdir -p "$CONF/.config/reac-pw"
 printf '[segment nbx0]\nrole = box\nmodel = s1608\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
 BOXMAC=00:40:ab:c4:dc:a2
-$in_peer "$FAKE" ngnp0 "$BOXMAC" 8 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
+$in_peer "$FAKE" ngnp0 "$BOXMAC" "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
 FAKEPID=$!
 sleep 0.5
 ip link set nbx0 up; ip link set ngn0 up

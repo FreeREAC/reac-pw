@@ -19,6 +19,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHECK(cond, ...) do { \
@@ -57,7 +58,7 @@ int main(void)
 	 * in BYTE order of the name, because an index is an ORDER and not an identity. */
 	reac_roster_begin(&r);
 	CHECK(reac_roster_add(&r, "enp131s0.12", REAC_ROSTER_ESTABLISHED, "s1608",
-	                      "master", "autodetected", 16, 8) == 0, "add of a boxed segment refused");
+	                      "master", "autodetected", REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT) == 0, "add of a boxed segment refused");
 	CHECK(reac_roster_add(&r, "enp131s0.11", REAC_ROSTER_PROBING, "none",
 	                      "master", "autodetected", 0, 0) == 0, "add of an empty segment refused");
 	int n = reac_roster_delta(&r, kv, REAC_ROSTER_KV_MAX);
@@ -78,7 +79,7 @@ int main(void)
 	CHECK(carries(kv, n, "reac.roster.1.name", "enp131s0.12"), "group 1 is not the second segment");
 	CHECK(carries(kv, n, "reac.roster.1.state", "established"), "a boxed segment is not `established`");
 	CHECK(carries(kv, n, "reac.roster.1.model", "s1608"), "the box model is not published");
-	CHECK(carries(kv, n, "reac.roster.1.width", "16/8"), "the width is not `in/out`: '%s'",
+	CHECK(carries(kv, n, "reac.roster.1.width", REACPW_STR(REAC_BOX_S1608_IN) "/" REACPW_STR(REAC_BOX_S1608_OUT)), "the width is not `in/out`: '%s'",
 	      delta_val(kv, n, "reac.roster.1.width", NULL));
 	reac_roster_commit(&r);
 
@@ -87,7 +88,7 @@ int main(void)
 	 * EMPTY delta: a tick that republishes is a client storm with the same node id. */
 	reac_roster_begin(&r);
 	reac_roster_add(&r, "enp131s0.12", REAC_ROSTER_ESTABLISHED, "s1608", "master",
-	                "autodetected", 16, 8);
+	                "autodetected", REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT);
 	reac_roster_add(&r, "enp131s0.11", REAC_ROSTER_PROBING, "none", "master",
 	                "autodetected", 0, 0);
 	CHECK(reac_roster_delta(&r, kv, REAC_ROSTER_KV_MAX) == 0,
@@ -97,13 +98,13 @@ int main(void)
 	/* ---- 3. ONE STATE CHANGE MOVES ONE GROUP, AND ONLY WHAT CHANGED IN IT -------- */
 	reac_roster_begin(&r);
 	reac_roster_add(&r, "enp131s0.12", REAC_ROSTER_ESTABLISHED, "s1608", "master",
-	                "autodetected", 16, 8);
+	                "autodetected", REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT);
 	reac_roster_add(&r, "enp131s0.11", REAC_ROSTER_ESTABLISHED, "s0808", "master",
-	                "autodetected", 8, 8);
+	                "autodetected", REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT);
 	n = reac_roster_delta(&r, kv, REAC_ROSTER_KV_MAX);
 	CHECK(carries(kv, n, "reac.roster.0.state", "established"), "the state change was not published");
 	CHECK(carries(kv, n, "reac.roster.0.model", "s0808"), "the model change was not published");
-	CHECK(carries(kv, n, "reac.roster.0.width", "8/8"), "the width change was not published");
+	CHECK(carries(kv, n, "reac.roster.0.width", REACPW_STR(REAC_BOX_S0808_IN) "/" REACPW_STR(REAC_BOX_S0808_OUT)), "the width change was not published");
 	CHECK(delta_val(kv, n, "reac.roster.0.name", NULL) == NULL,
 	      "a key that did not change was published anyway");
 	CHECK(delta_val(kv, n, "reac.roster.n", NULL) == NULL,
@@ -115,7 +116,7 @@ int main(void)
 	/* ---- 4. A SEGMENT LEAVES: ITS KEYS ARE REMOVED, NOT BLANKED ------------------ */
 	reac_roster_begin(&r);
 	reac_roster_add(&r, "enp131s0.11", REAC_ROSTER_ESTABLISHED, "s0808", "master",
-	                "autodetected", 8, 8);
+	                "autodetected", REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT);
 	n = reac_roster_delta(&r, kv, REAC_ROSTER_KV_MAX);
 	CHECK(carries(kv, n, "reac.roster.n", "1"), "the count did not fall to 1");
 	int removed = 0;

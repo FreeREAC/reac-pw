@@ -29,6 +29,7 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* The largest quantum we ever expect from the graph. The scratch buffer (used
  * to swallow reads for unlinked ports) is sized to this; if the graph ever asks

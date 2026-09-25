@@ -46,6 +46,7 @@
 # namespace -- `unshare -n` isolates the wire and not the graph, and a lane daemon has
 # appeared on the operator's live graph once already. Nothing here touches the live rig.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 # ABSOLUTE, ALWAYS: nsenter into a mount namespace starts at /, so a relative path runs
 # one side of the wire and silently fails to start the other.
@@ -241,7 +242,7 @@ echo "$OUT" | grep -qa "held-by .*lb0\.11 (probing, no box)" \
 	|| fail "the box side did not start"
 [ "$(val "$OUT" box-heard)" = "yes" ] \
 	|| fail "the box on lb0.13 was never HEARD — the yield's trigger never fired, so its absence below would mean nothing"
-echo "$OUT" | grep -qa "S_SEGMENT_HEARD.*\[lb0\.13\].*(16 ch)" \
+echo "$OUT" | grep -qa "S_SEGMENT_HEARD.*\[lb0\.13\].*($FACT_BOX_S1608_IN ch)" \
 	|| fail "what lb0.13 heard was not the 16-channel box this arm started — something else is on that wire"
 
 # ---- and now the claim itself

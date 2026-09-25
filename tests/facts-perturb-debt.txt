@@ -1,0 +1,46 @@
+# The tests that go red when reac-pw is built against a PERTURBED protocol
+# (tools/facts-perturb-check.sh), and why each is not reac-pw's copy to fix here.
+# One `test-name reason` per line. THIS LIST ONLY SHRINKS: an unlisted red is a new
+# copy (FAIL), a listed test that passes under every seed must be removed (FAIL),
+# and the entry count may not exceed the ceiling below.
+#
+#   libreac  the assertion crosses into libreac, compiled against the REAL protocol:
+#            its builders, parsers and tables keep their own hand copies until
+#            libreac reads reac_facts.h (libreac's migration, not reac-pw's)
+#   fixture  the assertion compares against captured bytes or a real-world claim,
+#            which hold for the real protocol only
+#
+# ceiling: 33
+reac_arbitration              libreac: reac_frame_is_master_downstream sizes frames from libreac's copies
+reac_box_badge                libreac: the pacer/master state machine frames at libreac's geometry
+reac_box_identity             libreac: identity-page parse at libreac's DT1 offsets
+reac_box_master_audio         libreac: the box-master emitter builds libreac-sized frames
+reac_box_master_identity      libreac: reac_box_model_table lookups by libreac's widths
+reac_box_pin                  libreac: reac_box_model_table carries libreac's per-model widths
+reac_boxreg                   libreac: reac_boxreg fabric width is libreac's MAX_CHANNELS
+reac_conformance              libreac: master frames vs the console profile, built by libreac
+reac_courtship                libreac: slave/master courtship run on libreac's FSMs
+reac_ctrl                     libreac: reac_ctrl builders and parser
+reac_disco                    libreac: discovery frames built by reac_ctrl
+reac_encode_golden            fixture: digest of a captured downstream/upstream corpus
+reac_grant                    libreac: reac_grant allocator and sweep builder
+reac_grant_dwell_default_on_declare libreac: master enrolment via libreac's classifier
+reac_grant_dwell_opt_out_holds_cap  libreac: master enrolment via libreac's classifier
+reac_headamp                  libreac: reac_ctrl head-amp builder, sens table
+reac_headamp_state            libreac: reac_downstream_build frame size; fixture FX_L4_HEADAMP
+reac_headamp_tx               libreac: reac_headamp_tx channel ceiling
+reac_hunt                     libreac: reac_hunt classifier widths
+reac_link_budget              fixture: fits/does-not-fit claims about real 100 Mbit/s and 1 Gbit/s ports
+reac_master                   libreac: reac_master emitter (chanmap ring, sweep, scene)
+reac_master_no_enroll         libreac: reac_master enrolment
+reac_ohrca_chanmap            libreac: reac_master chanmap markers
+reac_pace_watch               libreac: pace watch cadence from libreac's rates
+reac_pacer                    libreac: reac_pacer frame builder
+reac_rate_cfg                 libreac: reac_pacer establish at libreac's cadence
+reac_rx_dup                   libreac: reac_upstream_decode; fixture upstream frames
+reac_rx_gate                  fixture: captured UP16 decoded by libreac
+reac_s1608                    fixture: captured M-300 chanmap block (M300_CHANMAP_FE)
+reac_topo                     libreac: reac_topo_classify matches libreac's EtherType
+reac_tx                       libreac: reac_downstream_build frame size
+reac_upstream                 libreac: reac_upstream_channels geometry
+reac_vboxgain                 libreac: reac_slave_headamp_gain sens table

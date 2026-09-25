@@ -30,6 +30,7 @@
 # and its own PipeWire on a private runtime dir, because `unshare -n` isolates the wire and
 # not the graph.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
 # NOT `${2:?}`: the meson `fake_box` option is empty by default, and a test that HARD-FAILS
 # on an unset knob is a red about the machine wearing the clothes of a red about the code.
@@ -90,7 +91,7 @@ in_peer="nsenter -t $NSPID -n -m"
 ip link set nbnb0 netns $NSPID || exit 90
 ip link set nbn0 up; $in_peer ip link set nbnb0 up
 
-HOME="$CONF" "$BIN" --live nbn0 --tx nbn0 --name nbn0 --rate 96000 >"$LOG" 2>&1 &
+HOME="$CONF" "$BIN" --live nbn0 --tx nbn0 --name nbn0 --rate "$FACT_SAMPLE_RATE_96K" >"$LOG" 2>&1 &
 PID=$!
 sleep 4
 kill -0 $PID 2>/dev/null || { echo "daemon-died"; tail -8 "$LOG"; exit 91; }

@@ -7,11 +7,13 @@ The body must be exactly 8904 bytes — the total the op-0101 header declares an
 the box checks its reassembly against. Anything else is a truncated or decimated
 recovery (tools/recover-scene.py) and is refused here rather than compiled in.
 """
-import sys
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
 
 body = open(sys.argv[1], 'rb').read()
-if len(body) != 8904:
-    sys.exit(f'REFUSED: {len(body)} bytes, not 8904')
+if len(body) != FACTS["SCENE_BYTES"]:
+    sys.exit(f'REFUSED: {len(body)} bytes, not {FACTS["SCENE_BYTES"]}')
 
 print('// SPDX-License-Identifier: GPL-3.0-or-later')
 print('// Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>')

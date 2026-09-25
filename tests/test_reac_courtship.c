@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -45,7 +46,7 @@ static const uint8_t M_SRC[6]  = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t S_SRC[6]  = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x41 };
 static const uint8_t BCAST[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 struct court {
 	struct reac_master m;
@@ -118,7 +119,7 @@ static int step(struct court *c)
 		return 0;
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
 		/* the bounded broadcast presence-flood (zero control block + live audio) */
-		n = reac_ctrl_build_flood_filler(sf, BCAST, S_SRC, sc, 16, NULL,
+		n = reac_ctrl_build_flood_filler(sf, BCAST, S_SRC, sc, REAC_BOX_S1608_IN, NULL,
 		                                 REAC_SAMPLES_PER_PKT);
 		c->s_floods_fed++;
 		break;
@@ -134,33 +135,33 @@ static int step(struct court *c)
 			switch (c->cc_phase++ % 8) {
 			case 4:
 				n = reac_ctrl_build_config_announce(sf, c->s.fsm.master_mac, S_SRC,
-				                                    sc, 16);
+				                                    sc, REAC_BOX_S1608_IN);
 				break;
 			default:
 				n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
-				                                16, NULL, REAC_SAMPLES_PER_PKT);
+				                                REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 				c->s_joins_fed++;
 				break;
 			}
 		} else {
 			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
-			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			                                    REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 			c->s_unicasts_fed++;
 		}
 		break;
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
 		/* the ~1/s keep-alive REPLACES the audio frame on the slot the FSM flags */
 		if (d.with_heartbeat) {
-			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
+			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, REAC_BOX_S1608_IN);
 			c->s_heartbeats_fed++;
 		} else {
 			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
-			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			                                    REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 			c->s_unicasts_fed++;
 		}
 		break;
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
+		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, REAC_BOX_S1608_IN);
 		c->s_heartbeats_fed++;
 		break;
 	}
@@ -182,7 +183,7 @@ static int step(struct court *c)
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
 		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
-			reac_master_rx(&c->m, ev, ps.src, sf + 18);
+			reac_master_rx(&c->m, ev, ps.src, sf + REAC_CTRL_BLOCK_OFF);
 	}
 	return 0;
 }
@@ -201,8 +202,8 @@ static int step(struct court *c)
 static int test_quiet_wire_recorder_never_leaves_the_hunt(void)
 {
 	struct reac_slave s;
-	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = 16,
-	                               .sample_rate = 96000, .src_mac = S_SRC };
+	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
+	                               .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = S_SRC };
 	reac_slave_fsm_init(&s, &scfg);
 
 	struct reac_role_swap sw;
@@ -237,8 +238,8 @@ int main(void)
 	struct court c;
 	memset(&c, 0, sizeof c);
 	reac_master_init(&c.m, M_SRC, NULL, FPS);   /* S-1608 downstream (default) */
-	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = 16,
-	                               .sample_rate = 96000, .src_mac = S_SRC };
+	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
+	                               .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = S_SRC };
 	reac_slave_fsm_init(&c.s, &scfg);
 
 	/* 1. the master probes first: 2 s alone on the wire — probes + announces +
@@ -287,7 +288,7 @@ int main(void)
 	struct reac_segment_heard heard;
 	struct reac_segment_answer ans;
 	reac_segment_heard_init(&heard, 0);
-	reac_segment_answer_slave(&ans, heard.heard, 0, 96000, REAC_MAX_CHANNELS);
+	reac_segment_answer_slave(&ans, heard.heard, 0, REAC_SAMPLE_RATE_96K, REAC_MAX_CHANNELS);
 	CHK(strcmp(ans.master_state, "none") == 0);
 	CHK(strcmp(ans.master_mac, "none") == 0);
 	CHK(strcmp(ans.pace_source, "free-run") == 0);
@@ -348,7 +349,7 @@ int main(void)
 	 * the master's own classifier. That is the value the console's role policy
 	 * needs to join what it is joined to rather than report it as a rival. */
 	reac_segment_answer_slave(&ans, heard.heard,
-	                          reac_mac48_pack(c.s.fsm.master_mac), 96000,
+	                          reac_mac48_pack(c.s.fsm.master_mac), REAC_SAMPLE_RATE_96K,
 	                          REAC_MAX_CHANNELS);
 	CHK(strcmp(ans.master_state, "foreign") == 0);
 	CHK(strcmp(ans.master_mac, "00:40:ab:00:00:01") == 0);
@@ -357,7 +358,7 @@ int main(void)
 	CHK(strcmp(ans.rival_kind, "desk") == 0);
 	CHK(strcmp(ans.refusal, "none") == 0);      /* a desk is JOINED, not refused */
 	CHK(strcmp(ans.conflict, "0") == 0);        /* a slave masters nothing to dispute */
-	CHK(strcmp(ans.rate, "96000") == 0);
+	CHK(strcmp(ans.rate, REACPW_STR(REAC_SAMPLE_RATE_96K)) == 0);
 
 	/* 3. steady state holds >= 5 simulated seconds: the slave's upstream
 	 * flood + heartbeats hold our 600 budget; our chanmap+cfea hold its HOLD.
@@ -402,7 +403,7 @@ int main(void)
 	CHK(reac_segment_heard_step(&heard, frozen,
 	                            REAC_SEGMENT_HEARD_QUIET_TICKS) == 0);
 	reac_segment_answer_slave(&ans, heard.heard,
-	                          reac_mac48_pack(c.s.fsm.master_mac), 96000,
+	                          reac_mac48_pack(c.s.fsm.master_mac), REAC_SAMPLE_RATE_96K,
 	                          REAC_MAX_CHANNELS);
 	CHK(strcmp(ans.master_state, "none") == 0);
 	CHK(strcmp(ans.rival_kind, "none") == 0);

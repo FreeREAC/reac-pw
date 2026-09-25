@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static const uint8_t MASTER[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }; /* stand-in */
 static const uint8_t SRC[6]    = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 }; /* our stand-in */
@@ -39,8 +40,8 @@ static int check_record_cksum_order(void)
 		{ 0x00, REAC_HEADAMP_PHANTOM, 0x01 },
 		{ 0x07, REAC_HEADAMP_PAD,     0x00 },
 		{ 0x07, REAC_HEADAMP_PAD,     0x01 },
-		{ 0x20, REAC_HEADAMP_SENS,    0x00 },   /* S-1608 base: input 1  */
-		{ 0x2f, REAC_HEADAMP_SENS,    0x1a },   /* S-1608 base: input 16 */
+		{ REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SENS,    0x00 },   /* S-1608 base: input 1  */
+		{ REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1, REAC_HEADAMP_SENS, 0x1a },   /* S-1608 base: input 16 */
 		{ 0x10, REAC_HEADAMP_SENS,    REAC_HEADAMP_SENS_MAX },
 	};
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -53,7 +54,8 @@ static int check_record_cksum_order(void)
 		size_t n = reac_ctrl_build_headamp(f, BCAST, SRC, 0x77,
 		                                   RECS[i].ch, RECS[i].param, RECS[i].value);
 		CHK(n == REAC_FRAME_BYTES);
-		CHK(f[36] == RECS[i].ch && f[37] == RECS[i].param && f[38] == RECS[i].value);
+		CHK(f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] == RECS[i].ch && f[REACPW_FRAME_OF(REACPW_HA_PARAM_OFF)] == RECS[i].param &&
+		    f[REACPW_FRAME_OF(REACPW_HA_VALUE_OFF)] == RECS[i].value);
 		CHK(reac_ctrl_headamp_record_verify(f) == 0);   /* INNER: sum-to-0x80 */
 		CHK(reac_ctrl_checksum_verify(f) == 0);         /* OUTER: sum-to-0    */
 
@@ -61,11 +63,11 @@ static int check_record_cksum_order(void)
 		 * byte the outer sum has already counted, so the block no longer sums
 		 * to 0 — the frame the box would reject. */
 		memcpy(wrong, f, n);
-		wrong[39] = 0x00;                            /* un-stamp the inner byte  */
+		wrong[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)] = 0x00;                            /* un-stamp the inner byte  */
 		reac_ctrl_checksum_apply(wrong);             /* OUTER first (the bug)    */
-		reac_ctrl_record_cksum_stamp(wrong + 34, 6); /* INNER after it           */
+		reac_ctrl_record_cksum_stamp(wrong + REACPW_FRAME_OF(REAC_DT1_TAG_OFF), REACPW_HA_REC_LEN); /* INNER after it           */
 		CHK(reac_ctrl_headamp_record_verify(wrong) == 0);    /* record looks fine */
-		if (wrong[39] != 0x00) {          /* a zero inner byte clobbers nothing */
+		if (wrong[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)] != 0x00) {          /* a zero inner byte clobbers nothing */
 			CHK(reac_ctrl_checksum_verify(wrong) != 0);  /* ...the block does not */
 			CHK(memcmp(wrong, f, n) != 0);
 			traps++;
@@ -73,12 +75,12 @@ static int check_record_cksum_order(void)
 
 		/* (c) the in-place stamp path finishes in the same order — it overlays
 		 * the record on a built FILLER and must leave both checksums valid. */
-		size_t m = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x88, 16, NULL, 12);
-		CHK(m == 628);
+		size_t m = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x88, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+		CHK(m == REACPW_FRAME_LEN(REAC_BOX_S1608_IN));
 		CHK(reac_ctrl_stamp_headamp(f, RECS[i].ch, RECS[i].param, RECS[i].value) == 0);
 		CHK(reac_ctrl_headamp_record_verify(f) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
-		CHK(f[626] == 0xc2 && f[627] == 0xea);   /* the tail survives the stamp */
+		CHK(f[m - 2] == REAC_END_MARKER_0 && f[m - 1] == REAC_END_MARKER_1);   /* the tail survives the stamp */
 	}
 	/* the negative half must actually have fired, or (b) proves nothing */
 	CHK(traps > 0);
@@ -90,13 +92,14 @@ int main(void)
 	uint8_t f[1536];
 
 	/* 1. box heartbeat: cdea 01 03 0001 81, 628 B, checksum == 0x7a (wire value) */
-	size_t n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x1234, 16);
-	CHK(n == 628);
-	CHK(f[16] == 0xcd && f[17] == 0xea);
-	CHK(f[18] == 0x01 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x01 && f[22] == 0x81);
-	CHK(f[626] == 0xc2 && f[627] == 0xea);
+	size_t n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x1234, REAC_BOX_S1608_IN);
+	CHK(n == REACPW_FRAME_LEN(REAC_BOX_S1608_IN));
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_PAGE_0103 && REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_LEN_OFF) == REAC_LEN_SUB_LINK_ACK &&
+	    f[REAC_CTRL_BLOCK_OFF + REAC_SUB_0103_OFF] == REAC_SUB_0103_LINK_ACK);
+	CHK(f[n - 2] == REAC_END_MARKER_0 && f[n - 1] == REAC_END_MARKER_1);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	CHK(f[49] == 0x7a);   /* <-- cross-check vs the real captured box heartbeat */
+	CHK(f[REAC_CTRL_CKSUM_OFF] == 0x7a);   /* <-- cross-check vs the real captured box heartbeat */
 
 	struct reac_ctrl_parsed p;
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_BOX_HB);
@@ -107,62 +110,65 @@ int main(void)
 
 	/* 1b. the heartbeat width follows box_channels (W3): 8-ch = 340 B, 40-ch = 1492 B,
 	 * odd / out-of-range rejected. Byte-length = 50 hdr + n_ch*36 + 2 end. */
-	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 8) == 340);
-	CHK(f[338] == 0xc2 && f[339] == 0xea && reac_ctrl_checksum_verify(f) == 0);
-	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 40) == 1492);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, REAC_BOX_S0808_IN) == REACPW_FRAME_LEN(REAC_BOX_S0808_IN));
+	CHK(f[REACPW_FRAME_LEN(REAC_BOX_S0808_IN) - 2] == REAC_END_MARKER_0 && f[REACPW_FRAME_LEN(REAC_BOX_S0808_IN) - 1] == REAC_END_MARKER_1 &&
+	    reac_ctrl_checksum_verify(f) == 0);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, REAC_MAX_CHANNELS) == REAC_FRAME_BYTES);
 	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 15) == 0);   /* odd widths don't exist */
 	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 0)  == 0);
-	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 42) == 0);   /* > 40 */
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, REAC_MAX_CHANNELS + REAC_BRAID_PAIR_CHANNELS) == 0);   /* > MAX */
 
 	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips
 	 * through the capture-verified upstream decoder — i.e. we emit the same
 	 * BRAIDED layout a real box does (task #108), not plain LE. */
-	float chbuf[16][12]; float *pl[16];
-	for (int c = 0; c < 16; c++) {
+	float chbuf[REAC_BOX_S1608_IN][REAC_SAMPLES_PER_PKT]; float *pl[REAC_BOX_S1608_IN];
+	for (int c = 0; c < REAC_BOX_S1608_IN; c++) {
 		pl[c] = chbuf[c];
-		for (int s = 0; s < 12; s++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 			chbuf[c][s] = (float)c / 64.0f - 0.1f + (float)s / 1024.0f;
 	}
-	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 16, pl, 12);
-	CHK(n == 628);
-	CHK(f[16] == 0x00 && f[17] == 0x00);
-	for (int k = 0; k < 16; k++) CHK(f[18 + 2 * k] == 0x00 && f[18 + 2 * k + 1] == 0x7a);
-	CHK(f[626] == 0xc2 && f[627] == 0xea);
-	uint8_t pcm[16 * 12 * 3];
-	CHK(reac_upstream_decode(f, n, pcm) == 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, REAC_BOX_S1608_IN, pl, REAC_SAMPLES_PER_PKT);
+	CHK(n == REACPW_FRAME_LEN(REAC_BOX_S1608_IN));
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_FILLER);
+	for (int k = 0; k < REAC_CTRL_BLOCK_LEN / 2; k++)
+		CHK(f[REAC_CTRL_BLOCK_OFF + 2 * k] == 0x00 &&
+		    f[REAC_CTRL_BLOCK_OFF + 2 * k + 1] == REAC_FILLER_DESC_ESTABLISHED);
+	CHK(f[n - 2] == REAC_END_MARKER_0 && f[n - 1] == REAC_END_MARKER_1);
+	uint8_t pcm[REAC_BOX_S1608_IN * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
+	CHK(reac_upstream_decode(f, n, pcm) == REAC_SAMPLES_PER_PKT);
 	float maxerr = 0;
-	for (int ch = 0; ch < 16; ch++)
-		for (int s = 0; s < 12; s++) {
-			const uint8_t *p3 = &pcm[(size_t)(ch * 12 + s) * 3];
+	for (int ch = 0; ch < REAC_BOX_S1608_IN; ch++)
+		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+			const uint8_t *p3 = &pcm[(size_t)(ch * REAC_SAMPLES_PER_PKT + s) * REAC_RESOLUTION];
 			int32_t v = p3[0] | (p3[1] << 8) | (p3[2] << 16);
-			if (v & 0x800000) v |= ~0xffffff;
-			float got = (float)v / 8388608.0f, e = fabsf(got - chbuf[ch][s]);
+			if (v & REACPW_SAMPLE_SIGN) v |= (int32_t)~REACPW_SAMPLE_MASK;
+			float got = (float)v / (float)REACPW_SAMPLE_SIGN, e = fabsf(got - chbuf[ch][s]);
 			if (e > maxerr) maxerr = e;
 		}
 	CHK(maxerr < 1e-6f);
 	/* odd widths don't exist on-wire (the braid packs pairs) -> rejected */
-	CHK(reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 15, pl, 12) == 0);
+	CHK(reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 15, pl, REAC_SAMPLES_PER_PKT) == 0);
 
 	/* 3. experimental JOIN builders: checksum invariant holds */
-	reac_ctrl_build_config_announce(f, MASTER, SRC, 1, 16);
+	reac_ctrl_build_config_announce(f, MASTER, SRC, 1, REAC_BOX_S1608_IN);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, 16, NULL, 12);
-	CHK(reac_ctrl_checksum_verify(f) == 0 && f[18] == 0x04 && f[19] == 0x03);
+	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	CHK(reac_ctrl_checksum_verify(f) == 0 && REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER);
 
 	/* 3b. the full cold-connect escalation 0014->0013->0016->001a, byte-matched to
-	 * a real S-1608 (2026-07-11). block[31] = frame[49] is the per-variant trailer. */
-	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 1, 16, NULL, 12);
-	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x13 && f[49] == 0x02);  /* was 0x00 (bug) */
-	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 16, NULL, 12);
-	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x16 && f[49] == 0xfc);
-	n = reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 16, NULL, 12);
-	CHK(n == 628 && f[20] == 0x00 && f[21] == 0x1a && f[49] == 0xf4);
+	 * a real S-1608 (2026-07-11). block[31] = frame[REAC_CTRL_CKSUM_OFF] is the per-variant trailer. */
+	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	CHK(n == REACPW_FRAME_LEN(REAC_BOX_S1608_IN) && f[20] == 0x00 && f[21] == 0x13 && f[REAC_CTRL_CKSUM_OFF] == 0x02);  /* was 0x00 (bug) */
+	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	CHK(n == REACPW_FRAME_LEN(REAC_BOX_S1608_IN) && f[20] == 0x00 && f[21] == 0x16 && f[REAC_CTRL_CKSUM_OFF] == 0xfc);
+	n = reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	CHK(n == REACPW_FRAME_LEN(REAC_BOX_S1608_IN) && f[20] == 0x00 && f[21] == 0x1a && f[REAC_CTRL_CKSUM_OFF] == 0xf4);
 	/* 8-ch width -> 340 B; odd widths rejected */
-	CHK(reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, 8, NULL, 12) == 340);
-	CHK(reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 15, NULL, 12) == 0);
+	CHK(reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 1, REAC_BOX_S0808_IN, NULL, REAC_SAMPLES_PER_PKT) == 340);
+	CHK(reac_ctrl_build_coldconnect_001a(f, MASTER, SRC, 1, 15, NULL, REAC_SAMPLES_PER_PKT) == 0);
 
 	/* 4. 8-channel box width -> 340 B */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, 8, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 1, REAC_BOX_S0808_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n == 340);
 
 	/* 5. master-side box-frame classifier truth table -----------------------
@@ -173,9 +179,10 @@ int main(void)
 	enum reac_master_rx_event ev;
 
 	/* (a) the canonical cold-connect matches as JOIN, unicast AND broadcast */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
-	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x14 &&
-	    f[22] == 0x00 && f[23] == 0x02);                     /* zoneA block head */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER && f[20] == 0x00 && f[21] == 0x14 &&
+	    f[REAC_CTRL_BLOCK_OFF + REAC_SUB_0403_OFF] == REAC_SUB_0403_DT1_RECORD &&
+	    f[23] == 0x02);                                      /* zoneA block head */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_JOIN);
 	CHK(p.link == REAC_LINK_RECORD && p.seg == REAC_SEG_SINGLE &&
@@ -190,8 +197,8 @@ int main(void)
 	 * is what a container that is not full breaks. */
 	static const uint8_t LENS[] = { 0x13, 0x15, 0x1f, 0x00 };
 	for (size_t li = 0; li < sizeof LENS / sizeof LENS[0]; li++) {
-		n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
-		f[21] = LENS[li];
+		n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+		f[REACPW_FRAME_OF(REAC_HDR_LEN_OFF) + 1] = LENS[li];
 		reac_ctrl_checksum_apply(f);
 		CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 		CHK(ev == REAC_M_RX_BOX_JOIN && p.blk_len == LENS[li]);
@@ -200,23 +207,23 @@ int main(void)
 	/* (c) rejects: corrupted checksum / an unknown DT1 tag / our own echo /
 	 * non-Roland. The tag is the field that can refuse now — a link-4 record whose
 	 * register page we have never captured must not close a grant window. */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
-	f[49] ^= 0x5a;                                           /* break the checksum */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	f[REAC_CTRL_CKSUM_OFF] ^= 0x5a;                          /* break the checksum */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
-	f[34] = 0x07; f[35] = 0x77;                              /* an uncaptured tag */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+	f[REACPW_FRAME_OF(REAC_DT1_TAG_OFF)] = 0x07; f[REACPW_FRAME_OF(REAC_DT1_TAG_OFF) + 1] = 0x77;   /* an uncaptured tag */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT && p.dt1_tag == 0x0777);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7, 16, NULL, 12); /* src == our_mac */
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, OUR_MAC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT); /* src == our_mac */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	f[6] = 0xde; f[7] = 0xad;                                /* non-Roland OUI */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 
 	/* (d) NOT keyed on the tail: mutated inventory byte still matches (the 0x41
 	 * is device inventory, never a MAC tail) */
-	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, 16, NULL, 12);
+	n = reac_ctrl_build_coldconnect(f, OUR_MAC, SRC, 7, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	f[28] = 0x99;                                            /* block[10]: 0x41->0x99 */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
@@ -227,34 +234,35 @@ int main(void)
 	 *     The BYE's opcode is the bulk-transfer opcode, so libreac classifies the
 	 *     frame as SCENE_TRANSFER and only DIRECTION tells the two apart — see the
 	 *     note in reac_ctrl_classify_box_frame. */
-	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
+	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, REAC_BOX_S1608_IN);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_HEARTBEAT);
-	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, 16);
-	f[22] = 0x00;                                            /* disconnect latch */
+	n = reac_ctrl_build_box_hb(f, OUR_MAC, SRC, 9, REAC_BOX_S1608_IN);
+	f[REAC_CTRL_BLOCK_OFF + REAC_SUB_0103_OFF] = 0x00;       /* disconnect latch */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_SCENE_TRANSFER);   /* the collision */
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_BYE);
-	n = reac_ctrl_build_upstream_filler(f, BCAST, SRC, 9, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, BCAST, SRC, 9, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_BCAST_FILLER);
-	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, OUR_MAC, SRC, 9, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_UNICAST);
 	/* a config-announce (cdea 01 03 0010) is the box's SETUP DECLARATION — its
 	 * own event so the master FSM can establish on it (warm relink). */
-	n = reac_ctrl_build_config_announce(f, OUR_MAC, SRC, 9, 16);
+	n = reac_ctrl_build_config_announce(f, OUR_MAC, SRC, 9, REAC_BOX_S1608_IN);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_CONFIG);
 	/* a unicast between OTHER parties is not ours */
-	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 9, REAC_BOX_S1608_IN);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == -1);
 
 	/* 7. MASTER-side box recognition: a box's own config-announce round-trips
 	 * back to its matrix model (slave emits -> master identifies the same row). */
 	struct { const char *tok; int in_ch; } cases[] = {
-		{ "s1608", 16 }, { "s0808", 8 }, { "s4000s", 32 },
+		{ "s1608", REAC_BOX_S1608_IN }, { "s0808", REAC_BOX_S0808_IN },
+		{ "s4000s", REAC_BOX_S4000S_3208_IN },
 	};
 	for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
 		n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, cases[i].in_ch);
@@ -264,11 +272,11 @@ int main(void)
 		CHK(m->in_ch == cases[i].in_ch);
 	}
 	/* a NON-config-announce frame (heartbeat) is not identifiable -> NULL */
-	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x55, 16);
+	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x55, REAC_BOX_S1608_IN);
 	CHK(reac_ctrl_identify_box(f, n) == NULL);
 	/* an unknown 0x84 descriptor (mutate one descriptor byte) -> NULL (falls back) */
-	n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, 8);
-	f[REAC_CTRL_BLOCK_OFF + 8] ^= 0xff;   /* corrupt a descriptor byte */
+	n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, REAC_BOX_S0808_IN);
+	f[REAC_CTRL_BLOCK_OFF + REAC_PORTS_TABLE_OFF] ^= 0xff;   /* corrupt a descriptor byte */
 	CHK(reac_ctrl_identify_box(f, n) == NULL);
 
 	/* 8. the record/block checksum ORDER the builder scaffold makes structural */
@@ -323,7 +331,7 @@ int main(void)
 			memset(f, 0, 64);
 			memcpy(f, MASTER, 6);
 			memcpy(f + 6, SRC, 6);
-			f[12] = 0x88; f[13] = 0x19;
+			f[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; f[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 			f[16] = 0xce; f[17] = 0xea;
 			memcpy(f + 18, FORMS[k], sizeof FORMS[k]);
 			memcpy(f + 27, SRC, 6);          /* data[9..14] = the split's MAC */
@@ -350,32 +358,32 @@ int main(void)
 		int chunks = 0, total = -1;
 
 		for (int step = 0; step < REAC_SCENE_STEPS; step++) {
-			uint8_t blk[34];
+			reacpw_libreac_row blk;     /* libreac writes its row */
 			CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, step) == 0);
-			CHK(blk[0] == 0xcd && blk[1] == 0xea);
+			CHK(REACPW_BE16(blk) == REAC_TYPE_CONTROL);
 			/* the block checksum rule holds for every step */
 			unsigned sum = 0;
-			for (int i = 2; i < 34; i++)
+			for (int i = REAC_TYPE_WORD_BYTES; i < (int)sizeof blk; i++)
 				sum += blk[i];
-			CHK((sum & 0xff) == 0);
+			CHK((sum & 0xff) == REAC_CTRL_BLOCK_SUM);
 
-			int len = (blk[4] << 8) | blk[5];
+			int len = (int)REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_HDR_LEN_OFF);
 			if (step == 0) {
-				CHK(blk[2] == 0x01 && blk[3] == 0x01);
+				CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_HEADER);
 				CHK(len == REAC_SCENE_HEAD_BYTES);
-				total = (blk[7] << 8) | blk[8];
-				memcpy(back + got, blk + 9, REAC_SCENE_HEAD_BYTES);
+				total = (int)REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_HEAD_TOTAL_OFF);
+				memcpy(back + got, blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_HEAD_PAY_OFF, REAC_SCENE_HEAD_BYTES);
 				got += REAC_SCENE_HEAD_BYTES;
 			} else if (step < REAC_SCENE_STEPS - 1) {
-				CHK(blk[2] == 0x01 && blk[3] == 0x00);
+				CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
 				CHK(len == REAC_SCENE_CHUNK_BYTES);
-				memcpy(back + got, blk + 7, REAC_SCENE_CHUNK_BYTES);
+				memcpy(back + got, blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_CHUNK_BYTES);
 				got += REAC_SCENE_CHUNK_BYTES;
 				chunks++;
 			} else {
-				CHK(blk[2] == 0x01 && blk[3] == 0x02);
+				CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_FINAL);
 				CHK(len == REAC_SCENE_TAIL_BYTES);
-				memcpy(back + got, blk + 7, REAC_SCENE_TAIL_BYTES);
+				memcpy(back + got, blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_TAIL_BYTES);
 				got += REAC_SCENE_TAIL_BYTES;
 			}
 		}
@@ -393,7 +401,7 @@ int main(void)
 		    REAC_SCENE_TAIL_BYTES == REAC_SCENE_BYTES);
 
 		/* A body that is not a whole transfer is refused, never half-sent. */
-		uint8_t blk[34];
+		reacpw_libreac_row blk;
 		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body - 1, 0) == -1);
 		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, -1) == -1);
 		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, REAC_SCENE_STEPS) == -1);
@@ -413,11 +421,13 @@ int main(void)
 		/* and they must survive the chunker onto the wire, not just exist in the
 		 * body: SYSP rides chunk 32 and SCEN chunk 33. */
 		{
-			uint8_t c32[34], c33[34];
-			CHK(reac_ctrl_build_scene_step(c32, gen, REAC_SCENE_BYTES, 33) == 0);
-			CHK(reac_ctrl_build_scene_step(c33, gen, REAC_SCENE_BYTES, 34) == 0);
-			CHK(memmem(c32 + 7, 26, "SYSP", 4) != NULL);
-			CHK(memmem(c33 + 7, 26, "SCEN", 4) != NULL);
+			reacpw_libreac_row c32, c33;
+			CHK(reac_ctrl_build_scene_step(c32, gen, REAC_SCENE_BYTES,
+			                               REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SYSP_OFF) + 1) == 0);
+			CHK(reac_ctrl_build_scene_step(c33, gen, REAC_SCENE_BYTES,
+			                               REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SCEN_OFF) + 1) == 0);
+			CHK(memmem(c32 + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_CHUNK_BYTES, "SYSP", 4) != NULL);
+			CHK(memmem(c33 + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_CHUNK_BYTES, "SCEN", 4) != NULL);
 		}
 
 		/* Our identity goes into the body, replacing the capturing desk's. */
@@ -432,6 +442,7 @@ int main(void)
 	       "parser + descriptor + audio round-trip + box-frame classifier clean, "
 	       "DT1 record checksum stamped before the block checksum, "
 	       "retired --box pin disagreement reported exactly once, "
-	       "scene push round-trips 8904 B in 341 chunks\n");
+	       "scene push round-trips " REACPW_STR(REAC_SCENE_BYTES) " B in "
+	       REACPW_STR(REAC_SCENE_CHUNKS) " chunks\n");
 	return 0;
 }

@@ -32,6 +32,14 @@ Every mode prints the size of what it measured before the result it derives, so
 an empty scan can never be mistaken for a clean one.
 """
 import argparse, struct, sys, time
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
+
+# The frame counter: little-endian, HDR_COUNTER_BYTES wide at HDR_COUNTER_OFF.
+CTR_OFF = FACTS["HDR_COUNTER_OFF"]
+CTR_END = CTR_OFF + FACTS["HDR_COUNTER_BYTES"]
+CTR_MASK = (1 << (8 * FACTS["HDR_COUNTER_BYTES"])) - 1
 
 
 def ref(card, dev, dur):
@@ -107,12 +115,12 @@ def gaps(path, fps):
         d = f.read(cl)
         if len(d) < cl:
             break
-        if cl >= 16:
-            recs.append((s + u / den, struct.unpack("<H", d[14:16])[0]))
+        if cl >= CTR_END:
+            recs.append((s + u / den, int.from_bytes(d[CTR_OFF:CTR_END], "little")))
     if len(recs) < 2:
         sys.exit(f"{path}: {len(recs)} frames — nothing to measure. Capture with "
                  f"`tcpdump -i IF -s 20 --time-stamp-precision=nano -w FILE "
-                 f"'ether proto 0x8819 and ether src <our mac>'`")
+                 f"'ether proto {FACTS['ETHERTYPE']:#06x} and ether src <our mac>'`")
     dur = recs[-1][0] - recs[0][0]
     print(f"gaps: {len(recs)} frames over {dur:.3f} s  (the probe sees traffic)")
     print(f"  emitted {(len(recs) - 1) / dur:.4f} pps  "
@@ -124,7 +132,7 @@ def gaps(path, fps):
     hole_excess = 0.0
     for i in range(1, len(recs)):
         dt = recs[i][0] - recs[i - 1][0]
-        dc = (recs[i][1] - recs[i - 1][1]) & 0xFFFF
+        dc = (recs[i][1] - recs[i - 1][1]) & CTR_MASK
         if dc != 1:
             counter_gaps += 1
             lost_to_send += dc - 1
@@ -156,8 +164,8 @@ def main():
     r = sub.add_parser("ref"); r.add_argument("--card", default="card0")
     r.add_argument("--dev", default="0"); r.add_argument("--seconds", type=float, default=30)
     w = sub.add_parser("wire"); w.add_argument("iface", nargs="+")
-    w.add_argument("--seconds", type=float, default=180); w.add_argument("--fps", type=float, default=4000)
-    g = sub.add_parser("gaps"); g.add_argument("pcap"); g.add_argument("--fps", type=float, default=4000)
+    w.add_argument("--seconds", type=float, default=180); w.add_argument("--fps", type=float, default=FACTS["PKT_RATE_48K"])
+    g = sub.add_parser("gaps"); g.add_argument("pcap"); g.add_argument("--fps", type=float, default=FACTS["PKT_RATE_48K"])
     a = ap.parse_args()
     if a.mode == "ref":
         ref(a.card, a.dev, a.seconds)

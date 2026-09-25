@@ -26,7 +26,7 @@ echo "node=${node} ports=${nch}"
 # the same failure as a capture aimed at the wrong box.
 cmap=$(printf 'AUX%d,' $(seq 0 $((nch-1))) | sed 's/,$//')
 pw-record --target=0 --channels="$nch" --channel-map="$cmap" \
-          --format=f32 --rate=48000 "$out" &
+          --format=f32 --rate="$("$(dirname "$0")"/facts.py get SAMPLE_RATE_48K)" "$out" &
 rec=$!
 sleep 1
 

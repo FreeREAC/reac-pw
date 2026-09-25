@@ -44,6 +44,7 @@
  * option, dev-only, which is why this target is not build_by_default any more. */
 #include "reac_rx.c"
 #include <reac/transport/reac_pacer.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 #include "upstream_fixtures.inc"
 
 #define FRAMES  20000   /* per pass */
@@ -71,13 +72,13 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	memset(out, 0xff, 6);
 	static const uint8_t master[6] = { 0x00, 0x40, 0xab, 0xc4, 0x91, 0x90 };
 	memcpy(out + 6, master, 6);
-	out[12] = 0x88; out[13] = 0x19;
-	out[14] = (uint8_t)(counter & 0xff);
-	out[15] = (uint8_t)(counter >> 8);
+	out[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; out[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
+	out[REAC_HDR_COUNTER_OFF] = (uint8_t)(counter & 0xff);
+	out[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)(counter >> 8);
 	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-		for (int ch = 0; ch < 40; ch++) {
+		for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
 			size_t pos[3];
-			reac_braid_pos(s, ch, 40, pos);
+			reac_braid_pos(s, ch, REAC_MAX_CHANNELS, pos);
 			uint8_t *audio = out + REAC_L2_HEADER_LEN;
 			audio[pos[0]] = (uint8_t)(counter + ch);
 			audio[pos[1]] = (uint8_t)(s * 7 + ch);
@@ -104,9 +105,9 @@ static double case_rx_feed(int ring_channels, const char *label)
 	struct reac_rx rx;
 	memset(&rx, 0, sizeof rx);
 	rx.ring = &ring;
-	rx.sample_rate = 48000;
+	rx.sample_rate = REAC_SAMPLE_RATE_48K;
 	rx.cfg.accept = REAC_RX_ACCEPT_DOWNSTREAM;
-	const struct reac_mode *mode = reac_mode_for(48000);
+	const struct reac_mode *mode = reac_mode_for(REAC_SAMPLE_RATE_48K);
 
 	uint64_t pass[REPS];
 	for (int rep = 0; rep < REPS + 1; rep++) {
@@ -139,7 +140,7 @@ static double case_rx_feed_upstream(int ring_channels, const char *label)
 	static uint8_t frames[64][sizeof UP8];
 	for (int i = 0; i < 64; i++) {
 		memcpy(frames[i], UP8, sizeof UP8);
-		frames[i][14] = (uint8_t)i;          /* distinct counter per frame */
+		frames[i][REAC_HDR_COUNTER_OFF] = (uint8_t)i;          /* distinct counter per frame */
 	}
 	struct reac_ring ring;
 	if (reac_ring_init(&ring, (uint32_t)ring_channels, 4096) != 0)
@@ -147,9 +148,9 @@ static double case_rx_feed_upstream(int ring_channels, const char *label)
 	struct reac_rx rx;
 	memset(&rx, 0, sizeof rx);
 	rx.ring = &ring;
-	rx.sample_rate = 48000;
+	rx.sample_rate = REAC_SAMPLE_RATE_48K;
 	rx.cfg.accept = REAC_RX_ACCEPT_UPSTREAM;
-	const struct reac_mode *mode = reac_mode_for(48000);
+	const struct reac_mode *mode = reac_mode_for(REAC_SAMPLE_RATE_48K);
 
 	uint64_t pass[REPS];
 	for (int rep = 0; rep < REPS + 1; rep++) {
@@ -257,7 +258,7 @@ static double case_tx_pop(int with_memcpy)
 
 int main(int argc, char **argv)
 {
-	int width = argc > 1 ? atoi(argv[1]) : 40;
+	int width = argc > 1 ? atoi(argv[1]) : REAC_MAX_CHANNELS;
 	printf("# bench_hotpath frames=%d reps=%d clock=THREAD_CPUTIME\n", FRAMES, REPS);
 	case_rx_feed(REAC_MAX_CHANNELS, "rx_down_ring40_ns");
 	if (width != REAC_MAX_CHANNELS)

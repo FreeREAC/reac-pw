@@ -4,6 +4,7 @@
 #include <reac/reac_boxreg.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -18,18 +19,18 @@ int main(void)
 	struct reac_boxreg r;
 
 	/* --- auto-allocation: contiguous, by join order --- */
-	reac_boxreg_init(&r, 40);
-	CHK(r.n == 0 && r.fabric == 40);
-	int ia = reac_boxreg_add(&r, A, 16);          /* S-1608 -> slots 0..15  */
-	CHK(ia == 0 && r.box[0].base == 0 && r.box[0].nch == 16);
-	int ib = reac_boxreg_add(&r, B, 8);           /* S-0808 -> slots 16..23 */
-	CHK(ib == 1 && r.box[1].base == 16 && r.box[1].nch == 8);
-	int ic = reac_boxreg_add(&r, C, 8);           /* S-0808 -> slots 24..31 */
-	CHK(ic == 2 && r.box[2].base == 24);
+	reac_boxreg_init(&r, REAC_MAX_CHANNELS);
+	CHK(r.n == 0 && r.fabric == REAC_MAX_CHANNELS);
+	int ia = reac_boxreg_add(&r, A, REAC_BOX_S1608_IN);          /* S-1608 -> slots 0..15  */
+	CHK(ia == 0 && r.box[0].base == 0 && r.box[0].nch == REAC_BOX_S1608_IN);
+	int ib = reac_boxreg_add(&r, B, REAC_BOX_S0808_IN);           /* S-0808 -> slots 16..23 */
+	CHK(ib == 1 && r.box[1].base == REAC_BOX_S1608_IN && r.box[1].nch == REAC_BOX_S0808_IN);
+	int ic = reac_boxreg_add(&r, C, REAC_BOX_S0808_IN);           /* S-0808 -> slots 24..31 */
+	CHK(ic == 2 && r.box[2].base == REAC_BOX_S1608_IN + REAC_BOX_S0808_IN);
 
 	/* find + idempotency */
 	CHK(reac_boxreg_find(&r, A) == 0 && reac_boxreg_find(&r, B) == 1);
-	CHK(reac_boxreg_add(&r, A, 16) == 0);         /* re-add same MAC = same idx */
+	CHK(reac_boxreg_add(&r, A, REAC_BOX_S1608_IN) == 0);         /* re-add same MAC = same idx */
 	CHK(r.n == 3);
 
 	/* a zero MAC never matches a real box */
@@ -40,35 +41,35 @@ int main(void)
 	uint8_t D[6] = { 1,2,3,4,5,6 };
 	CHK(reac_boxreg_add(&r, D, 7) == -1);
 	CHK(reac_boxreg_add(&r, D, 0) == -1);
-	CHK(reac_boxreg_add(&r, D, 42) == -1);
+	CHK(reac_boxreg_add(&r, D, REAC_MAX_CHANNELS + REAC_BRAID_PAIR_CHANNELS) == -1);
 
 	/* --- gap reuse: a departed box's slots are reclaimed by the next add --- */
 	struct reac_boxreg g;
 	reac_boxreg_init(&g, 40);
-	reac_boxreg_add(&g, A, 16);   /* 0..15 */
-	reac_boxreg_add(&g, B, 8);    /* 16..23 */
+	reac_boxreg_add(&g, A, REAC_BOX_S1608_IN);   /* 0..15 */
+	reac_boxreg_add(&g, B, REAC_BOX_S0808_IN);    /* 16..23 */
 	/* simulate box A leaving: remove it by compacting (emulate a future remove) */
 	g.box[0] = g.box[1]; g.n = 1;                 /* now only B at base 16    */
-	int nb = reac_boxreg_add(&g, C, 16);          /* lowest free 16-wide = 0  */
+	int nb = reac_boxreg_add(&g, C, REAC_BOX_S1608_IN);          /* lowest free 16-wide = 0  */
 	CHK(nb == 1 && g.box[1].base == 0);
 
 	/* --- pre-declared names + pinned base bind on JOIN --- */
 	struct reac_boxreg d;
 	reac_boxreg_init(&d, 40);
-	int dd = reac_boxreg_declare(&d, 16, "Drums", -1);      /* auto base 0 */
+	int dd = reac_boxreg_declare(&d, REAC_BOX_S1608_IN, "Drums", -1);      /* auto base 0 */
 	CHK(dd == 0 && d.box[0].base == 0 && strcmp(d.box[0].name, "Drums") == 0);
 	CHK(mac_all_zero(&d, 0));                                /* still unbound */
-	int vv = reac_boxreg_declare(&d, 8, "Vocals", 24);      /* pinned base 24 */
+	int vv = reac_boxreg_declare(&d, REAC_BOX_S0808_IN, "Vocals", 24);      /* pinned base 24 */
 	CHK(vv == 1 && d.box[1].base == 24 && d.box[1].pinned);
 	/* a 16-wide box JOINs -> binds to the "Drums" slot (matching width) */
-	int j = reac_boxreg_add(&d, A, 16);
+	int j = reac_boxreg_add(&d, A, REAC_BOX_S1608_IN);
 	CHK(j == 0 && memcmp(d.box[0].mac, A, 6) == 0 && strcmp(d.box[0].name, "Drums") == 0);
 	/* an 8-wide box JOINs -> binds to the pinned "Vocals" slot at base 24 */
-	int j2 = reac_boxreg_add(&d, B, 8);
+	int j2 = reac_boxreg_add(&d, B, REAC_BOX_S0808_IN);
 	CHK(j2 == 1 && d.box[1].base == 24 && strcmp(d.box[1].name, "Vocals") == 0);
 
 	/* pinned collision rejected */
-	CHK(reac_boxreg_declare(&d, 8, "X", 0) == -1);          /* base 0 already taken */
+	CHK(reac_boxreg_declare(&d, REAC_BOX_S0808_IN, "X", 0) == -1);          /* base 0 already taken */
 
 	/* set_name overwrites */
 	reac_boxreg_set_name(&d, 0, "Kit");
@@ -76,11 +77,11 @@ int main(void)
 
 	/* --- fabric full: no room for a 6th box beyond 40 slots --- */
 	struct reac_boxreg f;
-	reac_boxreg_init(&f, 40);
+	reac_boxreg_init(&f, REAC_MAX_CHANNELS);
 	uint8_t m[6] = { 0x00,0x40,0xab,0,0,0 };
 	int placed = 0;
-	for (int i = 0; i < 8; i++) { m[5] = (uint8_t)i; if (reac_boxreg_add(&f, m, 8) >= 0) placed++; }
-	CHK(placed == 5);                                       /* 5 x 8 = 40, 6th rejected */
+	for (int i = 0; i < 8; i++) { m[5] = (uint8_t)i; if (reac_boxreg_add(&f, m, REAC_BOX_S0808_IN) >= 0) placed++; }
+	CHK(placed == REAC_MAX_CHANNELS / REAC_BOX_S0808_IN);                   /* the fabric in 8-wide boxes; one more is rejected */
 
 	printf("test_reac_boxreg: OK\n");
 	return 0;

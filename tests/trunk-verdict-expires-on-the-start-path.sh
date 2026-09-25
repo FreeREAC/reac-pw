@@ -29,6 +29,7 @@
 # Isolation is part of the test (tests/hearing-finds-a-segment.sh's header has the
 # reasoning). Skips (77) where the namespaces, iproute2 or PipeWire are unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -87,7 +88,7 @@ peer ip link add link speer0 name speer0.11 type vlan id 11 || exit 90
 mkdir -p "$CONF/.config/reac-pw"
 printf '[segment stale0]\nrole = master\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
-$in_peer "$FAKE" speer0.11 00:40:ab:c4:11:21 8 2000 >"$RT/tag.log" 2>&1 &
+$in_peer "$FAKE" speer0.11 00:40:ab:c4:11:21 "$FACT_BOX_S0808_IN" 2000 >"$RT/tag.log" 2>&1 &
 TAGPID=$!
 sleep 0.5
 ip link set stale0 up; peer ip link set speer0 up; peer ip link set speer0.11 up
@@ -126,7 +127,7 @@ wait_for_since "$MARK" "\[stale0\] tagged REAC was heard on this parent before, 
 # a trunk again — the window is a question asked continuously, not a latch in either
 # direction. Without this the expiry above could be a one-way door.
 MARK2=$(LINE0)
-$in_peer "$FAKE" speer0.11 00:40:ab:c4:11:21 8 2000 >"$RT/tag2.log" 2>&1 &
+$in_peer "$FAKE" speer0.11 00:40:ab:c4:11:21 "$FACT_BOX_S0808_IN" 2000 >"$RT/tag2.log" 2>&1 &
 TAGPID2=$!
 wait_for_since "$MARK2" "\[stale0\] this parent carries tagged REAC, so it is not itself a segment" 40 || {
 	echo "FAIL: the tags came back and the parent was never a trunk again — the verdict"

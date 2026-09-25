@@ -11,6 +11,7 @@
 #include <reac/reac.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static const uint8_t MASTER[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }; /* stand-in */
 static const uint8_t SRC[6]    = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 }; /* our stand-in */
@@ -40,29 +41,35 @@ int main(void)
 	size_t n = reac_ctrl_build_headamp(f, BCAST, MASTER, 0x1234,
 	                                   0x00, REAC_HEADAMP_PHANTOM, 0x01);
 	CHK(n == REAC_FRAME_BYTES);                       /* master/downstream width */
-	CHK(f[16] == 0xcd && f[17] == 0xea);
-	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x13);
-	CHK(f[22] == 0x00 && f[23] == 0x02 && f[24] == 0x00 && f[25] == 0xfe);
-	CHK(f[26] == 0x0e);                               /* preamble echo: oplen - 5 */
-	CHK(f[27] == 0xf0 && f[28] == 0x41 && f[29] == 0x0a && f[30] == 0x00 && f[31] == 0x00);
-	CHK(f[32] == 0x12 && f[33] == 0x12);              /* record marker */
-	CHK(f[34] == 0x01 && f[35] == 0x01);              /* TAG 01 01 */
-	CHK(f[36] == 0x00 && f[37] == 0x00 && f[38] == 0x01);
-	CHK(f[39] == 0x7d);                               /* inner cks (worked example) */
-	CHK(f[40] == 0xf7);
-	CHK(f[n - 2] == 0xc2 && f[n - 1] == 0xea);
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER &&
+	    REACPW_BE16(f + REACPW_FRAME_OF(REAC_HDR_LEN_OFF)) == REAC_DT1_DATA_OVERHEAD + REAC_IDENTITY_ADDR_LO_BYTES + 1);
+	CHK(((uint32_t)f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF)] << 24 | (uint32_t)f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF) + 1] << 16 |
+	     (uint32_t)f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF) + 2] << 8 | f[REACPW_FRAME_OF(REAC_HDR_OPCODE_OFF) + 3]) == REAC_DT1_WRAPPER);
+	CHK(f[REACPW_FRAME_OF(REAC_DT1_LEN_ECHO_OFF)] == REACPW_BE16(f + REACPW_FRAME_OF(REAC_HDR_LEN_OFF)) - (REAC_DT1_SYSEX_OFF - REAC_HDR_OPCODE_OFF));   /* oplen - 5 */
+	CHK(f[REACPW_FRAME_OF(REAC_DT1_SYSEX_OFF)] == REAC_SYSEX_START && f[REACPW_FRAME_OF(REAC_DT1_SYSEX_OFF) + 1] == REAC_ROLAND_ID &&
+	    f[REACPW_FRAME_OF(REAC_DT1_SYSEX_OFF) + 2] == REAC_DT1_DEVICE_ID);
+	CHK(f[REACPW_FRAME_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && f[REACPW_FRAME_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1);
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP);
+	CHK(f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] == 0x00 && f[REACPW_FRAME_OF(REACPW_HA_PARAM_OFF)] == REAC_HEADAMP_PARAM_PHANTOM &&
+	    f[REACPW_FRAME_OF(REACPW_HA_VALUE_OFF)] == 0x01);
+	CHK(f[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)] == 0x7d);         /* inner cks (worked example) */
+	CHK(f[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF) + 1] == REAC_SYSEX_END);
+	CHK(f[n - 2] == REAC_END_MARKER_0 && f[n - 1] == REAC_END_MARKER_1);
 	/* both checksum rules, computed not assumed: record TAG..CKSUM sums to 0x80,
 	 * CH+PARAM+VALUE+CKSUM == 0x7e, and the 32-byte block sums to 0 mod 256. */
 	{
 		unsigned rec = 0, blk = 0;
-		for (int i = 34; i <= 39; i++) rec += f[i];
-		for (int i = 18; i < 50; i++)  blk += f[i];
-		CHK((rec & 0xff) == 0x80);
-		CHK(((f[36] + f[37] + f[38] + f[39]) & 0xff) == 0x7e);
-		CHK((blk & 0xff) == 0);
+		for (int i = REACPW_FRAME_OF(REAC_DT1_TAG_OFF); i <= REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF); i++) rec += f[i];
+		for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i++)  blk += f[i];
+		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
+		CHK(((f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] + f[REACPW_FRAME_OF(REACPW_HA_PARAM_OFF)] + f[REACPW_FRAME_OF(REACPW_HA_VALUE_OFF)] +
+		       f[REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF)]) & 0xff) ==
+		    ((REAC_CTRL_RECORD_SUM - (REAC_DT1_TAG_HEAD_AMP >> 8) - (REAC_DT1_TAG_HEAD_AMP & 0xff)) & 0xff));
+		CHK((blk & 0xff) == REAC_CTRL_BLOCK_SUM);
 	}
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	CHK(f[49] == 0x02);
+	CHK(f[REAC_CTRL_CKSUM_OFF] == 0x02);
 
 	/* 2. round-trip: build -> parse -> HEADAMP with ch/param/value recovered */
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
@@ -79,7 +86,7 @@ int main(void)
 	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 0x32d9,
 	                            0x00, REAC_HEADAMP_SENS, 0x08);
 	CHK(n == REAC_FRAME_BYTES);
-	if (memcmp(f + 18, WIRE_SENS_BLOCK, 32) != 0) {
+	if (memcmp(f + REAC_CTRL_BLOCK_OFF, WIRE_SENS_BLOCK, REAC_CTRL_BLOCK_LEN) != 0) {
 		fprintf(stderr, "FAIL: block [18:50] differs from ctl2.pcap capture:\n"
 		        "  off built wire\n");
 		for (int i = 0; i < 32; i++)
@@ -93,15 +100,15 @@ int main(void)
 
 	/* 3b. S-1608 wire channels (model_base 0x20): ch1 = 0x20, ch16 = 0x2f;
 	 * the general record-sum rule holds at every CH. */
-	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0x2f, REAC_HEADAMP_PAD, 0x01);
+	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 1, REACPW_HEADAMP_TOP_CH, REAC_HEADAMP_PAD, 0x01);
 	CHK(n == REAC_FRAME_BYTES && reac_ctrl_checksum_verify(f) == 0);
 	{
 		unsigned rec = 0;
-		for (int i = 34; i <= 39; i++) rec += f[i];
-		CHK((rec & 0xff) == 0x80);
+		for (int i = REACPW_FRAME_OF(REAC_DT1_TAG_OFF); i <= REACPW_FRAME_OF(REACPW_HA_CKSUM_OFF); i++) rec += f[i];
+		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
 	}
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
-	CHK(p.ch == 0x2f && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
+	CHK(p.ch == REACPW_HEADAMP_TOP_CH && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
 
 	/* 3c. STAMP overlay (the MASTER emit path, task #155/C.7): stamping a head-amp
 	 * record over an already-built FILLER frame reproduces the SAME control block
@@ -111,34 +118,34 @@ int main(void)
 	{
 		uint8_t frame[REAC_FRAME_BYTES];
 		memset(frame, 0, sizeof frame);
-		frame[14] = 0x11; frame[15] = 0x22;                 /* a counter */
-		for (int i = 50; i < REAC_FRAME_BYTES - 2; i++)     /* nonzero audio */
+		frame[REAC_HDR_COUNTER_OFF] = 0x11; frame[REAC_HDR_COUNTER_OFF + 1] = 0x22;   /* a counter */
+		for (int i = REAC_AUDIO_OFFSET; i < REAC_FRAME_BYTES - REAC_END_MARKER_BYTES; i++)   /* nonzero audio */
 			frame[i] = (uint8_t)(i & 0xff);
-		frame[REAC_FRAME_BYTES - 2] = 0xc2;
-		frame[REAC_FRAME_BYTES - 1] = 0xea;                 /* C2/EA tail */
+		frame[REAC_FRAME_BYTES - 2] = REAC_END_MARKER_0;
+		frame[REAC_FRAME_BYTES - 1] = REAC_END_MARKER_1;   /* the tail */
 
 		CHK(reac_ctrl_stamp_headamp(frame, 0x00, REAC_HEADAMP_SENS, 0x08) == 0);
 		/* byte-exact vs the real M-200 ctl2.pcap record AND both checksums */
-		CHK(memcmp(frame + 18, WIRE_SENS_BLOCK, 32) == 0);
+		CHK(memcmp(frame + REAC_CTRL_BLOCK_OFF, WIRE_SENS_BLOCK, REAC_CTRL_BLOCK_LEN) == 0);
 		CHK(reac_ctrl_checksum_verify(frame) == 0);
 		CHK(reac_ctrl_headamp_record_verify(frame) == 0);
 		/* counter + tail + audio outside the block are untouched by the stamp */
-		CHK(frame[14] == 0x11 && frame[15] == 0x22);
-		CHK(frame[REAC_FRAME_BYTES - 2] == 0xc2 && frame[REAC_FRAME_BYTES - 1] == 0xea);
-		CHK(frame[50] == (uint8_t)(50 & 0xff));
+		CHK(frame[REAC_HDR_COUNTER_OFF] == 0x11 && frame[REAC_HDR_COUNTER_OFF + 1] == 0x22);
+		CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 && frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
+		CHK(frame[REAC_AUDIO_OFFSET] == (uint8_t)(REAC_AUDIO_OFFSET & 0xff));
 		CHK(frame[600] == (uint8_t)(600 & 0xff));
 		/* the stamp equals the fresh builder's block for the same (ch,param,value) */
 		{
 			uint8_t built[REAC_FRAME_BYTES];
 			CHK(reac_ctrl_build_headamp(built, BCAST, MASTER, 0x32d9,
 			                            0x00, REAC_HEADAMP_SENS, 0x08) == REAC_FRAME_BYTES);
-			CHK(memcmp(frame + 16, built + 16, 34) == 0);   /* type + block identical */
+			CHK(memcmp(frame + REAC_TYPED_BLOCK_OFF, built + 16, REAC_TYPED_BLOCK_LEN) == 0);   /* type + block identical */
 		}
 		/* a bad param leaves the frame byte-for-byte untouched */
 		{
 			uint8_t before[REAC_FRAME_BYTES];
 			memcpy(before, frame, sizeof before);
-			CHK(reac_ctrl_stamp_headamp(frame, 0x00, 0x03, 0x00) == -1);
+			CHK(reac_ctrl_stamp_headamp(frame, 0x00, REAC_HEADAMP_SWEEP_RECORDS_PER_CH, 0x00) == -1);
 			CHK(memcmp(before, frame, sizeof before) == 0);
 		}
 	}
@@ -159,21 +166,21 @@ int main(void)
 	 * GRANT — 0014 carries TAG 01 00, 0013 carries TAG 03 02 — while only
 	 * TAG 01 01 is HEADAMP. A live M-200 emits ~628 head-amp records per 14
 	 * grants; a joining slave must NOT read a knob-turn as its grant. */
-	n = reac_ctrl_build_coldconnect(f, MASTER, SRC, 7, 16, NULL, 12);
-	CHK(f[34] == 0x01 && f[35] == 0x00);              /* TAG 01 00 */
+	n = reac_ctrl_build_coldconnect(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_JOIN_GRANT);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
-	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 7, 16, NULL, 12);
-	CHK(f[34] == 0x03 && f[35] == 0x02);              /* TAG 03 02 */
+	n = reac_ctrl_build_coldconnect_0013(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_BOX_READY);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
-	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 7, 16, NULL, 12);
-	CHK(f[34] == 0x05 && f[35] == 0x00);              /* TAG 05 00 (identity) */
+	n = reac_ctrl_build_coldconnect_0016(f, MASTER, SRC, 7, REAC_BOX_S1608_IN, NULL, 12);
+	CHK(REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_IDENTITY);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_GRANT);
 
 	/* 5. bad args are rejected: unknown param, out-of-range values */
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, 0x03, 0x00) == 0);
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_PHANTOM, 0x02) == 0);
 	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_PAD, 0x02) == 0);
-	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_SENS, 0x38) == 0);
+	CHK(reac_ctrl_build_headamp(f, BCAST, MASTER, 1, 0, REAC_HEADAMP_SENS, REAC_HEADAMP_SENS_STEPS) == 0);
 
 	/* 6. SENS dB codec at all anchors: dB = -10 - value + (pad ? 20 : 0).
 	 * Pad off 0x00 = -10 dBu .. 0x37 = -65 dBu; pad on 0x00 = +10 .. 0x37 = -45.
@@ -204,14 +211,14 @@ int main(void)
 	 * Changing the scale is a contract change — the conversion runs both ways,
 	 * reac_slave.c derives virtual preamp gain from it, and openmixer publishes
 	 * sensDbu — so these assertions exist to make the next change deliberate. */
-	CHK(reac_headamp_sens_cdb(0x00, 0) == -1000);
-	CHK(reac_headamp_sens_cdb(0x37, 0) == -6500);
-	CHK(reac_headamp_sens_cdb(0x00, 1) ==  1000);
-	CHK(reac_headamp_sens_cdb(0x37, 1) == -4500);
-	CHK(reac_headamp_sens_db(0x00, 0) == -10);
-	CHK(reac_headamp_sens_db(0x37, 0) == -65);
-	CHK(reac_headamp_sens_value_cdb(-1000, 0) == 0x00);
-	CHK(reac_headamp_sens_value_cdb(-6500, 0) == 0x37);
+	CHK(reac_headamp_sens_cdb(0x00, 0) == REAC_HEADAMP_SENS_REF_CDB);
+	CHK(reac_headamp_sens_cdb(REAC_HEADAMP_SENS_MAX, 0) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0));
+	CHK(reac_headamp_sens_cdb(0x00, 1) == REACPW_SENS_CDB(0, 1));
+	CHK(reac_headamp_sens_cdb(REAC_HEADAMP_SENS_MAX, 1) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 1));
+	CHK(reac_headamp_sens_db(0x00, 0) == REACPW_SENS_CDB(0, 0) / 100);
+	CHK(reac_headamp_sens_db(REAC_HEADAMP_SENS_MAX, 0) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0) / 100);
+	CHK(reac_headamp_sens_value_cdb(REAC_HEADAMP_SENS_REF_CDB, 0) == 0x00);
+	CHK(reac_headamp_sens_value_cdb(REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0), 0) == REAC_HEADAMP_SENS_MAX);
 
 	/* EVERY step is 100 cdB, including the three the firmware's stage breaks sit
 	 * on. Those breaks were put to a rapid A/B/A alternation twice each, at two
@@ -228,7 +235,7 @@ int main(void)
 	 * was specifically about three of them. */
 	for (int v = 0; v < REAC_HEADAMP_SENS_MAX; v++)
 		CHK(reac_headamp_sens_cdb((uint8_t)v, 0) -
-		    reac_headamp_sens_cdb((uint8_t)(v + 1), 0) == 100);
+		    reac_headamp_sens_cdb((uint8_t)(v + 1), 0) == REAC_HEADAMP_SENS_STEP_CDB);
 
 	/* ROUND TRIP, both units, no exceptions. The map is injective now that the
 	 * three twins are gone, so step -> dB -> step is the identity for all 56
@@ -252,7 +259,7 @@ int main(void)
 	}
 
 	CHK(reac_headamp_sens_value(99, 0) == 0x00);      /* hotter than min gain */
-	CHK(reac_headamp_sens_value(-99, 0) == 0x37);     /* below max gain */
+	CHK(reac_headamp_sens_value(-99, 0) == REAC_HEADAMP_SENS_MAX);     /* below max gain */
 
 	printf("OK: head-amp record byte-exact vs the M-200 capture (inner 0x80 / "
 	       "outer sum-0), TAG dispatch grant-safe, SENS codec is one dB per step\n"

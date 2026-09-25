@@ -20,6 +20,7 @@
 # destroys only its own dummy interfaces and cannot touch a live REAC segment.
 # Skips (77) where that namespace or PipeWire is unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 SKIP=77
 
@@ -43,7 +44,7 @@ trap 'rm -f "$LOG"' EXIT
 ip link add vanish0 type dummy && ip link set vanish0 up || exit 90
 ip link add spacer0 type dummy || exit 90   # burn an index so a recreated
                                             # vanish0 cannot reuse the old one
-"$BIN" --live vanish0 --tx vanish0 --mixer m5000 --rate 96000 >"$LOG" 2>&1 &
+"$BIN" --live vanish0 --tx vanish0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" >"$LOG" 2>&1 &
 PID=$!
 sleep 5
 if ! kill -0 $PID 2>/dev/null; then

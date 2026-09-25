@@ -48,6 +48,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHK(cond) do { \
@@ -182,7 +183,7 @@ int main(void)
 	CHK(reac_hunt_role(&r.h) == REAC_ROLE_SLAVE);
 	CHK(r.h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(r.h.arb.rival == REAC_RIVAL_BOX);
-	CHK(r.h.arb.rival_channels == 16);      /* the S-1608's own width, not a desk's 40 */
+	CHK(r.h.arb.rival_channels == REAC_BOX_S1608_IN);      /* the S-1608's own width, not a desk's 40 */
 	CHK(r.h.arb.have_mac);
 	CHK(memcmp(r.h.arb.mac, S1608_ON_M, 6) == 0);
 	/* A box mastering is JOINED on an unpinned wire, so the daemon asserts the SLAVE end
@@ -201,7 +202,7 @@ int main(void)
 	saw_a_wire(&r, "box-master-pinned");
 	CHK(r.h.verdict == REAC_HUNT_SLAVE);
 	CHK(r.h.arb.rival == REAC_RIVAL_BOX);
-	CHK(r.h.arb.rival_channels == 16);
+	CHK(r.h.arb.rival_channels == REAC_BOX_S1608_IN);
 	CHK(memcmp(r.h.arb.mac, S1608_ON_M, 6) == 0);
 	/* THE ONE REFUSAL LEFT — a rival whose geometry has never been captured — is pinned by
 	 * `test_reac_hunt.c`'s own unreadable-rival arm, on built frames, because the corpus
@@ -220,7 +221,7 @@ int main(void)
 	CHK(r.h.verdict == REAC_HUNT_SLAVE);
 	CHK(r.h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(r.h.arb.rival == REAC_RIVAL_DESK);
-	CHK(r.h.arb.rival_channels == 40);
+	CHK(r.h.arb.rival_channels == REAC_MAX_CHANNELS);
 	CHK(memcmp(r.h.arb.mac, M200, 6) == 0);
 
 	/* THE ONE THAT MUST NOT BE A MASTER — "s1608 misheard as master", 2026-09-10: 3000
@@ -259,7 +260,7 @@ int main(void)
 	memset(synth, 0, sizeof synth);
 	memcpy(synth, "\xff\xff\xff\xff\xff\xff", 6);
 	memcpy(synth + 6, S1608_ON_M, 6);
-	synth[12] = 0x88; synth[13] = 0x19;
+	synth[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; synth[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	synth[16] = 0xce; synth[17] = 0xea;          /* the split device's own type word */
 	reac_ctrl_checksum_apply(synth);
 	struct reac_ctrl_parsed sp;

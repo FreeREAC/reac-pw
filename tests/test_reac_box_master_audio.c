@@ -43,13 +43,14 @@
 
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHK(cond) do { \
 	if (!(cond)) { fails++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } \
 } while (0)
 
-#define BOX_CH 8
+#define BOX_CH REAC_BOX_S0808_IN
 
 /* ---- minimal classic-pcap writer (LE, linktype 1), as test_reac_rx_gate.c ---- */
 static void pcap_hdr(FILE *f)
@@ -115,12 +116,12 @@ int main(void)
 
 	/* The geometry the wire declares IS the classification and the frame size:
 	 * 52 + 8*36 = 340 B (DESIGN.md 0.5.1, reac-protocol/wire-format.md). */
-	CHK(flen == 340);
+	CHK(flen == REACPW_FRAME_LEN(BOX_CH));
 	CHK(flen == reac_ctrl_box_frame_len(BOX_CH));
 
 	/* ---- the join: the receive-only accept mode main.c sets for a box master ---- */
 	struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-	                           .forced_rate = 96000, .pcap_realtime = 0,
+	                           .forced_rate = REAC_SAMPLE_RATE_96K, .pcap_realtime = 0,
 	                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 	struct reac_ring ring;
 	struct reac_rx rx;

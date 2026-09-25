@@ -29,6 +29,7 @@
 # PRESENCE FIRST: the refusal has to be the one under test (the join reached the capture
 # node and was refused there) before a flat count means anything.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master /path/to/refuse-capture-shim.so}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master /path/to/refuse-capture-shim.so}"
 SHIM="${3:?usage: $0 /path/to/reac-pw /path/to/fake-box-master /path/to/refuse-capture-shim.so}"
@@ -64,7 +65,7 @@ in_peer="nsenter -t $NSPID -n"
 
 ip link add ref0 type veth peer name rbox0 || exit 90
 ip link set rbox0 netns $NSPID || exit 90
-$in_peer "$FAKE" rbox0 00:40:ab:c4:dc:a7 8 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
+$in_peer "$FAKE" rbox0 00:40:ab:c4:dc:a7 "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
 sleep 0.5
 ip link set ref0 up; $in_peer ip link set rbox0 up
 
