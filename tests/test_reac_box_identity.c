@@ -80,7 +80,7 @@ static void build_identity_reply(uint8_t *fr, uint16_t addr_lo,
 	memset(fr, 0, REAC_FRAME_BYTES);
 	memcpy(fr, OUR, 6);
 	memcpy(fr + 6, BOX, 6);
-	fr[12] = 0x88; fr[13] = 0x19;
+	fr[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; fr[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	fr[16] = 0xcd; fr[17] = 0xea;
 	uint8_t *b = fr + REAC_CTRL_BLOCK_OFF;
 	unsigned sx = (unsigned)(13 + n);

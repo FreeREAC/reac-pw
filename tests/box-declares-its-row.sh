@@ -30,6 +30,7 @@
 # ISOLATION: a user+net+mount+pid namespace with its own veth, its own sysfs and its own
 # PipeWire on a private runtime dir — `unshare -n` isolates the wire and not the graph.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 # ABSOLUTE, ALWAYS. nsenter into a mount namespace starts at /, so a relative binary path
 # runs the box side and silently fails to start the master side — which read as "the mixer
@@ -64,9 +65,9 @@ pw-cli info 0 >/dev/null 2>&1 || {
 # read like a zero.
 mkdir -p "$RT/mhome"
 cat > "$RT/sniff.py" <<'PYEOF'
-import socket, sys, time
+import os, socket, sys, time
 iface, secs = sys.argv[1], float(sys.argv[2])
-s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x8819))
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(int(os.environ["FACT_ETHERTYPE"])))
 s.bind((iface, 0))
 s.settimeout(0.5)
 end = time.time() + secs
@@ -285,7 +286,7 @@ NM=$(get A name) && say "arm A sent a NAME record ('$NM'); the 0x82 family is na
 [ "$(get A broadcast)" -gt 10 ] 2>/dev/null || say "arm A never flooded broadcast — a box announces itself before any master answers"
 
 # ---- ARM B: the 40-channel experiment, with OUR identity on it -------------------------
-[ "$(get B in)" = "40" ]      || say "arm B declared $(get B in) inputs; the experiment row says 40"
+[ "$(get B in)" = "$FACT_MAX_CHANNELS" ] || say "arm B declared $(get B in) inputs; the experiment row says $FACT_MAX_CHANNELS"
 [ "$(get B out)" = "0" ]      || say "arm B declared $(get B out) outputs; the experiment row says 0"
 [ "$(get B blocksum)" = "0" ] || say "arm B's declaration does not checksum (sum mod 256 = $(get B blocksum))"
 [ "$(get B fw)" = "1.014" ]   || say "arm B's firmware reads '$(get B fw)'; our invented firmware is 1.014"
@@ -316,7 +317,7 @@ JOINS=$(get B master-joins); JOINS=${JOINS:-0}
 [ "$(get A roster-role)" = "box" ] || say "arm A's roster reads role '$(get A roster-role)', not box"
 [ "$(get B roster-role)" = "box" ] || say "arm B's roster reads role '$(get B roster-role)', not box"
 [ "$(get A roster-width)" = "16/8" ] || say "arm A's roster width is '$(get A roster-width)', not 16/8"
-[ "$(get B roster-width)" = "40/0" ] || say "arm B's roster width is '$(get B roster-width)', not 40/0"
+[ "$(get B roster-width)" = "$FACT_MAX_CHANNELS/0" ] || say "arm B's roster width is '$(get B roster-width)', not $FACT_MAX_CHANNELS/0"
 [ "$(get A roster-model)" = "s1608" ] || say "arm A's roster model is '$(get A roster-model)'"
 # ---- AND THE ENV DID NOT GET A VOTE ----------------------------------------------------
 # Arm A ran with REAC_BOX_CHANNELS=8 against a 16/8 row. Every width above was measured

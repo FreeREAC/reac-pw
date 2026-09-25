@@ -11,7 +11,9 @@ A mirrored capture repeats every frame; consecutive identical control blocks are
 dropped. The 7-of-8 frame loss that mirrors inflict on AUDIO does not touch these
 control frames — 2729 op-0100 in the 2026-07-11 M-200i capture is 341 x 8 transfers.
 """
-import struct, sys
+import os, struct, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
 
 def recover(path):
     f = open(path, 'rb')
@@ -32,7 +34,8 @@ def recover(path):
         # is the one whose length is not 52 + n*36, so it is decidable rather than
         # heuristic -- a content compare would also drop a frame a desk repeated on
         # purpose.
-        if len(pkt) < 52 or (len(pkt) - 52) % 36 != 0:
+        ovh, per = FACTS["FRAME_OVERHEAD"], FACTS["BYTES_PER_CHANNEL"]
+        if len(pkt) < ovh or (len(pkt) - ovh) % per != 0:
             continue
         i = pkt.find(b'\xcd\xea')
         if i < 0:

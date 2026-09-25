@@ -75,11 +75,11 @@ static int check_record_cksum_order(void)
 		/* (c) the in-place stamp path finishes in the same order — it overlays
 		 * the record on a built FILLER and must leave both checksums valid. */
 		size_t m = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x88, 16, NULL, REAC_SAMPLES_PER_PKT);
-		CHK(m == 628);
+		CHK(m == REACPW_FRAME_LEN(16));
 		CHK(reac_ctrl_stamp_headamp(f, RECS[i].ch, RECS[i].param, RECS[i].value) == 0);
 		CHK(reac_ctrl_headamp_record_verify(f) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
-		CHK(f[626] == 0xc2 && f[627] == 0xea);   /* the tail survives the stamp */
+		CHK(f[m - 2] == REAC_END_MARKER_0 && f[m - 1] == REAC_END_MARKER_1);   /* the tail survives the stamp */
 	}
 	/* the negative half must actually have fired, or (b) proves nothing */
 	CHK(traps > 0);
@@ -108,12 +108,13 @@ int main(void)
 
 	/* 1b. the heartbeat width follows box_channels (W3): 8-ch = 340 B, 40-ch = 1492 B,
 	 * odd / out-of-range rejected. Byte-length = 50 hdr + n_ch*36 + 2 end. */
-	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 8) == 340);
-	CHK(f[338] == 0xc2 && f[339] == 0xea && reac_ctrl_checksum_verify(f) == 0);
-	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 40) == 1492);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 8) == REACPW_FRAME_LEN(8));
+	CHK(f[REACPW_FRAME_LEN(8) - 2] == REAC_END_MARKER_0 && f[REACPW_FRAME_LEN(8) - 1] == REAC_END_MARKER_1 &&
+	    reac_ctrl_checksum_verify(f) == 0);
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, REAC_MAX_CHANNELS) == REAC_FRAME_BYTES);
 	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 15) == 0);   /* odd widths don't exist */
 	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 0)  == 0);
-	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, 42) == 0);   /* > 40 */
+	CHK(reac_ctrl_build_box_hb(f, MASTER, SRC, 7, REAC_MAX_CHANNELS + REAC_BRAID_PAIR_CHANNELS) == 0);   /* > MAX */
 
 	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips
 	 * through the capture-verified upstream decoder — i.e. we emit the same
@@ -125,19 +126,19 @@ int main(void)
 			chbuf[c][s] = (float)c / 64.0f - 0.1f + (float)s / 1024.0f;
 	}
 	n = reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 16, pl, REAC_SAMPLES_PER_PKT);
-	CHK(n == 628);
+	CHK(n == REACPW_FRAME_LEN(16));
 	CHK(f[16] == 0x00 && f[17] == 0x00);
 	for (int k = 0; k < 16; k++) CHK(f[18 + 2 * k] == 0x00 && f[18 + 2 * k + 1] == 0x7a);
-	CHK(f[626] == 0xc2 && f[627] == 0xea);
-	uint8_t pcm[16 * REAC_SAMPLES_PER_PKT * 3];
+	CHK(f[n - 2] == REAC_END_MARKER_0 && f[n - 1] == REAC_END_MARKER_1);
+	uint8_t pcm[16 * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	CHK(reac_upstream_decode(f, n, pcm) == REAC_SAMPLES_PER_PKT);
 	float maxerr = 0;
 	for (int ch = 0; ch < 16; ch++)
 		for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-			const uint8_t *p3 = &pcm[(size_t)(ch * REAC_SAMPLES_PER_PKT + s) * 3];
+			const uint8_t *p3 = &pcm[(size_t)(ch * REAC_SAMPLES_PER_PKT + s) * REAC_RESOLUTION];
 			int32_t v = p3[0] | (p3[1] << 8) | (p3[2] << 16);
-			if (v & 0x800000) v |= ~0xffffff;
-			float got = (float)v / 8388608.0f, e = fabsf(got - chbuf[ch][s]);
+			if (v & REACPW_SAMPLE_SIGN) v |= (int32_t)~REACPW_SAMPLE_MASK;
+			float got = (float)v / (float)REACPW_SAMPLE_SIGN, e = fabsf(got - chbuf[ch][s]);
 			if (e > maxerr) maxerr = e;
 		}
 	CHK(maxerr < 1e-6f);
@@ -324,7 +325,7 @@ int main(void)
 			memset(f, 0, 64);
 			memcpy(f, MASTER, 6);
 			memcpy(f + 6, SRC, 6);
-			f[12] = 0x88; f[13] = 0x19;
+			f[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; f[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 			f[16] = 0xce; f[17] = 0xea;
 			memcpy(f + 18, FORMS[k], sizeof FORMS[k]);
 			memcpy(f + 27, SRC, 6);          /* data[9..14] = the split's MAC */

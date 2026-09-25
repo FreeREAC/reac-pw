@@ -633,7 +633,7 @@ static void usage(const char *p)
 	  "usage: %s [--pcap FILE | --live IFNAME] [--role master|slave] [--rate R] [--tx IFNAME]\n"
 	  "         [--mixer M] [--box MODEL[:LABEL]] [--box-channels N] [--name NAME] [--src-mac M]\n"
 	  "  --pcap FILE   replay a REAC capture (offline test, reuses pcap_source)\n"
-	  "  --live IFNAME live AF_PACKET 0x8819 capture (reuses reac_capture; needs CAP_NET_RAW).\n"
+	  "  --live IFNAME live AF_PACKET " REACPW_STR(REAC_ETHERTYPE) " capture (reuses reac_capture; needs CAP_NET_RAW).\n"
 	  "                Repeatable (or a comma list in one flag) to run several segments in\n"
 	  "                this ONE daemon — see \"auto-spine\" below.\n"
 	  "  --role R      master (default; WE drive the handshake + own the clock — a box\n"
@@ -654,7 +654,8 @@ static void usage(const char *p)
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
-	  "                which no wire can tell us (even 2..40; 8=S-0808, 16=S-1608,\n"
+	  "                which no wire can tell us (even " REACPW_STR(REAC_BRAID_PAIR_CHANNELS) ".."
+	  REACPW_STR(REAC_MAX_CHANNELS) "; 8=S-0808, 16=S-1608,\n"
 	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
 	  "  --mixer M     master role: which desk NAME reac-pw logs as (m200|m300|m5000;\n"
 	  "                default m200). Does not set the wire's pace-code byte — that comes\n"
@@ -676,7 +677,8 @@ static void usage(const char *p)
 	  "                carry OUR identity (real boxes and desks sync to it; a borrowed\n"
 	  "                MAC collides with the real device and makes captures ambiguous).\n"
 	  "no --live and no --pcap: the packaged-service shape. The daemon HEARS its segments:\n"
-	  "  every Ethernet interface with link is sniffed (a passive 0x8819 socket), the first\n"
+	  "  every Ethernet interface with link is sniffed (a passive " REACPW_STR(REAC_ETHERTYPE)
+	  " socket), the first\n"
 	  "  REAC frame heard makes that interface a segment named after it, the ROLE is taken\n"
 	  "  from what is heard on it, and link loss drops it after a %d s hold. Nothing names\n"
 	  "  an interface in advance and NO environment variable decides a role.\n"
@@ -1416,7 +1418,8 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			        c->box_model ? c->box_model->out_ch : 0);
 		} else if (bcl != REAC_CONF_NONE) {
 			int n = atoi(v);
-			if (n >= 2 && n <= REAC_MAX_CHANNELS && (n & 1) == 0)
+			if (n >= REAC_BRAID_PAIR_CHANNELS && n <= REAC_MAX_CHANNELS &&
+			    n % REAC_BRAID_PAIR_CHANNELS == 0)
 				c->box_channels = n;
 			else
 				fprintf(stderr, "reac-pw: [%s] ignoring invalid "
@@ -1941,7 +1944,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	        c->tag, L->rx.sample_rate, L->rx.sample_rate / REAC_SAMPLES_PER_PKT,
 	        c->join_box_master ? "a box master's own broadcast (box-width)"
 	        : c->rxcfg.accept == REAC_RX_ACCEPT_UPSTREAM
-	          ? "box upstream return (box-width)" : "master downstream (40 ch)");
+	          ? "box upstream return (box-width)" : "master downstream (" REACPW_STR(REAC_MAX_CHANNELS) " ch)");
 
 	/* The reac-capture source is created AFTER the TX side, because whether to DEFER
 	 * it depends on whether a recognizer (the master pacer) exists. In pure autodetect
@@ -3174,7 +3177,8 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 		return -1;
 	memset(sn, 0, sizeof *sn);
 	if (reac_capture_open(&sn->cap, name) != 0) {
-		fprintf(stderr, "reac-pw: [%s] link is up but the 0x8819 sniffer could not open: %s "
+		fprintf(stderr, "reac-pw: [%s] link is up but the " REACPW_STR(REAC_ETHERTYPE)
+		        " sniffer could not open: %s "
 		        "— this interface is not watched\n", name, strerror(errno));
 		memset(sn, 0, sizeof *sn);
 		return -1;
@@ -4470,7 +4474,8 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				reac_code_emit(stderr, "reac-pw", RC_E_ENROLL_REFUSED,
 				        "[%s] REFUSED (%s): "
 				        "%02x:%02x:%02x:%02x:%02x:%02x masters this wire and carries no "
-				        "legal 52 + n*36 geometry, so there is nothing to size a segment "
+				        "legal " REACPW_STR(REAC_FRAME_OVERHEAD) " + n*" REACPW_STR(REAC_BYTES_PER_CHANNEL)
+				        " geometry, so there is nothing to size a segment "
 				        "from and nobody has captured a peer like it. Neither driven over "
 				        "nor joined; published as a door so it can be seen.\n",
 				        sn->name, reac_rival_refusal(sn->hunt.arb.rival),
@@ -5571,8 +5576,10 @@ int main(int argc, char **argv)
 			box_channels = m->in_ch;
 		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
 			box_channels = atoi(argv[++i]);
-			if (box_channels < 2 || box_channels > REAC_MAX_CHANNELS || (box_channels & 1)) {
-				fprintf(stderr, "reac-pw: --box-channels must be even, 2..%d "
+			if (box_channels < REAC_BRAID_PAIR_CHANNELS || box_channels > REAC_MAX_CHANNELS ||
+			    box_channels % REAC_BRAID_PAIR_CHANNELS) {
+				fprintf(stderr, "reac-pw: --box-channels must be even, "
+				        REACPW_STR(REAC_BRAID_PAIR_CHANNELS) "..%d "
 				        "(e.g. 8 = S-0808, 16 = S-1608, 32 = S-4000S)\n", REAC_MAX_CHANNELS);
 				return 2;
 			}

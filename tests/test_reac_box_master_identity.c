@@ -26,6 +26,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHK(cond) do { \
@@ -77,7 +78,7 @@ int main(void)
 	CHK(reac_box_master_model(0) == NULL);
 	CHK(reac_box_master_model(7) == NULL);
 	CHK(reac_box_master_model(9) == NULL);
-	CHK(reac_box_master_model(40) == NULL);
+	CHK(reac_box_master_model(REAC_MAX_CHANNELS) == NULL);
 	CHK(reac_box_master_model(64) == NULL);
 
 	/* ---- 2. the rig's own case, stamped ----------------------------------------- */

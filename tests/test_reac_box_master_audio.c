@@ -116,7 +116,7 @@ int main(void)
 
 	/* The geometry the wire declares IS the classification and the frame size:
 	 * 52 + 8*36 = 340 B (DESIGN.md 0.5.1, reac-protocol/wire-format.md). */
-	CHK(flen == 340);
+	CHK(flen == REACPW_FRAME_LEN(BOX_CH));
 	CHK(flen == reac_ctrl_box_frame_len(BOX_CH));
 
 	/* ---- the join: the receive-only accept mode main.c sets for a box master ---- */

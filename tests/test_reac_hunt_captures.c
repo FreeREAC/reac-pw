@@ -48,6 +48,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHK(cond) do { \
@@ -220,7 +221,7 @@ int main(void)
 	CHK(r.h.verdict == REAC_HUNT_SLAVE);
 	CHK(r.h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(r.h.arb.rival == REAC_RIVAL_DESK);
-	CHK(r.h.arb.rival_channels == 40);
+	CHK(r.h.arb.rival_channels == REAC_MAX_CHANNELS);
 	CHK(memcmp(r.h.arb.mac, M200, 6) == 0);
 
 	/* THE ONE THAT MUST NOT BE A MASTER — "s1608 misheard as master", 2026-09-10: 3000
@@ -259,7 +260,7 @@ int main(void)
 	memset(synth, 0, sizeof synth);
 	memcpy(synth, "\xff\xff\xff\xff\xff\xff", 6);
 	memcpy(synth + 6, S1608_ON_M, 6);
-	synth[12] = 0x88; synth[13] = 0x19;
+	synth[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; synth[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	synth[16] = 0xce; synth[17] = 0xea;          /* the split device's own type word */
 	reac_ctrl_checksum_apply(synth);
 	struct reac_ctrl_parsed sp;

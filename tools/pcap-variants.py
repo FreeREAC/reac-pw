@@ -50,10 +50,13 @@ def write(path, recs):
 
 
 def is_bcast(d):     return d[0:6] == b"\xff" * 6
-def counter(d):      return d[14] | (d[15] << 8)
+CTR_OFF = FACTS["HDR_COUNTER_OFF"]                        # LE frame counter
+CTR_MASK = (1 << (8 * FACTS["HDR_COUNTER_BYTES"])) - 1
+AUDIO, TAIL = FACTS["AUDIO_OFFSET"], FACTS["END_MARKER_BYTES"]
+def counter(d):      return d[CTR_OFF] | (d[CTR_OFF + 1] << 8)
 def set_counter(d, c):
-    d[14] = c & 0xFF
-    d[15] = (c >> 8) & 0xFF
+    d[CTR_OFF] = c & 0xFF
+    d[CTR_OFF + 1] = (c >> 8) & 0xFF
 def ctrl_zero(d):    return all(b == 0 for b in d[18:50])
 def is_ctrl(d):      return d[16] == 0xCD and d[17] == 0xEA   # a cdea control frame
 
@@ -84,7 +87,9 @@ def main(tmp):
     # V2 — the slots, silent. Everything up to the two-byte end marker.
     v = clone()
     for _, _, d in v:
-        for i in range(52, len(d) - 2):
+        # From AUDIO_OFFSET: this read 52 until 2026-09-25 and left the first two
+        # audio bytes of every frame intact (audit contract-copies, pcap-variants.py:85).
+        for i in range(AUDIO, len(d) - TAIL):
             d[i] = 0
     emit("V2-silent-slots.pcap", v, "every audio slot zeroed (we send digital silence)")
 
@@ -92,7 +97,7 @@ def main(tmp):
     v = clone()
     first = counter(v[0][2])
     for _, _, d in v:
-        set_counter(d, (counter(d) - first) & 0xFFFF)
+        set_counter(d, (counter(d) - first) & CTR_MASK)
     emit("V3-counter-rebased.pcap", v, "frame counter rebased to start at 0")
     v = clone()
     for _, _, d in v:
@@ -110,7 +115,7 @@ def main(tmp):
     for i in range(11599):
         f = flood[i % len(flood)]
         d = bytearray(f[2])
-        set_counter(d, (counter(flood[0][2]) + i) & 0xFFFF)
+        set_counter(d, (counter(flood[0][2]) + i) & CTR_MASK)
         v.append([ts, tu, d])
         tu += step_us
         if tu >= 1000000:
@@ -518,7 +523,7 @@ def fillers_vs_sequence(tmp):
         mine = of[j % len(of)][2]
         j += 1
         r[2][16:50] = bytearray(mine[16:50])     # our descriptor state
-        r[2][50:len(r[2]) - 2] = mine[50:len(mine) - 2][:len(r[2]) - 52]
+        r[2][AUDIO:len(r[2]) - TAIL] = mine[AUDIO:len(mine) - TAIL][:len(r[2]) - AUDIO - TAIL]
         n += 1
     write(os.path.join(dst, "V9m-their-sequence-our-fillers.pcap"), v)
     print("V9l-our-fillers-their-control.pcap     %6d frames  our stream, THEIR announce and "

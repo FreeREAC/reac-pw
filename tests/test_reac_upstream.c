@@ -35,25 +35,25 @@ static int fails;
 static int32_t s24_at(const uint8_t *out, int nch, int ch, int s)
 {
 	(void)nch;
-	const uint8_t *p = out + (size_t)(ch * REAC_SAMPLES_PER_PKT + s) * 3;
+	const uint8_t *p = out + (size_t)(ch * REAC_SAMPLES_PER_PKT + s) * REAC_RESOLUTION;
 	int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16));
-	if (v & 0x00800000)
-		v |= ~0x00FFFFFF;
+	if (v & REACPW_SAMPLE_SIGN)
+		v |= (int32_t)~REACPW_SAMPLE_MASK;
 	return v;
 }
 
 int main(void)
 {
 	/* 1. shape: nch from frame length (len = 52 + nch*36) */
-	CHK(reac_upstream_channels(628) == 16);  /* S-1608 */
-	CHK(reac_upstream_channels(340) == 8);   /* S-0808 */
-	CHK(reac_upstream_channels(1492) == -1); /* the 40-ch DOWNSTREAM shape is not upstream */
-	CHK(reac_upstream_channels(627) == -1);
-	CHK(reac_upstream_channels(629) == -1);
-	CHK(reac_upstream_channels(52) == -1);   /* nch 0 */
-	CHK(reac_upstream_channels(160) == -1);  /* odd nch (3): braid needs channel pairs */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(16)) == 16);  /* S-1608 */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(8)) == 8);   /* S-0808 */
+	CHK(reac_upstream_channels(REAC_FRAME_BYTES) == -1); /* the desk's DOWNSTREAM shape is not upstream */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(16) - 1) == -1);
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(16) + 1) == -1);
+	CHK(reac_upstream_channels(REAC_FRAME_OVERHEAD) == -1);   /* nch 0 */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(3)) == -1);  /* odd nch (3): braid needs channel pairs */
 	CHK(reac_upstream_channels(0) == -1);
-	CHK(reac_upstream_channels(14) == -1);
+	CHK(reac_upstream_channels(REAC_HDR_COUNTER_OFF) == -1);
 
 	/* 2. decode the captured 16-ch frame: header + counter + full PCM table */
 	uint8_t out[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
@@ -76,11 +76,11 @@ int main(void)
 	 * frames decode, through the door, to the independently-computed PCM
 	 * tables, and the trailer is NOT decoded as audio — the 1206 B (cleaned)
 	 * and 1204 B reads of the same frame are byte-equal. */
-	CHK(reac_upstream_channels(1206) == -1); /* raw wire length — the residue is still on it */
-	CHK(reac_frame_clean_len(1206) == 1204); /* the door's job, not this parser's */
+	CHK(reac_upstream_channels(sizeof UP32A) == -1); /* raw wire length — the residue is still on it */
+	CHK(reac_frame_clean_len(sizeof UP32A) == REACPW_FRAME_LEN(REAC_BOX_S4000S_3208_IN)); /* the door's job, not this parser's */
 	CHK(reac_upstream_channels(reac_frame_clean_len(1206)) == 32);
-	CHK(reac_upstream_channels(1204) == 32); /* trailerless variant, already clean */
-	CHK(reac_upstream_channels(1205) == -1);
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(32)) == 32); /* trailerless variant, already clean */
+	CHK(reac_upstream_channels(REACPW_FRAME_LEN(32) + 1) == -1);
 	ns = reac_upstream_decode(UP32A, reac_frame_clean_len(sizeof UP32A), out);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
 	CHK(reac_frame_counter(UP32A) == 0xff9c);
@@ -93,8 +93,8 @@ int main(void)
 	/* the trailer bytes never reach the audio: decoding the same real frame at
 	 * its clean 1204 B length yields the identical planar PCM */
 	uint8_t out2[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
-	CHK(reac_upstream_decode(UP32A, 1204, out2) == REAC_SAMPLES_PER_PKT);
-	CHK(memcmp(out, out2, (size_t)32 * REAC_SAMPLES_PER_PKT * 3) == 0);
+	CHK(reac_upstream_decode(UP32A, REACPW_FRAME_LEN(32), out2) == REAC_SAMPLES_PER_PKT);
+	CHK(memcmp(out, out2, (size_t)32 * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION) == 0);
 	/* the second consecutive frame (counter +1) pins the per-frame stability,
 	 * through the same door */
 	ns = reac_upstream_decode(UP32B, reac_frame_clean_len(sizeof UP32B), out);
@@ -118,16 +118,16 @@ int main(void)
 	CHK(bad == 0);
 
 	/* 5. validation rejects */
-	uint8_t f[628];
+	uint8_t f[sizeof UP16];
 	memcpy(f, UP16, sizeof f);
-	f[12] = 0x08; /* not 0x8819 */
+	f[REAC_ETHERTYPE_OFF] = 0x08; /* not the REAC EtherType */
 	CHK(reac_upstream_decode(f, sizeof f, out) == -1);
 	memcpy(f, UP16, sizeof f);
-	f[626] = 0x00; /* broken end marker */
+	f[sizeof f - REAC_END_MARKER_BYTES] = 0x00; /* broken end marker */
 	CHK(reac_upstream_decode(f, sizeof f, out) == -1);
 	memcpy(f, UP16, sizeof f);
-	CHK(reac_upstream_decode(f, 627, out) == -1);          /* truncated */
-	CHK(reac_upstream_decode(NULL, 628, out) == -1);
+	CHK(reac_upstream_decode(f, sizeof f - 1, out) == -1);          /* truncated */
+	CHK(reac_upstream_decode(NULL, sizeof f, out) == -1);
 	CHK(reac_upstream_decode(f, sizeof f, NULL) == -1);
 
 	if (fails) {

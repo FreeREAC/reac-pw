@@ -55,7 +55,7 @@ int main(void)
 	 * ruling, 2026-09-03): a valid checksummed control frame is real regardless of source
 	 * OUI, and the sighting carries the real (non-Roland) source MAC verbatim. */
 	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, 16);
-	CHK(n == 628);
+	CHK(n == REACPW_FRAME_LEN(16));
 	uint8_t nonRoland[6] = { 0xde, 0xad, 0xbe, 0xef, 0x00, 0x01 };
 	memcpy(f + 6, nonRoland, 6);
 	reac_ctrl_checksum_apply(f);                 /* the source moved; keep it VALID */
@@ -373,7 +373,7 @@ int main(void)
 	memset(f, 0, sizeof f);
 	memcpy(f, MASTER, 6);
 	memcpy(f + 6, SPLIT, 6);
-	f[12] = 0x88; f[13] = 0x19;
+	f[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; f[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	f[16] = 0xce; f[17] = 0xea;
 	memcpy(f + 18, SPLIT_FIRST, sizeof SPLIT_FIRST);
 	memcpy(f + 27, SPLIT, 6);                 /* data[9..14] = the split's MAC */

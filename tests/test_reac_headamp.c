@@ -11,6 +11,7 @@
 #include <reac/reac.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static const uint8_t MASTER[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }; /* stand-in */
 static const uint8_t SRC[6]    = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0xf6 }; /* our stand-in */
@@ -50,7 +51,7 @@ int main(void)
 	CHK(f[36] == 0x00 && f[37] == 0x00 && f[38] == 0x01);
 	CHK(f[39] == 0x7d);                               /* inner cks (worked example) */
 	CHK(f[40] == 0xf7);
-	CHK(f[n - 2] == 0xc2 && f[n - 1] == 0xea);
+	CHK(f[n - 2] == REAC_END_MARKER_0 && f[n - 1] == REAC_END_MARKER_1);
 	/* both checksum rules, computed not assumed: record TAG..CKSUM sums to 0x80,
 	 * CH+PARAM+VALUE+CKSUM == 0x7e, and the 32-byte block sums to 0 mod 256. */
 	{
@@ -111,11 +112,11 @@ int main(void)
 	{
 		uint8_t frame[REAC_FRAME_BYTES];
 		memset(frame, 0, sizeof frame);
-		frame[14] = 0x11; frame[15] = 0x22;                 /* a counter */
-		for (int i = 50; i < REAC_FRAME_BYTES - 2; i++)     /* nonzero audio */
+		frame[REAC_HDR_COUNTER_OFF] = 0x11; frame[REAC_HDR_COUNTER_OFF + 1] = 0x22;   /* a counter */
+		for (int i = REAC_AUDIO_OFFSET; i < REAC_FRAME_BYTES - REAC_END_MARKER_BYTES; i++)   /* nonzero audio */
 			frame[i] = (uint8_t)(i & 0xff);
-		frame[REAC_FRAME_BYTES - 2] = 0xc2;
-		frame[REAC_FRAME_BYTES - 1] = 0xea;                 /* C2/EA tail */
+		frame[REAC_FRAME_BYTES - 2] = REAC_END_MARKER_0;
+		frame[REAC_FRAME_BYTES - 1] = REAC_END_MARKER_1;   /* the tail */
 
 		CHK(reac_ctrl_stamp_headamp(frame, 0x00, REAC_HEADAMP_SENS, 0x08) == 0);
 		/* byte-exact vs the real M-200 ctl2.pcap record AND both checksums */
@@ -123,9 +124,9 @@ int main(void)
 		CHK(reac_ctrl_checksum_verify(frame) == 0);
 		CHK(reac_ctrl_headamp_record_verify(frame) == 0);
 		/* counter + tail + audio outside the block are untouched by the stamp */
-		CHK(frame[14] == 0x11 && frame[15] == 0x22);
-		CHK(frame[REAC_FRAME_BYTES - 2] == 0xc2 && frame[REAC_FRAME_BYTES - 1] == 0xea);
-		CHK(frame[50] == (uint8_t)(50 & 0xff));
+		CHK(frame[REAC_HDR_COUNTER_OFF] == 0x11 && frame[REAC_HDR_COUNTER_OFF + 1] == 0x22);
+		CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 && frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
+		CHK(frame[REAC_AUDIO_OFFSET] == (uint8_t)(REAC_AUDIO_OFFSET & 0xff));
 		CHK(frame[600] == (uint8_t)(600 & 0xff));
 		/* the stamp equals the fresh builder's block for the same (ch,param,value) */
 		{

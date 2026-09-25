@@ -59,11 +59,11 @@ static int box_flood(struct reac_hunt *h, const uint8_t src[6], int n_ch, uint64
  * direction check to make that call with). Sent when a box gives up on a lost master. */
 static int box_bye(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 {
-	uint8_t f[50];
+	uint8_t f[REAC_L2_HEADER_LEN];
 	memset(f, 0, sizeof f);
 	memcpy(f, BCAST, 6);
 	memcpy(f + 6, src, 6);
-	f[12] = 0x88; f[13] = 0x19;
+	f[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; f[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	f[16] = 0xcd; f[17] = 0xea;
 	uint8_t *block = f + 18;
 	block[0] = 0x01;   /* REAC_LINK_CTRL */

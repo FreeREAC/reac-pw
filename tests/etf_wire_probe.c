@@ -44,7 +44,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define REAC_ETHERTYPE 0x8819
+#include "reac_facts_pw.h"   /* REAC_ETHERTYPE, REAC_ETHERTYPE_OFF: the one declaration, no private copy */
 
 static uint64_t mono_ms(void)
 {
@@ -101,10 +101,10 @@ static int do_count(const char *ifname, int secs)
 		if (poll(&p, 1, 200) <= 0)
 			continue;
 		ssize_t n = recv(fd, buf, sizeof buf, MSG_DONTWAIT);
-		if (n < 14)
+		if (n < REAC_HDR_COUNTER_OFF)
 			continue;
 		any++;
-		if (((buf[12] << 8) | buf[13]) == REAC_ETHERTYPE)
+		if (((buf[REAC_ETHERTYPE_OFF] << 8) | buf[REAC_ETHERTYPE_OFF + 1]) == REAC_ETHERTYPE)
 			reac++;
 	}
 	close(fd);

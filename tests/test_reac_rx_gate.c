@@ -65,8 +65,8 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	memset(out, 0xff, 6);
 	static const uint8_t master[6] = { 0x00, 0x40, 0xab, 0xc4, 0x91, 0x90 };
 	memcpy(out + 6, master, 6);
-	out[12] = 0x88; out[13] = 0x19;
-	out[14] = (uint8_t)(counter & 0xff); out[15] = (uint8_t)(counter >> 8);
+	out[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; out[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
+	out[REAC_HDR_COUNTER_OFF] = (uint8_t)(counter & 0xff); out[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)(counter >> 8);
 	/* Audio region: a marker value on channel 0 and silence everywhere else,
 	 * laid down through the braid oracle — the wire layout the master really
 	 * emits and, since libreac 0.5.0, the one reac_decode() reads back. This
@@ -76,7 +76,7 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	 * what it claims to (#80). */
 	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
 		size_t pos[3];
-		reac_braid_pos(s, 0, 40, pos);
+		reac_braid_pos(s, 0, REAC_MAX_CHANNELS, pos);
 		uint8_t *audio = out + REAC_L2_HEADER_LEN;
 		audio[pos[0]] = 0x00;                  /* s24 0x400000 = +0.5 */
 		audio[pos[1]] = 0x00;
@@ -139,7 +139,7 @@ int main(void)
 	fclose(f);
 
 	/* the expected float of box-1 channel 0, sample 0 (braided s24 -> f32) */
-	uint8_t pcm[16 * REAC_SAMPLES_PER_PKT * 3];
+	uint8_t pcm[16 * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	CHK(reac_upstream_decode(UP16, sizeof UP16, pcm) == REAC_SAMPLES_PER_PKT);
 
 	/* ---- DOWNSTREAM accept: only the 1492 B broadcast feeds the ring ---- */
@@ -236,11 +236,11 @@ int main(void)
 		int bad = 0;
 		for (int c = 0; c < 16; c++)
 			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-				const uint8_t *p = &pcm[(size_t)(c * REAC_SAMPLES_PER_PKT + s) * 3];
+				const uint8_t *p = &pcm[(size_t)(c * REAC_SAMPLES_PER_PKT + s) * REAC_RESOLUTION];
 				int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 				                      ((uint32_t)p[2] << 16));
-				if (v & 0x00800000) v |= ~0x00FFFFFF;
-				if (fabsf(ch[c][s] - (float)v / 8388608.0f) > 1e-7f)
+				if (v & REACPW_SAMPLE_SIGN) v |= (int32_t)~REACPW_SAMPLE_MASK;
+				if (fabsf(ch[c][s] - (float)v / (float)REACPW_SAMPLE_SIGN) > 1e-7f)
 					bad++;
 			}
 		CHK(bad == 0);
