@@ -41,8 +41,8 @@ int main(void)
 	size_t n = reac_ctrl_build_headamp(f, BCAST, MASTER, 0x1234,
 	                                   0x00, REAC_HEADAMP_PHANTOM, 0x01);
 	CHK(n == REAC_FRAME_BYTES);                       /* master/downstream width */
-	CHK(f[16] == 0xcd && f[17] == 0xea);
-	CHK(f[18] == 0x04 && f[19] == 0x03 && f[20] == 0x00 && f[21] == 0x13);
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER && f[20] == 0x00 && f[21] == 0x13);
 	CHK(f[22] == 0x00 && f[23] == 0x02 && f[24] == 0x00 && f[25] == 0xfe);
 	CHK(f[26] == 0x0e);                               /* preamble echo: oplen - 5 */
 	CHK(f[27] == 0xf0 && f[28] == 0x41 && f[29] == 0x0a && f[30] == 0x00 && f[31] == 0x00);
@@ -57,13 +57,13 @@ int main(void)
 	{
 		unsigned rec = 0, blk = 0;
 		for (int i = 34; i <= 39; i++) rec += f[i];
-		for (int i = 18; i < 50; i++)  blk += f[i];
-		CHK((rec & 0xff) == 0x80);
+		for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i++)  blk += f[i];
+		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
 		CHK(((f[36] + f[37] + f[38] + f[39]) & 0xff) == 0x7e);
-		CHK((blk & 0xff) == 0);
+		CHK((blk & 0xff) == REAC_CTRL_BLOCK_SUM);
 	}
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	CHK(f[49] == 0x02);
+	CHK(f[REAC_CTRL_CKSUM_OFF] == 0x02);
 
 	/* 2. round-trip: build -> parse -> HEADAMP with ch/param/value recovered */
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
@@ -80,7 +80,7 @@ int main(void)
 	n = reac_ctrl_build_headamp(f, BCAST, MASTER, 0x32d9,
 	                            0x00, REAC_HEADAMP_SENS, 0x08);
 	CHK(n == REAC_FRAME_BYTES);
-	if (memcmp(f + 18, WIRE_SENS_BLOCK, 32) != 0) {
+	if (memcmp(f + REAC_CTRL_BLOCK_OFF, WIRE_SENS_BLOCK, REAC_CTRL_BLOCK_LEN) != 0) {
 		fprintf(stderr, "FAIL: block [18:50] differs from ctl2.pcap capture:\n"
 		        "  off built wire\n");
 		for (int i = 0; i < 32; i++)
@@ -99,7 +99,7 @@ int main(void)
 	{
 		unsigned rec = 0;
 		for (int i = 34; i <= 39; i++) rec += f[i];
-		CHK((rec & 0xff) == 0x80);
+		CHK((rec & 0xff) == REAC_CTRL_RECORD_SUM);
 	}
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
 	CHK(p.ch == 0x2f && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
@@ -120,7 +120,7 @@ int main(void)
 
 		CHK(reac_ctrl_stamp_headamp(frame, 0x00, REAC_HEADAMP_SENS, 0x08) == 0);
 		/* byte-exact vs the real M-200 ctl2.pcap record AND both checksums */
-		CHK(memcmp(frame + 18, WIRE_SENS_BLOCK, 32) == 0);
+		CHK(memcmp(frame + REAC_CTRL_BLOCK_OFF, WIRE_SENS_BLOCK, REAC_CTRL_BLOCK_LEN) == 0);
 		CHK(reac_ctrl_checksum_verify(frame) == 0);
 		CHK(reac_ctrl_headamp_record_verify(frame) == 0);
 		/* counter + tail + audio outside the block are untouched by the stamp */
@@ -133,7 +133,7 @@ int main(void)
 			uint8_t built[REAC_FRAME_BYTES];
 			CHK(reac_ctrl_build_headamp(built, BCAST, MASTER, 0x32d9,
 			                            0x00, REAC_HEADAMP_SENS, 0x08) == REAC_FRAME_BYTES);
-			CHK(memcmp(frame + 16, built + 16, 34) == 0);   /* type + block identical */
+			CHK(memcmp(frame + REAC_TYPED_BLOCK_OFF, built + 16, REAC_TYPED_BLOCK_LEN) == 0);   /* type + block identical */
 		}
 		/* a bad param leaves the frame byte-for-byte untouched */
 		{

@@ -57,8 +57,12 @@ def counter(d):      return d[CTR_OFF] | (d[CTR_OFF + 1] << 8)
 def set_counter(d, c):
     d[CTR_OFF] = c & 0xFF
     d[CTR_OFF + 1] = (c >> 8) & 0xFF
-def ctrl_zero(d):    return all(b == 0 for b in d[18:50])
-def is_ctrl(d):      return d[16] == 0xCD and d[17] == 0xEA   # a cdea control frame
+TB, TL = FACTS["TYPED_BLOCK_OFF"], FACTS["TYPED_BLOCK_LEN"]   # the typed window
+CB, CE = FACTS["CTRL_BLOCK_OFF"], FACTS["CTRL_BLOCK_END"]     # its control block
+CK = FACTS["CTRL_CKSUM_OFF"]
+TYPE_CTRL = FACTS["TYPE_CONTROL"].to_bytes(2, "big")
+def ctrl_zero(d):    return all(b == 0 for b in d[CB:CE])
+def is_ctrl(d):      return d[TB:TB + 2] == TYPE_CTRL   # a cdea control frame
 
 
 def main(tmp):
@@ -134,9 +138,9 @@ def main(tmp):
     v = clone()
     for _, _, d in v:
         if not is_bcast(d) and ctrl_zero(d):
-            for i in range(16):
-                d[18 + i * 2] = 0x00
-                d[18 + i * 2 + 1] = 0x7A
+            for i in range(FACTS["CTRL_BLOCK_LEN"] // 2):
+                d[CB + i * 2] = 0x00
+                d[CB + i * 2 + 1] = FACTS["FILLER_DESC_ESTABLISHED"]
     emit("V5-pregrant-descriptor.pcap", v,
          "NEGATIVE CONTROL: pre-grant unicast claims ESTABLISHED (007a) — must NOT be granted")
 
@@ -222,14 +226,15 @@ if __name__ == "__main__":
 # The full-frame diff, like against like, leaves exactly one real difference in those
 # frames: our slots are silent and theirs carry live samples — which V2 already cleared.
 
-KIND_ANNOUNCE = b"\xcd\xea\x01\x03\x00\x10"
-KIND_0014     = b"\xcd\xea\x04\x03\x00\x14"
-KIND_0013     = b"\xcd\xea\x04\x03\x00\x13"
+def _kind(op, ln): return struct.pack(">HHH", FACTS["TYPE_CONTROL"], op, ln)
+KIND_ANNOUNCE = _kind(FACTS["OP_PAGE_0103"], FACTS["LEN_SUB_COMMIT_REPORT"])
+KIND_0014     = _kind(FACTS["OP_DT1_CONTAINER"], 0x14)   # DT1 record lengths: undeclared
+KIND_0013     = _kind(FACTS["OP_DT1_CONTAINER"], 0x13)
 
 
 def kind_of(d):
     for k in (KIND_ANNOUNCE, KIND_0014, KIND_0013):
-        if d[16:22] == k:
+        if d[TB:TB + 6] == k:
             return k
     return None
 
@@ -334,12 +339,12 @@ def second_record(tmp):
     seen = None
     n = 0
     for r in v:
-        if is_bcast(r[2]) or r[2][16:22] != KIND_0014:
+        if is_bcast(r[2]) or r[2][TB:TB + 6] != KIND_0014:
             continue
         if seen is None:
-            seen = bytes(r[2][16:50])          # their FIRST 0014's block
+            seen = bytes(r[2][TB:CE])          # their FIRST 0014's block
         else:
-            r[2][16:50] = seen                 # the second becomes a copy of it, as ours is
+            r[2][TB:CE] = seen                 # the second becomes a copy of it, as ours is
             n += 1
     write(os.path.join(dst, "V6g-their-burst-repeated.pcap"), v)
     print("V6g-their-burst-repeated.pcap           %3d frames changed  "
@@ -365,8 +370,8 @@ S1608_TABLE = bytes.fromhex("020202020101")   # the S-1608's own port table
 
 def block_cksum_fix(d):
     """The 32-byte block frame[18:50] sums to 0 mod 256; the last byte carries it."""
-    s = sum(d[18:49]) & 0xFF
-    d[49] = (0x100 - s) & 0xFF
+    s = sum(d[CB:CK]) & 0xFF
+    d[CK] = (0x100 - s) & 0xFF
 
 
 def s0808_enrol(tmp):
@@ -384,20 +389,21 @@ def s0808_enrol(tmp):
     v = [[ts, tu, bytearray(d)] for ts, tu, d in keep]
     n = 0
     for _, _, d in v:
-        if d[16:22] == KIND_ANNOUNCE:
-            d[26:32] = S1608_TABLE      # control-area offsets 10..15, the port table
+        if d[TB:TB + 6] == KIND_ANNOUNCE:
+            PT = CB + FACTS["PORTS_TABLE_OFF"]
+            d[PT:PT + len(S1608_TABLE)] = S1608_TABLE   # the port table
             block_cksum_fix(d)
             n += 1
     write(os.path.join(dst, "V9a-s0808-enrol-s1608-table.pcap"), v)
-    ann = [d for _, _, d in keep if d[16:22] == KIND_ANNOUNCE]
+    ann = [d for _, _, d in keep if d[TB:TB + 6] == KIND_ANNOUNCE]
     print("V9-s0808-enrol.pcap                    %6d frames  the S-0808's own enrolment, "
           "verbatim: no flood, announce then burst (CONTROL: must be granted)" % len(keep))
     print("V9a-s0808-enrol-s1608-table.pcap       %6d frames  the same with the announce's "
           "port table made the S-1608's (%d announce frames rewritten)" % (len(v), n))
     if ann:
-        print("     V9  announce block: %s" % ann[0][16:50].hex())
+        print("     V9  announce block: %s" % ann[0][TB:CE].hex())
         print("     V9a announce block: %s" %
-              [d for _, _, d in v if d[16:22] == KIND_ANNOUNCE][0][16:50].hex())
+              [d for _, _, d in v if d[TB:TB + 6] == KIND_ANNOUNCE][0][TB:CE].hex())
 
 
 # ---- V9b/V9c: the two differences left between our join and the granted one -------------
@@ -421,14 +427,14 @@ HEADMARK_BLK = bytes.fromhex(
 
 
 def _ctrl_frames(recs):
-    return [i for i, r in enumerate(recs) if r[2][16] == 0xCD and r[2][17] == 0xEA]
+    return [i for i, r in enumerate(recs) if is_ctrl(r[2])]
 
 
 def _blank(d):
     """Make a control frame a plain FILLER again, leaving its audio untouched."""
-    d[16] = 0x00
-    d[17] = 0x00
-    for i in range(18, 50):
+    d[TB] = 0x00
+    d[TB + 1] = 0x00
+    for i in range(CB, CE):
         d[i] = 0x00
 
 
@@ -444,9 +450,9 @@ def join_variants(tmp):
     # V9b — the head_mark rides the frame right after the JOIN, and BOX_READY moves on by
     # one, so the three records are consecutive exactly as ours are.
     v = [[ts, tu, bytearray(d)] for ts, tu, d in base]
-    v[rec2][2][16:50] = HEADMARK_BLK[:34]
+    v[rec2][2][TB:CE] = HEADMARK_BLK[:TL]
     nxt = rec2 + 1
-    v[nxt][2][16:50] = bytearray(base[rec2][2][16:50])   # BOX_READY, one frame later
+    v[nxt][2][TB:CE] = bytearray(base[rec2][2][TB:CE])   # BOX_READY, one frame later
     write(os.path.join(dst, "V9b-three-record-burst.pcap"), v)
 
     # V9c — our timing: the burst 200 ms after the announce, and the pair again every 2 s.
@@ -454,9 +460,9 @@ def join_variants(tmp):
     fps = FACTS["PKT_RATE_96K"]
     step = fps // 5                       # 200 ms at the wire rate
     _blank(v[rec1][2]); _blank(v[rec2][2])
-    ann_blk = bytearray(base[ann][2][16:50])
-    r1_blk  = bytearray(base[rec1][2][16:50])
-    r2_blk  = bytearray(base[rec2][2][16:50])
+    ann_blk = bytearray(base[ann][2][TB:CE])
+    r1_blk  = bytearray(base[rec1][2][TB:CE])
+    r2_blk  = bytearray(base[rec2][2][TB:CE])
     placed = 0
     for k in range(4):                    # the pair, then a retry every 2 s
         a = ann + k * 2 * fps
@@ -464,9 +470,9 @@ def join_variants(tmp):
         if b + 1 >= len(v):
             break
         if k:                             # the first announce is already in place
-            v[a][2][16:50] = ann_blk
-        v[b][2][16:50] = r1_blk
-        v[b + 1][2][16:50] = r2_blk
+            v[a][2][TB:CE] = ann_blk
+        v[b][2][TB:CE] = r1_blk
+        v[b + 1][2][TB:CE] = r2_blk
         placed += 1
     write(os.path.join(dst, "V9c-our-timing.pcap"), v)
     print("V9b-three-record-burst.pcap            %6d frames  our 0000 head_mark inserted "
@@ -490,7 +496,7 @@ def join_variants(tmp):
 # something neither file carries (the pacing, which V9k already tested, or the socket).
 
 def _is_ctrl(d):
-    return d[16] == 0xCD and d[17] == 0xEA
+    return is_ctrl(d)
 
 
 def fillers_vs_sequence(tmp):
@@ -508,7 +514,7 @@ def fillers_vs_sequence(tmp):
     v = [[ts, tu, bytearray(d)] for ts, tu, d in ours]
     for k, i in enumerate(o_ctrl_i):
         src = t_ctrl[k % len(t_ctrl)][2]
-        v[i][2][16:50] = bytearray(src[16:50])
+        v[i][2][TB:CE] = bytearray(src[TB:CE])
     write(os.path.join(dst, "V9l-our-fillers-their-control.pcap"), v)
 
     # V9m — their stream and their timing, our FILLERS' control area (which is what a filler
@@ -522,7 +528,7 @@ def fillers_vs_sequence(tmp):
             continue                      # their announce, burst and heartbeats stay
         mine = of[j % len(of)][2]
         j += 1
-        r[2][16:50] = bytearray(mine[16:50])     # our descriptor state
+        r[2][TB:CE] = bytearray(mine[TB:CE])     # our descriptor state
         r[2][AUDIO:len(r[2]) - TAIL] = mine[AUDIO:len(mine) - TAIL][:len(r[2]) - AUDIO - TAIL]
         n += 1
     write(os.path.join(dst, "V9m-their-sequence-our-fillers.pcap"), v)

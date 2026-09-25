@@ -196,7 +196,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 		 * classifier (reac_fsm.c is_master_frame) without ever granting anything.
 		 * Stamped from the generated block and re-checksummed over the frame. */
 		if (sent % fps == fps / 4) {
-			memcpy(f + 16, ann.announce_blk, sizeof ann.announce_blk);
+			memcpy(f + REAC_TYPED_BLOCK_OFF, ann.announce_blk, sizeof ann.announce_blk);
 			reac_ctrl_checksum_apply(f);
 			announces++;
 		}

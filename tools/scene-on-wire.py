@@ -13,7 +13,11 @@ between them sum to the total the header declared.
 
   tools/scene-on-wire.py capture.pcap [src-mac]
 """
-import struct, sys, collections
+import os, struct, sys, collections
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
+
+CTRL, TL = FACTS["TYPE_CONTROL"].to_bytes(2, 'big'), FACTS["TYPED_BLOCK_LEN"]
 
 HEAD, CHUNK, FINAL = b'\x01\x01', b'\x01\x00', b'\x01\x02'
 HEAD_B, CHUNK_B, FINAL_B = 24, 26, 14
@@ -40,11 +44,11 @@ while True:
         t0 = t
     if want and pkt[6:12] != want:
         continue
-    i = pkt.find(b'\xcd\xea')
+    i = pkt.find(CTRL)
     if i < 0:
         continue
-    blk = pkt[i:i + 34]
-    if len(blk) < 34:
+    blk = pkt[i:i + TL]
+    if len(blk) < TL:
         continue
     op = blk[2:4]
     if op in (HEAD, CHUNK, FINAL):

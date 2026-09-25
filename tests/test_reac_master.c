@@ -175,31 +175,33 @@ int main(void)
 
 	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
 	 * fe frame (marker + 0x00..0x06), asserted below against M300_CHANMAP_FE. */
-	CHK(m.chanmap_nframes == 49);
+	CHK(m.chanmap_nframes == REAC_CHANMAP_RING_LEN);
 
 	/* ---- byte oracle ---------------------------------------------------- */
 
 	/* 1. the generated channel-map frame byte-matches the captured M-300 block
 	 * (no MAC in the chanmap -> EXACT) + checksum. */
 	build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, 0, planar);
-	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);      /* type + block exact */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CHANMAP_FE, REAC_TYPED_BLOCK_LEN) == 0);      /* type + block exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);          /* Sum[18..49]%256==0 */
-	CHK(f[16] == 0xcd && f[17] == 0xea);             /* cdea */
-	CHK(f[18] == 0x01 && f[19] == 0x03);             /* established sub-state */
-	CHK(f[20] == 0x00 && f[21] == 0x19);             /* BE len 0x0019 */
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);             /* cdea */
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_PAGE_0103);             /* established sub-state */
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_LEN_OFF) == REAC_LEN_SUB_CHANMAP);             /* BE len 0x0019 */
 	CHK(f[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 &&
 	    f[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
 
 	/* 2. cfea = fixed head + OUR MAC + inCh 0x28 + outCh 0x08 + console 0 +
 	 * recomputed checksum (identity fix — NEVER a cloned desk MAC). */
 	build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-	CHK(f[16] == 0xcf && f[17] == 0xea);                 /* cfea */
-	CHK(memcmp(f + 16, M300_CFEA, M300_CFEA_MAC_IDX) == 0); /* head intact */
-	CHK(memcmp(f + 16 + M300_CFEA_MAC_IDX, SRC, 6) == 0); /* OUR MAC embedded */
-	CHK(memcmp(f + 16 + M300_CFEA_MAC_IDX + 6,           /* tail intact (pre-cksum) */
-	           M300_CFEA + M300_CFEA_MAC_IDX + 6, 34 - M300_CFEA_MAC_IDX - 6 - 1) == 0);
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_ANNOUNCE);                 /* cfea */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CFEA, M300_CFEA_MAC_IDX) == 0); /* head intact */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF + M300_CFEA_MAC_IDX, SRC, REAC_ETH_ADDR_BYTES) == 0); /* OUR MAC embedded */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF + M300_CFEA_MAC_IDX + REAC_ETH_ADDR_BYTES,   /* tail intact (pre-cksum) */
+	           M300_CFEA + M300_CFEA_MAC_IDX + REAC_ETH_ADDR_BYTES,
+	           REAC_TYPED_BLOCK_LEN - M300_CFEA_MAC_IDX - REAC_ETH_ADDR_BYTES - 1) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	CHK(f[16 + 17] == 0x28 && f[16 + 18] == 0x08);       /* inCh 40, outCh 8 */
+	CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_TOTAL_SLOTS_OFF] == REAC_MAX_CHANNELS &&
+	    f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);
 
 	/* 2b. reac_master_set_box carries the RECOGNIZED box's INPUT width into the
 	 * cfea announce (deviation fix, byte-cited vs real M-200 goldens): block byte
@@ -214,12 +216,12 @@ int main(void)
 
 		reac_master_set_box(&mw, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);             /* S-1608: 16 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x10);                     /* width byte tracks the box */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S1608_IN);                     /* width byte tracks the box */
 		CHK(reac_ctrl_checksum_verify(f) == 0);       /* re-stamped, still valid */
 
 		reac_master_set_box(&mw, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);              /* S-0808: 8 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* THE WIDTH TRACKS RECOGNITION, THE COUNT TRACKS THE GRANT — two different
@@ -259,8 +261,8 @@ int main(void)
 		CHK(mw.state == REAC_M_GRANTING);
 		reac_master_set_box(&mw, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);              /* recognized mid-grant */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);                       /* the width follows at once */
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x00); /* ungranted: count still 0 */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);                       /* the width follows at once */
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_COUNT_OFF) == 0); /* ungranted: count still 0 */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* AND IT RISES WHEN THE GRANT HAS GONE OUT. Run the ENROLL->grant dwell
@@ -283,16 +285,16 @@ int main(void)
 		}
 		CHK(mw.state == REAC_M_ESTABLISHED);
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);                       /* still the S-0808's width */
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01); /* count rises at the grant */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);                       /* still the S-0808's width */
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_COUNT_OFF) == 1); /* count rises at the grant */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* a warm relink (a DIFFERENT model recognized while established) moves the
 		 * width and keeps the 1 — the count must not fall back to the idle 0. */
 		reac_master_set_box(&mw, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x10);
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01);
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S1608_IN);
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_COUNT_OFF) == 1);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 	}
 
@@ -309,8 +311,8 @@ int main(void)
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	build_and_stamp(&m, f, REAC_M_EMIT_GRANT, 0, planar);
-	CHK(f[16] == 0xcd && f[17] == 0xea && f[18] == 0x04 && f[19] == 0x03);
-	CHK(memcmp(f + 16, m.grant_burst[0], 34) == 0);      /* burst block 0, byte-exact */
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL && REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER);
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, m.grant_burst[0], REAC_TYPED_BLOCK_LEN) == 0);      /* burst block 0, byte-exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* 3b. The grant sweep is GENERATED from OUR allocation for the recognized box,
@@ -350,7 +352,7 @@ int main(void)
 		 * group map and the cfea width byte move together or not at all. The
 		 * previous cut let the allocation be refused and then stamped the bad width
 		 * into the ENROLL and the announce anyway. */
-		uint8_t enroll_before[34];
+		uint8_t enroll_before[REAC_TYPED_BLOCK_LEN];
 		memcpy(enroll_before, mg.enroll_blk, 34);
 		uint8_t cfea_before = mg.cfg.out_channels;
 		reac_master_set_box(&mg, 999, 8, S1608_BASE);                /* nonsense recognition */
@@ -366,7 +368,7 @@ int main(void)
 	 * body of the wrong length or a mis-sliced payload fails here. */
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene, 0) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0, planar);
-	CHK(f[16] == 0xcd && f[17] == 0xea);
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
 	CHK(f[18] == 0x01 && f[19] == 0x01);              /* op-0101              */
 	CHK(f[20] == 0x00 && f[21] == 0x18);              /* 24-byte payload      */
 	CHK(f[23] == 0x22 && f[24] == 0xc8);              /* declares the total   */
@@ -384,9 +386,9 @@ int main(void)
 	/* 5. chanmap window 0 (the fe frame) lists the marker + channels 0x00..0x06. */
 	{
 		const uint8_t *blk = M300_CHANMAP_FE + 2;   /* the 32-byte block */
-		CHK(blk[5] == 0xfe);                     /* slot 0 = section marker */
+		CHK(blk[REAC_SEG_CONT_PAYLOAD_OFF] == REAC_CHANMAP_ID_IDENTITY);                     /* slot 0 = section marker */
 		for (int c = 0; c <= 6; c++) {
-			const uint8_t *t = blk + 5 + (c + 1) * 3;
+			const uint8_t *t = blk + REAC_SEG_CONT_PAYLOAD_OFF + (c + 1) * REAC_CHANMAP_REC_BYTES;
 			CHK(t[0] == (uint8_t)c && t[1] == 0x28 && t[2] == 0x00);
 		}
 	}
@@ -394,17 +396,17 @@ int main(void)
 	/* 5b. the full sweep tiles the whole fabric: every slot 0x00..0x2f appears as a
 	 * channel id in at least one window (#130 — else a box owning it stays mute). */
 	{
-		int seen[0x30] = { 0 };
+		int seen[REAC_SLOT_SPACE] = { 0 };
 		for (int i = 0; i < m.chanmap_nframes; i++) {
 			build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, i, planar);
-			const uint8_t *blk = f + 16 + 2;      /* the 32-byte block */
-			for (int s = 0; s < 8; s++) {
-				uint8_t ch = blk[5 + s * 3];
-				if (ch != 0xfe && ch < 0x30)
+			const uint8_t *blk = f + REAC_CTRL_BLOCK_OFF;      /* the control block */
+			for (int s = 0; s < REAC_CHANMAP_RECS_PER_FRAME; s++) {
+				uint8_t ch = blk[REAC_SEG_CONT_PAYLOAD_OFF + s * REAC_CHANMAP_REC_BYTES];
+				if (ch != REAC_CHANMAP_ID_IDENTITY && ch < REAC_SLOT_SPACE)
 					seen[ch] = 1;
 			}
 		}
-		for (int ch = 0x00; ch <= 0x2f; ch++)
+		for (int ch = 0; ch < REAC_SLOT_SPACE; ch++)
 			CHK(seen[ch] == 1);                   /* whole fabric advertised */
 	}
 
@@ -414,7 +416,7 @@ int main(void)
 	uint8_t s24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	int ns = reac_decode(f, REAC_FRAME_BYTES, &mode, s24);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
-	CHK(f[16] == 0x00 && f[17] == 0x00);        /* FILLER keeps type 00 00 */
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_FILLER);        /* FILLER keeps type 00 00 */
 
 	/* 6. #130 fix 2: the FILLER control block [18:50] is the non-zero descriptor
 	 * a real master stamps there (reac-captures/m{200,300}-s1608-establish-
@@ -427,7 +429,7 @@ int main(void)
 	 * above). */
 	{
 		int all_zero = 1;
-		for (int i = 18; i < 50; i += 2) {
+		for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i += 2) {
 			CHK(f[i] == 0x00);              /* high byte constant, per the captures */
 			CHK(f[i + 1] == m.filler_desc);   /* tracks the current probe */
 			if (f[i] || f[i + 1])
@@ -444,7 +446,7 @@ int main(void)
 	uint16_t cnt = 0;
 	int idx;
 	long n_probe = 0, n_sub01 = 0, n_sub02 = 0, n_ann = 0, n_grant = 0, n_cm = 0;
-	int cm_seen[49] = { 0 };                    /* which sweep windows were emitted */
+	int cm_seen[REAC_CHANMAP_RING_LEN] = { 0 };                    /* which sweep windows were emitted */
 	/* One chanmap window per control cycle (fps*10778/4000 slots ≈ 2.69 s), so
 	 * the 49-window sweep needs 49 cycles ≈ 132 s — soak 140 s (~52 cycles) to
 	 * cover the whole fabric. Burst rhythm asserted slot-exact: within a burst
@@ -501,7 +503,7 @@ int main(void)
 			continue;
 		build_and_stamp(&m, f, e, idx, planar);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
-		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY chunk */
+		CHK(m.filler_desc == f[REAC_CTRL_CKSUM_OFF]);              /* descriptor tracks EVERY chunk */
 		int chunk = m.scene_step - 1;             /* 0-based index into the body */
 		if (chunk == 31) {                        /* carries a MAC: OURS */
 			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
@@ -563,7 +565,7 @@ int main(void)
 			last_grant_slot = i;
 			CHK(idx == grants);                          /* blocks emitted in order */
 			build_and_stamp(&m, f, e, idx, planar);
-			CHK(memcmp(f + 16, m.grant_burst[idx], 34) == 0);  /* burst block, byte-exact */
+			CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, m.grant_burst[idx], REAC_TYPED_BLOCK_LEN) == 0);  /* burst block, byte-exact */
 			CHK(reac_ctrl_checksum_verify(f) == 0);
 			grants++;
 		}
@@ -831,7 +833,7 @@ int main(void)
 				continue;
 			emitted_grants++;
 			build_and_stamp(&mb, f, e, gi, planar);
-			CHK(f[16] == 0xcd && f[17] == 0xea);    /* a real cdea grant frame */
+			CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);    /* a real cdea grant frame */
 			CHK(reac_ctrl_checksum_verify(f) == 0);
 			if (f[32] == 0x12 && f[33] == 0x12 && f[34] == 0x01 && f[35] == 0x01) {
 				ga_records++;

@@ -64,10 +64,10 @@ static int box_bye(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 	memcpy(f, BCAST, 6);
 	memcpy(f + 6, src, 6);
 	f[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; f[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
-	f[16] = 0xcd; f[17] = 0xea;
-	uint8_t *block = f + 18;
-	block[0] = 0x01;   /* REAC_LINK_CTRL */
-	block[1] = 0x03;   /* REAC_SEG_SINGLE */
+	f[REAC_TYPED_BLOCK_OFF] = REAC_TYPE_CONTROL >> 8; f[REAC_TYPED_BLOCK_OFF + 1] = REAC_TYPE_CONTROL & 0xff;
+	uint8_t *block = f + REAC_CTRL_BLOCK_OFF;
+	block[REAC_HDR_LINK_OFF] = REAC_LINK_CONTROL;
+	block[REAC_HDR_SEG_OFF] = REAC_SEG_SINGLE;
 	block[4] = 0x00;   /* REAC_OP_BULK */
 	reac_ctrl_checksum_apply(f);
 	return reac_hunt_observe(h, f, sizeof f, now, NULL);

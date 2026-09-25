@@ -180,7 +180,7 @@ int main(void)
 	 * left the wire — worse than no name, since the console would keep a patch
 	 * label for equipment nobody can address. */
 	bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, REAC_BOX_S1608_IN);
-	bf[22] = 0x00;                  /* selector 0x00 = the box's BYE */
+	bf[REAC_CTRL_BLOCK_OFF + REAC_SUB_0103_OFF] = 0x00;   /* selector 0x00 = the box's BYE */
 	reac_ctrl_checksum_apply(bf);   /* a corrupt block is not a BYE */
 	reac_pacer_rx_ingest(&p, bf, bn);
 	CHK(p.master.state == REAC_M_PROBING);
