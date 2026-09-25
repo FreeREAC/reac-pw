@@ -41,6 +41,10 @@ for t in unshare nsenter ip pipewire pw-cli pw-dump python3; do
 done
 unshare -r -n -m -p -f --mount-proc --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net+mount+pid namespaces unavailable"; exit $SKIP; }
+# THE KERNEL'S LINK TYPES ARE PROBED BY NAME (audit 2026-09-24, H3): a kernel without 8021q
+# is a machine this test cannot run on, and says so here, so a later `|| exit 90` is a FAIL.
+unshare -r -n sh -c 'ip link add p0 type veth peer name p1 && ip link add link p0 name p0.9 type vlan id 9' 2>/dev/null || {
+	echo "SKIP: this kernel cannot create a VLAN link in a namespace (no 8021q)"; exit $SKIP; }
 
 OUT=$(unshare -r -n -m -p -f --mount-proc --map-root-user bash -s -- "$BIN" <<'INNER'
 set -u
@@ -144,9 +148,12 @@ INNER
 )
 rc=$?
 echo "$OUT" | sed 's/^/  /'
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$OUT" | grep -qa 'daemon-died' && { echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && { echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+[ $rc -eq 0 ] || { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 echo "$OUT" | grep -qa '^SKIP:' && { echo "$OUT" | grep -a '^SKIP:'; exit $SKIP; }
-echo "$OUT" | grep -qa '^daemon-died' && { echo "FAIL: the daemon died at start"; exit 1; }
 
 fail() { echo "FAIL: $1"; exit 1; }
 # `before`/`after` are: <n> <named> <top> <i:name ...>
