@@ -36,6 +36,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* THE BASE A BOX ANNOUNCES, not one derived from its width. These are the
  * straps the real chassis carry in their config announce (block[7] * 0x10,
@@ -75,7 +76,7 @@ static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
  * tracks the rotating probe, so the test compares against m.filler_desc rather
  * than any fixed byte — a frozen descriptor is exactly the bug we fixed. */
 
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 /* Build a base downstream FILLER (so the audio + tail are present), then let the
  * master stamp the control block, and return the frame in `out`. */
@@ -408,7 +409,7 @@ int main(void)
 	}
 
 	/* control stamping is non-destructive: a FILLER frame's audio round-trips. */
-	const struct reac_mode mode = { 48000, 40, 12 };
+	const struct reac_mode mode = { REAC_SAMPLE_RATE_48K, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT };
 	build_and_stamp(&m, f, REAC_M_EMIT_FILLER, 0, planar);
 	uint8_t s24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	int ns = reac_decode(f, REAC_FRAME_BYTES, &mode, s24);
@@ -717,13 +718,13 @@ int main(void)
 		 *
 		 * `clamped` is retained in the signature and is always 0 — kept so a
 		 * real, demonstrated rule would have one place to live. */
-		CHK(reac_mixer_resolve_rate(m200, 0, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200, 48000, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200, 96000, &clamped) == 96000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m300, 96000, &clamped) == 96000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 96000, &clamped) == 96000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 48000, &clamped) == 48000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, 0, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, REAC_SAMPLE_RATE_48K, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, REAC_SAMPLE_RATE_96K, &clamped) == REAC_SAMPLE_RATE_96K && !clamped);
+		CHK(reac_mixer_resolve_rate(m300, REAC_SAMPLE_RATE_96K, &clamped) == REAC_SAMPLE_RATE_96K && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_96K, &clamped) == REAC_SAMPLE_RATE_96K && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_48K, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
 
 		/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz (operator, 2026-08-21).
 		 * A Roland desk offers exactly these and drives the segment at the one
@@ -731,19 +732,19 @@ int main(void)
 		 * need RE-PACING between the rig clock and the wire, which reac-pw cannot
 		 * do. Refuse it and SAY SO via `clamped`, rather than putting a cadence on
 		 * the wire no box can follow and calling it configuration. */
-		CHK(reac_mixer_resolve_rate(m200,  44100, &clamped) == 44100 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 44100, &clamped) == 44100 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200,  88200, &clamped) == 48000 && clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 32000, &clamped) == 48000 && clamped);
-		CHK(reac_mixer_resolve_rate(m300,  1,     &clamped) == 48000 && clamped);
+		CHK(reac_mixer_resolve_rate(m200,  REAC_SAMPLE_RATE_44K1, &clamped) == REAC_SAMPLE_RATE_44K1 && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_44K1, &clamped) == REAC_SAMPLE_RATE_44K1 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200,  88200, &clamped) == REAC_SAMPLE_RATE_48K && clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 32000, &clamped) == REAC_SAMPLE_RATE_48K && clamped);
+		CHK(reac_mixer_resolve_rate(m300,  1,     &clamped) == REAC_SAMPLE_RATE_48K && clamped);
 
 		/* fps = rate/REAC_SAMPLES_PER_PKT (reac_sink_node.c) for each resolved
 		 * rate; the pacer's per-fps period (reac_pacer_period_ns) is already
 		 * covered by test_reac_pacer.c — pin the rate->fps mapping here. */
 		int fps_m200_48k  = reac_mixer_resolve_rate(m200, 0, NULL) / REAC_SAMPLES_PER_PKT;
-		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, 96000, NULL) / REAC_SAMPLES_PER_PKT;
-		CHK(fps_m200_48k == 4000);
-		CHK(fps_m5000_96k == 8000);
+		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_96K, NULL) / REAC_SAMPLES_PER_PKT;
+		CHK(fps_m200_48k == REAC_PKT_RATE_48K);
+		CHK(fps_m5000_96k == REAC_PKT_RATE_96K);
 
 		/* frame SHAPE is identical for both: reac_downstream_build takes no mixer/rate
 		 * input at all, so the emitted frame is REAC_FRAME_BYTES regardless. */
@@ -760,7 +761,7 @@ int main(void)
 		/* any source MAC does — the cadence math under test is MAC-independent */
 		reac_master_init(&mm200, src, NULL, fps_m200_48k);
 		reac_master_init(&mm5000, src, NULL, fps_m5000_96k);
-		CHK(mm200.fps == 4000 && mm5000.fps == 8000);
+		CHK(mm200.fps == REAC_PKT_RATE_48K && mm5000.fps == REAC_PKT_RATE_96K);
 		CHK(mm5000.cycle_len == mm200.cycle_len * 2);      /* fps doubled -> cycle doubled */
 		CHK(mm5000.chanmap_off == mm200.chanmap_off * 2);
 

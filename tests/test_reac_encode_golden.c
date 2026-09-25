@@ -45,6 +45,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* Digests of the PRE-MOVE encoder's output over the corpora below (reac-pw at
  * c86a2d6, libreac at 498f411). Reproducing them needs that old code, so a
@@ -84,7 +85,7 @@ static void absorb_len(size_t len)
 }
 
 static const float SCALES[4] = { 0.25f, 1.0f, 4.0f, 0.0000001f };
-static const int   NS[5]     = { 0, 1, 6, 12, 13 };
+static const int   NS[5]     = { 0, 1, 6, REAC_SAMPLES_PER_PKT, REAC_SAMPLES_PER_PKT + 1 };
 static const uint16_t CNT[7] = { 0x0000, 0x0001, 0x1234, 0x7fff, 0x8000, 0xfffe, 0xffff };
 
 static float chbuf[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];

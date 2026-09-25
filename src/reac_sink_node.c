@@ -34,6 +34,7 @@
 #include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
 #include "reac_headamp_state.h"  /* the head-amp door's READ side: asserted + refusal */
 #include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
+#include "reac_facts_pw.h"       /* the protocol's numbers, from their one declaration */
 #include "reac_sink_format.h"    /* the Format pod + renegotiate decision (#4.3) */
 #include <reac/reac_role.h>           /* enum reac_role — this node is MASTER-only */
 #include "reac_role_cfg.h"       /* live reac.cfg.role parse + decision core */
@@ -581,7 +582,7 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_params),
 		SPA_PROP_INFO_description, SPA_POD_String(
 			"REAC head-amp: \"reac.headamp.<ch>.{phantom,pad,sens}\" = value; "
-			"REAC rate: \"reac.cfg.rate\" = 44100|48000|96000; "
+			"REAC rate: \"reac.cfg.rate\" = " REACPW_RATES_BAR "; "
 			"REAC role: \"reac.cfg.role\" = 0 (master) | 1 (slave)"),
 		SPA_PROP_INFO_type,        SPA_POD_String(
 			"reac.headamp.<ch>.<param> | reac.cfg.rate | reac.cfg.role"));

@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -54,13 +55,13 @@ static struct reac_ctrl_parsed master_frame(enum reac_ctrl_kind k, const uint8_t
 int main(void)
 {
 	struct reac_slave_cfg cfg = { .ifname = "lo", .box_channels = 16,
-	                              .sample_rate = 96000, .src_mac = NULL };
+	                              .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = NULL };
 	struct reac_slave s;
 	struct reac_slave_decision d;
 
 	/* The decision core needs no socket; init the FSM half directly. */
 	reac_slave_fsm_init(&s, &cfg);
-	CHK(s.box_channels == 16);
+	CHK(s.box_channels == REAC_BOX_S1608_IN);
 	CHK(s.fsm.state == FSM_PHY_DOWN);
 	CHK(!atomic_load(&s.established));
 
@@ -139,7 +140,7 @@ int main(void)
 	/* the ~1/s box heartbeat is flagged in ESTABLISHED (a master HB re-arms each
 	 * round so we never drop while checking the heartbeat cadence). */
 	int hb_seen = 0;
-	for (int i = 0; i < 9000; i++) {   /* > the FSM's internal HEARTBEAT_PERIOD (8000) */
+	for (int i = 0; i < REAC_PKT_RATE_96K + REAC_PKT_RATE_96K / 8; i++) {   /* > the FSM's HEARTBEAT_PERIOD, 1 s of frames */
 		reac_slave_step_rx(&s, &hb);                  /* re-arm */
 		d = reac_slave_step_tick(&s);
 		if (d.emit == REAC_SLAVE_EMIT_UPSTREAM_AUDIO && d.with_heartbeat)

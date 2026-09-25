@@ -43,6 +43,7 @@
 
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static int fails;
 #define CHK(cond) do { \
@@ -120,7 +121,7 @@ int main(void)
 
 	/* ---- the join: the receive-only accept mode main.c sets for a box master ---- */
 	struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-	                           .forced_rate = 96000, .pcap_realtime = 0,
+	                           .forced_rate = REAC_SAMPLE_RATE_96K, .pcap_realtime = 0,
 	                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 	struct reac_ring ring;
 	struct reac_rx rx;

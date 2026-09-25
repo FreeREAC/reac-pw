@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #include "reac_s4000_golden.inc"
 
@@ -84,7 +85,7 @@ int main(void)
 	/* Before ANY control frame validates a peer, a FILLER is accepted exactly as the
 	 * unlocked classifier already accepted it — the lock only closes the window AFTER a
 	 * real peer is known. */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x20, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x20, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(n > 0);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);
@@ -97,14 +98,14 @@ int main(void)
 	CHK(memcmp(lock.mac, BOX, 6) == 0);
 
 	/* Now a FILLER from the SAME box still passes. */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x22, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, BOX, 0x22, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == 0);
 	CHK(memcmp(s.mac, BOX, 6) == 0);
 
 	/* A FILLER claiming to be a DIFFERENT box on the SAME (now-locked) segment is refused —
 	 * this is the sabotage target: reverting classify_core's lock check must turn this red. */
 	static const uint8_t IMPOSTOR[6] = { 0x00, 0x40, 0xab, 0xbe, 0xef, 0x01 };
-	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x23, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x23, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == -1);
 	/* The SAME frame is real evidence through the unlocked classifier — the refusal is the
 	 * lock's, not the frame's. */
@@ -120,14 +121,14 @@ int main(void)
 
 	/* And the impostor's FILLER is STILL refused after that — proving a checksum-verified
 	 * sighting from a new MAC does not quietly relax the lock. */
-	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x25, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x25, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock, f, n, OURS, &s) == -1);
 
 	/* A fresh lock (a segment drop/reopen) starts unlocked again, so the box's own FILLER
 	 * is not permanently orphaned by a stale lock from a departed peer. */
 	struct reac_disco_peer_lock lock2;
 	reac_disco_peer_lock_init(&lock2);
-	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x26, 16, NULL, 12);
+	n = reac_ctrl_build_upstream_filler(f, MASTER, IMPOSTOR, 0x26, 16, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_disco_classify_on_segment(&lock2, f, n, OURS, &s) == 0);
 
 	/* ---- (b) role from the signature, not the kind. */
@@ -169,7 +170,7 @@ int main(void)
 
 	/* A broadcast FILLER is AMBIGUOUS: a box's presence-flood and a master's downstream
 	 * audio are both type 0000 broadcast. Neither guess is honest. */
-	n = reac_ctrl_build_flood_filler(f, BCAST, BOX, 0x13, 16, NULL, 12);   /* NULL = silent */
+	n = reac_ctrl_build_flood_filler(f, BCAST, BOX, 0x13, 16, NULL, REAC_SAMPLES_PER_PKT);   /* NULL = silent */
 	CHK(n > 0);
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_UNKNOWN);
@@ -264,8 +265,8 @@ int main(void)
 	/* An established box emits FILLER at 8000 fps. Simulate one second of it: exactly
 	 * ONE refresh may pass, or the 128-slot ring evicts the JOIN/BYE transcript. */
 	int pushes = 0;
-	for (int i = 1; i <= 8000; i++) {
-		uint64_t t_ns = S_(1) + (uint64_t)i * 125000ULL;   /* 8000 fps */
+	for (int i = 1; i <= REAC_PKT_RATE_96K; i++) {
+		uint64_t t_ns = S_(1) + (uint64_t)i * (1000000000ULL / REAC_PKT_RATE_96K);   /* one 96 kHz slot */
 		if (reac_disco_gate_should_push(&g, &live, t_ns))
 			pushes++;
 	}

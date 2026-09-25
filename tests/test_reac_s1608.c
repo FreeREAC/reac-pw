@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -92,7 +93,7 @@ static int test_probe_rotation(void)
 	uint8_t f[REAC_FRAME_BYTES];
 	struct reac_console_cfg idle = REAC_CONSOLE_CFG_IDLE;
 	struct reac_master m;
-	reac_master_init(&m, OUR_MAC, &idle, 8000);
+	reac_master_init(&m, OUR_MAC, &idle, REAC_PKT_RATE_96K);
 
 	int prev_step = 0;
 	int np = 0, fillers_checked = 0;
@@ -150,7 +151,7 @@ int main(void)
 
 	/* --- with OUR distinct MAC: chanmap EXACT, cfea EXACT except MAC+cksum --- */
 	struct reac_master m;
-	reac_master_init(&m, OUR_MAC, &idle, 8000);
+	reac_master_init(&m, OUR_MAC, &idle, REAC_PKT_RATE_96K);
 	CHK(m.chanmap_nframes == GOLD_CHANMAP_WINDOWS);   /* full 49-window fabric sweep */
 
 	/* CHANMAP: no MAC -> byte-EXACT vs the capture. Window 0 is the fe frame
@@ -183,7 +184,7 @@ int main(void)
 
 	/* --- with the M-300 MAC as OUR src: cfea is byte-EXACT incl. checksum ---- */
 	struct reac_master m300;
-	reac_master_init(&m300, M300_MAC, &idle, 8000);
+	reac_master_init(&m300, M300_MAC, &idle, REAC_PKT_RATE_96K);
 	stamp(&m300, f, REAC_M_EMIT_ANNOUNCE, 0);
 	CHK(memcmp(f + 16, M300_CFEA, 34) == 0);   /* …00 40 ab c9 d8 5b … 28 08 … d4 */
 	CHK(reac_ctrl_checksum_verify(f) == 0);

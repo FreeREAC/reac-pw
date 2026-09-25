@@ -27,11 +27,12 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 /* Slot s of a chanmap block: 3 bytes at [7 + 3s]. */
 #define SLOT(blk, s) ((blk) + 7 + (s) * 3)

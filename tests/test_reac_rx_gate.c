@@ -34,6 +34,7 @@
 #include <reac/transport/reac_rx.h>
 #include <reac/reac_braid.h>
 #include <reac/reac_upstream.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #include "upstream_fixtures.inc"
 
@@ -144,7 +145,7 @@ int main(void)
 	/* ---- DOWNSTREAM accept: only the 1492 B broadcast feeds the ring ---- */
 	{
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_DOWNSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -161,10 +162,10 @@ int main(void)
 		 * PARTNER (ch 1, the other half of the pair) is silent — the pair is
 		 * where a plain-LE read of a braided frame goes wrong, so this is the
 		 * layout pin, not just a liveness check */
-		float ch[REAC_MAX_CHANNELS][12];
+		float ch[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
 		float *dst[REAC_MAX_CHANNELS];
 		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
-		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
+		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
 		CHK(fabsf(ch[0][0] - 0.5f) < 1e-6f);
 		CHK(ch[1][0] == 0.0f);
 		reac_rx_close(&rx);
@@ -180,7 +181,7 @@ int main(void)
 	 * master, so it can say so — and then box 1 speaking first must not win. */
 	{
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -213,7 +214,7 @@ int main(void)
 	/* ---- UPSTREAM accept: only box 1's return feeds the ring ---- */
 	{
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -228,14 +229,14 @@ int main(void)
 		CHK(memcmp(rx.up_src, UP16 + 6, 6) == 0);
 
 		/* ring channels 0..15 carry box 1's braided audio; 16..39 are silent */
-		float ch[REAC_MAX_CHANNELS][12];
+		float ch[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
 		float *dst[REAC_MAX_CHANNELS];
 		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
-		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
+		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
 		int bad = 0;
 		for (int c = 0; c < 16; c++)
-			for (int s = 0; s < 12; s++) {
-				const uint8_t *p = &pcm[(size_t)(c * 12 + s) * 3];
+			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
+				const uint8_t *p = &pcm[(size_t)(c * REAC_SAMPLES_PER_PKT + s) * 3];
 				int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 				                      ((uint32_t)p[2] << 16));
 				if (v & 0x00800000) v |= ~0x00FFFFFF;
@@ -244,7 +245,7 @@ int main(void)
 			}
 		CHK(bad == 0);
 		for (int c = 16; c < REAC_MAX_CHANNELS; c++)
-			for (int s = 0; s < 12; s++)
+			for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++)
 				if (ch[c][s] != 0.0f)
 					bad++;
 		CHK(bad == 0);
@@ -270,7 +271,7 @@ int main(void)
 		fclose(of);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = opath,
-		                           .forced_rate = 96000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_96K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_DOWNSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -281,10 +282,10 @@ int main(void)
 
 		/* the embedded 1492 B frame decoded: channel 0 still carries +0.5 and
 		 * its braid partner is still silent — the 2 extra bytes reached no lane */
-		float ch[REAC_MAX_CHANNELS][12];
+		float ch[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
 		float *dst[REAC_MAX_CHANNELS];
 		for (int c = 0; c < REAC_MAX_CHANNELS; c++) dst[c] = ch[c];
-		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, 12) == 12);
+		CHK(reac_ring_read_planar(&ring, dst, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT) == REAC_SAMPLES_PER_PKT);
 		CHK(fabsf(ch[0][0] - 0.5f) < 1e-6f);
 		CHK(ch[1][0] == 0.0f);
 		reac_rx_close(&rx);

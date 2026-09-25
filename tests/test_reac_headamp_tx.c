@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -192,7 +193,7 @@ int main(void)
 		struct reac_headamp_tx ship;
 		reac_headamp_tx_init(&ship);
 		reac_headamp_tx_set_resweep(&ship,
-			(uint32_t)8000 * REAC_HEADAMP_RESWEEP_SECONDS);
+			(uint32_t)REAC_PKT_RATE_96K * REAC_HEADAMP_RESWEEP_SECONDS);
 		CHK(ship.resweep_period == 0);
 		CHK(reac_headamp_tx_set(&ship, 2, REAC_HEADAMP_PHANTOM, 1) == 0);
 		reac_headamp_tx_arm_scene(&ship, 0x00, 8);

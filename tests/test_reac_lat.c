@@ -14,18 +14,18 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 int main(void)
 {
-	const int rate = 48000;
+	const int rate = REAC_SAMPLE_RATE_48K;
 
 	/* 1. pure math. staging (1 frame) + depth, each REAC_SAMPLES_PER_PKT samples. */
-	CHK(reac_lat_ns(0.0f, rate) == (int64_t)REAC_SAMPLES_PER_PKT * 1000000000LL / rate);
-	/* depth 75 (the live sawtooth mean) -> (1+75)*12 = 912 samples = 19.0 ms. */
-	CHK(reac_lat_ns(75.0f, rate) == (int64_t)(76 * 12) * 1000000000LL / rate);
-	CHK(reac_lat_ns(75.0f, rate) == 19000000LL);
+	CHK(reac_lat_ns(0.0f, rate) == ((int64_t)REAC_SAMPLES_PER_PKT * 1000000000LL + rate / 2) / rate);
+	/* depth 75 (the live sawtooth mean) -> (1+75)*12 = 912 samples = 19.0 ms today. */
+	CHK(reac_lat_ns(75.0f, rate) == ((int64_t)(76 * REAC_SAMPLES_PER_PKT) * 1000000000LL + rate / 2) / rate);
 	CHK(reac_lat_ns(10.0f, 0) == 0);              /* guard: no rate */
 
 	/* EMA seeds to the first sample, then converges toward the input mean. */

@@ -20,11 +20,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 /* 96 kHz downstream = 8000 fps. */
-#define NOMINAL_NS 125000L
+#define NOMINAL_NS (1000000000L / REAC_PKT_RATE_96K)
 
 int main(void)
 {

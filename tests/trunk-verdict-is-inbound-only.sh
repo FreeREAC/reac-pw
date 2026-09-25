@@ -52,6 +52,7 @@
 # Isolation is part of the test (tests/hearing-finds-a-segment.sh's header has the
 # reasoning). Skips (77) where the namespaces, iproute2 or PipeWire are unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -130,7 +131,7 @@ peer ip link set tpeer0.21 up
 # namespace, at the top rate the emulator paces; and one real box on M behind the trunk.
 # All four run BEFORE the daemon, so its very first tap open happens under the traffic.
 for v in 11 12 13; do
-	"$FAKE" noise0.$v 00:40:ab:c4:$v:21 8 8000 >"$RT/noise$v.log" 2>&1 &
+	"$FAKE" noise0.$v 00:40:ab:c4:$v:21 8 "$FACT_PKT_RATE_96K" >"$RT/noise$v.log" 2>&1 &
 done
 $in_peer "$FAKE" tpeer0.21 00:40:ab:c4:21:21 8 2000 >"$RT/tag21.log" 2>&1 &
 sleep 1

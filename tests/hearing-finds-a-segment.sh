@@ -26,6 +26,7 @@
 # real desk's nodes. Every daemon it starts is killed on every exit path, for the same
 # reason. Skips (77) where the namespace, iproute2 or PipeWire is unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -269,7 +270,7 @@ up_pair hear0 desk0
 # (reac_disco_classify: a 0x8819 frame whose control block verifies, or a filler -- never a
 # packet count, and since 2026-09-03 never a MAC's vendor prefix either). The source
 # address below is a real Roland one only because it is what this rig's captures carry.
-$in_peer "$BIN" --live desk0 --tx desk0 --mixer m5000 --rate 96000 --name desk \
+$in_peer "$BIN" --live desk0 --tx desk0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" --name desk \
        --src-mac 00:40:ab:de:5c:01 >"$PEER" 2>&1 &
 PPID2=$!
 sleep 3
@@ -566,7 +567,7 @@ OURMAC=$(awk '{print substr($1, 1, 12), $2}' "$RT/cold1.cnt" | sort -k2 -n | tai
 [ "$(seen x "$RT/cold1.cnt" "$OURMAC-b")" -gt 500 ] || {
 	echo "FAIL: cold1 was served as master and is not BROADCASTING a downstream"
 	cat "$RT/cold1.cnt"; tail -20 "$LOG"; exit 1; }
-$in_peer "$BIN" --live kdesk1 --tx kdesk1 --mixer m5000 --rate 96000 --name kdesk \
+$in_peer "$BIN" --live kdesk1 --tx kdesk1 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" --name kdesk \
        --src-mac 00:40:ab:de:5c:02 >"$PEER" 2>&1 &
 KDESKPID=$!
 wait_for "\[cold1\] a desk masters this segment .* yielding the master role" 25 || {
@@ -718,7 +719,7 @@ esac
 	echo "      (this is the 2026-09-08 rig defect: 'locked to graph clock (api.alsa.0)'"
 	echo "      in the journal beside 'free-run' in the row)"; exit 1; }
 # THE DESK IS SWITCHED ON, on the wire we are mastering with a box enrolled on it.
-$in_peer "$BIN" --live vbox0 --tx vbox0 --mixer m5000 --rate 96000 --name vdesk \
+$in_peer "$BIN" --live vbox0 --tx vbox0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" --name vdesk \
        --src-mac $VDESKMAC >"$RT/venue-desk.log" 2>&1 &
 VDESKPID=$!
 # WITHIN ONE ANNOUNCE CADENCE. A desk announces itself once a second; the hunt reads the

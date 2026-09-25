@@ -16,6 +16,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdatomic.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 /* relative tolerance for float gain comparisons */
@@ -39,7 +40,7 @@ static struct reac_ctrl_parsed ha_rec(uint8_t ch, uint8_t param, uint8_t value)
 static void slave16(struct reac_slave *s)
 {
 	struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = 16,
-	                              .sample_rate = 48000, .src_mac = SRC };
+	                              .sample_rate = REAC_SAMPLE_RATE_48K, .src_mac = SRC };
 	reac_slave_fsm_init(s, &cfg);
 }
 
@@ -117,7 +118,7 @@ int main(void)
 	{
 		struct reac_slave s;
 		struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = 8,
-		                              .sample_rate = 48000, .src_mac = SRC };
+		                              .sample_rate = REAC_SAMPLE_RATE_48K, .src_mac = SRC };
 		reac_slave_fsm_init(&s, &cfg);
 		CHK(s.ch_base == 0x00);
 		struct reac_ctrl_parsed p;

@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { \
 	fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -113,10 +114,10 @@ int main(void)
 	struct reac_pacer p;
 	memset(&p, 0, sizeof p);
 	p.handle = NULL;
-	p.fps = 8000;
+	p.fps = REAC_PKT_RATE_96K;
 	memcpy(p.src, OUR, 6);
 	CHK(reac_frame_ring_init(&p.ring, 8, 2048) == 0);
-	reac_master_init(&p.master, OUR, NULL, 8000);
+	reac_master_init(&p.master, OUR, NULL, REAC_PKT_RATE_96K);
 
 	uint8_t frame[REAC_FRAME_BYTES];
 	struct fake_props f;
