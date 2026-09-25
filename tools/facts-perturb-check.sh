@@ -70,7 +70,8 @@ import json, sys
 for line in open(sys.argv[1]):
     r = json.loads(line)
     if r["result"] not in ("OK", "SKIP", "EXPECTEDFAIL"):
-        print(r["name"].split(" / ")[-1], sys.argv[2])
+        # "reac-pw / reac_tx" (meson <1.8) or "reac-pw:reac_tx" (newer): the bare test name
+        print(r["name"].split(" / ")[-1].split(":")[-1], sys.argv[2])
 PY
 	echo "seed $seed: $(awk -v s="$seed" '$2 == s' "$FAILED" | wc -l) test(s) red against the perturbed set"
 done
