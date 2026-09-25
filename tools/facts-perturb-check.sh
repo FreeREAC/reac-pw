@@ -36,6 +36,9 @@ verdict() { echo "facts-perturb-check: $1"; exit "$2"; }
 
 [ -f "$DEBT" ] || { echo "no $DEBT"; verdict FAIL 1; }
 mkdir -p "$WORK"
+# CANONICAL, because meson compares paths as strings: "$HERE/../x" starts with the source
+# root and is refused as an absolute include directory inside it, though it is not.
+WORK=$(cd "$WORK" && pwd -P)
 FAILED="$WORK/failed.txt"; : > "$FAILED"
 
 for seed in "${SEEDS[@]}"; do
@@ -46,8 +49,9 @@ for seed in "${SEEDS[@]}"; do
 	if [ -f "$bld/build.ninja" ]; then
 		meson configure "$bld" -Dfacts_dir="$dir" >/dev/null || verdict FAIL 1
 	else
-		meson setup "$bld" "$HERE" -Dfacts_dir="$dir" >/dev/null \
-			|| { echo "seed $seed: meson setup failed"; verdict FAIL 1; }
+		meson setup "$bld" "$HERE" -Dfacts_dir="$dir" >"$WORK/setup-$seed.log" 2>&1 \
+			|| { grep -E 'ERROR' "$WORK/setup-$seed.log" | head -5
+			     echo "seed $seed: meson setup failed"; verdict FAIL 1; }
 	fi
 	# A PERTURBED BUILD MUST BUILD. A literal array bound or a static_assert that only
 	# holds for the real numbers is a copy too, and it cannot be listed as debt.
