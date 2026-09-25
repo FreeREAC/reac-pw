@@ -82,16 +82,7 @@ static void build_identity_reply(uint8_t *fr, uint16_t addr_lo,
 	memcpy(fr + 6, BOX, 6);
 	fr[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; fr[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	fr[REAC_TYPED_BLOCK_OFF] = REAC_TYPE_CONTROL >> 8; fr[REAC_TYPED_BLOCK_OFF + 1] = REAC_TYPE_CONTROL & 0xff;
-	uint8_t *b = fr + REAC_CTRL_BLOCK_OFF;
-	unsigned sx = (unsigned)(13 + n);
-	b[REAC_HDR_LINK_OFF] = REAC_LINK_RECORD; b[REAC_HDR_SEG_OFF] = REAC_SEG_SINGLE; b[3] = (uint8_t)(sx + 5);
-	b[5] = 0x02; b[7] = 0xfe; b[8] = (uint8_t)sx;
-	b[9] = 0xf0; b[10] = 0x41; b[11] = 0x0a; b[14] = 0x12; b[15] = 0x12;
-	b[16] = 0x05; b[17] = 0x00;
-	b[18] = (uint8_t)(addr_lo >> 8); b[19] = (uint8_t)(addr_lo & 0xff);
-	for (size_t i = 0; i < n; i++)
-		b[20 + i] = pl[i];
-	b[20 + n] = 0x7f; b[21 + n] = 0xf7;
+	reacpw_dt1_record(fr + REAC_CTRL_BLOCK_OFF, REAC_DT1_TAG_IDENTITY, addr_lo, pl, n);
 }
 
 /* Stamp the badge exactly the way the sink stamps it: the pacer's snapshot
@@ -106,10 +97,10 @@ static void publish(struct reac_pacer *p, struct fake_props *f)
 int main(void)
 {
 	/* The S-1608's two replies, and the S-4000S-3208's, as captured. */
-	static const uint8_t FW_S1608[4]   = { 0x02, 0x02, 0x00, 0x00 };  /* 2.200 */
-	static const uint8_t VER_S1608[8]  = { 0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x02 };
-	static const uint8_t FW_S4000S[4]  = { 0x02, 0x05, 0x00, 0x00 };  /* 2.500 */
-	static const uint8_t VER_S4000S[8] = { 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 };
+	static const uint8_t FW_S1608[REAC_IDENTITY_FIRMWARE_BYTES]   = { 0x02, 0x02, 0x00, 0x00 };  /* 2.200 */
+	static const uint8_t VER_S1608[REAC_IDENTITY_REAC_VERSION_BYTES]  = { 0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x02 };
+	static const uint8_t FW_S4000S[REAC_IDENTITY_FIRMWARE_BYTES]  = { 0x02, 0x05, 0x00, 0x00 };  /* 2.500 */
+	static const uint8_t VER_S4000S[REAC_IDENTITY_REAC_VERSION_BYTES] = { 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02 };
 
 	struct reac_pacer p;
 	memset(&p, 0, sizeof p);
@@ -134,9 +125,9 @@ int main(void)
 	/* ---- 2. The S-1608 answers both addresses. The key a consumer matches is
 	 * spelled out here, not taken from the macro: a rename must break a test
 	 * rather than a rig. */
-	build_identity_reply(frame, REAC_IDENTITY_ADDR_FIRMWARE_VERSION, FW_S1608, 4);
+	build_identity_reply(frame, REAC_IDENTITY_ADDR_FIRMWARE_VERSION, FW_S1608, sizeof FW_S1608);
 	reac_pacer_rx_ingest(&p, frame, REAC_FRAME_BYTES);
-	build_identity_reply(frame, REAC_IDENTITY_ADDR_REAC_VERSION, VER_S1608, 8);
+	build_identity_reply(frame, REAC_IDENTITY_ADDR_REAC_VERSION, VER_S1608, sizeof VER_S1608);
 	reac_pacer_rx_ingest(&p, frame, REAC_FRAME_BYTES);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, "reac.box.reac_version"), "2.302") == 0);
@@ -149,9 +140,9 @@ int main(void)
 
 	/* ---- 3. An S-4000S-3208 on the same segment: a different REAC version off
 	 * the same address, and every key re-stamped over the previous box's. */
-	build_identity_reply(frame, REAC_IDENTITY_ADDR_FIRMWARE_VERSION, FW_S4000S, 4);
+	build_identity_reply(frame, REAC_IDENTITY_ADDR_FIRMWARE_VERSION, FW_S4000S, sizeof FW_S4000S);
 	reac_pacer_rx_ingest(&p, frame, REAC_FRAME_BYTES);
-	build_identity_reply(frame, REAC_IDENTITY_ADDR_REAC_VERSION, VER_S4000S, 8);
+	build_identity_reply(frame, REAC_IDENTITY_ADDR_REAC_VERSION, VER_S4000S, sizeof VER_S4000S);
 	reac_pacer_rx_ingest(&p, frame, REAC_FRAME_BYTES);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, "reac.box.reac_version"), "2.102") == 0);

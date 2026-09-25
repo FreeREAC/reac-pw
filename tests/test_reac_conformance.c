@@ -205,13 +205,15 @@ int main(void)
 			int n = reac_grant_build_sweep(sw, REAC_GRANT_SWEEP_MAX, &a, &tx);
 			CHK(n == (int)(sizeof GOLD_S1608_SWEEP / sizeof GOLD_S1608_SWEEP[0]));
 			for (int i = 0; i < n; i++)
-				CHK(memcmp(sw[i], GOLD_S1608_SWEEP[i], 34) == 0);
+				CHK(memcmp(sw[i], GOLD_S1608_SWEEP[i], REAC_TYPED_BLOCK_LEN) == 0);
 
 			/* HEAD_ACK (marker 12 12, tag 01 00) / HEAD_MARK (marker 12 12, tag
 			 * 00 00) bracket the first channel's group A — console-independent
 			 * fixed frames (reac_grant.c's GRANT_HEAD_ACK / GRANT_HEAD_MARK). */
-			CHK(sw[0][16] == 0x12 && sw[0][17] == 0x12 && sw[0][18] == 0x01 && sw[0][19] == 0x00);
-			CHK(sw[4][16] == 0x12 && sw[4][17] == 0x12 && sw[4][18] == 0x00 && sw[4][19] == 0x00);
+			CHK(sw[0][REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && sw[0][REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+			    REACPW_BE16(sw[0] + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_JOIN_GRANT);
+			CHK(sw[4][REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && sw[4][REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+			    REACPW_BE16(sw[4] + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_MARK);
 		}
 	}
 
