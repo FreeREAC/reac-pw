@@ -46,6 +46,10 @@ command -v pw-dump >/dev/null 2>&1 || { echo "SKIP: no pw-dump"; exit $SKIP; }
 # interrupted run cleans itself up whether or not the trap ever ran.
 unshare -r -n -p -f --mount-proc --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net+pid namespaces unavailable"; exit $SKIP; }
+# THE KERNEL'S LINK TYPES ARE PROBED BY NAME (audit 2026-09-24, H3): a kernel without 8021q
+# is a machine this test cannot run on, and says so here, so a later `|| exit 90` is a FAIL.
+unshare -r -n sh -c 'ip link add p0 type veth peer name p1 && ip link add link p0 name p0.9 type vlan id 9' 2>/dev/null || {
+	echo "SKIP: this kernel cannot create a VLAN link in a namespace (no 8021q)"; exit $SKIP; }
 
 OUT=$(unshare -r -n -p -f --mount-proc --map-root-user bash -s -- "$BIN" "$FAKE" <<'INNER'
 set -u
