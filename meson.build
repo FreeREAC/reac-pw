@@ -805,6 +805,26 @@ test('reac_master_gone_is_re_decided',
   args : [reac_pw_exe, fake_box_master],
   timeout : 240)
 
+# --- whole-binary test: a refused open releases the engine it started (audit H1) ---------
+#
+# Audit 2026-09-24, H1: listener_open's fail_with_nodes exit dropped the nodes and nothing
+# else, though a join had already opened and started the slave engine; hearing_serve then
+# memset the listener under the running thread and retried into it. A box-master join
+# whose reac-capture PipeWire refuses (tests/refuse_capture_shim.c, LD_PRELOAD) is refused
+# five times, and the daemon's threads and fds must stay flat from refusal to refusal.
+refuse_capture_shim = shared_module('refuse-capture-shim',
+  ['tests/refuse_capture_shim.c'],
+  dependencies : [pipewire_dep, cc.find_library('dl', required : false)],
+  name_prefix : '',
+  build_by_default : true)
+test('reac_refused_open_releases_its_engine',
+  find_program('tests/refused-open-releases-its-engine.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_master, refuse_capture_shim],
+  depends : [refuse_capture_shim],
+  timeout : 180)
+
 # --- whole-binary test: a segment with NO recognised box has NO node ---------
 #
 # Operator, 2026-09-16: "a segment with NO recognised box must not appear in the PipeWire
