@@ -654,8 +654,8 @@ static void usage(const char *p)
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
-	  "                which no wire can tell us (even " REACPW_STR(REAC_BRAID_PAIR_CHANNELS) ".."
-	  REACPW_STR(REAC_MAX_CHANNELS) "; " REACPW_STR(REAC_BOX_S0808_IN) "=S-0808, "
+	  "                which no wire can tell us (even " REACPW_STR(REAC_BOX_MIN_CHANNELS) ".."
+	  REACPW_STR(REAC_BOX_MAX_CHANNELS) "; " REACPW_STR(REAC_BOX_S0808_IN) "=S-0808, "
 	  REACPW_STR(REAC_BOX_S1608_IN) "=S-1608,\n"
 	  "                " REACPW_STR(REAC_BOX_S4000S_3208_IN) "=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
 	  "  --mixer M     master role: which desk NAME reac-pw logs as (m200|m300|m5000;\n"
@@ -1419,7 +1419,7 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			        c->box_model ? c->box_model->out_ch : 0);
 		} else if (bcl != REAC_CONF_NONE) {
 			int n = atoi(v);
-			if (n >= REAC_BRAID_PAIR_CHANNELS && n <= REAC_MAX_CHANNELS &&
+			if (n >= REAC_BOX_MIN_CHANNELS && n <= REAC_BOX_MAX_CHANNELS &&
 			    n % REAC_BRAID_PAIR_CHANNELS == 0)
 				c->box_channels = n;
 			else
