@@ -160,8 +160,8 @@ int main(void)
 		 * fresh init seeds the header (step 0); the first body chunk is the
 		 * phase-6/sub-0x02 block transcribed off the live M-200. */
 		build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0);
-		CHK(f[18] == 0x01 && f[19] == 0x01);          /* op-0101              */
-		CHK(f[23] == 0x22 && f[24] == 0xc8);          /* declares 0x22c8      */
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_HEADER);
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_HEAD_TOTAL_OFF) == REAC_SCENE_BYTES);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 		{
 			/* Chunk 1 carries the body verbatim and is the SAME for every console
@@ -169,15 +169,15 @@ int main(void)
 			 * transfer is keyed to the mixer model. Byte-comparing against a
 			 * captured M-200i block would only assert that we replay THAT desk's
 			 * mixer state, which is the thing we deliberately stopped doing. */
-			uint8_t blk[34];
+			uint8_t blk[REAC_TYPED_BLOCK_LEN];
 			CHK(reac_ctrl_build_scene_step(blk, m.scene, sizeof m.scene, 1) == 0);
 			CHK(REACPW_BE16(blk) == REAC_TYPE_CONTROL);
-			CHK(blk[2] == 0x01 && blk[3] == 0x00);           /* op-0100        */
-			CHK(blk[4] == 0x00 && blk[5] == 0x1a);           /* 26-byte payload */
-			CHK(memcmp(blk + 7, m.scene + REAC_SCENE_HEAD_BYTES,
+			CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
+			CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_LEN_OFF) == REAC_SCENE_CHUNK_BYTES);
+			CHK(memcmp(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, m.scene + REAC_SCENE_HEAD_BYTES,
 			           REAC_SCENE_CHUNK_BYTES) == 0);
 			if (first_scene_chunk_set)
-				CHK(memcmp(blk, first_scene_chunk, 34) == 0);  /* profile-independent */
+				CHK(memcmp(blk, first_scene_chunk, REAC_TYPED_BLOCK_LEN) == 0);  /* profile-independent */
 			else {
 				memcpy(first_scene_chunk, blk, 34);
 				first_scene_chunk_set = 1;

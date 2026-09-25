@@ -641,8 +641,10 @@ int main(int argc, char **argv)
 			 * and a daemon that waits for quiet always has a window. */
 			ear.scene_running = ((sent / (fps / 2)) % 4) == 0 && sent > fps / 4;
 			if (ear.scene_running) {
-				static const uint8_t SCENE[6] = { 0xcd, 0xea, 0x01, 0x00,
-				                                  0x00, 0x1a };
+				const uint8_t SCENE[6] = {
+					REAC_TYPE_CONTROL >> 8, REAC_TYPE_CONTROL & 0xff,
+					REAC_OP_SCENE_CHUNK >> 8, REAC_OP_SCENE_CHUNK & 0xff,
+					REAC_SCENE_CHUNK_BYTES >> 8, REAC_SCENE_CHUNK_BYTES & 0xff };
 				memcpy(f + REAC_TYPED_BLOCK_OFF, SCENE, sizeof SCENE);
 				memset(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_OPCODE_OFF, 0,
 			       REAC_CTRL_BLOCK_END - (REAC_CTRL_BLOCK_OFF + REAC_HDR_OPCODE_OFF));

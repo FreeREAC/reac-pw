@@ -112,11 +112,11 @@ static int test_probe_rotation(void)
 			 * checksum — and no two consecutive chunks are identical. That last one
 			 * is the property the old model got wrong: it emitted each block TWICE,
 			 * which a mirrored capture had made look like the desk's own behaviour. */
-			CHK(f[18] == 0x01 && f[19] == 0x00);
-			CHK(f[20] == 0x00 && f[21] == 0x1a);
+			CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
+			CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_LEN_OFF) == REAC_SCENE_CHUNK_BYTES);
 			size_t off = REAC_SCENE_HEAD_BYTES +
 			             (size_t)(m.scene_step - 1) * REAC_SCENE_CHUNK_BYTES;
-			CHK(memcmp(f + 23, m.scene + off, REAC_SCENE_CHUNK_BYTES) == 0);
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF, m.scene + off, REAC_SCENE_CHUNK_BYTES) == 0);
 			CHK(reac_ctrl_checksum_verify(f) == 0);
 			/* The step advances by exactly one per chunk slot. That is the
 			 * body-independent form of the invariant the old model broke: it

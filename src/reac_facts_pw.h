@@ -51,6 +51,10 @@
 #define REACPW_SAMPLE_MASK  ((1LL << REACPW_SAMPLE_BITS) - 1)
 
 /* A big-endian u16 at p: the type word, the opcode (link, segment) and the length. */
+/* Where a scene-body offset lands on the wire: which chunk (0-based, step - 1)
+ * and how far into that chunk's payload. */
+#define REACPW_SCENE_CHUNK_OF(off) (((off) - REAC_SCENE_HEAD_BYTES) / REAC_SCENE_CHUNK_BYTES)
+#define REACPW_SCENE_IN_CHUNK(off) (((off) - REAC_SCENE_HEAD_BYTES) % REAC_SCENE_CHUNK_BYTES)
 #define REACPW_BE16(p) ((unsigned)((const uint8_t *)(p))[0] << 8 | ((const uint8_t *)(p))[1])
 
 /* The legal paces, as text: "44100, 48000 or 96000" and "44100|48000|96000". */

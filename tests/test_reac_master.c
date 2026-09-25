@@ -369,17 +369,17 @@ int main(void)
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene, 0) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0, planar);
 	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
-	CHK(f[18] == 0x01 && f[19] == 0x01);              /* op-0101              */
-	CHK(f[20] == 0x00 && f[21] == 0x18);              /* 24-byte payload      */
-	CHK(f[23] == 0x22 && f[24] == 0xc8);              /* declares the total   */
-	CHK(memcmp(f + 25, m.scene, REAC_SCENE_HEAD_BYTES) == 0);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_HEADER);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_LEN_OFF) == REAC_SCENE_HEAD_BYTES);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_HEAD_TOTAL_OFF) == REAC_SCENE_BYTES);
+	CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_HEAD_PAY_OFF, m.scene, REAC_SCENE_HEAD_BYTES) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene,
 	                               REAC_SCENE_STEPS - 1) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_TAIL, 0, planar);
-	CHK(f[18] == 0x01 && f[19] == 0x02);              /* op-0102              */
-	CHK(f[20] == 0x00 && f[21] == 0x0e);              /* 14-byte payload      */
-	CHK(memcmp(f + 23, m.scene + REAC_SCENE_BYTES - REAC_SCENE_TAIL_BYTES,
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_FINAL);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_LEN_OFF) == REAC_SCENE_TAIL_BYTES);
+	CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF, m.scene + REAC_SCENE_BYTES - REAC_SCENE_TAIL_BYTES,
 	           REAC_SCENE_TAIL_BYTES) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
@@ -480,7 +480,7 @@ int main(void)
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
 	CHK(n_cm > 0);                              /* §4: chanmap advertised while unlinked */
-	CHK(n_probe >= 51L * 341 && n_probe <= 53L * 341);   /* 341 chunks per transfer */
+	CHK(n_probe >= 51L * REAC_SCENE_CHUNKS && n_probe <= 53L * REAC_SCENE_CHUNKS);
 	CHK(n_sub01 >= 50 && n_sub01 <= 53);        /* sub01: once per cycle */
 	CHK(n_sub02 >= 50 && n_sub02 <= 53);        /* sub02: once per cycle */
 	CHK(n_cm    >= 50 && n_cm    <= 53);        /* chanmap: ONE window per cycle */
@@ -505,14 +505,14 @@ int main(void)
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 		CHK(m.filler_desc == f[REAC_CTRL_CKSUM_OFF]);              /* descriptor tracks EVERY chunk */
 		int chunk = m.scene_step - 1;             /* 0-based index into the body */
-		if (chunk == 31) {                        /* carries a MAC: OURS */
-			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
+		if (chunk == REACPW_SCENE_CHUNK_OF(REAC_SCENE_MAC_OFF)) {    /* carries a MAC: OURS */
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF + REACPW_SCENE_IN_CHUNK(REAC_SCENE_MAC_OFF), SRC, 6) == 0);
 			specials_seen++;
-		} else if (chunk == 32) {                 /* the "SYSP" token */
-			CHK(f[39] == 'S' && f[40] == 'Y' && f[41] == 'S' && f[42] == 'P');
+		} else if (chunk == REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SYSP_OFF)) {   /* the "SYSP" token */
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF + REACPW_SCENE_IN_CHUNK(REAC_SCENE_TAG_SYSP_OFF), "SYSP", 4) == 0);
 			specials_seen++;
-		} else if (chunk == 33) {                 /* the "SCEN" token */
-			CHK(f[33] == 'S' && f[34] == 'C' && f[35] == 'E' && f[36] == 'N');
+		} else if (chunk == REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SCEN_OFF)) {   /* the "SCEN" token */
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF + REACPW_SCENE_IN_CHUNK(REAC_SCENE_TAG_SCEN_OFF), "SCEN", 4) == 0);
 			specials_seen++;
 		}
 	}

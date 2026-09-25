@@ -15,6 +15,13 @@ import os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
 
+# The scene ops, and where their fields sit in the typed block (type word first).
+HEAD, CHUNK, FINAL = FACTS["OP_SCENE_HEADER"], FACTS["OP_SCENE_CHUNK"], FACTS["OP_SCENE_FINAL"]
+HEAD_B, CHUNK_B, FINAL_B = FACTS["SCENE_HEAD_BYTES"], FACTS["SCENE_CHUNK_BYTES"], FACTS["SCENE_TAIL_BYTES"]
+TW = FACTS["TYPE_WORD_BYTES"]
+OP, TOT = TW + FACTS["SCENE_OP_OFF"], TW + FACTS["SCENE_HEAD_TOTAL_OFF"]
+HPAY, CPAY = TW + FACTS["SCENE_HEAD_PAY_OFF"], TW + FACTS["SCENE_CHUNK_PAY_OFF"]
+
 def recover(path):
     f = open(path, 'rb')
     magic, = struct.unpack('<I', f.read(24)[:4])
@@ -41,25 +48,25 @@ def recover(path):
         if i < 0:
             continue
         blk = pkt[i:i + FACTS["TYPED_BLOCK_LEN"]]
-        op = blk[2:4]
-        if op not in (b'\x01\x01', b'\x01\x00', b'\x01\x02'):
+        op = struct.unpack('>H', blk[OP:OP + 2])[0]
+        if op not in (HEAD, CHUNK, FINAL):
             continue
-        if op == b'\x01\x01':
-            total, = struct.unpack('>H', blk[7:9])
-            scene, state, chunks = blk[9:9 + 24], 1, 0
-        elif op == b'\x01\x00' and state == 1:
-            scene += blk[7:7 + 26]
+        if op == HEAD:
+            total, = struct.unpack('>H', blk[TOT:TOT + 2])
+            scene, state, chunks = blk[HPAY:HPAY + HEAD_B], 1, 0
+        elif op == CHUNK and state == 1:
+            scene += blk[CPAY:CPAY + CHUNK_B]
             chunks += 1
-        elif op == b'\x01\x02' and state == 1:
-            scene += blk[7:7 + 14]
+        elif op == FINAL and state == 1:
+            scene += blk[CPAY:CPAY + FINAL_B]
             break
     return scene, chunks, total
 
 if __name__ == '__main__':
     scene, chunks, total = recover(sys.argv[1])
     print(f'declared {total} chunks {chunks} recovered {len(scene)}')
-    if len(scene) != 8904:
-        sys.exit('REFUSED: not 8904 bytes — truncated or decimated capture')
+    if len(scene) != FACTS["SCENE_BYTES"]:
+        sys.exit('REFUSED: not %d bytes — truncated or decimated capture' % FACTS["SCENE_BYTES"])
     if len(sys.argv) > 2:
         open(sys.argv[2], 'wb').write(scene)
 
