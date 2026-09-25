@@ -1855,6 +1855,8 @@ static int listener_holds_nodes(const struct listener *L)
 	return 0;
 }
 
+static void listener_close(struct listener *L, struct pw_loop *loop);
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
@@ -2507,19 +2509,25 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	}
 	return 0;
 
-	/* THE ONE EXIT THAT HAS ALREADY BUILT SOMETHING THE GRAPH CAN SEE (#108 §a.3). The
-	 * ring, the socket and the seglock are cleaned up at each refusal above because each
-	 * knows what it opened; the NODES were the one resource nobody took back, and the
-	 * caller cannot take them back either — hearing_serve memsets a listener whose open
-	 * refused, and main()'s array entry is simply left. The code makes it searchable:
-	 * reaching this at all means a node lived, however briefly, for a segment that never
-	 * came up. */
+	/* THE ONE EXIT THAT HAS ALREADY BUILT SOMETHING THE GRAPH CAN SEE (#108 §a.3), AND
+	 * THE ONE THAT HAS ALREADY STARTED AN ENGINE (audit 2026-09-24, H1). Both callers
+	 * arrive with the RX and ring open, the slave engine open AND RUNNING on a join or
+	 * box role, or the seglock claimed on a pinned master. This used to drop the nodes
+	 * only, under a comment saying the rest was "cleaned up at each refusal above" --
+	 * nothing above had cleaned it. hearing_serve then memset the listener under the
+	 * running slave thread and retried into the same slot: a socket leaked per retry,
+	 * the thread's own state zeroed under it, and a pinned master's seglock held by a
+	 * handle nobody had any more, so this process refused its own segment for good.
+	 * listener_close is the one teardown, safe on a partial open, and it stops the
+	 * engine before it frees what the engine reads. The code stays searchable:
+	 * reaching this at all means a node lived, however briefly, for a segment that
+	 * never came up. */
 fail_with_nodes:
 	reac_code_emit(stderr, "reac-pw", RC_E_ORPHAN_PAIR,
 	    "%sthe open refused AFTER putting node(s) on the graph — removing them, because "
 	    "a segment that did not come up must leave nothing behind for a console to read\n",
 	    c->tag);
-	listener_drop_nodes(L, loop);
+	listener_close(L, loop);
 	return -1;
 }
 
