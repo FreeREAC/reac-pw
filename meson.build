@@ -176,6 +176,16 @@ reac_pw_src = [
   'src/reac_roster_node.c',
 ]
 
+# THE PROTOCOL'S NUMBERS COME FROM ONE DECLARATION (src/reac_facts_pw.h, tools/facts.py).
+# facts/ holds the verbatim copy of reac-protocol's generated reac_facts.h (plus the
+# reac_facts_undef.h derived from it); the `facts_dir` option swaps in another copy,
+# which is how tools/facts-perturb-check.sh builds against a perturbed fact set.
+facts_dir = get_option('facts_dir')
+if facts_dir == ''
+  facts_dir = 'facts'
+endif
+src_inc = [include_directories('src'), include_directories(facts_dir)]
+
 # include_directories('src') is new here: it used to resolve implicitly (a quoted
 # #include finds a sibling in the SAME directory as the including file first, and
 # main.c/reac_sink_node.c's own local headers always were siblings). Now that
@@ -185,7 +195,7 @@ reac_pw_src = [
 # file and needs the -I fallback instead.
 reac_pw_exe = executable('reac-pw',
   reac_pw_src,
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep],
   install : true)
 
@@ -196,7 +206,7 @@ reac_pw_exe = executable('reac-pw',
 # reader infers differently, and they are all sure they are right.
 conf_test = executable('test_reac_conf',
   ['tests/test_reac_conf.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_conf', conf_test)
 
@@ -212,7 +222,7 @@ test('reac_conf', conf_test)
 # find is a knob that does not exist.
 pacer_knob_test = executable('test_reac_pacer_knob',
   ['tests/test_reac_pacer_knob.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_pacer_knob', pacer_knob_test,
   env : ['REACPW_SRCDIR=' + meson.current_source_dir()])
@@ -228,7 +238,7 @@ test('reac_pacer_knob', pacer_knob_test,
 # layer decided.
 rt_test = executable('test_reac_rt',
   ['tests/test_reac_rt.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_rt', rt_test)
 
@@ -248,6 +258,7 @@ test('reac_rt_single_door',
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',
   ['tests/test_reac_ring.c', ],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep])
 test('reac_ring', ring_test)
 
@@ -257,7 +268,7 @@ test('reac_ring', ring_test)
 # reac_eth_crc32 (the OHRCA-trailer RE verifier, not part of any encode path).
 tx_test = executable('test_reac_tx',
   ['tests/test_reac_tx.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_tx', tx_test)
 
@@ -270,7 +281,7 @@ test('reac_tx', tx_test)
 # the wrap. A mismatch is a wire-format regression — never update the constant.
 encode_golden_test = executable('test_reac_encode_golden',
   ['tests/test_reac_encode_golden.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_encode_golden', encode_golden_test)
 
@@ -278,7 +289,7 @@ test('reac_encode_golden', encode_golden_test)
 # Captured-frame fixtures (MAC-sanitized) + the resolved braid layout; no I/O.
 upstream_test = executable('test_reac_upstream',
   ['tests/test_reac_upstream.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_upstream', upstream_test)
 
@@ -288,7 +299,7 @@ test('reac_upstream', upstream_test)
 rx_gate_test = executable('test_reac_rx_gate',
   ['tests/test_reac_rx_gate.c', 
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
 
@@ -304,7 +315,7 @@ test('reac_rx_gate', rx_gate_test)
 box_master_audio_test = executable('test_reac_box_master_audio',
   ['tests/test_reac_box_master_audio.c', 
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_master_audio', box_master_audio_test)
 
@@ -316,7 +327,7 @@ test('reac_box_master_audio', box_master_audio_test)
 rx_dup_test = executable('test_reac_rx_dup',
   ['tests/test_reac_rx_dup.c', 
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_rx_dup', rx_dup_test)
 
@@ -329,7 +340,7 @@ test('reac_rx_dup', rx_dup_test)
 # genuinely dead one.
 carrier_test = executable('test_reac_carrier',
   ['tests/test_reac_carrier.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_carrier', carrier_test)
 
@@ -346,7 +357,7 @@ test('reac_carrier', carrier_test)
 # reads nothing. No privilege: RTNLGRP_LINK is unprivileged.
 linkmon_test = executable('test_reac_linkmon',
   ['tests/test_reac_linkmon.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_linkmon', linkmon_test)
 
@@ -372,7 +383,7 @@ test('reac_link_edge_observed',
 # host through the same parser (unprivileged).
 ifscan_test = executable('test_reac_ifscan',
   ['tests/test_reac_ifscan.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_ifscan', ifscan_test)
 
@@ -386,7 +397,7 @@ test('reac_ifscan', ifscan_test)
 # release that decides whether a netdev is deleted.
 topo_test = executable('test_reac_topo',
   ['tests/test_reac_topo.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_topo', topo_test)
 
@@ -398,14 +409,14 @@ test('reac_topo', topo_test)
 # against real captured /sys paths from a real box, not synthetic strings.
 ifname_test = executable('test_reac_ifname',
   ['tests/test_reac_ifname.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_ifname', ifname_test)
 
 rx_live_iface_test = executable('test_reac_rx_live_iface',
   ['tests/test_reac_rx_live_iface.c', 
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_rx_live_iface', rx_live_iface_test)
 
@@ -449,7 +460,7 @@ test('reac_link_up_reestablishes',
 # pinned master. Same libreac builders as test_reac_hunt's own fixture.
 fake_box_master = executable('fake-box-master',
   ['tests/fake_box_master.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep],
   install : false)
 
@@ -465,7 +476,7 @@ fake_box_master = executable('fake-box-master',
 # qdisc through the library's public netlink door, never by scraping `tc`.
 etf_wire_probe = executable('etf-wire-probe',
   ['tests/etf_wire_probe.c', 'src/reac_qdisc.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep],
   install : false)
 
@@ -481,7 +492,7 @@ test('reac_etf_qdisc_owned',
 # are not (`reac-pw.env`, `enp131s0.env`), and the bounds. No netlink, no netdev.
 declared_vlan_test = executable('test_reac_declared_vlan',
   ['tests/test_reac_declared_vlan.c', 'src/reac_declared_vlan.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_declared_vlan', declared_vlan_test)
 
@@ -492,7 +503,7 @@ test('reac_declared_vlan', declared_vlan_test)
 # autodetect spec exists to remove.
 segconf_test = executable('test_reac_segconf',
   ['tests/test_reac_segconf.c', 'src/reac_segconf.c', 'src/reac_declared_vlan.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_segconf', segconf_test)
 
@@ -504,7 +515,7 @@ test('reac_segconf', segconf_test)
 # node exists to avoid. Pure: no PipeWire, no netlink, no clock.
 roster_test = executable('test_reac_roster',
   ['tests/test_reac_roster.c', 'src/reac_roster.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_roster', roster_test)
 
@@ -550,7 +561,7 @@ test('reac_declared_vlan_waits_for_its_tag',
 # so no device is touched and a failing removal can be arranged without privileges.
 qdisc_test = executable('test_reac_qdisc',
   ['tests/test_reac_qdisc.c', 'src/reac_qdisc.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   link_args : ['-Wl,--wrap=reac_etf_qdisc_state',
                '-Wl,--wrap=reac_etf_qdisc_install',
                '-Wl,--wrap=reac_etf_qdisc_remove'],
@@ -724,7 +735,7 @@ test('reac_box_master_rejoins',
 # where the master could not hold its pacing. Timeout covers the 40 s run plus setup.
 courtship_probe = executable('courtship-probe',
   ['tests/courtship_probe.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep],
   install : false)
 
@@ -743,7 +754,7 @@ test('reac_courtship_backs_off',
 # needs one).
 tap_probe = executable('tap-probe',
   ['tests/tap_probe.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep],
   install : false)
 
@@ -1011,6 +1022,20 @@ test('netns_rc_is_a_verdict',
   find_program('tests/netns-rc-is-a-verdict.sh'),
   timeout : 30)
 
+# --- the protocol facts are reac-protocol's, byte for byte ---------------------------
+# facts/reac_facts.h is a committed copy of reac-protocol's generated header. With a
+# reac-protocol checkout reachable (option reac_protocol), this regenerates it with
+# reac-protocol's own gen-facts.py and requires byte identity; without one it SKIPS
+# and the build uses the committed copy -- libreac's facts-drift-check, one mechanism.
+reac_protocol_dir = get_option('reac_protocol')
+if not reac_protocol_dir.startswith('/')
+  reac_protocol_dir = meson.project_source_root() / reac_protocol_dir
+endif
+test('facts_drift',
+  find_program('python3'),
+  args : [files('tools/facts.py'), 'drift', reac_protocol_dir],
+  timeout : 60)
+
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
@@ -1050,14 +1075,14 @@ test('reac_safe_enable_selects_one_user',
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_ctrl', ctrl_test)
 
 # --- unit test: head-amp source control (op 04 03 TAG 01 01, M-200-truthed) ---
 headamp_test = executable('test_reac_headamp',
   ['tests/test_reac_headamp.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_headamp', headamp_test)
 
@@ -1068,21 +1093,21 @@ test('reac_headamp', headamp_test)
 # untestable by construction.
 watch_test = executable('test_reac_watch',
   ['tests/test_reac_watch.c', 'src/reac_watch.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_watch', watch_test)
 
 # --- unit test: the multi-box registry (fabric slot allocation + names) -------
 boxreg_test = executable('test_reac_boxreg',
   ['tests/test_reac_boxreg.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_boxreg', boxreg_test)
 
 # --- unit test: the JOIN/HOLD connection FSM (pure state machine) -------------
 fsm_test = executable('test_reac_fsm',
   ['tests/test_reac_fsm.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_fsm', fsm_test)
 
@@ -1094,7 +1119,7 @@ test('reac_fsm', fsm_test)
 master_test = executable('test_reac_master',
   ['tests/test_reac_master.c',
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_master', master_test)
 
@@ -1103,7 +1128,7 @@ test('reac_master', master_test)
 master_no_enroll_test = executable('test_reac_master_no_enroll',
   ['tests/test_reac_master_no_enroll.c',
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_master_no_enroll', master_no_enroll_test)
 
@@ -1112,7 +1137,7 @@ test('reac_master_no_enroll', master_no_enroll_test)
 ohrca_chanmap_test = executable('test_reac_ohrca_chanmap',
   ['tests/test_reac_ohrca_chanmap.c',
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_ohrca_chanmap', ohrca_chanmap_test)
 
@@ -1123,7 +1148,7 @@ test('reac_ohrca_chanmap', ohrca_chanmap_test)
 # struct reac_master.
 master_fsm_test = executable('test_reac_master_fsm',
   ['tests/test_reac_master_fsm.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_master_fsm', master_fsm_test)
 
@@ -1134,7 +1159,7 @@ test('reac_master_fsm', master_fsm_test)
 # generated control block sums to 0 mod 256. The #130 hardware-verify gate.
 s1608_test = executable('test_reac_s1608',
   ['tests/test_reac_s1608.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_s1608', s1608_test)
 
@@ -1143,7 +1168,7 @@ test('reac_s1608', s1608_test)
 # asserts the smoothed latency settles into a tight band and stops re-advertising.
 lat_test = executable('test_reac_lat',
   ['tests/test_reac_lat.c', 'src/reac_lat.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_lat', lat_test)
 
@@ -1152,7 +1177,7 @@ test('reac_lat', lat_test)
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
   ['tests/test_reac_pacer.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
 
@@ -1170,7 +1195,7 @@ test('reac_pacer', pacer_test)
 # "we cannot tell" band so it can never be reported as an unstable reference.
 clock_test = executable('test_reac_clock',
   ['tests/test_reac_clock.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_clock', clock_test)
 
@@ -1187,7 +1212,7 @@ test('reac_clock', clock_test)
 # name, and a measurably jittery one flagged rather than ejected.
 pacer_clock_test = executable('test_reac_pacer_clock',
   ['tests/test_reac_pacer_clock.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_pacer_clock', pacer_clock_test)
 
@@ -1201,7 +1226,7 @@ test('reac_pacer_clock', pacer_clock_test)
 # exercised correct-by-construction against the capture-derived control kinds.
 slave_test = executable('test_reac_slave',
   ['tests/test_reac_slave.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
 
@@ -1211,7 +1236,7 @@ test('reac_slave', slave_test)
 # mapping, and the RT multiply-only apply. Same link set as slave_test.
 vboxgain_test = executable('test_reac_vboxgain',
   ['tests/test_reac_vboxgain.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_vboxgain', vboxgain_test)
 
@@ -1226,13 +1251,13 @@ courtship_test = executable('test_reac_courtship',
   ['tests/test_reac_courtship.c',
    
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_courtship', courtship_test)
 
 grant_dwell_test = executable('test_reac_grant_dwell',
   ['tests/test_reac_grant_dwell.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 # The knob getters cache in statics, so each arm gets its own process.
 test('reac_grant_dwell_default_on_declare', grant_dwell_test,
@@ -1246,7 +1271,7 @@ test('reac_grant_dwell_opt_out_holds_cap', grant_dwell_test,
 # independently. No socket/PipeWire — the pure kernel the RT sink path calls.
 gain_test = executable('test_reac_gain',
   ['tests/test_reac_gain.c', 'src/reac_gain.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_gain', gain_test)
 
@@ -1268,7 +1293,7 @@ test('sink_buffer_pairing', python3,
 box_badge_test = executable('test_reac_box_badge',
   ['tests/test_reac_box_badge.c', 
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_badge', box_badge_test)
 
@@ -1280,7 +1305,7 @@ test('reac_box_badge', box_badge_test)
 # "which key got which number, and is it written at all" is what is proven.
 box_identity_test = executable('test_reac_box_identity',
   ['tests/test_reac_box_identity.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_identity', box_identity_test)
 
@@ -1290,7 +1315,7 @@ test('reac_box_identity', box_identity_test)
 # strings a consumer (openmixer's stagebox card) matches on.
 link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_link_state', link_state_test)
 
@@ -1304,7 +1329,7 @@ test('reac_link_state', link_state_test)
 # console keys a stagebox off).
 box_master_identity_test = executable('test_reac_box_master_identity',
   ['tests/test_reac_box_master_identity.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_box_master_identity', box_master_identity_test)
 
@@ -1318,7 +1343,7 @@ test('reac_box_master_identity', box_master_identity_test)
 # runs on the same bytes the wire carries.
 disco_test = executable('test_reac_disco',
   ['tests/test_reac_disco.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_disco', disco_test)
 
@@ -1328,7 +1353,7 @@ test('reac_disco', disco_test)
 # clock discipline: FOLLOW (arbitration spec S3). Pure; no socket, no PipeWire.
 envflag_test = executable('test_reac_envflag',
   ['tests/test_reac_envflag.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_envflag', envflag_test)
 
@@ -1340,7 +1365,7 @@ test('reac_envflag', envflag_test)
 # cannot drift the way the file's own closing promise never checked.
 knob_table_test = executable('test_reac_knob_table',
   ['tests/test_reac_knob_table.c', 'src/reac_knobs.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_knob_table', knob_table_test,
   env : ['REACPW_SRCDIR=' + meson.current_source_dir()])
@@ -1351,7 +1376,7 @@ test('reac_knob_table', knob_table_test,
 # nine minutes of dead input patches with a journal that read like success.
 recover_test = executable('test_reac_node_recover',
   ['tests/test_reac_node_recover.c', 'src/reac_node_recover.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_node_recover', recover_test)
 
@@ -1365,7 +1390,7 @@ test('reac_node_recover', recover_test)
 # Pure; no socket.
 hunt_test = executable('test_reac_hunt',
   ['tests/test_reac_hunt.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt', hunt_test)
 
@@ -1378,7 +1403,7 @@ test('reac_hunt', hunt_test)
 # with every health sign green is the silent clamp this repo exists to refuse. Pure.
 link_budget_test = executable('test_reac_link_budget',
   ['tests/test_reac_link_budget.c', 'src/reac_link_budget.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep])
 test('reac_link_budget', link_budget_test)
 
@@ -1391,7 +1416,7 @@ test('reac_link_budget', link_budget_test)
 # The corpus is not in this repo: with none present the test exits 77 (SKIP) and says so.
 hunt_captures_test = executable('test_reac_hunt_captures',
   ['tests/test_reac_hunt_captures.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt_captures', hunt_captures_test, timeout : 120)
 
@@ -1405,7 +1430,7 @@ test('reac_hunt_captures', hunt_captures_test, timeout : 120)
 # must refuse it by name, each with a control showing the same call succeeding. Pure.
 wake_test = executable('test_reac_wake',
   ['tests/test_reac_wake.c', 'src/reac_wake.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_wake', wake_test)
 
@@ -1424,6 +1449,7 @@ test('reac_wake', wake_test)
 # either latch, fails HERE, at reac-pw's own gate, instead of on a desk. Pure; no socket.
 enrolment_binding_test = executable('test_reac_enrolment_binding',
   ['tests/test_reac_enrolment_binding.c'],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_enrolment_binding', enrolment_binding_test)
 
@@ -1433,7 +1459,7 @@ test('reac_enrolment_binding', enrolment_binding_test)
 # is parsed; --role slave without --tx is rejected; an unknown role is rejected.
 role_test = executable('test_reac_role',
   ['tests/test_reac_role.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_role', role_test)
 
@@ -1442,7 +1468,7 @@ test('reac_role', role_test)
 # NIC touched. Proves the derived default can never equal a real box's MAC.
 mac_test = executable('test_reac_mac',
   ['tests/test_reac_mac.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_mac', mac_test)
 
@@ -1452,7 +1478,7 @@ test('reac_mac', mac_test)
 arbitration_test = executable('test_reac_arbitration',
   ['tests/test_reac_arbitration.c',],
   dependencies : [libreac_dep, libreac_transport_dep],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_arbitration', arbitration_test)
 
@@ -1466,7 +1492,7 @@ box_pin_test = executable('test_reac_box_pin',
   ['tests/test_reac_box_pin.c', 'src/reac_box_pin.c',
   ],
   dependencies : [libreac_dep, libreac_transport_dep],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_box_pin', box_pin_test)
 
@@ -1478,7 +1504,7 @@ test('reac_box_pin', box_pin_test)
 pace_watch_test = executable('test_reac_pace_watch',
   ['tests/test_reac_pace_watch.c', ],
   dependencies : [libreac_dep, libreac_transport_dep],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_pace_watch', pace_watch_test)
 
@@ -1487,7 +1513,7 @@ test('reac_pace_watch', pace_watch_test)
 # the edge-on-change emission, the full-table re-assert sweep, and OFF-unless-set.
 headamp_tx_test = executable('test_reac_headamp_tx',
   ['tests/test_reac_headamp_tx.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_headamp_tx', headamp_tx_test)
 
@@ -1498,7 +1524,7 @@ test('reac_headamp_tx', headamp_tx_test)
 headamp_prop_test = executable('test_reac_headamp_prop',
   ['tests/test_reac_headamp_prop.c', 'src/reac_headamp_prop.c',
    'src/reac_headamp_state.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, spa_dep])
 test('reac_headamp_prop', headamp_prop_test)
 
@@ -1516,7 +1542,7 @@ test('reac_headamp_prop', headamp_prop_test)
 headamp_state_test = executable('test_reac_headamp_state',
   ['tests/test_reac_headamp_state.c', 'src/reac_headamp_prop.c',
    'src/reac_headamp_state.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep, spa_dep])
 test('reac_headamp_state', headamp_state_test)
 
@@ -1527,7 +1553,7 @@ test('reac_headamp_state', headamp_state_test)
 # drop, and a writer-thread stress that asserts NO torn (ch,param,value) triple.
 headamp_live_test = executable('test_reac_headamp_live',
   ['tests/test_reac_headamp_live.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_headamp_live', headamp_live_test)
 
@@ -1546,7 +1572,7 @@ test('reac_headamp_live', headamp_live_test)
 # reac_rate_cfg.h's honesty clause).
 rate_cfg_test = executable('test_reac_rate_cfg',
   ['tests/test_reac_rate_cfg.c', 'src/reac_rate_cfg.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep, spa_dep])
 test('reac_rate_cfg', rate_cfg_test)
 
@@ -1563,7 +1589,7 @@ test('reac_rate_cfg', rate_cfg_test)
 # actually distinguishes the two answers.
 role_cfg_test = executable('test_reac_role_cfg',
   ['tests/test_reac_role_cfg.c', 'src/reac_role_cfg.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, spa_dep])
 test('reac_role_cfg', role_cfg_test)
 
@@ -1594,7 +1620,7 @@ test('reac_role_cfg', role_cfg_test)
 role_swap_test = executable('test_reac_role_swap',
   ['tests/test_reac_role_swap.c', 
    ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_role_swap', role_swap_test)
 
@@ -1613,7 +1639,7 @@ test('reac_role_swap', role_swap_test)
 # arms so flipping the comparison turns a currently-green line red.
 sink_format_test = executable('test_reac_sink_format',
   ['tests/test_reac_sink_format.c', 'src/reac_sink_format.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [spa_dep, libreac_dep, libreac_transport_dep])
 test('reac_sink_format', sink_format_test)
 
@@ -1631,7 +1657,7 @@ test('reac_sink_format', sink_format_test)
 # task fixes (capture stuck presenting the boot rate).
 source_format_test = executable('test_reac_source_format',
   ['tests/test_reac_source_format.c', 'src/reac_sink_format.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [spa_dep, libreac_dep, libreac_transport_dep])
 test('reac_source_format', source_format_test)
 
@@ -1648,7 +1674,7 @@ test('reac_source_format', source_format_test)
 # function on the label-only-change case.
 node_ensure_test = executable('test_reac_node_ensure',
   ['tests/test_reac_node_ensure.c', 'src/reac_node_ensure.c'],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_node_ensure', node_ensure_test)
 
@@ -1664,7 +1690,7 @@ test('reac_node_ensure', node_ensure_test)
 # which is why reac_boxreg links in here. Pure — no socket.
 grant_test = executable('test_reac_grant',
   ['tests/test_reac_grant.c',],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_grant', grant_test)
 
@@ -1679,7 +1705,7 @@ test('reac_grant', grant_test)
 # profile. Pure — no socket.
 conformance_test = executable('test_reac_conformance',
   ['tests/test_reac_conformance.c', ],
-  include_directories : [include_directories('src')],
+  include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_conformance', conformance_test)
 
@@ -1693,7 +1719,7 @@ test('reac_conformance', conformance_test)
 # rt_single_door test's positive control). Not build_by_default any more: a
 # normal checkout without that sibling tree would otherwise fail `ninja`
 # outright for a target nothing else here depends on.
-bench_hotpath_inc = [include_directories('src'), include_directories('tests')]
+bench_hotpath_inc = [src_inc, include_directories('tests')]
 if libreac_transport_srcdir != ''
   bench_hotpath_inc += include_directories(libreac_transport_srcdir, is_system : true)
 endif
