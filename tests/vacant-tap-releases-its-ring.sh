@@ -61,7 +61,13 @@ $in_peer ip link set pvtap0 up || exit 90
 mkdir -p "$CONF/.config/reac-pw"
 printf '[segment vtap0]\nrole = tap\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
-HOME="$CONF" "$BIN" >"$LOG" 2>&1 &
+# THE ALLOCATOR IS PINNED, so VmData measures the daemon and not glibc's heuristics. glibc
+# raises its mmap threshold to the size of each mmapped block it frees, so the SECOND ring
+# (5 MB) comes from the brk heap instead, and a freed heap block stays mapped: one 5 MB step
+# with the fix in, measured on fedora:44 CI (5596 -> 10828 kB, then flat). A fixed threshold
+# turns that heuristic off; every ring is its own mapping, gone when it is freed, and a leaked
+# one still shows as +5 MB a teardown.
+HOME="$CONF" GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072 "$BIN" >"$LOG" 2>&1 &
 PID=$!
 sleep 1
 ip link set vtap0 up
