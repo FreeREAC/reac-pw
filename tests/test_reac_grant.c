@@ -32,7 +32,7 @@
 
 /* A sweep row's record fields, for readability. Row is [type|block] = frame[16:50],
  * so a frame offset f maps to row index f-16. */
-#define ROW(f) ((f) - 16)
+#define ROW(f) ((f) - REAC_TYPED_BLOCK_OFF)
 static int row_is_groupa(const uint8_t r[34]) { return r[ROW(32)] == 0x12 && r[ROW(33)] == 0x12 &&
                                                        r[ROW(34)] == 0x01 && r[ROW(35)] == 0x01; }
 static int row_is_groupb(const uint8_t r[34]) { return r[ROW(32)] == 0x12 && r[ROW(33)] == 0x11; }
@@ -111,7 +111,7 @@ int main(void)
 	 *    M-200 golden (matrix-m200-s1608-2026-07-11, deduped by frame counter)
 	 *    frame-for-frame.
 	 * ---------------------------------------------------------------- */
-	uint8_t sweep[REAC_GRANT_SWEEP_MAX][34];
+	uint8_t sweep[REAC_GRANT_SWEEP_MAX][REAC_TYPED_BLOCK_LEN];
 	struct reac_grant_alloc s1608 = { .base = 0x20, .width = REAC_BOX_S1608_IN };
 	int n = reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s1608, NULL);
 	CHK(n == 56);
@@ -182,9 +182,9 @@ int main(void)
 	 * M-200's. Row index r maps to frame offset r+16, so the block is rows [2:34]. */
 	for (int i = 0; i < n; i++) {
 		unsigned sum = 0;
-		for (int b = 2; b < 34; b++)
+		for (int b = REAC_TYPE_WORD_BYTES; b < REAC_TYPED_BLOCK_LEN; b++)
 			sum += sweep[i][b];
-		CHK((sum & 0xff) == 0);
+		CHK((sum & 0xff) == REAC_CTRL_BLOCK_SUM);
 	}
 
 	/* ---------------------------------------------------------------- *
@@ -283,7 +283,7 @@ int main(void)
 		CHK(b16[i][ROW(36)] == B_EXPECT[i][0]);
 		CHK(b16[i][ROW(37)] == B_EXPECT[i][1]);
 		CHK(b16[i][ROW(38)] == B_EXPECT[i][2]);
-		CHK(b16[i][ROW(49)] == 0x03);   /* group B's trailer byte */
+		CHK(b16[i][ROW(REAC_CTRL_CKSUM_OFF)] == 0x03);   /* group B's trailer byte */
 	}
 
 	/* ---------------------------------------------------------------- *

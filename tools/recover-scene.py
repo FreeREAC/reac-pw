@@ -37,10 +37,10 @@ def recover(path):
         ovh, per = FACTS["FRAME_OVERHEAD"], FACTS["BYTES_PER_CHANNEL"]
         if len(pkt) < ovh or (len(pkt) - ovh) % per != 0:
             continue
-        i = pkt.find(b'\xcd\xea')
+        i = pkt.find(FACTS["TYPE_CONTROL"].to_bytes(2, 'big'))
         if i < 0:
             continue
-        blk = pkt[i:i + 34]
+        blk = pkt[i:i + FACTS["TYPED_BLOCK_LEN"]]
         op = blk[2:4]
         if op not in (b'\x01\x01', b'\x01\x00', b'\x01\x02'):
             continue

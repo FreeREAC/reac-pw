@@ -183,7 +183,7 @@ static int step(struct court *c)
 		struct reac_ctrl_parsed ps;
 		enum reac_master_rx_event ev;
 		if (reac_ctrl_classify_box_frame(sf, n, M_SRC, &ps, &ev) == 0)
-			reac_master_rx(&c->m, ev, ps.src, sf + 18);
+			reac_master_rx(&c->m, ev, ps.src, sf + REAC_CTRL_BLOCK_OFF);
 	}
 	return 0;
 }

@@ -68,7 +68,7 @@ int main(void)
 
 	/* A corrupt control block is evidence of NOTHING — not a device with a bad byte. */
 	n = reac_ctrl_build_box_hb(f, MASTER, BOX, 0x11, REAC_BOX_S1608_IN);
-	f[49] ^= 0xff;                               /* break the checksum */
+	f[REAC_CTRL_CKSUM_OFF] ^= 0xff;                               /* break the checksum */
 	CHK(reac_ctrl_checksum_verify(f) != 0);
 	CHK(reac_disco_classify(f, n, OURS, &s) == -1);
 
@@ -150,7 +150,7 @@ int main(void)
 	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, REAC_BOX_S0808_IN);   /* 8 in_ch = the S-0808 row */
 	CHK(n > 0);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_CONFIG_ANNOUNCE);
-	CHK(p.link == REAC_LINK_CTRL && p.opcode == 0x84);   /* the 0x84 family */
+	CHK(p.link == REAC_LINK_CTRL && p.opcode == REAC_SUB_0103_COMMIT_REPORT_84);   /* the 0x84 family */
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);                  /* not master */
 
@@ -375,7 +375,7 @@ int main(void)
 	memcpy(f + 6, SPLIT, 6);
 	f[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; f[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
 	f[16] = 0xce; f[17] = 0xea;
-	memcpy(f + 18, SPLIT_FIRST, sizeof SPLIT_FIRST);
+	memcpy(f + REAC_CTRL_BLOCK_OFF, SPLIT_FIRST, sizeof SPLIT_FIRST);
 	memcpy(f + 27, SPLIT, 6);                 /* data[9..14] = the split's MAC */
 	reac_ctrl_checksum_apply(f);
 	CHK(reac_ctrl_parse(f, 64, &p) == REAC_CTRL_SPLIT_ANNOUNCE);   /* named, not UNKNOWN_CTRL */

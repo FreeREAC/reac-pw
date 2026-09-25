@@ -178,8 +178,8 @@ int main(void)
 
 		/* the JOIN: fsm mirror flips to GRANTING, the ring holds the block */
 		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
-		uint8_t join_blk[32];
-		memcpy(join_blk, bf + 18, 32);
+		uint8_t join_blk[REAC_CTRL_BLOCK_LEN];
+		memcpy(join_blk, bf + REAC_CTRL_BLOCK_OFF, REAC_CTRL_BLOCK_LEN);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_joins == 1 && p3.rx_box_ctrl == 1);
 		/* The JOIN is HELD until the scene push completes (reac_master.c): the box
@@ -265,7 +265,7 @@ int main(void)
 		 * model left standing after the box has left is the console asserting a box
 		 * that is not there. Then a re-join re-derives it from the wire, as always. */
 		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, REAC_BOX_S1608_IN);
-		bf[22] = 0x00;                            /* selector 0x00 = the box's BYE */
+		bf[REAC_CTRL_BLOCK_OFF + REAC_SUB_0103_OFF] = 0x00;   /* selector 0x00 = the box's BYE */
 		reac_ctrl_checksum_apply(bf);             /* a corrupt block is not a BYE */
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.master.state == REAC_M_PROBING);
@@ -329,9 +329,10 @@ int main(void)
 			size_t _n = sizeof _pl; \
 			memset((FR), 0, REAC_FRAME_BYTES); \
 			memcpy((FR), OUR, 6); memcpy((FR) + 6, BOX, 6); \
-			(FR)[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; (FR)[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff; (FR)[16] = 0xcd; (FR)[17] = 0xea; \
-			uint8_t *_b = (FR) + 18; unsigned _sx = (unsigned)(13 + _n); \
-			_b[0] = 0x04; _b[1] = 0x03; _b[3] = (uint8_t)(_sx + 5); \
+			(FR)[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; (FR)[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff; (FR)[REAC_TYPED_BLOCK_OFF] = REAC_TYPE_CONTROL >> 8; \
+			(FR)[REAC_TYPED_BLOCK_OFF + 1] = REAC_TYPE_CONTROL & 0xff; \
+			uint8_t *_b = (FR) + REAC_CTRL_BLOCK_OFF; unsigned _sx = (unsigned)(13 + _n); \
+			_b[REAC_HDR_LINK_OFF] = REAC_LINK_RECORD; _b[REAC_HDR_SEG_OFF] = REAC_SEG_SINGLE; _b[3] = (uint8_t)(_sx + 5); \
 			_b[5] = 0x02; _b[7] = 0xfe; _b[8] = (uint8_t)_sx; \
 			_b[9] = 0xf0; _b[10] = 0x41; _b[11] = 0x0a; _b[14] = 0x12; _b[15] = 0x12; \
 			_b[16] = 0x05; _b[17] = 0x00; \
@@ -341,7 +342,7 @@ int main(void)
 		} while (0)
 
 		/* firmware addr 0x0000: 01 00 00 03 -> 1.003 */
-		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_FIRMWARE, 0x01, 0x00, 0x00, 0x03);
+		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_FIRMWARE_VERSION, 0x01, 0x00, 0x00, 0x03);
 		reac_pacer_rx_ingest(&p4, frame, REAC_FRAME_BYTES);
 		/* REAC version addr 0x0600: the S-0808's eight bytes, (0,1,0,0) */
 		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_REAC_VERSION, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00);
@@ -392,7 +393,7 @@ int main(void)
 		 * reads 32x8 while reac_ctrl_identify_box has no byte-exact match. */
 		size_t bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 7, REAC_BOX_S4000S_3208_IN);
 		CHK(bn > 0);
-		bf[18 + 26] ^= 0x5a;                      /* block[26]: model tail data */
+		bf[REAC_CTRL_BLOCK_OFF + 26] ^= 0x5a;     /* block[26]: model tail data */
 		reac_ctrl_checksum_apply(bf);             /* keep the frame VALID */
 		CHK(reac_ctrl_identify_box(bf, bn) == NULL);   /* no row names it */
 
@@ -400,7 +401,7 @@ int main(void)
 		CHK(atomic_load(&p5.recognized_box) == NULL);  /* honestly unnamed... */
 		CHK(reac_master_has_box(&p5.master) == 1);     /* ...but SIZED */
 		CHK(p5.master.alloc.width == 32);
-		CHK(p5.master.announce_blk[18] == 32);         /* cfea width byte = declared */
+		CHK(p5.master.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S4000S_3208_IN);         /* cfea width byte = declared */
 
 		reac_frame_ring_free(&p5.ring);
 	}
@@ -418,7 +419,7 @@ int main(void)
 		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = reac_pace_code(REAC_PKT_RATE_44K1) };
 		struct reac_master m;
 		reac_master_init(&m, OUR, &cfg, REAC_PKT_RATE_44K1);
-		CHK(m.announce_blk[19] == REAC_PACE_CODE_44K1);     /* the byte a box paces by */
+		CHK(m.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_PACE_OFF] == REAC_PACE_CODE_44K1);     /* the byte a box paces by */
 	}
 
 	/* ---- the sustained-discard detector --------------------------------- *

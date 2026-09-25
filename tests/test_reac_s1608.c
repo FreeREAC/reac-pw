@@ -128,11 +128,11 @@ static int test_probe_rotation(void)
 			if (np > 0)
 				CHK(m.scene_step == prev_step + 1);
 			prev_step = m.scene_step;
-			cur_desc = f[49];                      /* this chunk's checksum */
+			cur_desc = f[REAC_CTRL_CKSUM_OFF];                      /* this chunk's checksum */
 			have = 1;
 			np++;
 		} else if (e == REAC_M_EMIT_FILLER && have) {
-			for (int k = 18; k < 50; k += 2) {
+			for (int k = REAC_CTRL_BLOCK_OFF; k < REAC_CTRL_BLOCK_END; k += 2) {
 				CHK(f[k] == 0x00);                 /* high byte constant */
 				CHK(f[k + 1] == cur_desc);         /* FILLER tracks the probe */
 			}
@@ -157,7 +157,7 @@ int main(void)
 	/* CHANMAP: no MAC -> byte-EXACT vs the capture. Window 0 is the fe frame
 	 * (marker + 0x00..0x06, checksum 0xb7); the full sweep is checked next. */
 	stamp(&m, f, REAC_M_EMIT_CHANMAP, 0);
-	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CHANMAP_FE, REAC_TYPED_BLOCK_LEN) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* CHANMAP SWEEP: all 11 windows byte-EXACT vs the captured M-300 chanmap sweep
@@ -165,7 +165,7 @@ int main(void)
 	 * it sees its own slots). */
 	for (int i = 0; i < GOLD_CHANMAP_WINDOWS; i++) {
 		stamp(&m, f, REAC_M_EMIT_CHANMAP, i);
-		CHK(memcmp(f + 16, GOLD_CHANMAP_SWEEP[i], 34) == 0);
+		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, GOLD_CHANMAP_SWEEP[i], REAC_TYPED_BLOCK_LEN) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 	}
 
@@ -186,11 +186,11 @@ int main(void)
 	struct reac_master m300;
 	reac_master_init(&m300, M300_MAC, &idle, REAC_PKT_RATE_96K);
 	stamp(&m300, f, REAC_M_EMIT_ANNOUNCE, 0);
-	CHK(memcmp(f + 16, M300_CFEA, 34) == 0);   /* …00 40 ab c9 d8 5b … 28 08 … d4 */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CFEA, REAC_TYPED_BLOCK_LEN) == 0);   /* …00 40 ab c9 d8 5b … 28 08 … d4 */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	/* and the chanmap is still byte-exact (MAC-independent). */
 	stamp(&m300, f, REAC_M_EMIT_CHANMAP, 0);
-	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CHANMAP_FE, REAC_TYPED_BLOCK_LEN) == 0);
 	CHK(check_all_checksums(&m300) == 0);
 
 	/* the rotating probe + the FILLER descriptor that tracks it */
