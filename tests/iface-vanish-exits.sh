@@ -26,6 +26,11 @@ SKIP=77
 command -v unshare >/dev/null 2>&1 || { echo "SKIP: no unshare"; exit $SKIP; }
 unshare -r -n --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net namespaces unavailable"; exit $SKIP; }
+# THE KERNEL'S LINK TYPES ARE PROBED BY NAME (audit 2026-09-24, H3): a kernel without the
+# dummy driver is a machine this test cannot run on, and says so here, so a later `|| exit 90`
+# is a FAIL.
+unshare -r -n sh -c 'ip link add d0 type dummy' 2>/dev/null || {
+	echo "SKIP: this kernel cannot create a dummy link in a namespace (no dummy driver)"; exit $SKIP; }
 
 # The body runs INSIDE the namespace; $1 picks the scenario.
 run_case() {
@@ -43,9 +48,12 @@ PID=$!
 sleep 5
 if ! kill -0 $PID 2>/dev/null; then
 	wait $PID; rc=$?
-	echo "daemon never got running (exit $rc) — no PipeWire in this namespace?"
+	# A DAEMON THAT DIES AT START IS A FAIL, NOT A SKIP (audit 2026-09-24, H3). This body
+	# starts no PipeWire and the daemon runs without one (it is how a boot before the
+	# graph starts), so nothing about the machine explains this exit.
+	echo "daemon-died at start (exit $rc)"
 	tail -3 "$LOG"
-	exit 77
+	exit 91
 fi
 
 ip link delete vanish0
