@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
+# THE SUITE, ON EVERY PUSH TO main AND EVERY PULL REQUEST (audit 2026-09-24, H3).
+#
+# Until this file, the only workflow was release-rpm.yml (workflow_dispatch), and the tests
+# ran only in the spec's %check, inside a builder that has no user namespaces. So every
+# whole-binary test SKIPPED there: the 1.0.26 release job read `Ok: 0 Fail: 0 Skipped: 30`
+# for the netns suite, and a startup crash would have passed every automated check.
+#
+# WHERE IT RUNS, AND WHY THERE. A fedora:44 container, the release's own target: its
+# PipeWire and WirePlumber 0.5 are what the tests are written against
+# (box-master-slave-join.sh's WirePlumber drop-in is 0.5 syntax, and the runner's Ubuntu
+# ships 0.4). The container is --privileged because the tests mint unprivileged user, net,
+# mount and pid namespaces, and Docker's default seccomp profile refuses unshare(CLONE_NEWUSER).
+# The runner VM is prepared first, on the host: Ubuntu 24.04 restricts unprivileged user
+# namespaces through AppArmor, and a user namespace may not autoload a kernel module, so
+# veth, dummy, 8021q and sch_etf are loaded here, by name, before any test asks for them.
+#
+# libreac IS BUILT FROM ITS TAG, pinned at the floor meson.build requires, through
+# tools/build-with-libreac.sh (the documented checkout path). Its fake_box is the far end
+# several tests drive, and it only exists as source.
+#
+# THE VERDICT is tools/ci-suite.sh's: any FAIL, AND any netns test that did not report OK.
+# This runner can run all of them, so a SKIP here is a test that did not run.
+
+name: Test suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LIBREAC_REF: v1.5.0
+
+jobs:
+  suite:
+    name: meson test (unit + netns), fedora 44
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: libreac ${{ env.LIBREAC_REF }}
+        run: git clone --depth 1 --branch "$LIBREAC_REF" https://github.com/FreeREAC/libreac.git ../libreac
+
+      - name: Prepare the host for namespace tests
+        run: |
+          set -eux
+          # Ubuntu 24.04 denies unprivileged user namespaces through AppArmor by default.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          # A user namespace may not autoload a module, so load every one a test asks for.
+          # The azure kernel keeps some of them in linux-modules-extra.
+          mods="veth dummy 8021q sch_etf"
+          if ! sudo modprobe -a $mods; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe -a $mods
+          fi
+          lsmod | grep -E '^(veth|dummy|8021q|sch_etf) '
+
+      - name: Run the suite in fedora:44
+        run: |
+          docker run --rm --privileged \
+            -v "$GITHUB_WORKSPACE/..:/w" -w /w/"$(basename "$GITHUB_WORKSPACE")" \
+            fedora:44 bash -euxo pipefail -c '
+              dnf install -y -q --setopt=install_weak_deps=False \
+                gcc make git meson ninja-build pkgconf-pkg-config python3 \
+                pipewire pipewire-devel pipewire-utils wireplumber \
+                iproute iproute-tc tcpdump libcap procps-ng util-linux which findutils \
+                diffutils gawk sed grep coreutils
+              git config --global --add safe.directory "*"
+              tools/ci-suite.sh ../libreac build-ci
+            '
+
+      - name: Keep the test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meson-testlogs
+          path: build-ci/meson-logs/
+          if-no-files-found: warn
+          retention-days: 14

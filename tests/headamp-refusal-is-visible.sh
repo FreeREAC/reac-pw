@@ -205,10 +205,9 @@ INNER
 )
 rc=$?
 echo "$OUT"
-case "$OUT" in
-	*SKIP:*) exit $SKIP ;;
-esac
-[ $rc -eq 0 ] || exit $rc
+# rc 77 IS THE ONLY SKIP (audit 2026-09-24, H3); a SKIP: anywhere in the output is not one.
+[ $rc -eq 77 ] && exit $SKIP
+[ $rc -eq 0 ] || { echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 case "$OUT" in
 	*PASS*) exit 0 ;;
 	*) echo "FAIL: the inner namespace did not reach PASS"; exit 1 ;;

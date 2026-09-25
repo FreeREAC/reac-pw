@@ -61,6 +61,10 @@ for t in unshare nsenter ip pipewire pw-cli pw-dump python3; do
 done
 unshare -r -n -m -p -f --mount-proc --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net+mount+pid namespaces unavailable"; exit $SKIP; }
+# THE KERNEL'S LINK TYPES ARE PROBED BY NAME (audit 2026-09-24, H3): a kernel without 8021q
+# is a machine this test cannot run on, and says so here, so a later `|| exit 90` is a FAIL.
+unshare -r -n sh -c 'ip link add p0 type veth peer name p1 && ip link add link p0 name p0.9 type vlan id 9' 2>/dev/null || {
+	echo "SKIP: this kernel cannot create a VLAN link in a namespace (no 8021q)"; exit $SKIP; }
 
 # ONE BODY, TWO ARMS, so the arm that is about a refusal cannot drift into testing a
 # different daemon from the arm that is about a box.
@@ -223,9 +227,12 @@ val() { echo "$1" | grep -a "^ *$2 " | head -1 | awk '{print $2}'; }
 echo "=== arm: cold wire, box, box again ==="
 A=$(run_arm cold); rc=$?
 echo "$A" | sed 's/^/  /'
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$A" | grep -qa 'daemon-died' && { echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && exit $SKIP
+[ $rc -eq 0 ] || { echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 echo "$A" | grep -qa '^SKIP:' && { echo "$A" | grep -a '^SKIP:'; exit $SKIP; }
-echo "$A" | grep -qa '^daemon-died' && { echo "FAIL: the daemon died at start"; exit 1; }
 
 # THE CONTROL FIRST: an instrument that never counted a pair cannot report a ghost or an
 # absence, and every assertion after this one is about one or the other.
@@ -244,9 +251,12 @@ echo "$A" | grep -qa '^daemon-died' && { echo "FAIL: the daemon died at start"; 
 echo "=== arm: a held port, a refused sibling ==="
 B=$(run_arm budget); rc=$?
 echo "$B" | sed 's/^/  /'
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$B" | grep -qa 'daemon-died' && { echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && exit $SKIP
+[ $rc -eq 0 ] || { echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 echo "$B" | grep -qa '^SKIP:' && { echo "$B" | grep -a '^SKIP:'; exit $SKIP; }
-echo "$B" | grep -qa '^daemon-died' && { echo "FAIL: the daemon died at start"; exit 1; }
 
 [ "$(val "$B" knob-announced)" = "yes" ] \
 	|| fail "REACPW_LINK_MBIT=100 was never announced — the port was not capped, nothing was ever refused, and this arm is not about #108's ordering at all"
