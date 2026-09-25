@@ -984,6 +984,13 @@ test('netns_tests_are_serial',
   find_program('tests/netns-tests-are-serial.sh'),
   timeout : 30)
 
+# --- ratchet: a namespace test's rc is a verdict, not an excuse -----------------
+# Audit 2026-09-24, H3: seventeen whole-binary tests read ANY non-zero rc from their
+# namespace body as SKIP, so a daemon that died at start was green. rc 77 is the only skip.
+test('netns_rc_is_a_verdict',
+  find_program('tests/netns-rc-is-a-verdict.sh'),
+  timeout : 30)
+
 # --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment

@@ -70,16 +70,22 @@ SPID=$!
 
 wait $MPID; mrc=$?
 kill -TERM $SPID 2>/dev/null; wait $SPID 2>/dev/null
-[ $mrc -eq 0 ] || { echo "SKIP: the master end could not run (rc=$mrc)"; tail -3 "$RT/master.err"; exit 77; }
+# OUR OWN PROBE AND OUR OWN ENGINE FAILING ARE FAILS, NOT SKIPS (audit 2026-09-24, H3):
+# this namespace's root may open AF_PACKET, so nothing about the machine explains either.
+[ $mrc -eq 0 ] || { echo "FAIL: the master end exited rc=$mrc"; tail -3 "$RT/master.err"; exit 94; }
 grep -q "reac_slave_open failed\|AF_PACKET" "$RT/slave.err" && {
-	echo "SKIP: the slave engine could not open its socket"; tail -3 "$RT/slave.err"; exit 77; }
+	echo "FAIL: the slave engine could not open its socket"; tail -3 "$RT/slave.err"; exit 94; }
 cat "$RT/master.out"
 grep -a 'STATE' "$RT/slave.err" | sed 's/^/slave: /'
 exit 0
 INNER
 )
 rc=$?
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"; echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$OUT" | grep -qa 'daemon-died' && { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && { echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+[ $rc -eq 0 ] || { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 
 echo "$OUT" | sed 's/^/  /'
 

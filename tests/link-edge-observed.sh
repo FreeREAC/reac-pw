@@ -27,6 +27,11 @@ command -v unshare >/dev/null 2>&1 || { echo "SKIP: no unshare"; exit $SKIP; }
 command -v ip >/dev/null 2>&1 || { echo "SKIP: no iproute2"; exit $SKIP; }
 unshare -r -n --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net namespaces unavailable"; exit $SKIP; }
+# THE KERNEL'S LINK TYPES ARE PROBED BY NAME (audit 2026-09-24, H3): a kernel without the
+# dummy driver is a machine this test cannot run on, and says so here, so a later `|| exit 90`
+# is a FAIL.
+unshare -r -n sh -c 'ip link add d0 type dummy' 2>/dev/null || {
+	echo "SKIP: this kernel cannot create a dummy link in a namespace (no dummy driver)"; exit $SKIP; }
 
 OUT=$(unshare -r -n --map-root-user bash -s -- "$BIN" <<'INNER'
 set -u
@@ -51,7 +56,11 @@ rc=$?
 
 echo "$OUT" | sed 's/^/  /'
 
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$OUT" | grep -qa 'daemon-died' && { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && { echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+[ $rc -eq 0 ] || { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 
 EDGES=$(echo "$OUT" | grep '^EDGE ' | tr '\n' ' ' | sed 's/ $//')
 

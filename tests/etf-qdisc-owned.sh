@@ -195,8 +195,11 @@ exit 0
 INNER
 )
 rc=$?
-[ $rc -eq 0 ] || { echo "SKIP: the namespace body could not run (rc=$rc)"
-                   echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+# THE BODY'S rc IS A VERDICT (audit 2026-09-24, H3): a dead daemon FAILs whatever rc it left,
+# 77 is the only SKIP, any other rc FAILs. Any-non-zero-is-SKIP read a crash at start as green.
+echo "$OUT" | grep -qa 'daemon-died' && { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the daemon died at start"; exit 1; }
+[ $rc -eq 77 ] && { echo "$OUT" | sed 's/^/  /'; exit $SKIP; }
+[ $rc -eq 0 ] || { echo "$OUT" | sed 's/^/  /'; echo "FAIL: the namespace body exited rc=$rc"; exit 1; }
 
 echo "$OUT" | sed 's/^/  /'
 
