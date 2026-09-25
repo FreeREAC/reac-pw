@@ -35,6 +35,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -48,10 +49,10 @@
  * written out here rather than computed from in_ch on purpose — a helper
  * mapping width to base is the very table this law retired, and it would agree
  * with the wire on exactly the chassis we own. */
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 #define S0808_BASE 0x00
 
-#define FPS 4000   /* irrelevant to the assertions below: we stamp directly,
+#define FPS REAC_PKT_RATE_48K   /* irrelevant to the assertions below: we stamp directly,
                     * never drive the pacer/cadence, so no cycle timing is
                     * exercised here (that is test_reac_master.c's job). */
 
@@ -72,39 +73,39 @@ int main(void)
 
 	for (size_t c = 0; c < sizeof CONF_CONSOLES / sizeof CONF_CONSOLES[0]; c++) {
 		const struct conf_console *cc = &CONF_CONSOLES[c];
-		struct reac_console_cfg cfg = { .out_channels = 8,
+		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_OUT,
 		                                .console_field = cc->console_field };
 		struct reac_master m;
-	uint8_t first_scene_chunk[34];
+	reacpw_libreac_row first_scene_chunk;
 	int first_scene_chunk_set = 0;
 		reac_master_init(&m, cc->mac, &cfg, FPS);
 
 		/* ---- (a) cfea announce (idle): the per-console identity bytes ---- */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
-		CHK(memcmp(f + 16, cc->cfea_idle, 34) == 0);        /* full byte-equality incl cksum */
-		CHK(f[16 + 17] == 0x28);                            /* fixed 40-slot total [17] */
-		CHK(f[16 + 19] == cc->console_field);               /* the pace-code discriminator */
-		CHK(memcmp(f + 16 + CONF_MAC_IDX, cc->mac, 6) == 0); /* identity == the L2 source (never a cloned desk MAC) */
+		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, cc->cfea_idle, REAC_TYPED_BLOCK_LEN) == 0);        /* full byte-equality incl cksum */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_TOTAL_SLOTS_OFF] == REAC_MAX_CHANNELS);   /* the slot total */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_PACE_OFF] == cc->console_field);               /* the pace-code discriminator */
+		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF + CONF_MAC_IDX, cc->mac, REAC_ETH_ADDR_BYTES) == 0); /* identity == the L2 source (never a cloned desk MAC) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* ---- (a) recognized S-1608 (w=0x10) / S-0808 (w=0x08), GRANTED (count=1) ---- */
-		reac_master_set_box(&m, 16, 8, S1608_BASE);         /* recognized while still un-granted (count stays 0) */
+		reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);         /* recognized while still un-granted (count stays 0) */
 		m.state = REAC_M_ESTABLISHED;           /* force the granted branch (mirrors enter_established) */
-		reac_master_set_box(&m, 16, 8, S1608_BASE);         /* re-stamp now that we're "granted": count -> 1 */
+		reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);         /* re-stamp now that we're "granted": count -> 1 */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
-		CHK(memcmp(f + 16, cc->cfea_s1608, 34) == 0);
+		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, cc->cfea_s1608, REAC_TYPED_BLOCK_LEN) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
-		reac_master_set_box(&m, 8, 8, S0808_BASE);          /* an S-0808 instead, still granted */
+		reac_master_set_box(&m, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);          /* an S-0808 instead, still granted */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
-		CHK(memcmp(f + 16, cc->cfea_s0808, 34) == 0);
+		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, cc->cfea_s0808, REAC_TYPED_BLOCK_LEN) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* ---- (a) ENROLL: console-model byte follows the profile ---- */
 		build_and_stamp(&m, f, REAC_M_EMIT_ENROLL, 0);
-		CHK(f[16 + 2] == 0x01 && f[16 + 3] == 0x03 &&
-		    f[16 + 4] == 0x00 && f[16 + 5] == 0x0d);        /* cdea 01 03 000d */
-		CHK(f[16 + 8] == cc->console_field);                /* ENROLL_BLK[8] (reac_master.c's
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_PAGE_0103 &&
+		    REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_LEN_OFF) == REAC_LEN_SUB_ENROLL_GROUP_MAP);
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ENROLL_PACE_OFF] == cc->console_field);                /* ENROLL_BLK[8] (reac_master.c's
 		                                                      * REAC_ENROLL_CONSOLE_IDX, private) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
@@ -139,14 +140,14 @@ int main(void)
 				/* Only a 96 kHz profile may differ, and only here. */
 				CHK(cc->console_field == 0x01);
 				int is_marker_family = 0;
-				for (int sl = 0; sl < 8; sl++)
+				for (int sl = 0; sl < REAC_CHANMAP_RECS_PER_FRAME; sl++)
 					if (i == 7 + sl * 3 + 1 && want[7 + sl * 3] == 0xfe)
 						is_marker_family = 1;
 				if (is_marker_family) {
 					CHK(want[i] == 0x00 && got[i] == 0x01);
 					marker_slots++;
 				} else {
-					CHK(i == 33);   /* the checksum that covers it */
+					CHK(i == REAC_CTRL_CKSUM_OFF - REAC_TYPED_BLOCK_OFF);   /* the checksum that covers it */
 				}
 			}
 		}
@@ -159,8 +160,8 @@ int main(void)
 		 * fresh init seeds the header (step 0); the first body chunk is the
 		 * phase-6/sub-0x02 block transcribed off the live M-200. */
 		build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0);
-		CHK(f[18] == 0x01 && f[19] == 0x01);          /* op-0101              */
-		CHK(f[23] == 0x22 && f[24] == 0xc8);          /* declares 0x22c8      */
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_HEADER);
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_HEAD_TOTAL_OFF) == REAC_SCENE_BYTES);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 		{
 			/* Chunk 1 carries the body verbatim and is the SAME for every console
@@ -168,17 +169,17 @@ int main(void)
 			 * transfer is keyed to the mixer model. Byte-comparing against a
 			 * captured M-200i block would only assert that we replay THAT desk's
 			 * mixer state, which is the thing we deliberately stopped doing. */
-			uint8_t blk[34];
+			reacpw_libreac_row blk;     /* libreac writes its row */
 			CHK(reac_ctrl_build_scene_step(blk, m.scene, sizeof m.scene, 1) == 0);
-			CHK(blk[0] == 0xcd && blk[1] == 0xea);
-			CHK(blk[2] == 0x01 && blk[3] == 0x00);           /* op-0100        */
-			CHK(blk[4] == 0x00 && blk[5] == 0x1a);           /* 26-byte payload */
-			CHK(memcmp(blk + 7, m.scene + REAC_SCENE_HEAD_BYTES,
+			CHK(REACPW_BE16(blk) == REAC_TYPE_CONTROL);
+			CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
+			CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_LEN_OFF) == REAC_SCENE_CHUNK_BYTES);
+			CHK(memcmp(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, m.scene + REAC_SCENE_HEAD_BYTES,
 			           REAC_SCENE_CHUNK_BYTES) == 0);
 			if (first_scene_chunk_set)
-				CHK(memcmp(blk, first_scene_chunk, 34) == 0);  /* profile-independent */
+				CHK(memcmp(blk, first_scene_chunk, sizeof blk) == 0);  /* profile-independent */
 			else {
-				memcpy(first_scene_chunk, blk, 34);
+				memcpy(first_scene_chunk, blk, sizeof blk);
 				first_scene_chunk_set = 1;
 			}
 		}
@@ -197,20 +198,22 @@ int main(void)
 				                        GOLD_S1608_CELLS[i][2]) == 0);
 
 			struct reac_grant_alloc a;
-			CHK(reac_grant_allocate(&a, 0x20, 16) == 0);
-			CHK(a.base == 0x20 && a.width == 16);
+			CHK(reac_grant_allocate(&a, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 0);
+			CHK(a.base == REACPW_S1608_HEADAMP_BASE && a.width == REAC_BOX_S1608_IN);
 
-			uint8_t sw[REAC_GRANT_SWEEP_MAX][34];
+			reacpw_libreac_row sw[REAC_GRANT_SWEEP_MAX];
 			int n = reac_grant_build_sweep(sw, REAC_GRANT_SWEEP_MAX, &a, &tx);
 			CHK(n == (int)(sizeof GOLD_S1608_SWEEP / sizeof GOLD_S1608_SWEEP[0]));
 			for (int i = 0; i < n; i++)
-				CHK(memcmp(sw[i], GOLD_S1608_SWEEP[i], 34) == 0);
+				CHK(memcmp(sw[i], GOLD_S1608_SWEEP[i], REAC_TYPED_BLOCK_LEN) == 0);
 
 			/* HEAD_ACK (marker 12 12, tag 01 00) / HEAD_MARK (marker 12 12, tag
 			 * 00 00) bracket the first channel's group A — console-independent
 			 * fixed frames (reac_grant.c's GRANT_HEAD_ACK / GRANT_HEAD_MARK). */
-			CHK(sw[0][16] == 0x12 && sw[0][17] == 0x12 && sw[0][18] == 0x01 && sw[0][19] == 0x00);
-			CHK(sw[4][16] == 0x12 && sw[4][17] == 0x12 && sw[4][18] == 0x00 && sw[4][19] == 0x00);
+			CHK(sw[0][REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && sw[0][REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+			    REACPW_BE16(sw[0] + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_JOIN_GRANT);
+			CHK(sw[4][REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && sw[4][REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+			    REACPW_BE16(sw[4] + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_MARK);
 		}
 	}
 

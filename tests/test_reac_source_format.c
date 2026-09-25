@@ -48,6 +48,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -57,18 +58,19 @@
  * 8 out). Prove the pod round-trips the NEW rate at each real box width. */
 static int test_build_at_capture_widths_after_a_rate_change(void)
 {
-	const int widths[] = { 8, 16, 32, REAC_MAX_CHANNELS };
+	const int widths[] = { REAC_BOX_S0808_IN, REAC_BOX_S1608_IN, REAC_BOX_S4000S_3208_IN,
+	                       REAC_MAX_CHANNELS };
 	for (size_t i = 0; i < sizeof widths / sizeof widths[0]; i++) {
 		uint8_t buf[4096];
 		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
-		const struct spa_pod *pod = reac_sink_format_build(&b, widths[i], 44100);
+		const struct spa_pod *pod = reac_sink_format_build(&b, widths[i], REAC_SAMPLE_RATE_44K1);
 		CHK(pod != NULL);
 
 		struct spa_audio_info_raw info;
 		memset(&info, 0, sizeof info);
 		CHK(spa_format_audio_raw_parse(pod, &info) >= 0);
 		CHK(info.format == SPA_AUDIO_FORMAT_F32P);
-		CHK(info.rate == 44100);
+		CHK(info.rate == REAC_SAMPLE_RATE_44K1);
 		CHK(info.channels == (uint32_t)widths[i]);
 		for (int c = 0; c < widths[i]; c++)
 			CHK(info.position[c] == (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c));
@@ -81,8 +83,8 @@ static int test_build_at_capture_widths_after_a_rate_change(void)
  * must never look like a pending renegotiation. */
 static int test_no_reconnect_on_matching_rate(void)
 {
-	CHK(reac_sink_format_needs_update(48000, 48000) == 0);
-	CHK(reac_sink_format_needs_update(96000, 96000) == 0);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_48K) == 0);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_96K, REAC_SAMPLE_RATE_96K) == 0);
 	return 0;
 }
 
@@ -92,8 +94,8 @@ static int test_no_reconnect_on_matching_rate(void)
  * rate) hands the source the SAME accepted `hz`, and this gate must say so. */
 static int test_reconnect_fires_on_accepted_change(void)
 {
-	CHK(reac_sink_format_needs_update(48000, 44100) == 1);
-	CHK(reac_sink_format_needs_update(44100, 96000) == 1);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_44K1) == 1);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_44K1, REAC_SAMPLE_RATE_96K) == 1);
 	return 0;
 }
 
@@ -104,8 +106,8 @@ static int test_reconnect_fires_on_accepted_change(void)
  * reconnects reac-capture no more than it reconnects reac-playback. */
 static int test_no_reconnect_after_a_refusal(void)
 {
-	int node_rate = 48000;
-	int pacer_rate_after_refusal = 48000;   /* reac_rate_cfg_decide refused; unchanged */
+	int node_rate = REAC_SAMPLE_RATE_48K;
+	int pacer_rate_after_refusal = REAC_SAMPLE_RATE_48K;   /* reac_rate_cfg_decide refused; unchanged */
 	CHK(reac_sink_format_needs_update(node_rate, pacer_rate_after_refusal) == 0);
 	return 0;
 }
@@ -117,12 +119,12 @@ static int test_no_reconnect_after_a_refusal(void)
  * function disagrees with that inversion on both arms, by hand. */
 static int test_sabotage_inverted_gate_would_fail(void)
 {
-	int inverted_matching = (48000 == 48000);      /* what an inverted fn would answer */
-	int inverted_changed  = (48000 == 44100);
+	int inverted_matching = (REAC_SAMPLE_RATE_48K == REAC_SAMPLE_RATE_48K);      /* what an inverted fn would answer */
+	int inverted_changed  = (REAC_SAMPLE_RATE_48K == REAC_SAMPLE_RATE_44K1);
 	CHK(inverted_matching == 1);   /* the WRONG answer for the matching case (want 0) */
 	CHK(inverted_changed  == 0);   /* the WRONG answer for the changed case (want 1) */
-	CHK(reac_sink_format_needs_update(48000, 48000) != inverted_matching);
-	CHK(reac_sink_format_needs_update(48000, 44100) != inverted_changed);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_48K) != inverted_matching);
+	CHK(reac_sink_format_needs_update(REAC_SAMPLE_RATE_48K, REAC_SAMPLE_RATE_44K1) != inverted_changed);
 	return 0;
 }
 
@@ -132,8 +134,8 @@ static int test_sabotage_inverted_gate_would_fail(void)
  * for work not done" applied to the capture node's own rate). */
 static int test_rate_after_attempt_matches_connect_outcome(void)
 {
-	CHK(reac_sink_format_rate_after_attempt(44100, 48000, 1) == 44100);
-	CHK(reac_sink_format_rate_after_attempt(44100, 48000, 0) == 48000);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_44K1, REAC_SAMPLE_RATE_48K, 1) == REAC_SAMPLE_RATE_44K1);
+	CHK(reac_sink_format_rate_after_attempt(REAC_SAMPLE_RATE_44K1, REAC_SAMPLE_RATE_48K, 0) == REAC_SAMPLE_RATE_48K);
 	return 0;
 }
 

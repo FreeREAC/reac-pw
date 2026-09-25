@@ -43,13 +43,14 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static float s24le_to_f32(const uint8_t *p)
 {
 	int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16));
-	if (v & 0x00800000)
-		v |= ~0x00FFFFFF;
-	return (float)v / 8388608.0f;
+	if (v & REACPW_SAMPLE_SIGN)
+		v |= (int32_t)~REACPW_SAMPLE_MASK;
+	return (float)v / (float)REACPW_SAMPLE_SIGN;
 }
 
 /* Un-braid one channel of a downstream audio region into 12 floats — the box's
@@ -61,7 +62,7 @@ static void unbraid_ch(const uint8_t *audio, int ch, float out[REAC_SAMPLES_PER_
 	const uint8_t *g0 = audio + (size_t)(ch & ~1) * REAC_RESOLUTION;
 	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
 		const uint8_t *g = g0 + (size_t)s * N * REAC_RESOLUTION;
-		uint8_t trio[3];
+		uint8_t trio[REAC_RESOLUTION];
 		if ((ch & 1) == 0) {
 			trio[0] = g[3]; trio[1] = g[0]; trio[2] = g[1];
 		} else {
@@ -123,8 +124,8 @@ int main(void)
 		                        REAC_SAMPLES_PER_PKT, 0x1234, src);
 		CHK(len == REAC_FRAME_BYTES);
 		if (fr == 0) {
-			CHK(frame[12] == 0x88 && frame[13] == 0x19);
-			CHK(frame[14] == 0x34 && frame[15] == 0x12);          /* counter LE */
+			CHK(frame[REAC_ETHERTYPE_OFF] == (REAC_ETHERTYPE >> 8) && frame[REAC_ETHERTYPE_OFF + 1] == (REAC_ETHERTYPE & 0xff));
+			CHK(frame[REAC_HDR_COUNTER_OFF] == 0x34 && frame[REAC_HDR_COUNTER_OFF + 1] == 0x12);   /* counter LE */
 			CHK(memcmp(frame + 6, src, 6) == 0);
 			CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0);
 			CHK(frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);

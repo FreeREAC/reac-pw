@@ -9,6 +9,7 @@
 #include <spa/param/audio/raw.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/pod/builder.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 const struct spa_pod *reac_sink_format_build(struct spa_pod_builder *b,
                                              int channels, int rate)

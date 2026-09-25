@@ -7,6 +7,7 @@
 #include "reac_link_budget.h"
 
 #include <reac/reac.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #include <stdio.h>
 
@@ -16,17 +17,17 @@ static int fails;
 int main(void)
 {
 	/* The geometry, from the protocol: 12 samples a frame at every rate. */
-	CHK(reac_link_master_pps(96000) == 8000);
-	CHK(reac_link_master_pps(48000) == 4000);
-	CHK(reac_link_master_pps(44100) == 3675);
+	CHK(reac_link_master_pps(REAC_SAMPLE_RATE_96K) == REAC_PKT_RATE_96K);
+	CHK(reac_link_master_pps(REAC_SAMPLE_RATE_48K) == REAC_PKT_RATE_48K);
+	CHK(reac_link_master_pps(REAC_SAMPLE_RATE_44K1) == REAC_PKT_RATE_44K1);
 	CHK(reac_link_master_pps(0) == 0);
 
 	/* ONE 96 kHz MASTER IS ~97 Mbit/s: 8000 x (1492 + 24) x 8. Measured against the
 	 * desk's own qdisc, which passed 8238 pkt/s and reported the link at 99.6 Mbit/s. */
-	uint64_t one = reac_link_cost_kbit(reac_link_master_pps(96000), REAC_FRAME_BYTES);
-	CHK(one == 97024);
+	uint64_t one = reac_link_cost_kbit(reac_link_master_pps(REAC_SAMPLE_RATE_96K), REAC_FRAME_BYTES);
+	CHK(one == (uint64_t)REAC_PKT_RATE_96K * (REAC_FRAME_BYTES + REAC_LINK_WIRE_OVERHEAD_BYTES) * 8 / 1000);
 	CHK(reac_link_cost_kbit(0, REAC_FRAME_BYTES) == 0);
-	CHK(reac_link_cost_kbit(8000, 0) == 0);
+	CHK(reac_link_cost_kbit(REAC_PKT_RATE_96K, 0) == 0);
 
 	/* THE ANSWER THE DESK NEEDED. One master fits a 100 Mbit/s port; a second does
 	 * not, and neither does a third or a fourth — which is what was running, at 387
@@ -39,8 +40,8 @@ int main(void)
 	/* AT 48 kHz TWO FIT AND FOUR DO NOT — the operator's own test, and why dropping the
 	 * box to 48 k did not fix the silence: four segments at 48 k still offer 194 Mbit/s
 	 * onto a 100 Mbit/s port. */
-	uint64_t half = reac_link_cost_kbit(reac_link_master_pps(48000), REAC_FRAME_BYTES);
-	CHK(half == 48512);
+	uint64_t half = reac_link_cost_kbit(reac_link_master_pps(REAC_SAMPLE_RATE_48K), REAC_FRAME_BYTES);
+	CHK(half == (uint64_t)REAC_PKT_RATE_48K * (REAC_FRAME_BYTES + REAC_LINK_WIRE_OVERHEAD_BYTES) * 8 / 1000);
 	CHK(reac_link_budget_fits(100, half, half) == 1);
 	CHK(reac_link_budget_fits(100, 2 * half, half) == 0);
 

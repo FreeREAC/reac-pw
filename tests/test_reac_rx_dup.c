@@ -57,6 +57,7 @@
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
 #include <reac/reac_upstream.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #include "upstream_fixtures.inc"
 
@@ -116,8 +117,8 @@ static void mk_frame(uint8_t *out, int i)
 {
 	memcpy(out, UP16, sizeof UP16);
 	uint16_t ctr = (uint16_t)(CTR_BASE + i);
-	out[14] = (uint8_t)(ctr & 0xff);
-	out[15] = (uint8_t)(ctr >> 8);
+	out[REAC_HDR_COUNTER_OFF] = (uint8_t)(ctr & 0xff);
+	out[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)(ctr >> 8);
 	/* distinct audio marker: a byte inside the braided audio region
 	 * [REAC_L2_HEADER_LEN : 626) — which decoded sample it lands in is
 	 * irrelevant, the expected PCM is recomputed per frame below */
@@ -134,11 +135,11 @@ static void mk_downstream(uint8_t *out, uint16_t counter)
 	memset(out, 0xff, 6);                       /* dst broadcast */
 	static const uint8_t master[6] = { 0x00, 0x40, 0xab, 0xc4, 0x91, 0x90 };
 	memcpy(out + 6, master, 6);
-	out[12] = 0x88; out[13] = 0x19;
-	out[14] = (uint8_t)(counter & 0xff); out[15] = (uint8_t)(counter >> 8);
+	out[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; out[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff;
+	out[REAC_HDR_COUNTER_OFF] = (uint8_t)(counter & 0xff); out[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)(counter >> 8);
 	for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
 		size_t pos[3];
-		reac_braid_pos(s, 0, 40, pos);
+		reac_braid_pos(s, 0, REAC_MAX_CHANNELS, pos);
 		uint8_t *audio = out + REAC_L2_HEADER_LEN;
 		audio[pos[0]] = (uint8_t)counter;       /* per-frame marker: distinct PCM */
 		audio[pos[1]] = 0x00;
@@ -168,7 +169,7 @@ int main(void)
 	uint8_t frame[sizeof UP16];
 
 	/* the expected decoded PCM of every distinct frame, from the real decoder */
-	static uint8_t pcm[NFRAMES][16 * REAC_SAMPLES_PER_PKT * 3];
+	static uint8_t pcm[NFRAMES][16 * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	for (int i = 0; i < NFRAMES; i++) {
 		mk_frame(frame, i);
 		CHK(reac_upstream_decode(frame, sizeof frame, pcm[i]) == REAC_SAMPLES_PER_PKT);
@@ -190,7 +191,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -225,11 +226,11 @@ int main(void)
 		for (int i = 0; i < NFRAMES; i++)
 			for (int c = 0; c < 16; c++)
 				for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-					const uint8_t *p = &pcm[i][(size_t)(c * 12 + s) * 3];
+					const uint8_t *p = &pcm[i][(size_t)(c * REAC_SAMPLES_PER_PKT + s) * REAC_RESOLUTION];
 					int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 					                      ((uint32_t)p[2] << 16));
-					if (v & 0x00800000) v |= ~0x00FFFFFF;
-					if (fabsf(ch[c][i * 12 + s] - (float)v / 8388608.0f) > 1e-7f)
+					if (v & REACPW_SAMPLE_SIGN) v |= (int32_t)~REACPW_SAMPLE_MASK;
+					if (fabsf(ch[c][i * REAC_SAMPLES_PER_PKT + s] - (float)v / (float)REACPW_SAMPLE_SIGN) > 1e-7f)
 						bad++;
 				}
 		CHK(bad == 0);
@@ -263,7 +264,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -290,11 +291,11 @@ int main(void)
 		for (int i = 0; i < NFRAMES; i++)
 			for (int c = 0; c < 16; c++)
 				for (int s = 0; s < REAC_SAMPLES_PER_PKT; s++) {
-					const uint8_t *p = &pcm[i][(size_t)(c * 12 + s) * 3];
+					const uint8_t *p = &pcm[i][(size_t)(c * REAC_SAMPLES_PER_PKT + s) * REAC_RESOLUTION];
 					int32_t v = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 					                      ((uint32_t)p[2] << 16));
-					if (v & 0x00800000) v |= ~0x00FFFFFF;
-					if (fabsf(ch[c][i * 12 + s] - (float)v / 8388608.0f) > 1e-7f)
+					if (v & REACPW_SAMPLE_SIGN) v |= (int32_t)~REACPW_SAMPLE_MASK;
+					if (fabsf(ch[c][i * REAC_SAMPLES_PER_PKT + s] - (float)v / (float)REACPW_SAMPLE_SIGN) > 1e-7f)
 						bad++;
 				}
 		CHK(bad == 0);
@@ -325,7 +326,7 @@ int main(void)
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 48000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_48K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_DOWNSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;
@@ -356,15 +357,15 @@ int main(void)
 		for (int i = 0; i < 2 * NFRAMES; i++) {
 			memcpy(frame, UP16, sizeof UP16);
 			uint16_t ctr = (uint16_t)(CTR_BASE + i);
-			frame[14] = (uint8_t)(ctr & 0xff);
-			frame[15] = (uint8_t)(ctr >> 8);
+			frame[REAC_HDR_COUNTER_OFF] = (uint8_t)(ctr & 0xff);
+			frame[REAC_HDR_COUNTER_OFF + 1] = (uint8_t)(ctr >> 8);
 			frame[REAC_L2_HEADER_LEN + 7] = (uint8_t)i;
 			pcap_rec(f, frame, sizeof frame);
 		}
 		fclose(f);
 
 		struct reac_rx_cfg cfg = { .kind = REAC_RX_PCAP, .source = path,
-		                           .forced_rate = 96000, .pcap_realtime = 0,
+		                           .forced_rate = REAC_SAMPLE_RATE_96K, .pcap_realtime = 0,
 		                           .accept = REAC_RX_ACCEPT_UPSTREAM };
 		struct reac_ring ring;
 		struct reac_rx rx;

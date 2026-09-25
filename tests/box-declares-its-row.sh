@@ -30,6 +30,7 @@
 # ISOLATION: a user+net+mount+pid namespace with its own veth, its own sysfs and its own
 # PipeWire on a private runtime dir — `unshare -n` isolates the wire and not the graph.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 # ABSOLUTE, ALWAYS. nsenter into a mount namespace starts at /, so a relative binary path
 # runs the box side and silently fails to start the master side — which read as "the mixer
@@ -64,12 +65,19 @@ pw-cli info 0 >/dev/null 2>&1 || {
 # read like a zero.
 mkdir -p "$RT/mhome"
 cat > "$RT/sniff.py" <<'PYEOF'
-import socket, sys, time
+import os, socket, sys, time
 iface, secs = sys.argv[1], float(sys.argv[2])
-s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x8819))
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(int(os.environ["FACT_ETHERTYPE"])))
 s.bind((iface, 0))
 s.settimeout(0.5)
 end = time.time() + secs
+F = {k[5:]: int(v) for k, v in os.environ.items() if k.startswith("FACT_")}
+TB, CB, CE = F["TYPED_BLOCK_OFF"], F["CTRL_BLOCK_OFF"], F["CTRL_BLOCK_END"]
+CTRL = F["TYPE_CONTROL"].to_bytes(2, "big")
+ANN_HEAD = (F["OP_PAGE_0103"].to_bytes(2, "big") + F["LEN_SUB_COMMIT_REPORT"].to_bytes(2, "big"))
+LNK, SEG, TAG = F["HDR_LINK_OFF"], F["HDR_SEG_OFF"], F["DT1_TAG_OFF"]
+ADDR, DATA = TAG + 2, TAG + F["IDENTITY_ADDR_BYTES"]
+PT = slice(F["PORTS_TABLE_OFF"], F["PORTS_TABLE_OFF"] + F["PORTS_TABLE_SLOTS"])
 bcast = 0; announce = None; fw = None; ver = None; name_first = None; name_last = None
 lens = {}
 while time.time() < end:
@@ -84,34 +92,34 @@ while time.time() < end:
         # the seconds before it and calls them the whole run.
         time.sleep(0.2)
         continue
-    if len(f) < 50:
+    if len(f) < CE:
         continue
     lens[len(f)] = lens.get(len(f), 0) + 1
     if f[0:6] == b'\xff\xff\xff\xff\xff\xff':
         bcast += 1
-    blk = f[18:50]
+    blk = f[CB:CE]
     # cdea link 1, the config-announce: 01 03 00 10 then the selector
-    if f[16:18] == b'\xcd\xea' and blk[0:4] == b'\x01\x03\x00\x10':
+    if f[TB:TB + 2] == CTRL and blk[0:4] == ANN_HEAD:
         announce = blk
     # the identity page rides link 4 with the DT1 address 0500 xxxx at blk[16:20]
-    if f[16:18] == b'\xcd\xea' and blk[0] == 0x04 and blk[16:18] == b'\x05\x00':
-        addr = blk[18:20]
-        if blk[1] == 0x03 and addr == b'\x00\x00':
-            fw = blk[20:24]
-        elif blk[1] == 0x03 and addr == b'\x06\x00':
-            ver = blk[20:28]
-        elif blk[1] == 0x01 and addr == b'\x10\x00':
+    if f[TB:TB + 2] == CTRL and blk[LNK] == F["LINK_RECORD"] and int.from_bytes(blk[TAG:ADDR], "big") == F["DT1_TAG_IDENTITY"]:
+        addr = int.from_bytes(blk[ADDR:DATA], "big")
+        if blk[SEG] == F["SEG_SINGLE"] and addr == F["IDENTITY_ADDR_FIRMWARE_VERSION"]:
+            fw = blk[DATA:DATA + 4]
+        elif blk[SEG] == F["SEG_SINGLE"] and addr == F["IDENTITY_ADDR_REAC_VERSION"]:
+            ver = blk[DATA:DATA + 8]
+        elif blk[SEG] == F["SEG_FIRST_BIT"] and addr == F["IDENTITY_ADDR_MODEL_NAME"]:
             name_first = blk
-    if f[16:18] == b'\xcd\xea' and blk[0] == 0x04 and blk[1] == 0x02:
+    if f[TB:TB + 2] == CTRL and blk[LNK] == F["LINK_RECORD"] and blk[SEG] == F["SEG_LAST_BIT"]:
         name_last = blk
 print("frames", sum(lens.values()))
 print("broadcast", bcast)
 for L in sorted(lens, key=lambda k: -lens[k])[:2]:
     print("len", L, lens[L])
 if announce is not None:
-    ins = sum(1 for b in announce[8:20] if b == 0x02) * 4
-    outs = sum(1 for b in announce[8:20] if b == 0x01) * 4
-    print("selector", "0x%02x" % announce[4])
+    ins = sum(1 for b in announce[PT] if b == F["PORT_SLOT_IN"]) * F["PORTS_CH_PER_SLOT"]
+    outs = sum(1 for b in announce[PT] if b == F["PORT_SLOT_OUT"]) * F["PORTS_CH_PER_SLOT"]
+    print("selector", "0x%02x" % announce[F["SUB_0103_OFF"]])
     print("strap", announce[7])
     print("in", ins)
     print("out", outs)
@@ -249,7 +257,7 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	return 0
 }
 
-arm A s1608 bxa0 8 || exit $?
+arm A s1608 bxa0 "$FACT_BOX_S1608_OUT" || exit $?
 arm B fr4000 bxb0 || exit $?
 exit 0
 INNER
@@ -274,18 +282,19 @@ FR=$(get A frames) || FR=0
 [ "${FR:-0}" -gt 100 ] || say "the sniffer saw ${FR:-0} REAC frames on arm A — it cannot prove anything about arm B either"
 
 # ---- ARM A: a CAPTURED row's own numbers reach the wire -------------------------------
-[ "$(get A in)" = "16" ]      || say "arm A declared $(get A in) inputs on the wire; the S-1608 row says 16"
-[ "$(get A out)" = "8" ]      || say "arm A declared $(get A out) outputs; the S-1608 row says 8"
-[ "$(get A selector)" = "0x82" ] || say "arm A announced selector $(get A selector); the S-1608 row says 0x82"
+[ "$(get A in)" = "$FACT_BOX_S1608_IN" ]  || say "arm A declared $(get A in) inputs on the wire; the S-1608 row says $FACT_BOX_S1608_IN"
+[ "$(get A out)" = "$FACT_BOX_S1608_OUT" ] || say "arm A declared $(get A out) outputs; the S-1608 row says $FACT_BOX_S1608_OUT"
+SEL=$(printf '0x%02x' "$FACT_SUB_0103_COMMIT_REPORT")
+[ "$(get A selector)" = "$SEL" ] || say "arm A announced selector $(get A selector); the S-1608 row says $SEL"
 [ "$(get A strap)" = "2" ]    || say "arm A announced head-amp strap $(get A strap); the S-1608 row says 2 (base 0x20)"
-[ "$(get A blocksum)" = "0" ] || say "arm A's declaration does not checksum (sum mod 256 = $(get A blocksum))"
+[ "$(get A blocksum)" = "$FACT_CTRL_BLOCK_SUM" ] || say "arm A's declaration does not checksum (sum mod 256 = $(get A blocksum))"
 [ "$(get A fw)" = "2.200" ]   || say "arm A's firmware record reads '$(get A fw)'; the S-1608 row says 2.200"
 [ "$(get A reacver)" = "2.302" ] || say "arm A's REAC version reads '$(get A reacver)'; the S-1608 row says 2.302"
 NM=$(get A name) && say "arm A sent a NAME record ('$NM'); the 0x82 family is named by its selector and sends none"
 [ "$(get A broadcast)" -gt 10 ] 2>/dev/null || say "arm A never flooded broadcast — a box announces itself before any master answers"
 
 # ---- ARM B: the 40-channel experiment, with OUR identity on it -------------------------
-[ "$(get B in)" = "40" ]      || say "arm B declared $(get B in) inputs; the experiment row says 40"
+[ "$(get B in)" = "$FACT_MAX_CHANNELS" ] || say "arm B declared $(get B in) inputs; the experiment row says $FACT_MAX_CHANNELS"
 [ "$(get B out)" = "0" ]      || say "arm B declared $(get B out) outputs; the experiment row says 0"
 [ "$(get B blocksum)" = "0" ] || say "arm B's declaration does not checksum (sum mod 256 = $(get B blocksum))"
 [ "$(get B fw)" = "1.014" ]   || say "arm B's firmware reads '$(get B fw)'; our invented firmware is 1.014"
@@ -315,8 +324,8 @@ JOINS=$(get B master-joins); JOINS=${JOINS:-0}
 [ "$JOINS" -ge 1 ] 2>/dev/null || say "the mixer counted $JOINS joins from the 40-channel row — its cold-connect never reached a master at all"
 [ "$(get A roster-role)" = "box" ] || say "arm A's roster reads role '$(get A roster-role)', not box"
 [ "$(get B roster-role)" = "box" ] || say "arm B's roster reads role '$(get B roster-role)', not box"
-[ "$(get A roster-width)" = "16/8" ] || say "arm A's roster width is '$(get A roster-width)', not 16/8"
-[ "$(get B roster-width)" = "40/0" ] || say "arm B's roster width is '$(get B roster-width)', not 40/0"
+[ "$(get A roster-width)" = "$FACT_BOX_S1608_IN/$FACT_BOX_S1608_OUT" ] || say "arm A's roster width is '$(get A roster-width)', not $FACT_BOX_S1608_IN/$FACT_BOX_S1608_OUT"
+[ "$(get B roster-width)" = "$FACT_MAX_CHANNELS/0" ] || say "arm B's roster width is '$(get B roster-width)', not $FACT_MAX_CHANNELS/0"
 [ "$(get A roster-model)" = "s1608" ] || say "arm A's roster model is '$(get A roster-model)'"
 # ---- AND THE ENV DID NOT GET A VOTE ----------------------------------------------------
 # Arm A ran with REAC_BOX_CHANNELS=8 against a 16/8 row. Every width above was measured

@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -92,7 +93,7 @@ static int test_probe_rotation(void)
 	uint8_t f[REAC_FRAME_BYTES];
 	struct reac_console_cfg idle = REAC_CONSOLE_CFG_IDLE;
 	struct reac_master m;
-	reac_master_init(&m, OUR_MAC, &idle, 8000);
+	reac_master_init(&m, OUR_MAC, &idle, REAC_PKT_RATE_96K);
 
 	int prev_step = 0;
 	int np = 0, fillers_checked = 0;
@@ -111,11 +112,11 @@ static int test_probe_rotation(void)
 			 * checksum — and no two consecutive chunks are identical. That last one
 			 * is the property the old model got wrong: it emitted each block TWICE,
 			 * which a mirrored capture had made look like the desk's own behaviour. */
-			CHK(f[18] == 0x01 && f[19] == 0x00);
-			CHK(f[20] == 0x00 && f[21] == 0x1a);
+			CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
+			CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_LEN_OFF) == REAC_SCENE_CHUNK_BYTES);
 			size_t off = REAC_SCENE_HEAD_BYTES +
 			             (size_t)(m.scene_step - 1) * REAC_SCENE_CHUNK_BYTES;
-			CHK(memcmp(f + 23, m.scene + off, REAC_SCENE_CHUNK_BYTES) == 0);
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF, m.scene + off, REAC_SCENE_CHUNK_BYTES) == 0);
 			CHK(reac_ctrl_checksum_verify(f) == 0);
 			/* The step advances by exactly one per chunk slot. That is the
 			 * body-independent form of the invariant the old model broke: it
@@ -127,11 +128,11 @@ static int test_probe_rotation(void)
 			if (np > 0)
 				CHK(m.scene_step == prev_step + 1);
 			prev_step = m.scene_step;
-			cur_desc = f[49];                      /* this chunk's checksum */
+			cur_desc = f[REAC_CTRL_CKSUM_OFF];                      /* this chunk's checksum */
 			have = 1;
 			np++;
 		} else if (e == REAC_M_EMIT_FILLER && have) {
-			for (int k = 18; k < 50; k += 2) {
+			for (int k = REAC_CTRL_BLOCK_OFF; k < REAC_CTRL_BLOCK_END; k += 2) {
 				CHK(f[k] == 0x00);                 /* high byte constant */
 				CHK(f[k + 1] == cur_desc);         /* FILLER tracks the probe */
 			}
@@ -150,13 +151,13 @@ int main(void)
 
 	/* --- with OUR distinct MAC: chanmap EXACT, cfea EXACT except MAC+cksum --- */
 	struct reac_master m;
-	reac_master_init(&m, OUR_MAC, &idle, 8000);
+	reac_master_init(&m, OUR_MAC, &idle, REAC_PKT_RATE_96K);
 	CHK(m.chanmap_nframes == GOLD_CHANMAP_WINDOWS);   /* full 49-window fabric sweep */
 
 	/* CHANMAP: no MAC -> byte-EXACT vs the capture. Window 0 is the fe frame
 	 * (marker + 0x00..0x06, checksum 0xb7); the full sweep is checked next. */
 	stamp(&m, f, REAC_M_EMIT_CHANMAP, 0);
-	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CHANMAP_FE, REAC_TYPED_BLOCK_LEN) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* CHANMAP SWEEP: all 11 windows byte-EXACT vs the captured M-300 chanmap sweep
@@ -164,7 +165,7 @@ int main(void)
 	 * it sees its own slots). */
 	for (int i = 0; i < GOLD_CHANMAP_WINDOWS; i++) {
 		stamp(&m, f, REAC_M_EMIT_CHANMAP, i);
-		CHK(memcmp(f + 16, GOLD_CHANMAP_SWEEP[i], 34) == 0);
+		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, GOLD_CHANMAP_SWEEP[i], REAC_TYPED_BLOCK_LEN) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 	}
 
@@ -183,13 +184,13 @@ int main(void)
 
 	/* --- with the M-300 MAC as OUR src: cfea is byte-EXACT incl. checksum ---- */
 	struct reac_master m300;
-	reac_master_init(&m300, M300_MAC, &idle, 8000);
+	reac_master_init(&m300, M300_MAC, &idle, REAC_PKT_RATE_96K);
 	stamp(&m300, f, REAC_M_EMIT_ANNOUNCE, 0);
-	CHK(memcmp(f + 16, M300_CFEA, 34) == 0);   /* …00 40 ab c9 d8 5b … 28 08 … d4 */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CFEA, REAC_TYPED_BLOCK_LEN) == 0);   /* …00 40 ab c9 d8 5b … 28 08 … d4 */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	/* and the chanmap is still byte-exact (MAC-independent). */
 	stamp(&m300, f, REAC_M_EMIT_CHANMAP, 0);
-	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CHANMAP_FE, REAC_TYPED_BLOCK_LEN) == 0);
 	CHK(check_all_checksums(&m300) == 0);
 
 	/* the rotating probe + the FILLER descriptor that tracks it */

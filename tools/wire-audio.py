@@ -12,6 +12,9 @@ average.
   tools/wire-audio.py capture.pcap <src-mac>
 """
 import struct, sys, collections
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from facts import FACTS   # the protocol's numbers, from their one declaration (tools/facts.py)
 
 path = sys.argv[1]
 want = bytes.fromhex(sys.argv[2].replace(':', ''))
@@ -36,11 +39,13 @@ while True:
     t = ts + (tus / 1e9 if nano else tus / 1e6)
     if t0 is None:
         t0 = t
-    if pkt[6:12] != want or len(pkt) < 1400:
+    if pkt[6:12] != want or len(pkt) < FACTS["FRAME_BYTES"]:
         continue
     b = int(t - t0)
     total[b] += 1
-    aud = pkt[50:1492]
+    # AUDIO_OFFSET up to the end marker: this sliced [50:1492] until 2026-09-25 and so
+    # took in the two end-marker bytes (audit contract-copies, wire-audio.py:43).
+    aud = pkt[FACTS["AUDIO_OFFSET"]:FACTS["FRAME_BYTES"] - FACTS["END_MARKER_BYTES"]]
     if any(aud):
         live[b] += 1
     if prev is not None and aud != prev:

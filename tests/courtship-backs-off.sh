@@ -27,6 +27,7 @@
 # namespaces are unavailable, and where the master could not hold its pacing — a measurement
 # that could not be taken is not a pass.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/courtship-probe}"
 SKIP=77
 
@@ -37,7 +38,7 @@ unshare -r -n --map-root-user true 2>/dev/null || {
 	echo "SKIP: unprivileged user+net namespaces unavailable"; exit $SKIP; }
 
 # 44.1 k is the capture's rate: fps = 44100 / 12 = 3675, and both bounds scale with it.
-FPS=3675
+FPS=$FACT_PKT_RATE_44K1
 RUN=40
 SLAVE_MAC=00:40:ab:9f:9e:be
 
@@ -65,7 +66,7 @@ nsenter -t $NSPID -n ip link set ctm0 up
 nsenter -t $NSPID -n "$BIN" master ctm0 "$SLAVE_MAC" "$FPS" "$RUN" >"$RT/master.out" 2>"$RT/master.err" &
 MPID=$!
 sleep 0.5
-"$BIN" slave cts0 "$SLAVE_MAC" 44100 $((RUN - 2)) >"$RT/slave.out" 2>"$RT/slave.err" &
+"$BIN" slave cts0 "$SLAVE_MAC" "$FACT_SAMPLE_RATE_44K1" $((RUN - 2)) >"$RT/slave.out" 2>"$RT/slave.err" &
 SPID=$!
 
 wait $MPID; mrc=$?

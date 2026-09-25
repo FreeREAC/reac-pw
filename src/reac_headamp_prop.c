@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* Coerce a scalar value pod to a byte, accepting the three encodings a
  * controller might naturally send: Bool (phantom/pad toggles), Int (any of the

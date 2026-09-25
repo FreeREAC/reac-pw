@@ -35,6 +35,7 @@
 # not a measurement. Skips (77) where namespaces, iproute2, PipeWire or sch_etf are
 # unavailable — module autoload needs privileges this namespace does not have.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 SKIP=77
 
@@ -81,7 +82,7 @@ tc qdisc add dev nsx0 root etf clockid CLOCK_TAI delta 300000 skip_sock_check 2>
 	|| { echo "SKIP: this namespace cannot add an etf qdisc at all"; exit 77; }
 tc qdisc del dev nsx0 root 2>/dev/null
 
-HOME="$CONF" REACPW_PACER=thread "$BIN" --live nsx0 --tx nsx0 --mixer m5000 --rate 96000 \
+HOME="$CONF" REACPW_PACER=thread "$BIN" --live nsx0 --tx nsx0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" \
 	--name nsx >"$LOG" 2>&1 &
 PID=$!
 sleep 3

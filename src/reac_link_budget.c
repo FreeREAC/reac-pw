@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_link_budget.h"
+#include "reac_facts_pw.h"   /* REAC_SAMPLES_PER_PKT */
 
 uint64_t reac_link_cost_kbit(unsigned pps, unsigned frame_bytes)
 {
@@ -14,7 +15,7 @@ uint64_t reac_link_cost_kbit(unsigned pps, unsigned frame_bytes)
 
 unsigned reac_link_master_pps(unsigned sample_rate)
 {
-	return sample_rate / 12u;
+	return sample_rate / (unsigned)REAC_SAMPLES_PER_PKT;
 }
 
 int reac_link_budget_fits(unsigned link_mbit, uint64_t used_kbit, uint64_t want_kbit)

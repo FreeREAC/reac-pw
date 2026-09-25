@@ -31,6 +31,7 @@
 # sub-interface is not a netdev the daemon under test could see and serve. HOME is
 # redirected at the daemon so the conf file this test writes is the only one it reads.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -131,7 +132,7 @@ grep -a "declared VLAN segment" "$RT/a.log" | tr -d '\r' | sed 's/^/  a: /' | he
 # ---- 2. THE TAG. A box master inside VID 11 on the far end; the kernel tags every frame.
 peer ip link add link farA name farA.11 type vlan id 11 || exit 90
 peer ip link set farA.11 up
-peer "$FAKE" farA.11 00:40:ab:c4:11:21 8 2000 >"$RT/tag.log" 2>&1 &
+peer "$FAKE" farA.11 00:40:ab:c4:11:21 "$FACT_BOX_S0808_IN" 2000 >"$RT/tag.log" 2>&1 &
 TAGPID=$!
 if wait_for "\[trunkA\] tagged .* vid 11" 30 "$RT/a.log"; then
 	echo "a-heard-11 1"

@@ -41,6 +41,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -48,14 +49,14 @@
 
 static int test_closed_list_and_bits(void)
 {
-	CHK(reac_rate_is_closed(44100) && reac_rate_is_closed(48000) &&
-	    reac_rate_is_closed(96000));
+	CHK(reac_rate_is_closed(REAC_SAMPLE_RATE_44K1) && reac_rate_is_closed(REAC_SAMPLE_RATE_48K) &&
+	    reac_rate_is_closed(REAC_SAMPLE_RATE_96K));
 	CHK(!reac_rate_is_closed(44101) && !reac_rate_is_closed(0) &&
 	    !reac_rate_is_closed(192000));
 
-	CHK(reac_rate_bit(44100) == REAC_RATE_BIT_44100);
-	CHK(reac_rate_bit(48000) == REAC_RATE_BIT_48000);
-	CHK(reac_rate_bit(96000) == REAC_RATE_BIT_96000);
+	CHK(reac_rate_bit(REAC_SAMPLE_RATE_44K1) == REAC_RATE_BIT_44100);
+	CHK(reac_rate_bit(REAC_SAMPLE_RATE_48K) == REAC_RATE_BIT_48000);
+	CHK(reac_rate_bit(REAC_SAMPLE_RATE_96K) == REAC_RATE_BIT_96000);
 	CHK(reac_rate_bit(12345) == 0);   /* not in the closed list: no bit at all */
 	return 0;
 }
@@ -63,12 +64,12 @@ static int test_closed_list_and_bits(void)
 static int test_best_drivable(void)
 {
 	/* The honest default: nothing measured, everything declared drivable. */
-	CHK(reac_rate_best_drivable(REAC_RATE_ALL_BITS) == 96000);
+	CHK(reac_rate_best_drivable(REAC_RATE_ALL_BITS) == REAC_SAMPLE_RATE_96K);
 	/* "if we cannot drive a 96 kHz mixer then we must default to something
 	 * lesser" — a segment that cannot do 96k defaults to 48k, never silently
 	 * clamped to a third value and never refusing to have a default at all. */
-	CHK(reac_rate_best_drivable(REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000) == 48000);
-	CHK(reac_rate_best_drivable(REAC_RATE_BIT_44100) == 44100);
+	CHK(reac_rate_best_drivable(REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000) == REAC_SAMPLE_RATE_48K);
+	CHK(reac_rate_best_drivable(REAC_RATE_BIT_44100) == REAC_SAMPLE_RATE_44K1);
 	CHK(reac_rate_best_drivable(0) == 0);   /* no bits at all: no rate to give */
 	return 0;
 }
@@ -77,16 +78,17 @@ static int test_drivable_csv(void)
 {
 	char buf[64];
 	CHK(reac_rate_drivable_csv(REAC_RATE_ALL_BITS, buf, sizeof buf) == 17);
-	CHK(strcmp(buf, "44100,48000,96000") == 0);
+	CHK(strcmp(buf, REACPW_STR(REAC_SAMPLE_RATE_44K1) "," REACPW_STR(REAC_SAMPLE_RATE_48K) ","
+	                REACPW_STR(REAC_SAMPLE_RATE_96K)) == 0);
 
 	/* Ascending order is the mask's iteration order, not the bit layout's —
 	 * prove it survives a mask whose SET bit is not the lowest one. */
 	CHK(reac_rate_drivable_csv(REAC_RATE_BIT_96000, buf, sizeof buf) == 5);
-	CHK(strcmp(buf, "96000") == 0);
+	CHK(strcmp(buf, REACPW_STR(REAC_SAMPLE_RATE_96K)) == 0);
 
 	CHK(reac_rate_drivable_csv(REAC_RATE_BIT_44100 | REAC_RATE_BIT_96000,
 	                           buf, sizeof buf) == 11);
-	CHK(strcmp(buf, "44100,96000") == 0);
+	CHK(strcmp(buf, REACPW_STR(REAC_SAMPLE_RATE_44K1) "," REACPW_STR(REAC_SAMPLE_RATE_96K)) == 0);
 
 	CHK(reac_rate_drivable_csv(0, buf, sizeof buf) == 0);
 	CHK(buf[0] == '\0');
@@ -103,19 +105,19 @@ static int test_decide(void)
 	 * "cannot do 96k" case the spec's own roadmap names, proven here at the
 	 * decision-core level since no real probe exists to supply the mask from
 	 * the wire (reac_rate_cfg.h's honesty clause explains why). */
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 96000,
+	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, REAC_SAMPLE_RATE_96K,
 	                         REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000) ==
 	    REAC_RATE_REFUSE_NOT_DRIVABLE);
 
 	/* (c) a slave refuses EVERY assertion, even a valid, fully drivable one —
 	 * "as a SLAVE there is no rate setting: refuse with its own code." */
-	CHK(reac_rate_cfg_decide(REAC_ROLE_SLAVE, 48000, REAC_RATE_ALL_BITS) ==
+	CHK(reac_rate_cfg_decide(REAC_ROLE_SLAVE, REAC_SAMPLE_RATE_48K, REAC_RATE_ALL_BITS) ==
 	    REAC_RATE_REFUSE_ROLE_SLAVE);
 	CHK(reac_rate_cfg_decide(REAC_ROLE_SLAVE, 44101, REAC_RATE_ALL_BITS) ==
 	    REAC_RATE_REFUSE_ROLE_SLAVE);   /* role wins even over a bad value */
 
 	/* The accepted case. */
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 48000, REAC_RATE_ALL_BITS) ==
+	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, REAC_SAMPLE_RATE_48K, REAC_RATE_ALL_BITS) ==
 	    REAC_RATE_REFUSE_NONE);
 
 	/* Every refusal has a non-"none" code; NONE is "none". */
@@ -158,12 +160,12 @@ static int test_prop_parse(void)
 		spa_pod_builder_string(&b, "reac.headamp.3.phantom");
 		spa_pod_builder_int(&b, 1);
 		spa_pod_builder_string(&b, REAC_CFG_PROP_RATE);
-		spa_pod_builder_int(&b, 48000);
+		spa_pod_builder_int(&b, REAC_SAMPLE_RATE_48K);
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 
 		int hz = -1;
 		CHK(reac_rate_prop_parse(pod, &hz) == 1);
-		CHK(hz == 48000);
+		CHK(hz == REAC_SAMPLE_RATE_48K);
 	}
 
 	/* A Float encoding (a slider/JSON-number bridge) rounds to the nearest Hz. */
@@ -172,12 +174,12 @@ static int test_prop_parse(void)
 		struct spa_pod_frame obj, st;
 		begin_props(&b, &obj, &st);
 		spa_pod_builder_string(&b, REAC_CFG_PROP_RATE);
-		spa_pod_builder_float(&b, 96000.4f);
+		spa_pod_builder_float(&b, REAC_SAMPLE_RATE_96K + 0.4f);
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 
 		int hz = -1;
 		CHK(reac_rate_prop_parse(pod, &hz) == 1);
-		CHK(hz == 96000);
+		CHK(hz == REAC_SAMPLE_RATE_96K);
 	}
 
 	/* No reac.cfg.rate key at all (a plain head-amp write) -> 0, untouched. */
@@ -225,7 +227,7 @@ static const uint8_t ZONEA_JOIN[32] = {
 };
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 
 /* Mirrors test_reac_master_no_enroll.c's helper of the same name: stand in the
  * quiet window between scene transfers so the JOIN below is not held. */
@@ -266,7 +268,7 @@ static int shapes_equal(const struct establish_shape *a, const struct establish_
 static int run_establish(struct reac_master *m, struct establish_shape *out)
 {
 	uint16_t cnt;
-	reac_master_set_box(m, 16, 8, S1608_BASE);   /* S-1608: 16 in / 8 out */
+	reac_master_set_box(m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);   /* S-1608: 16 in / 8 out */
 	if (!reac_master_has_box(m))
 		return -1;
 
@@ -344,18 +346,18 @@ static void bare_pacer_init(struct reac_pacer *p, int fps,
  * re-establish — no process restart, same struct reac_pacer throughout. */
 static int test_apply_rate_shape(void)
 {
-	struct reac_console_cfg cfg = { .out_channels = 16, .console_field = 1 };
+	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };
 	struct reac_pacer p;
-	bare_pacer_init(&p, 4000, &cfg);   /* 48 kHz */
+	bare_pacer_init(&p, REAC_PKT_RATE_48K, &cfg);   /* 48 kHz */
 
 	struct establish_shape before;
 	CHK(run_establish(&p.master, &before) == 0);
 	CHK(before.reached_established);
 
-	int fps = reac_pacer_apply_rate(&p, 96000);
-	CHK(fps == 8000);
-	CHK(p.fps == 8000);
-	CHK(p.period_ns == reac_pacer_period_ns(8000));
+	int fps = reac_pacer_apply_rate(&p, REAC_SAMPLE_RATE_96K);
+	CHK(fps == REAC_PKT_RATE_96K);
+	CHK(p.fps == REAC_PKT_RATE_96K);
+	CHK(p.period_ns == reac_pacer_period_ns(REAC_PKT_RATE_96K));
 
 	/* Immediate consequences of the re-establish: the FSM is back at IDLE (the
 	 * pacer's very next slot would promote it to PROBING, exactly a cold
@@ -363,7 +365,7 @@ static int test_apply_rate_shape(void)
 	CHK(p.master.state == REAC_M_IDLE);
 	CHK(reac_master_has_box(&p.master) == 0);
 	CHK(atomic_load_explicit(&p.fsm_state, memory_order_relaxed) == REAC_M_IDLE);
-	CHK(atomic_load_explicit(&p.rate_hz, memory_order_relaxed) == 96000);
+	CHK(atomic_load_explicit(&p.rate_hz, memory_order_relaxed) == REAC_SAMPLE_RATE_96K);
 	CHK(atomic_load_explicit(&p.rate_asserted, memory_order_relaxed) == 1);
 	CHK(atomic_load_explicit(&p.rate_reestablishing, memory_order_relaxed) == 1);
 
@@ -385,7 +387,7 @@ static int test_apply_rate_shape(void)
 static int test_refused_rate_moves_nothing(void)
 {
 	struct reac_pacer p;
-	bare_pacer_init(&p, 4000, NULL);
+	bare_pacer_init(&p, REAC_PKT_RATE_48K, NULL);
 
 	struct establish_shape before;
 	CHK(run_establish(&p.master, &before) == 0);
@@ -413,9 +415,9 @@ static int test_refused_rate_moves_nothing(void)
 static int test_narrow_mask_refuses_and_defaults_lower(void)
 {
 	unsigned narrow = REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000;   /* no 96k */
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 96000, narrow) ==
+	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, REAC_SAMPLE_RATE_96K, narrow) ==
 	    REAC_RATE_REFUSE_NOT_DRIVABLE);
-	CHK(reac_rate_best_drivable(narrow) == 48000);
+	CHK(reac_rate_best_drivable(narrow) == REAC_SAMPLE_RATE_48K);
 	return 0;
 }
 
@@ -436,11 +438,11 @@ static int test_narrow_mask_refuses_and_defaults_lower(void)
  * fps, period, FSM state and rate props byte-for-byte untouched. */
 static int test_two_segments_are_independent(void)
 {
-	struct reac_console_cfg cfg_a = { .out_channels = 16, .console_field = 0 };  /* m200 */
-	struct reac_console_cfg cfg_b = { .out_channels = 16, .console_field = 1 };  /* m5000 */
+	struct reac_console_cfg cfg_a = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_48K };  /* m200 */
+	struct reac_console_cfg cfg_b = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };  /* m5000 */
 	struct reac_pacer a, b;
-	bare_pacer_init(&a, 4000, &cfg_a);   /* 48 kHz, like this rig's segment A */
-	bare_pacer_init(&b, 4000, &cfg_b);   /* 48 kHz, like this rig's segment B */
+	bare_pacer_init(&a, REAC_PKT_RATE_48K, &cfg_a);   /* 48 kHz, like this rig's segment A */
+	bare_pacer_init(&b, REAC_PKT_RATE_48K, &cfg_b);   /* 48 kHz, like this rig's segment B */
 
 	struct establish_shape sh_a, sh_b;
 	CHK(run_establish(&a.master, &sh_a) == 0);
@@ -460,11 +462,11 @@ static int test_two_segments_are_independent(void)
 
 	/* The write door: reac_rate_cfg_decide (pure) then reac_pacer_apply_rate —
 	 * on_param_changed's own sequence — applied ONLY to segment A. */
-	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, 96000, a.drivable_mask) == REAC_RATE_REFUSE_NONE);
-	int a_fps = reac_pacer_apply_rate(&a, 96000);
-	CHK(a_fps == 8000);
-	CHK(a.fps == 8000);
-	CHK(atomic_load_explicit(&a.rate_hz, memory_order_relaxed) == 96000);
+	CHK(reac_rate_cfg_decide(REAC_ROLE_MASTER, REAC_SAMPLE_RATE_96K, a.drivable_mask) == REAC_RATE_REFUSE_NONE);
+	int a_fps = reac_pacer_apply_rate(&a, REAC_SAMPLE_RATE_96K);
+	CHK(a_fps == REAC_PKT_RATE_96K);
+	CHK(a.fps == REAC_PKT_RATE_96K);
+	CHK(atomic_load_explicit(&a.rate_hz, memory_order_relaxed) == REAC_SAMPLE_RATE_96K);
 	CHK(atomic_load_explicit(&a.rate_reestablishing, memory_order_relaxed) == 1);
 
 	/* B: untouched, byte-for-byte. */
@@ -498,9 +500,9 @@ static int test_two_segments_are_independent(void)
  * touched the console. */
 static int test_link_edge_reestablishes_at_the_standing_rate(void)
 {
-	struct reac_console_cfg cfg = { .out_channels = 16, .console_field = 1 };
+	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };
 	struct reac_pacer p;
-	bare_pacer_init(&p, 4000, &cfg);   /* 48 kHz, asserted by nobody */
+	bare_pacer_init(&p, REAC_PKT_RATE_48K, &cfg);   /* 48 kHz, asserted by nobody */
 
 	struct establish_shape before;
 	CHK(run_establish(&p.master, &before) == 0);
@@ -514,9 +516,9 @@ static int test_link_edge_reestablishes_at_the_standing_rate(void)
 	CHK(reac_pacer_rate_drain(&p) == 1);
 
 	/* THE PACE IS UNTOUCHED. */
-	CHK(p.fps == 4000);
-	CHK(p.period_ns == reac_pacer_period_ns(4000));
-	CHK(atomic_load_explicit(&p.rate_hz, memory_order_relaxed) == 48000);
+	CHK(p.fps == REAC_PKT_RATE_48K);
+	CHK(p.period_ns == reac_pacer_period_ns(REAC_PKT_RATE_48K));
+	CHK(atomic_load_explicit(&p.rate_hz, memory_order_relaxed) == REAC_SAMPLE_RATE_48K);
 
 	/* THE ESTABLISHMENT IS REDONE: back to IDLE with no box, exactly a cold
 	 * start, which is the state a box's ANNOUNCE needs to arrive into. */
@@ -537,17 +539,17 @@ static int test_link_edge_reestablishes_at_the_standing_rate(void)
 	reac_pacer_request_reestablish(&p, REAC_PEV_CAUSE_LINK_DOWN);
 	CHK(reac_pacer_rate_drain(&p) == 1);
 	CHK(p.master.state == REAC_M_IDLE);
-	CHK(p.fps == 4000);
+	CHK(p.fps == REAC_PKT_RATE_48K);
 	/* Nothing pending: a drain with no new request applies nothing. */
 	CHK(reac_pacer_rate_drain(&p) == 0);
 
 	/* A RATE CHANGE STILL SAYS "RATE CHANGE". The cause is per-request, so a
 	 * link edge cannot leave its label standing on the next operator action. */
-	reac_pacer_request_rate(&p, 96000);
+	reac_pacer_request_rate(&p, REAC_SAMPLE_RATE_96K);
 	CHK(atomic_load_explicit(&p.reestab_cause, memory_order_relaxed) ==
 	    REAC_PEV_CAUSE_RATE_CHANGE);
 	CHK(reac_pacer_rate_drain(&p) == 1);
-	CHK(p.fps == 8000);
+	CHK(p.fps == REAC_PKT_RATE_96K);
 
 	return 0;
 }

@@ -61,6 +61,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static volatile sig_atomic_t stop_now;
 static void on_term(int sig) { (void)sig; stop_now = 1; }
@@ -89,8 +90,8 @@ struct ear {
 	 * "sending is always the same" is a diff of these lines rather than a reading of
 	 * two journals (0.5.5). */
 	unsigned long kind[24];
-	uint8_t announce_blk[34]; int have_announce;
-	uint8_t chanmap_blk[34];  int have_chanmap;
+	uint8_t announce_blk[REAC_TYPED_BLOCK_LEN]; int have_announce;
+	uint8_t chanmap_blk[REAC_TYPED_BLOCK_LEN];  int have_chanmap;
 	/* THE LAST VALUE SEEN PER CELL, not the last record seen. An established master
 	 * replays the COMPLETE head-amp scene at establishment, so "the last record" is
 	 * whatever cell that sweep ended on and says nothing about the write under test
@@ -105,7 +106,7 @@ struct ear {
 	 * S-1608's own cdea 04 03 records back inside its broadcast, byte for byte, 4 ms
 	 * after the burst. That echo IS the grant, so the records are kept here for the
 	 * TX side to hand back — without it nothing on this wire can ever establish. */
-	uint8_t grant_q[4][34]; int grant_n;
+	uint8_t grant_q[4][REAC_TYPED_BLOCK_LEN]; int grant_n;
 	int grant_n_total;                 /* distinct records ever seen, for the proof */
 	unsigned long up_frames, up_announce, up_join, up_hb;
 	size_t up_len;
@@ -113,7 +114,7 @@ struct ear {
 	double up_sq[REAC_MAX_CHANNELS], up_pk[REAC_MAX_CHANNELS];
 	unsigned long up_ns; int up_nch;
 	unsigned long flood_frames; double flood_t0, flood_t1; size_t flood_len;
-	uint8_t announce_seen[34]; int have_announce_seen;
+	uint8_t announce_seen[REAC_TYPED_BLOCK_LEN]; int have_announce_seen;
 	int announce_ok; unsigned long announce_refused;
 	/* THE TWO THINGS A REAL MASTER'S TIMING REFUSES (0.5.6-9). An announce that lands
 	 * INSIDE the master's scene transfer is not answered - both granted joins waited for
@@ -160,15 +161,15 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 	 * carrier, so a burst or a filler claiming it counts the same. */
 	{
 		int desc = 0;
-		for (int i = 18; i < 50; i++)
+		for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i++)
 			if (f[i] != 0x00) { desc = 1; break; }
 		/* THE REQUESTING STATE (0.5.6-10). A real slave's fillers carry 0x52 from its
 		 * announce until the grant and 0x7a after; zeroing that window is refused by a
 		 * real S-1608, so an emulator that ignores it would pass a daemon the rig will
 		 * not. Counted here and asserted by the proof. */
-		if (k == REAC_CTRL_FILLER && f[19] == 0x52)
+		if (k == REAC_CTRL_FILLER && f[REAC_CTRL_BLOCK_OFF + 1] == REAC_FILLER_DESC_REQUESTING)
 			e->desc_req_frames++;
-		if (desc && f[19] != 0x52 && k == REAC_CTRL_FILLER) {
+		if (desc && f[REAC_CTRL_BLOCK_OFF + 1] != REAC_FILLER_DESC_REQUESTING && k == REAC_CTRL_FILLER) {
 			if (!e->desc_first_frame)
 				e->desc_first_frame = e->rx_frames_seen;
 			if (!e->grant_frame)
@@ -178,7 +179,7 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 	if (k == REAC_CTRL_CONFIG_ANNOUNCE) {
 		if (!e->up_announce) e->up_t_announce = t;
 		e->up_announce++;
-		memcpy(e->announce_seen, f + 16, sizeof e->announce_seen);
+		memcpy(e->announce_seen, f + REAC_TYPED_BLOCK_OFF, sizeof e->announce_seen);
 		e->have_announce_seen = 1;
 		/* block[6] is the model-family selector and block[10:22] the port-type
 		 * table; a table of all-equal entries declares nothing. The OUI is Roland's
@@ -189,11 +190,12 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 			e->announce_refused++;
 			return;      /* a box joining mid-transfer must not cancel it */
 		}
-		int sel_ok = f[16 + 6] == 0x80;
+		int sel_ok = f[REAC_CTRL_BLOCK_OFF + REAC_SUB_0103_OFF] == REAC_SUB_0103_DECLARATION_ALT;
 		int oui_ok = f[6] == 0x00 && f[7] == 0x40 && f[8] == 0xab;
 		int tbl_ok = 0;
-		for (int i = 11; i < 22; i++)
-			if (f[16 + i] != f[16 + 10])
+		const uint8_t *tbl = f + REAC_CTRL_BLOCK_OFF + REAC_PORTS_TABLE_OFF;
+		for (int i = 1; i < REAC_PORTS_TABLE_SLOTS; i++)
+			if (tbl[i] != tbl[0])
 				tbl_ok = 1;
 		e->announce_ok = sel_ok && oui_ok && tbl_ok;
 		if (!e->announce_ok)
@@ -210,10 +212,10 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 		 * burst that repeats itself, which is what ours sent until 0.5.6-7. */
 		int already = 0;
 		for (int i = 0; i < e->grant_n; i++)
-			if (memcmp(e->grant_q[i], f + 16, 34) == 0)
+			if (memcmp(e->grant_q[i], f + REAC_TYPED_BLOCK_OFF, REAC_TYPED_BLOCK_LEN) == 0)
 				already = 1;
 		if (e->announce_ok && !e->desc_before_grant && !already && e->grant_n < 4) {
-			memcpy(e->grant_q[e->grant_n], f + 16, 34);
+			memcpy(e->grant_q[e->grant_n], f + REAC_TYPED_BLOCK_OFF, REAC_TYPED_BLOCK_LEN);
 			e->grant_n++;
 			e->grant_n_total++;
 			if (!e->grant_frame)
@@ -239,7 +241,7 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t src[6],
                        unsigned long tx_so_far, const struct reac_mode *mode)
 {
-	if (n < 14 || f[12] != 0x88 || f[13] != 0x19)
+	if (n < REAC_HDR_COUNTER_OFF || f[REAC_ETHERTYPE_OFF] != (REAC_ETHERTYPE >> 8) || f[REAC_ETHERTYPE_OFF + 1] != (REAC_ETHERTYPE & 0xff))
 		return;
 	if (memcmp(f + 6, src, 6) == 0)
 		return;                    /* our own egress, if the kernel ever echoes it */
@@ -266,7 +268,7 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 		if (uns > 0) {
 			for (int c = 0; c < nch && c < REAC_MAX_CHANNELS; c++)
 				for (int i = 0; i < uns; i++) {
-					float v = reac_s24le_to_f32(&us24[(size_t)(c * uns + i) * 3]);
+					float v = reac_s24le_to_f32(&us24[(size_t)(c * uns + i) * REAC_RESOLUTION]);
 					e->up_sq[c] += (double)v * v;
 					double a = v < 0 ? -(double)v : (double)v;
 					if (a > e->up_pk[c]) e->up_pk[c] = a;
@@ -311,7 +313,7 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 	} else {
 		for (int c = 0; c < mode->n_channels && c < REAC_MAX_CHANNELS; c++)
 			for (int i = 0; i < ns; i++) {
-				float v = reac_s24le_to_f32(&s24[(size_t)(c * ns + i) * 3]);
+				float v = reac_s24le_to_f32(&s24[(size_t)(c * ns + i) * REAC_RESOLUTION]);
 				e->sumsq[c] += (double)v * (double)v;
 				double a = v < 0 ? -(double)v : (double)v;
 				if (a > e->peak[c])
@@ -326,10 +328,10 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 	if ((unsigned)kind < 24)
 		e->kind[kind]++;
 	if (kind == REAC_CTRL_MASTER_ANNOUNCE) {
-		memcpy(e->announce_blk, f + 16, sizeof e->announce_blk);
+		memcpy(e->announce_blk, f + REAC_TYPED_BLOCK_OFF, sizeof e->announce_blk);
 		e->have_announce = 1;
 	} else if (kind == REAC_CTRL_MASTER_HB) {
-		memcpy(e->chanmap_blk, f + 16, sizeof e->chanmap_blk);
+		memcpy(e->chanmap_blk, f + REAC_TYPED_BLOCK_OFF, sizeof e->chanmap_blk);
 		e->have_chanmap = 1;
 	}
 	if (kind == REAC_CTRL_HEADAMP) {
@@ -478,7 +480,7 @@ int main(int argc, char **argv)
 	if (listen_only)
 		fps = 2000;   /* the drain/report cadence only; nothing is transmitted */
 
-	int fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
+	int fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 	if (fd < 0) {
 		fprintf(stderr, "fake-box-master: AF_PACKET: %s (need CAP_NET_RAW)\n",
 		        strerror(errno));
@@ -494,7 +496,7 @@ int main(int argc, char **argv)
 	struct sockaddr_ll sll;
 	memset(&sll, 0, sizeof sll);
 	sll.sll_family = AF_PACKET;
-	sll.sll_protocol = htons(0x8819);
+	sll.sll_protocol = htons(REAC_ETHERTYPE);
 	sll.sll_ifindex = ifr.ifr_ifindex;
 	sll.sll_halen = 6;
 	memset(sll.sll_addr, 0xff, 6);
@@ -523,7 +525,7 @@ int main(int argc, char **argv)
 	 * `probing` a console must not see. The socket is always opened; `report` only says
 	 * whether a snapshot is also written. */
 	{
-		ear.fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
+		ear.fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 		if (ear.fd < 0) {
 			fprintf(stderr, "fake-box-master: RX socket: %s\n", strerror(errno));
 			return 1;
@@ -531,7 +533,7 @@ int main(int argc, char **argv)
 		struct sockaddr_ll rsll;
 		memset(&rsll, 0, sizeof rsll);
 		rsll.sll_family = AF_PACKET;
-		rsll.sll_protocol = htons(0x8819);
+		rsll.sll_protocol = htons(REAC_ETHERTYPE);
 		rsll.sll_ifindex = ifr.ifr_ifindex;
 		if (bind(ear.fd, (struct sockaddr *)&rsll, sizeof rsll) < 0) {
 			fprintf(stderr, "fake-box-master: RX bind: %s\n", strerror(errno));
@@ -580,10 +582,10 @@ int main(int argc, char **argv)
 	 * — 0x10 measured on the S-1608, 0x20 on the S-4000S, same analysis §2. This
 	 * emulator is a box, so it declares n_ch. */
 	static struct reac_master ann;
-	struct reac_console_cfg ann_cfg = { .out_channels = 8,
+	struct reac_console_cfg ann_cfg = { .out_channels = REAC_BOX_S1608_OUT,
 	                                    .console_field = reac_pace_code(fps) };
 	reac_master_init(&ann, src, &ann_cfg, fps);
-	ann.announce_blk[17] = (uint8_t)n_ch;
+	ann.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_TOTAL_SLOTS_OFF] = (uint8_t)n_ch;
 
 	long sent = 0, announces = 0, granted = 0;
 	struct timespec period = { 0, 0 };
@@ -615,7 +617,7 @@ int main(int argc, char **argv)
 			          + (double)(now.tv_nsec - last_report.tv_nsec) / 1e9;
 			if (report && dt > 0.3) {
 				last_report = now;
-				ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
+				ear_report(&ear, report, (unsigned long)sent, n_ch > REAC_BOX_S0808_IN ? n_ch : REAC_BOX_S0808_IN);
 			}
 		}
 		if (tx_paused || listen_only) {
@@ -639,10 +641,13 @@ int main(int argc, char **argv)
 			 * and a daemon that waits for quiet always has a window. */
 			ear.scene_running = ((sent / (fps / 2)) % 4) == 0 && sent > fps / 4;
 			if (ear.scene_running) {
-				static const uint8_t SCENE[6] = { 0xcd, 0xea, 0x01, 0x00,
-				                                  0x00, 0x1a };
-				memcpy(f + 16, SCENE, sizeof SCENE);
-				memset(f + 22, 0, 28);
+				const uint8_t SCENE[6] = {
+					REAC_TYPE_CONTROL >> 8, REAC_TYPE_CONTROL & 0xff,
+					REAC_OP_SCENE_CHUNK >> 8, REAC_OP_SCENE_CHUNK & 0xff,
+					REAC_SCENE_CHUNK_BYTES >> 8, REAC_SCENE_CHUNK_BYTES & 0xff };
+				memcpy(f + REAC_TYPED_BLOCK_OFF, SCENE, sizeof SCENE);
+				memset(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_OPCODE_OFF, 0,
+			       REAC_CTRL_BLOCK_END - (REAC_CTRL_BLOCK_OFF + REAC_HDR_OPCODE_OFF));
 				reac_ctrl_checksum_apply(f);
 				announces++;
 				goto send;
@@ -654,9 +659,9 @@ int main(int argc, char **argv)
 				 * the enrolled-box count rises when a grant has actually left
 				 * the wire, not when the peer was recognized (the M-200
 				 * timeline, m200-enrol-441k-2026-09-13/analysis.md). */
-				uint8_t *b = f + 16;
+				uint8_t *b = f + REAC_TYPED_BLOCK_OFF;
 				memcpy(b, ann.announce_blk, sizeof ann.announce_blk);
-				b[21] = granted > 0 ? 0x01 : 0x00;
+				b[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_BOX_COUNT_OFF + 1] = granted > 0 ? 0x01 : 0x00;
 				reac_ctrl_checksum_apply(f);
 				announces++;
 				goto send;
@@ -670,7 +675,7 @@ int main(int argc, char **argv)
 		 * queued record per frame, stamped over the filler's control block and
 		 * re-checksummed, exactly as the head-amp record below is. */
 		if (ear.grant_n > 0) {
-			memcpy(f + 16, ear.grant_q[0], 34);
+			memcpy(f + REAC_TYPED_BLOCK_OFF, ear.grant_q[0], REAC_TYPED_BLOCK_LEN);
 			memmove(ear.grant_q[0], ear.grant_q[1], sizeof ear.grant_q[0] * 3);
 			ear.grant_n--;
 			reac_ctrl_checksum_apply(f);
@@ -682,7 +687,7 @@ int main(int argc, char **argv)
 		 * MASTER — at a length that is unambiguously a box's. The block checksum is
 		 * re-applied after the stamp, or the sighting is discarded as corrupt. */
 		if (sent % fps == 0) {
-			if (reac_ctrl_stamp_headamp(f, 0x20, 0 /* phantom */, 1) != 0)
+			if (reac_ctrl_stamp_headamp(f, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1) != 0)
 				break;
 			reac_ctrl_checksum_apply(f);
 			announces++;
@@ -705,7 +710,7 @@ send:
 	        "%ld grants echoed), heard %lu downstream / %lu upstream frames back\n",
 	        sent, announces, granted, ear.rx_down, ear.up_frames);
 	if (report)
-		ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
+		ear_report(&ear, report, (unsigned long)sent, n_ch > REAC_BOX_S0808_IN ? n_ch : REAC_BOX_S0808_IN);
 	if (ear.fd >= 0)
 		close(ear.fd);
 	close(fd);

@@ -7,6 +7,6 @@
 # entry count may only fall. Never add a line to silence a genuinely unmapped
 # assertion -- fix the test, give the daemon a real producer, or ask the operator.
 
-box-master-slave-join.sh:601: bare segment-tag anchor `[bmx2]` with no descriptive text alongside it in this grep -- the words that would identify a producer are asserted by the SURROUNDING lines in the same test, not this one.
+box-master-slave-join.sh:603: bare segment-tag anchor `[bmx2]` with no descriptive text alongside it in this grep -- the words that would identify a producer are asserted by the SURROUNDING lines in the same test, not this one.
 pins-need-no-door.sh:188: `tapdr0|TAP` is a test-local interface name plus a 3-char word (below this script's 4-char floor); the real assertion is that ONE of two segment tags appears, which is a shape no producer wordlist can confirm on its own.
 pins-need-no-door.sh:199: `mstdr0` is a test-local interface name with no other word in the pattern; it can only ever reach the wire through a producer's own `%s`, never as literal text in src/*.c.

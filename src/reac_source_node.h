@@ -20,6 +20,7 @@
 
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 struct pw_loop;
 struct reac_source_node;

@@ -65,6 +65,7 @@
 # module autoload needs privileges this namespace does not have, so an absent sch_etf
 # is a skip and not a failure.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/etf_wire_probe}"
 PROBE="${2:?usage: $0 /path/to/reac-pw /path/to/etf_wire_probe}"
 SKIP=77
@@ -117,7 +118,7 @@ echo "control-present $("$PROBE" qdisc etfa)"
 tc qdisc del dev etfa root 2>/dev/null
 echo "control-absent $("$PROBE" qdisc etfa)"
 
-DAEMON="--live etfa --tx etfa --mixer m5000 --rate 96000"
+DAEMON="--live etfa --tx etfa --mixer m5000 --rate $FACT_SAMPLE_RATE_96K"
 
 # One arm: start the daemon the given way, read the qdisc while it runs, count frames
 # at the far end, stop it, read the qdisc again.

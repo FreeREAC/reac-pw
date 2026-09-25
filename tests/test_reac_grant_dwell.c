@@ -36,8 +36,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
-#define FPS 8000                     /* 96 kHz: 8000 downstream frames/s */
+#define FPS REAC_PKT_RATE_96K                     /* 96 kHz: 8000 downstream frames/s */
 #define DWELL_MS 5000                /* the cap both arms are given */
 static const uint8_t M_SRC[6] = { 0x34, 0x5a, 0x60, 0x9f, 0x9e, 0xbe };
 static const uint8_t B_SRC[6] = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };  /* the rig's S-4000S */
@@ -66,7 +67,7 @@ int main(void)
 
 	/* Recognition lands while GRANTING — the window-restart path. 32 in / 8 out is the
 	 * S-4000S the rig declared; the head-amp base is the one its announce carries. */
-	reac_master_set_box(&m, 32, 8, 0x00);
+	reac_master_set_box(&m, REAC_BOX_S4000S_3208_IN, REAC_BOX_S4000S_3208_OUT, 0x00);
 	CHK(reac_master_has_box(&m));
 
 	const int dwell_slots = (FPS * DWELL_MS) / 1000;
@@ -86,7 +87,7 @@ int main(void)
 		int i0;
 		reac_master_next(&m, &c0, &i0);
 	}
-	reac_master_set_box(&m, 32, 8, 0x00);
+	reac_master_set_box(&m, REAC_BOX_S4000S_3208_IN, REAC_BOX_S4000S_3208_OUT, 0x00);
 	CHK(m.enroll_pending == 1);               /* re-armed, window NOT restarted */
 
 	/* Drive slots until the master reaches ESTABLISHED — the thing the rig measures and

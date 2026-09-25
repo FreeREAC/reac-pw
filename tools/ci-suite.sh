@@ -5,7 +5,7 @@
 # THE WHOLE SUITE, WHERE IT CAN FAIL. The body of .github/workflows/test.yml (audit
 # 2026-09-24, H3), kept here so the same thing runs on a desk:
 #
-#   tools/ci-suite.sh <libreac-checkout> [builddir]
+#   tools/ci-suite.sh <libreac-checkout> [builddir] [reac-protocol-checkout]
 #
 # Builds reac-pw against the libreac checkout (tools/build-with-libreac.sh), builds
 # libreac's fake_box, then runs the suite the way the RPM %check does: everything but
@@ -20,6 +20,7 @@
 set -uo pipefail
 LIBREAC="${1:?usage: $0 <libreac-checkout> [builddir]}"
 BUILD="${2:-build-ci}"
+RP="${3:-}"
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 LIBREAC=$(cd "$LIBREAC" && pwd)
 
@@ -51,4 +52,14 @@ if bad:
     sys.exit(1)
 print(f"OK: all {len(rows)} namespace tests ran and passed")
 PY
+
+# EVERY PROTOCOL NUMBER FROM ITS ONE DECLARATION. With a reac-protocol checkout, build
+# against three perturbed fact sets and run the unit suite: a reac-pw copy of a number
+# goes red and is named, and the known reds are the shrink-only tests/facts-perturb-debt.txt.
+# The perturbed builds find this run's libreac through the same prefix.
+if [ -n "$RP" ]; then
+	PKG_CONFIG_PATH="$HERE/$BUILD/_libreac-prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+	FACTS_PERTURB_WORK="$HERE/../reac-pw-facts-perturb" \
+		"$HERE/tools/facts-perturb-check.sh" "$RP" 1 2 3 || rc=1
+fi
 exit $rc

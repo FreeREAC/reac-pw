@@ -43,6 +43,7 @@
 set -u
 BIN="${1:?usage: $0 /path/to/reac-pw}"
 SKIP=77
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration (exported into the namespaces)
 
 command -v unshare >/dev/null 2>&1 || { echo "SKIP: no unshare"; exit $SKIP; }
 command -v nsenter  >/dev/null 2>&1 || { echo "SKIP: no nsenter"; exit $SKIP; }
@@ -158,8 +159,8 @@ echo "OK: the reader sees $NODE and reads its properties (caps '$CAPS')"
 # ---- 1. THE TRAVEL IS PUBLISHED, so a client renders the range it receives rather than
 # one compiled into it (ruling 1). 55 = 0x37 = REAC_HEADAMP_SENS_MAX.
 SENSMAX=$(read_prop $PID $NODE reac.headamp.sens.max)
-[ "$SENSMAX" = "55" ] || {
-	echo "FAIL: reac.headamp.sens.max reads '$SENSMAX', not the published travel '55'"
+[ "$SENSMAX" = "$FACT_HEADAMP_SENS_MAX" ] || {
+	echo "FAIL: reac.headamp.sens.max reads '$SENSMAX', not the published travel '$FACT_HEADAMP_SENS_MAX'"
 	exit 1; }
 
 # ---- 2. A COLD MASTER ANSWERS, AND THE ANSWER IS HONEST. No box is recognised, so there

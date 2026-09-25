@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -32,9 +33,12 @@ static uint64_t mono_ns(void)
 int main(void)
 {
 	/* 1. per-rate slot period (the 125 us @96k contract). */
-	CHK(reac_pacer_period_ns(8000) == 125000);   /* 96 kHz */
-	CHK(reac_pacer_period_ns(4000) == 250000);   /* 48 kHz */
-	CHK(reac_pacer_period_ns(3675) == 272109);   /* 44.1 kHz (rounded) */
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_96K) ==
+	    (1000000000 + REAC_PKT_RATE_96K / 2) / REAC_PKT_RATE_96K);   /* 96 kHz */
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_48K) ==
+	    (1000000000 + REAC_PKT_RATE_48K / 2) / REAC_PKT_RATE_48K);   /* 48 kHz */
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_44K1) ==
+	    (1000000000 + REAC_PKT_RATE_44K1 / 2) / REAC_PKT_RATE_44K1);   /* 44.1 kHz (rounded) */
 
 	/* 2. the SPSC frame ring. */
 	struct reac_frame_ring r;
@@ -46,18 +50,18 @@ int main(void)
 
 	/* FIFO order: push 3 frames with distinct markers, pop in order. */
 	for (int i = 0; i < 3; i++) {
-		in[14] = (uint8_t)i;                       /* tag at the counter slot */
+		in[REAC_HDR_COUNTER_OFF] = (uint8_t)i;                       /* tag at the counter slot */
 		CHK(reac_frame_ring_push(&r, in, REAC_FRAME_BYTES) == 1);
 	}
 	CHK(reac_frame_ring_readable(&r) == 3);
 	/* ring full (3 usable): the 4th push drops the NEWEST and bumps overruns. */
-	in[14] = 0x99;
+	in[REAC_HDR_COUNTER_OFF] = 0x99;
 	CHK(reac_frame_ring_push(&r, in, REAC_FRAME_BYTES) == 0);
 	CHK(r.overruns == 1);
 	for (int i = 0; i < 3; i++) {
 		uint16_t n = reac_frame_ring_pop(&r, out);
 		CHK(n == REAC_FRAME_BYTES);
-		CHK(out[14] == (uint8_t)i);                /* FIFO: 0,1,2 — never the dropped 0x99 */
+		CHK(out[REAC_HDR_COUNTER_OFF] == (uint8_t)i);                /* FIFO: 0,1,2 — never the dropped 0x99 */
 	}
 	/* underrun: empty pop returns 0 + bumps underruns (the pacer fills silence). */
 	CHK(reac_frame_ring_pop(&r, out) == 0);
@@ -108,8 +112,8 @@ int main(void)
 		struct reac_pacer pg;
 		memset(&pg, 0, sizeof pg);
 		pg.handle = NULL;
-		pg.fps = 4000;
-		pg.period_ns = reac_pacer_period_ns(4000);
+		pg.fps = REAC_PKT_RATE_48K;
+		pg.period_ns = reac_pacer_period_ns(REAC_PKT_RATE_48K);
 		atomic_store(&pg.ring_depth_min, UINT32_MAX);
 		CHK(reac_frame_ring_init(&pg.ring, 2048, 2048) == 0);
 		uint8_t gpf[REAC_FRAME_BYTES];
@@ -152,30 +156,30 @@ int main(void)
 		struct reac_pacer p3;
 		memset(&p3, 0, sizeof p3);
 		p3.handle = NULL;
-		p3.fps = 8000;
+		p3.fps = REAC_PKT_RATE_96K;
 		memcpy(p3.src, OUR, 6);
-		CHK(reac_frame_ring_init(&p3.ring, 8, 2048) == 0);
-		reac_master_init(&p3.master, OUR, NULL, 8000);   /* S-1608 default */
+		CHK(reac_frame_ring_init(&p3.ring, REAC_BOX_S0808_IN, 2048) == 0);
+		reac_master_init(&p3.master, OUR, NULL, REAC_PKT_RATE_96K);   /* S-1608 default */
 		p3.prev_state = REAC_M_IDLE;
 
 		uint8_t bf[2048];
 
 		/* a broadcast presence FILLER: counted, no state change, presence event */
 		static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-		size_t bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, 12);
+		size_t bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_box_frames == 1 && p3.rx_box_ctrl == 0 && p3.rx_joins == 0);
 		CHK(p3.master.state == REAC_M_PROBING);   /* promoted, but NOT granting */
 
 		/* our own echo must be ignored (the software self-filter) */
-		bn = reac_ctrl_build_upstream_filler(bf, BCAST, OUR, 1, 16, NULL, 12);
+		bn = reac_ctrl_build_upstream_filler(bf, BCAST, OUR, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_box_frames == 1);
 
 		/* the JOIN: fsm mirror flips to GRANTING, the ring holds the block */
-		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, 12);
-		uint8_t join_blk[32];
-		memcpy(join_blk, bf + 18, 32);
+		bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
+		uint8_t join_blk[REAC_CTRL_BLOCK_LEN];
+		memcpy(join_blk, bf + REAC_CTRL_BLOCK_OFF, REAC_CTRL_BLOCK_LEN);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.rx_joins == 1 && p3.rx_box_ctrl == 1);
 		/* The JOIN is HELD until the scene push completes (reac_master.c): the box
@@ -207,7 +211,7 @@ int main(void)
 		CHK(p3.master.grant_burst_len == 0);
 		CHK(atomic_load(&p3.recognized_box) == NULL);
 
-		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 3, 16);
+		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 3, REAC_BOX_S1608_IN);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		const struct reac_box_model *rec = atomic_load(&p3.recognized_box);
 		CHK(rec != NULL && rec->in_ch == 16);
@@ -215,13 +219,14 @@ int main(void)
 		/* THE VALUE, not the shape: an S-1608's inputs are enrolled at head-amp
 		 * 0x20..0x2f, and the enrollment that will reach the wire says so in every
 		 * group-A record. This is the agreement head-amp control depends on. */
-		CHK(p3.master.alloc.base == 0x20 && p3.master.alloc.width == 16);
-		CHK(p3.master.grant_burst_len == 56);
+		CHK(p3.master.alloc.base == REACPW_S1608_HEADAMP_BASE && p3.master.alloc.width == REAC_BOX_S1608_IN);
+		CHK(p3.master.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		for (int i = 0; i < p3.master.grant_burst_len; i++) {
 			const uint8_t *r = p3.master.grant_burst[i];
-			if (!(r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01))
+			if (!(r[REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && r[REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+		      REACPW_BE16(r + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP))
 				continue;                       /* not a group-A head-amp record */
-			CHK(r[20] >= 0x20 && r[20] <= 0x2f);
+			CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] >= REACPW_S1608_HEADAMP_BASE && r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);
 		}
 
 		/* the event ring contains a JOIN event with the exact 32-byte block */
@@ -251,7 +256,7 @@ int main(void)
 		CHK(p3.master.state == REAC_M_ESTABLISHED);
 
 		/* the box heartbeat confirms the lock (mirror path). */
-		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3, 16);
+		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 3, REAC_BOX_S1608_IN);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.master.state == REAC_M_ESTABLISHED);
 
@@ -260,18 +265,18 @@ int main(void)
 		 * reac.box-width are what a consumer computes a head-amp address from, so a
 		 * model left standing after the box has left is the console asserting a box
 		 * that is not there. Then a re-join re-derives it from the wire, as always. */
-		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, 16);
-		bf[22] = 0x00;                            /* selector 0x00 = the box's BYE */
+		bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, REAC_BOX_S1608_IN);
+		bf[REAC_CTRL_BLOCK_OFF + REAC_SUB_0103_OFF] = 0x00;   /* selector 0x00 = the box's BYE */
 		reac_ctrl_checksum_apply(bf);             /* a corrupt block is not a BYE */
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(p3.master.state == REAC_M_PROBING);
 		CHK(reac_master_has_box(&p3.master) == 0);
 		CHK(atomic_load(&p3.recognized_box) == NULL);
 
-		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 5, 16);
+		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 5, REAC_BOX_S1608_IN);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(atomic_load(&p3.recognized_box) != NULL);
-		CHK(p3.master.alloc.base == 0x20 && p3.master.alloc.width == 16);
+		CHK(p3.master.alloc.base == REACPW_S1608_HEADAMP_BASE && p3.master.alloc.width == REAC_BOX_S1608_IN);
 
 		/* drain formats + counts every queued event, then returns 0 */
 		FILE *sink = tmpfile();
@@ -285,7 +290,7 @@ int main(void)
 		/* overflow: flood JOINs (each always logs) -> ring caps at EVRING,
 		 * drop-newest counts ev_drops, a full drain returns exactly EVRING */
 		for (int i = 0; i < REAC_PACER_EVRING * 2; i++) {
-			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i, 16, NULL, 12);
+			bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, (uint16_t)i, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 			reac_pacer_rx_ingest(&p3, bf, bn);
 		}
 		CHK(p3.ev_drops > 0);
@@ -308,10 +313,10 @@ int main(void)
 		struct reac_pacer p4;
 		memset(&p4, 0, sizeof p4);
 		p4.handle = NULL;
-		p4.fps = 8000;
+		p4.fps = REAC_PKT_RATE_96K;
 		memcpy(p4.src, OUR, 6);
-		CHK(reac_frame_ring_init(&p4.ring, 8, 2048) == 0);
-		reac_master_init(&p4.master, OUR, NULL, 8000);
+		CHK(reac_frame_ring_init(&p4.ring, REAC_BOX_S0808_IN, 2048) == 0);
+		reac_master_init(&p4.master, OUR, NULL, REAC_PKT_RATE_96K);
 
 		struct reac_identity id0;
 		reac_pacer_read_identity(&p4, &id0);
@@ -325,19 +330,13 @@ int main(void)
 			size_t _n = sizeof _pl; \
 			memset((FR), 0, REAC_FRAME_BYTES); \
 			memcpy((FR), OUR, 6); memcpy((FR) + 6, BOX, 6); \
-			(FR)[12] = 0x88; (FR)[13] = 0x19; (FR)[16] = 0xcd; (FR)[17] = 0xea; \
-			uint8_t *_b = (FR) + 18; unsigned _sx = (unsigned)(13 + _n); \
-			_b[0] = 0x04; _b[1] = 0x03; _b[3] = (uint8_t)(_sx + 5); \
-			_b[5] = 0x02; _b[7] = 0xfe; _b[8] = (uint8_t)_sx; \
-			_b[9] = 0xf0; _b[10] = 0x41; _b[11] = 0x0a; _b[14] = 0x12; _b[15] = 0x12; \
-			_b[16] = 0x05; _b[17] = 0x00; \
-			_b[18] = (uint8_t)((ADDR) >> 8); _b[19] = (uint8_t)((ADDR) & 0xff); \
-			for (size_t _i = 0; _i < _n; _i++) _b[20 + _i] = _pl[_i]; \
-			_b[20 + _n] = 0x7f; _b[21 + _n] = 0xf7; \
+			(FR)[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; (FR)[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff; (FR)[REAC_TYPED_BLOCK_OFF] = REAC_TYPE_CONTROL >> 8; \
+			(FR)[REAC_TYPED_BLOCK_OFF + 1] = REAC_TYPE_CONTROL & 0xff; \
+			reacpw_dt1_record((FR) + REAC_CTRL_BLOCK_OFF, REAC_DT1_TAG_IDENTITY, (ADDR), _pl, _n); \
 		} while (0)
 
 		/* firmware addr 0x0000: 01 00 00 03 -> 1.003 */
-		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_FIRMWARE, 0x01, 0x00, 0x00, 0x03);
+		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_FIRMWARE_VERSION, 0x01, 0x00, 0x00, 0x03);
 		reac_pacer_rx_ingest(&p4, frame, REAC_FRAME_BYTES);
 		/* REAC version addr 0x0600: the S-0808's eight bytes, (0,1,0,0) */
 		BUILD_ID_REPLY(frame, REAC_IDENTITY_ADDR_REAC_VERSION, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00);
@@ -376,19 +375,19 @@ int main(void)
 		struct reac_pacer p5;
 		memset(&p5, 0, sizeof p5);
 		p5.handle = NULL;
-		p5.fps = 8000;
+		p5.fps = REAC_PKT_RATE_96K;
 		memcpy(p5.src, OUR, 6);
-		CHK(reac_frame_ring_init(&p5.ring, 8, 2048) == 0);
-		reac_master_init(&p5.master, OUR, NULL, 8000);
+		CHK(reac_frame_ring_init(&p5.ring, REAC_BOX_S0808_IN, 2048) == 0);
+		reac_master_init(&p5.master, OUR, NULL, REAC_PKT_RATE_96K);
 		p5.prev_state = REAC_M_IDLE;
 
 		uint8_t bf[2048];
 		/* the matrix S-4000S announce (32 in), then a tail byte no row carries —
 		 * the port table at block[8..19] is untouched, so the DECLARATION still
 		 * reads 32x8 while reac_ctrl_identify_box has no byte-exact match. */
-		size_t bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 7, 32);
+		size_t bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 7, REAC_BOX_S4000S_3208_IN);
 		CHK(bn > 0);
-		bf[18 + 26] ^= 0x5a;                      /* block[26]: model tail data */
+		bf[REAC_CTRL_BLOCK_OFF + 26] ^= 0x5a;     /* block[26]: model tail data */
 		reac_ctrl_checksum_apply(bf);             /* keep the frame VALID */
 		CHK(reac_ctrl_identify_box(bf, bn) == NULL);   /* no row names it */
 
@@ -396,7 +395,7 @@ int main(void)
 		CHK(atomic_load(&p5.recognized_box) == NULL);  /* honestly unnamed... */
 		CHK(reac_master_has_box(&p5.master) == 1);     /* ...but SIZED */
 		CHK(p5.master.alloc.width == 32);
-		CHK(p5.master.announce_blk[18] == 32);         /* cfea width byte = declared */
+		CHK(p5.master.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S4000S_3208_IN);         /* cfea width byte = declared */
 
 		reac_frame_ring_free(&p5.ring);
 	}
@@ -407,14 +406,14 @@ int main(void)
 	 * S-4000S returned 4000 pps under a 3675 pps cadence. Pin the mapping and the byte
 	 * placement without a socket. */
 	{
-		CHK(reac_pace_code(3675) == 2);   /* 44.1 kHz */
-		CHK(reac_pace_code(4000) == 0);   /* 48 kHz */
-		CHK(reac_pace_code(8000) == 1);   /* 96 kHz */
+		CHK(reac_pace_code(REAC_PKT_RATE_44K1) == REAC_PACE_CODE_44K1);   /* 44.1 kHz */
+		CHK(reac_pace_code(REAC_PKT_RATE_48K) == REAC_PACE_CODE_48K);   /* 48 kHz */
+		CHK(reac_pace_code(REAC_PKT_RATE_96K) == REAC_PACE_CODE_96K);   /* 96 kHz */
 		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-		struct reac_console_cfg cfg = { .out_channels = 16, .console_field = reac_pace_code(3675) };
+		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = reac_pace_code(REAC_PKT_RATE_44K1) };
 		struct reac_master m;
-		reac_master_init(&m, OUR, &cfg, 3675);
-		CHK(m.announce_blk[19] == 2);     /* the byte a box paces by */
+		reac_master_init(&m, OUR, &cfg, REAC_PKT_RATE_44K1);
+		CHK(m.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_PACE_OFF] == REAC_PACE_CODE_44K1);     /* the byte a box paces by */
 	}
 
 	/* ---- the sustained-discard detector --------------------------------- *
@@ -503,7 +502,7 @@ int main(void)
 
 	/* 4. live cadence on lo (best-effort; needs CAP_NET_RAW). */
 	struct reac_pacer p;
-	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = 8000, .prio = 0, .cpu = -1,
+	struct reac_pacer_cfg cfg = { .ifname = "lo", .fps = REAC_PKT_RATE_96K, .prio = 0, .cpu = -1,
 	                              .src_mac = NULL };
 	if (reac_pacer_open(&p, &cfg) != 0) {
 		/* Name what RAN. "parts 1-2" undersold it by five sections and made a
@@ -517,7 +516,7 @@ int main(void)
 		       "the live emit on lo, is skipped\n");
 		return 77;   /* meson: test SKIP */
 	}
-	CHK(reac_pacer_period_ns(8000) == p.period_ns);
+	CHK(reac_pacer_period_ns(REAC_PKT_RATE_96K) == p.period_ns);
 
 	/* prime the ring so the pacer emits queued frames (not only silent FILLER). */
 	memset(in, 0, sizeof in);

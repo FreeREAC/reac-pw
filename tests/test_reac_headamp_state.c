@@ -52,6 +52,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -63,7 +64,7 @@ static const uint8_t FX_L4_HEADAMP[34] = {
 	0x41, 0x0a, 0x00, 0x00, 0x12, 0x12, 0x01, 0x01, 0x20, 0x00, 0x01, 0x5d,
 	0xf7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
 };
-#define CTRL_OFF 16          /* where that slice starts in a downstream frame */
+#define CTRL_OFF REAC_TYPED_BLOCK_OFF          /* where that slice starts in a downstream frame */
 
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 
@@ -152,7 +153,7 @@ static int test_props_write_emits_the_golden_record(void)
 	CHK(memcmp(frame + CTRL_OFF, FX_L4_HEADAMP, sizeof FX_L4_HEADAMP) == 0);
 	CHK(reac_ctrl_headamp_record_verify(frame) == 0);
 	CHK(reac_ctrl_checksum_verify(frame) == 0);
-	CHK(frame[REAC_FRAME_BYTES - 2] == 0xc2 && frame[REAC_FRAME_BYTES - 1] == 0xea);
+	CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 && frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
 
 	/* The edge is consumed: a master that has said it once goes quiet, as a real
 	 * M-200 does (no re-assert cadence is set here). */
@@ -177,7 +178,7 @@ static int test_props_write_emits_the_golden_record(void)
 static int test_capability_decision(void)
 {
 	/* An enrolled S-1608: 16 preamps, strap 32. The only accepting case. */
-	CHK(reac_headamp_cfg_decide(0, 16, 32) == REAC_HEADAMP_REFUSE_NONE);
+	CHK(reac_headamp_cfg_decide(0, REAC_BOX_S1608_IN, 32) == REAC_HEADAMP_REFUSE_NONE);
 	CHK(strcmp(reac_headamp_cfg_state(0, 16, 32), REAC_HEADAMP_STATE_APPLIED) == 0);
 
 	/* No model recognised yet. */
@@ -188,12 +189,12 @@ static int test_capability_decision(void)
 	 * win — `no-box` cannot be rendered as "the box is master, its preamps are
 	 * preconfigured", and that sentence is the reason this code exists. */
 	CHK(reac_headamp_cfg_decide(1, 0, -1) == REAC_HEADAMP_REFUSE_BOX_MASTER);
-	CHK(reac_headamp_cfg_decide(1, 16, 32) == REAC_HEADAMP_REFUSE_BOX_MASTER);
+	CHK(reac_headamp_cfg_decide(1, REAC_BOX_S1608_IN, 32) == REAC_HEADAMP_REFUSE_BOX_MASTER);
 	CHK(strcmp(reac_headamp_cfg_state(1, 0, -1), REAC_HEADAMP_STATE_UNAVAILABLE) == 0);
 
 	/* A recognised box with no announced strap: there is no wire address, and 0
 	 * is not a safe guess — it would address an S-1608's preamps 32 slots low. */
-	CHK(reac_headamp_cfg_decide(0, 16, -1) == REAC_HEADAMP_REFUSE_NO_BASE);
+	CHK(reac_headamp_cfg_decide(0, REAC_BOX_S1608_IN, -1) == REAC_HEADAMP_REFUSE_NO_BASE);
 
 	/* The codes as a client reads them. */
 	CHK(strcmp(reac_headamp_refuse_code(REAC_HEADAMP_REFUSE_NONE), "none") == 0);
@@ -295,7 +296,7 @@ static int test_every_refusal_is_visible(void)
 		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 		struct spa_pod_frame obj, st;
 		begin_props(&b, &obj, &st);
-		kv_int(&b, "reac.headamp.32.sens", 0x38);      /* refused: out of range */
+		kv_int(&b, "reac.headamp.32.sens", REAC_HEADAMP_SENS_STEPS);      /* refused: out of range */
 		kv_int(&b, "reac.headamp.33.sens", 0x20);      /* accepted              */
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 		CHK(reac_headamp_prop_parse_result(pod, out, MAX, &res) == 1);
@@ -393,7 +394,7 @@ static int test_one_client_writes_another_reads(void)
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 		int n = reac_headamp_prop_parse_result(pod, ha, MAX, &res);
 		CHK(n == 2 && res.keys == 2);
-		CHK(reac_headamp_cfg_decide(0, 16, 32) == REAC_HEADAMP_REFUSE_NONE);
+		CHK(reac_headamp_cfg_decide(0, REAC_BOX_S1608_IN, 32) == REAC_HEADAMP_REFUSE_NONE);
 		for (int i = 0; i < n; i++) {
 			CHK(reac_pacer_headamp_set(&p, ha[i].ch, ha[i].param, ha[i].value) == 1);
 			CHK(reac_headamp_asserted_set(&mirror, ha[i].ch, ha[i].param,
@@ -420,7 +421,7 @@ static int test_one_client_writes_another_reads(void)
 	/* AN ESTABLISHMENT RE-PUSH CHANGES NOTHING ABOUT THE READBACK. Arming the
 	 * complete scene is what restores a power-cycled box's pins; the cells the
 	 * operator set are still the cells the client reads afterwards. */
-	reac_headamp_tx_arm_scene(&p.headamp, 32, 16);
+	reac_headamp_tx_arm_scene(&p.headamp, 32, REAC_BOX_S1608_IN);
 	char after[REAC_HEADAMP_ASSERTED_MAX];
 	reac_headamp_asserted_render(&mirror, after, sizeof after);
 	CHK(strcmp(after, rendered) == 0);

@@ -45,6 +45,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* Digests of the PRE-MOVE encoder's output over the corpora below (reac-pw at
  * c86a2d6, libreac at 498f411). Reproducing them needs that old code, so a
@@ -84,7 +85,7 @@ static void absorb_len(size_t len)
 }
 
 static const float SCALES[4] = { 0.25f, 1.0f, 4.0f, 0.0000001f };
-static const int   NS[5]     = { 0, 1, 6, 12, 13 };
+static const int   NS[5]     = { 0, 1, 6, REAC_SAMPLES_PER_PKT, REAC_SAMPLES_PER_PKT + 1 };
 static const uint16_t CNT[7] = { 0x0000, 0x0001, 0x1234, 0x7fff, 0x8000, 0xfffe, 0xffff };
 
 static float chbuf[REAC_MAX_CHANNELS][REAC_SAMPLES_PER_PKT];
@@ -104,7 +105,8 @@ static float *const *fill(uint32_t seed, float scale, int null_all)
 
 static uint64_t downstream_corpus(void)
 {
-	static const int NCH[8] = { 0, 1, 2, 7, 8, 16, 32, 40 };
+	static const int NCH[8] = { 0, 1, 2, 7, REAC_BOX_S0808_IN, REAC_BOX_S1608_IN,
+	                               REAC_BOX_S4000S_3208_IN, REAC_MAX_CHANNELS };
 	uint32_t seed = 1;
 
 	fnv = FNV_INIT;
@@ -128,7 +130,9 @@ static uint64_t downstream_corpus(void)
 
 static uint64_t upstream_corpus(void)
 {
-	static const int NCH[6] = { 2, 8, 16, 32, 38, 40 };
+	static const int NCH[6] = { 2, REAC_BOX_S0808_IN, REAC_BOX_S1608_IN, REAC_BOX_S4000S_3208_IN,
+	                               REAC_MAX_CHANNELS - REAC_BRAID_PAIR_CHANNELS,
+	                               REAC_MAX_CHANNELS };
 	static const uint8_t master[6] = { 0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e };
 	static const uint8_t bcast[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	uint32_t seed = 0x50000;
@@ -204,7 +208,7 @@ int main(void)
 	/* Sanity: the corpus must actually have built frames, so a builder that
 	 * started returning 0 everywhere cannot pass by digesting nothing. */
 	CHK(reac_ctrl_build_upstream_filler(frame, (const uint8_t[6]){0}, (const uint8_t[6]){0},
-	                                    0, 16, NULL, REAC_SAMPLES_PER_PKT) == 628);
+	                                    0, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT) == REACPW_FRAME_LEN(REAC_BOX_S1608_IN));
 	CHK(reac_downstream_build(frame, NULL, 0, REAC_SAMPLES_PER_PKT, 0,
 	                          (const uint8_t[6]){0}) == REAC_FRAME_BYTES);
 

@@ -27,22 +27,23 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 /* Slot s of a chanmap block: 3 bytes at [7 + 3s]. */
-#define SLOT(blk, s) ((blk) + 7 + (s) * 3)
+#define SLOT(blk, s) ((blk) + REAC_TYPE_WORD_BYTES + REAC_SEG_CONT_PAYLOAD_OFF + (s) * REAC_CHANMAP_REC_BYTES)
 
 static int count_marker_slots(const struct reac_master *m, uint8_t want_family)
 {
 	int n = 0;
 	for (int f = 0; f < m->chanmap_nframes; f++)
-		for (int s = 0; s < 8; s++) {
+		for (int s = 0; s < REAC_CHANMAP_RECS_PER_FRAME; s++) {
 			const uint8_t *t = SLOT(m->chanmap[f], s);
-			if (t[0] == 0xfe && t[1] == want_family && t[2] == 0x00)
+			if (t[0] == REAC_CHANMAP_ID_IDENTITY && t[1] == want_family && t[2] == 0x00)
 				n++;
 		}
 	return n;
@@ -78,13 +79,14 @@ int main(void)
 	int diff_family = 0;
 	for (int f = 0; f < vmix.chanmap_nframes; f++) {
 		const uint8_t *a = vmix.chanmap[f], *b = ohrca.chanmap[f];
-		for (int i = 0; i < 34; i++) {
+		for (int i = 0; i < REAC_TYPED_BLOCK_LEN; i++) {
 			if (a[i] == b[i])
 				continue;
 			int is_marker_family = 0;
-			for (int s = 0; s < 8; s++) {
+			for (int s = 0; s < REAC_CHANMAP_RECS_PER_FRAME; s++) {
 				const uint8_t *t = SLOT(a, s);
-				if (i == (7 + s * 3 + 1) && t[0] == 0xfe) {
+				if (i == (REAC_TYPE_WORD_BYTES + REAC_SEG_CONT_PAYLOAD_OFF + s * REAC_CHANMAP_REC_BYTES + 1) &&
+				    t[0] == REAC_CHANMAP_ID_IDENTITY) {
 					is_marker_family = 1;
 					CHK(a[i] == 0x00 && b[i] == 0x01);
 					diff_family++;
@@ -92,7 +94,7 @@ int main(void)
 			}
 			/* [33] is the stamped block checksum: it MUST move with the byte. */
 			if (!is_marker_family)
-				CHK(i == 33);
+				CHK(i == REAC_CTRL_CKSUM_OFF - REAC_TYPED_BLOCK_OFF);
 		}
 	}
 	CHK(diff_family == v_markers);

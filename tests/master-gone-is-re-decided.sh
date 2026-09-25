@@ -33,6 +33,7 @@
 # end of the pair lives in a nested network namespace so both ends are never ours.
 # Skips (77) where the namespaces, iproute2 or PipeWire are unavailable.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -84,7 +85,7 @@ ip link set gbox0 netns $NSPID || exit 90
 BOXMAC=00:40:ab:c4:dc:a1
 # The box is on the wire before the carrier is, so the segment is a box-master join from
 # the first instant of link and the masterless licence is never in the race.
-$in_peer "$FAKE" gbox0 "$BOXMAC" 8 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
+$in_peer "$FAKE" gbox0 "$BOXMAC" "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
 FAKEPID=$!
 sleep 0.5
 ip link set gone0 up; peer ip link set gbox0 up

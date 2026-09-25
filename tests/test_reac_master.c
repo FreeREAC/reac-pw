@@ -36,6 +36,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* THE BASE A BOX ANNOUNCES, not one derived from its width. These are the
  * straps the real chassis carry in their config announce (block[7] * 0x10,
@@ -43,7 +44,7 @@
  * written out here rather than computed from in_ch on purpose — a helper
  * mapping width to base is the very table this law retired, and it would agree
  * with the wire on exactly the chassis we own. */
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 #define S0808_BASE 0x00
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -75,7 +76,7 @@ static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
  * tracks the rotating probe, so the test compares against m.filler_desc rather
  * than any fixed byte — a frozen descriptor is exactly the bug we fixed. */
 
-#define FPS 8000
+#define FPS REAC_PKT_RATE_96K
 
 /* Build a base downstream FILLER (so the audio + tail are present), then let the
  * master stamp the control block, and return the frame in `out`. */
@@ -140,7 +141,7 @@ static void establish(struct reac_master *m, uint16_t *cnt, const uint8_t box[6]
 	 * this call. Nothing can be enrolled before it: the cold-connect JOIN carries no
 	 * width and the master no longer holds a fabricated one to fall back on. Every
 	 * re-join re-declares, because a drop forgets the box (reac_master_forget_box). */
-	reac_master_set_box(m, 16, 8, S1608_BASE);
+	reac_master_set_box(m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 	/* +1 for the leading ENROLL slot, +grant_dwell for the ENROLL->grant dwell
 	 * (~1.6 s, matching the measured M-200 gap), before the 32-block burst. */
 	for (int i = 0; i < m->grant_dwell + m->grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
@@ -174,31 +175,33 @@ int main(void)
 
 	/* the downstream chanmap is the 11-window fabric sweep (#130); window 0 is the
 	 * fe frame (marker + 0x00..0x06), asserted below against M300_CHANMAP_FE. */
-	CHK(m.chanmap_nframes == 49);
+	CHK(m.chanmap_nframes == REAC_CHANMAP_RING_LEN);
 
 	/* ---- byte oracle ---------------------------------------------------- */
 
 	/* 1. the generated channel-map frame byte-matches the captured M-300 block
 	 * (no MAC in the chanmap -> EXACT) + checksum. */
 	build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, 0, planar);
-	CHK(memcmp(f + 16, M300_CHANMAP_FE, 34) == 0);      /* type + block exact */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CHANMAP_FE, REAC_TYPED_BLOCK_LEN) == 0);      /* type + block exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);          /* Sum[18..49]%256==0 */
-	CHK(f[16] == 0xcd && f[17] == 0xea);             /* cdea */
-	CHK(f[18] == 0x01 && f[19] == 0x03);             /* established sub-state */
-	CHK(f[20] == 0x00 && f[21] == 0x19);             /* BE len 0x0019 */
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);             /* cdea */
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_PAGE_0103);             /* established sub-state */
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_LEN_OFF) == REAC_LEN_SUB_CHANMAP);             /* BE len 0x0019 */
 	CHK(f[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 &&
 	    f[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
 
 	/* 2. cfea = fixed head + OUR MAC + inCh 0x28 + outCh 0x08 + console 0 +
 	 * recomputed checksum (identity fix — NEVER a cloned desk MAC). */
 	build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-	CHK(f[16] == 0xcf && f[17] == 0xea);                 /* cfea */
-	CHK(memcmp(f + 16, M300_CFEA, M300_CFEA_MAC_IDX) == 0); /* head intact */
-	CHK(memcmp(f + 16 + M300_CFEA_MAC_IDX, SRC, 6) == 0); /* OUR MAC embedded */
-	CHK(memcmp(f + 16 + M300_CFEA_MAC_IDX + 6,           /* tail intact (pre-cksum) */
-	           M300_CFEA + M300_CFEA_MAC_IDX + 6, 34 - M300_CFEA_MAC_IDX - 6 - 1) == 0);
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_ANNOUNCE);                 /* cfea */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, M300_CFEA, M300_CFEA_MAC_IDX) == 0); /* head intact */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF + M300_CFEA_MAC_IDX, SRC, REAC_ETH_ADDR_BYTES) == 0); /* OUR MAC embedded */
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF + M300_CFEA_MAC_IDX + REAC_ETH_ADDR_BYTES,   /* tail intact (pre-cksum) */
+	           M300_CFEA + M300_CFEA_MAC_IDX + REAC_ETH_ADDR_BYTES,
+	           REAC_TYPED_BLOCK_LEN - M300_CFEA_MAC_IDX - REAC_ETH_ADDR_BYTES - 1) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
-	CHK(f[16 + 17] == 0x28 && f[16 + 18] == 0x08);       /* inCh 40, outCh 8 */
+	CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_TOTAL_SLOTS_OFF] == REAC_MAX_CHANNELS &&
+	    f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);
 
 	/* 2b. reac_master_set_box carries the RECOGNIZED box's INPUT width into the
 	 * cfea announce (deviation fix, byte-cited vs real M-200 goldens): block byte
@@ -211,14 +214,14 @@ int main(void)
 		struct reac_master mw;
 		reac_master_init(&mw, SRC, &idle, FPS);
 
-		reac_master_set_box(&mw, 16, 8, S1608_BASE);             /* S-1608: 16 in / 8 out */
+		reac_master_set_box(&mw, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);             /* S-1608: 16 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x10);                     /* width byte tracks the box */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S1608_IN);                     /* width byte tracks the box */
 		CHK(reac_ctrl_checksum_verify(f) == 0);       /* re-stamped, still valid */
 
-		reac_master_set_box(&mw, 8, 8, S0808_BASE);              /* S-0808: 8 in / 8 out */
+		reac_master_set_box(&mw, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);              /* S-0808: 8 in / 8 out */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* THE WIDTH TRACKS RECOGNITION, THE COUNT TRACKS THE GRANT — two different
@@ -256,10 +259,10 @@ int main(void)
 		}
 		CHK(mw.join_held == 0);                   /* released on the final chunk */
 		CHK(mw.state == REAC_M_GRANTING);
-		reac_master_set_box(&mw, 8, 8, S0808_BASE);              /* recognized mid-grant */
+		reac_master_set_box(&mw, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);              /* recognized mid-grant */
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);                       /* the width follows at once */
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x00); /* ungranted: count still 0 */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);                       /* the width follows at once */
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_COUNT_OFF) == 0); /* ungranted: count still 0 */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* AND IT RISES WHEN THE GRANT HAS GONE OUT. Run the ENROLL->grant dwell
@@ -282,22 +285,22 @@ int main(void)
 		}
 		CHK(mw.state == REAC_M_ESTABLISHED);
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x08);                       /* still the S-0808's width */
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01); /* count rises at the grant */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S0808_IN);                       /* still the S-0808's width */
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_COUNT_OFF) == 1); /* count rises at the grant */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* a warm relink (a DIFFERENT model recognized while established) moves the
 		 * width and keeps the 1 — the count must not fall back to the idle 0. */
-		reac_master_set_box(&mw, 16, 8, S1608_BASE);
+		reac_master_set_box(&mw, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 		build_and_stamp(&mw, f, REAC_M_EMIT_ANNOUNCE, 0, planar);
-		CHK(f[16 + 18] == 0x10);
-		CHK(f[16 + 20] == 0x00 && f[16 + 21] == 0x01);
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_IN_WIDTH_OFF] == REAC_BOX_S1608_IN);
+		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_BOX_COUNT_OFF) == 1);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 	}
 
 	/* The box declares itself (what reac_pacer does on the config-announce). Only
 	 * now is there an enrollment to grant. */
-	reac_master_set_box(&m, 16, 8, S1608_BASE);
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 	CHK(reac_master_has_box(&m) == 1);
 
 	/* 3. the grant is the master's OWN burst sweep (byte-exact M-200 cdea 04 03),
@@ -308,8 +311,8 @@ int main(void)
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
 	build_and_stamp(&m, f, REAC_M_EMIT_GRANT, 0, planar);
-	CHK(f[16] == 0xcd && f[17] == 0xea && f[18] == 0x04 && f[19] == 0x03);
-	CHK(memcmp(f + 16, m.grant_burst[0], 34) == 0);      /* burst block 0, byte-exact */
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL && REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER);
+	CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, m.grant_burst[0], REAC_TYPED_BLOCK_LEN) == 0);      /* burst block 0, byte-exact */
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* 3b. The grant sweep is GENERATED from OUR allocation for the recognized box,
@@ -323,39 +326,40 @@ int main(void)
 		struct reac_master mg;
 
 		reac_master_init(&mg, SRC, &idle, FPS);
-		reac_master_set_box(&mg, 16, 8, S1608_BASE);                 /* a real S-1608 links */
-		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
-		CHK(mg.grant_burst_len == 56);                   /* 8 + 16*3 */
+		reac_master_set_box(&mg, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);                 /* a real S-1608 links */
+		CHK(mg.alloc.base == REACPW_S1608_HEADAMP_BASE && mg.alloc.width == REAC_BOX_S1608_IN);
+		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));                   /* 8 + 16*3 */
 
-		reac_master_set_box(&mg, 8, 8, S0808_BASE);                  /* an S-0808 instead */
+		reac_master_set_box(&mg, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);                  /* an S-0808 instead */
 		CHK(mg.alloc.base == 0x00 && mg.alloc.width == 8);
-		CHK(mg.grant_burst_len == 32);                   /* 8 + 8*3 — sweep RESIZED */
+		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));   /* sweep RESIZED */
 
 		/* Every group-A record the sweep emits addresses a slot inside the
 		 * allocation. This is the invariant the replayed table violated. */
-		reac_master_set_box(&mg, 16, 8, S1608_BASE);
+		reac_master_set_box(&mg, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
 		int groupa = 0;
 		for (int i = 0; i < mg.grant_burst_len; i++) {
 			const uint8_t *r = mg.grant_burst[i];
-			if (!(r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01))
+			if (!(r[REACPW_TYPED_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && r[REACPW_TYPED_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+		      REACPW_BE16(r + REACPW_TYPED_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP))
 				continue;
 			groupa++;
-			CHK(r[20] >= mg.alloc.base);
-			CHK(r[20] < mg.alloc.base + mg.alloc.width);
+			CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] >= mg.alloc.base);
+			CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] < mg.alloc.base + mg.alloc.width);
 		}
-		CHK(groupa == 16 * 3);
+		CHK(groupa == REAC_BOX_S1608_IN * REAC_HEADAMP_SWEEP_RECORDS_PER_CH);
 
 		/* A width we cannot place must not HALF-apply: the allocation, the ENROLL
 		 * group map and the cfea width byte move together or not at all. The
 		 * previous cut let the allocation be refused and then stamped the bad width
 		 * into the ENROLL and the announce anyway. */
-		uint8_t enroll_before[34];
-		memcpy(enroll_before, mg.enroll_blk, 34);
+		reacpw_libreac_row enroll_before;
+		memcpy(enroll_before, mg.enroll_blk, sizeof mg.enroll_blk);
 		uint8_t cfea_before = mg.cfg.out_channels;
 		reac_master_set_box(&mg, 999, 8, S1608_BASE);                /* nonsense recognition */
-		CHK(mg.grant_burst_len == 56);                   /* previous sweep retained */
-		CHK(mg.alloc.base == 0x20 && mg.alloc.width == 16);
-		CHK(memcmp(enroll_before, mg.enroll_blk, 34) == 0);
+		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));                   /* previous sweep retained */
+		CHK(mg.alloc.base == REACPW_S1608_HEADAMP_BASE && mg.alloc.width == REAC_BOX_S1608_IN);
+		CHK(memcmp(enroll_before, mg.enroll_blk, sizeof mg.enroll_blk) == 0);
 		CHK(mg.cfg.out_channels == cfea_before);
 	}
 
@@ -365,27 +369,27 @@ int main(void)
 	 * body of the wrong length or a mis-sliced payload fails here. */
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene, 0) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_HEAD, 0, planar);
-	CHK(f[16] == 0xcd && f[17] == 0xea);
-	CHK(f[18] == 0x01 && f[19] == 0x01);              /* op-0101              */
-	CHK(f[20] == 0x00 && f[21] == 0x18);              /* 24-byte payload      */
-	CHK(f[23] == 0x22 && f[24] == 0xc8);              /* declares the total   */
-	CHK(memcmp(f + 25, m.scene, REAC_SCENE_HEAD_BYTES) == 0);
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_HEADER);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_LEN_OFF) == REAC_SCENE_HEAD_BYTES);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_HEAD_TOTAL_OFF) == REAC_SCENE_BYTES);
+	CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_HEAD_PAY_OFF, m.scene, REAC_SCENE_HEAD_BYTES) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	CHK(reac_ctrl_build_scene_step(m.scene_blk, m.scene, sizeof m.scene,
 	                               REAC_SCENE_STEPS - 1) == 0);
 	build_and_stamp(&m, f, REAC_M_EMIT_SCENE_TAIL, 0, planar);
-	CHK(f[18] == 0x01 && f[19] == 0x02);              /* op-0102              */
-	CHK(f[20] == 0x00 && f[21] == 0x0e);              /* 14-byte payload      */
-	CHK(memcmp(f + 23, m.scene + REAC_SCENE_BYTES - REAC_SCENE_TAIL_BYTES,
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_FINAL);
+	CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_LEN_OFF) == REAC_SCENE_TAIL_BYTES);
+	CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF, m.scene + REAC_SCENE_BYTES - REAC_SCENE_TAIL_BYTES,
 	           REAC_SCENE_TAIL_BYTES) == 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 
 	/* 5. chanmap window 0 (the fe frame) lists the marker + channels 0x00..0x06. */
 	{
 		const uint8_t *blk = M300_CHANMAP_FE + 2;   /* the 32-byte block */
-		CHK(blk[5] == 0xfe);                     /* slot 0 = section marker */
+		CHK(blk[REAC_SEG_CONT_PAYLOAD_OFF] == REAC_CHANMAP_ID_IDENTITY);                     /* slot 0 = section marker */
 		for (int c = 0; c <= 6; c++) {
-			const uint8_t *t = blk + 5 + (c + 1) * 3;
+			const uint8_t *t = blk + REAC_SEG_CONT_PAYLOAD_OFF + (c + 1) * REAC_CHANMAP_REC_BYTES;
 			CHK(t[0] == (uint8_t)c && t[1] == 0x28 && t[2] == 0x00);
 		}
 	}
@@ -393,27 +397,27 @@ int main(void)
 	/* 5b. the full sweep tiles the whole fabric: every slot 0x00..0x2f appears as a
 	 * channel id in at least one window (#130 — else a box owning it stays mute). */
 	{
-		int seen[0x30] = { 0 };
+		int seen[REAC_SLOT_SPACE] = { 0 };
 		for (int i = 0; i < m.chanmap_nframes; i++) {
 			build_and_stamp(&m, f, REAC_M_EMIT_CHANMAP, i, planar);
-			const uint8_t *blk = f + 16 + 2;      /* the 32-byte block */
-			for (int s = 0; s < 8; s++) {
-				uint8_t ch = blk[5 + s * 3];
-				if (ch != 0xfe && ch < 0x30)
+			const uint8_t *blk = f + REAC_CTRL_BLOCK_OFF;      /* the control block */
+			for (int s = 0; s < REAC_CHANMAP_RECS_PER_FRAME; s++) {
+				uint8_t ch = blk[REAC_SEG_CONT_PAYLOAD_OFF + s * REAC_CHANMAP_REC_BYTES];
+				if (ch != REAC_CHANMAP_ID_IDENTITY && ch < REAC_SLOT_SPACE)
 					seen[ch] = 1;
 			}
 		}
-		for (int ch = 0x00; ch <= 0x2f; ch++)
+		for (int ch = 0; ch < REAC_SLOT_SPACE; ch++)
 			CHK(seen[ch] == 1);                   /* whole fabric advertised */
 	}
 
 	/* control stamping is non-destructive: a FILLER frame's audio round-trips. */
-	const struct reac_mode mode = { 48000, 40, 12 };
+	const struct reac_mode mode = { REAC_SAMPLE_RATE_48K, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT };
 	build_and_stamp(&m, f, REAC_M_EMIT_FILLER, 0, planar);
 	uint8_t s24[REAC_MAX_CHANNELS * REAC_SAMPLES_PER_PKT * REAC_RESOLUTION];
 	int ns = reac_decode(f, REAC_FRAME_BYTES, &mode, s24);
 	CHK(ns == REAC_SAMPLES_PER_PKT);
-	CHK(f[16] == 0x00 && f[17] == 0x00);        /* FILLER keeps type 00 00 */
+	CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_FILLER);        /* FILLER keeps type 00 00 */
 
 	/* 6. #130 fix 2: the FILLER control block [18:50] is the non-zero descriptor
 	 * a real master stamps there (reac-captures/m{200,300}-s1608-establish-
@@ -426,7 +430,7 @@ int main(void)
 	 * above). */
 	{
 		int all_zero = 1;
-		for (int i = 18; i < 50; i += 2) {
+		for (int i = REAC_CTRL_BLOCK_OFF; i < REAC_CTRL_BLOCK_END; i += 2) {
 			CHK(f[i] == 0x00);              /* high byte constant, per the captures */
 			CHK(f[i + 1] == m.filler_desc);   /* tracks the current probe */
 			if (f[i] || f[i + 1])
@@ -443,7 +447,7 @@ int main(void)
 	uint16_t cnt = 0;
 	int idx;
 	long n_probe = 0, n_sub01 = 0, n_sub02 = 0, n_ann = 0, n_grant = 0, n_cm = 0;
-	int cm_seen[49] = { 0 };                    /* which sweep windows were emitted */
+	int cm_seen[REAC_CHANMAP_RING_LEN] = { 0 };                    /* which sweep windows were emitted */
 	/* One chanmap window per control cycle (fps*10778/4000 slots ≈ 2.69 s), so
 	 * the 49-window sweep needs 49 cycles ≈ 132 s — soak 140 s (~52 cycles) to
 	 * cover the whole fabric. Burst rhythm asserted slot-exact: within a burst
@@ -477,7 +481,7 @@ int main(void)
 	CHK(m.state == REAC_M_PROBING);             /* NEVER advanced on a timer */
 	CHK(n_grant == 0);                          /* invariant: NO grant without a validated JOIN */
 	CHK(n_cm > 0);                              /* §4: chanmap advertised while unlinked */
-	CHK(n_probe >= 51L * 341 && n_probe <= 53L * 341);   /* 341 chunks per transfer */
+	CHK(n_probe >= 51L * REAC_SCENE_CHUNKS && n_probe <= 53L * REAC_SCENE_CHUNKS);
 	CHK(n_sub01 >= 50 && n_sub01 <= 53);        /* sub01: once per cycle */
 	CHK(n_sub02 >= 50 && n_sub02 <= 53);        /* sub02: once per cycle */
 	CHK(n_cm    >= 50 && n_cm    <= 53);        /* chanmap: ONE window per cycle */
@@ -500,16 +504,16 @@ int main(void)
 			continue;
 		build_and_stamp(&m, f, e, idx, planar);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
-		CHK(m.filler_desc == f[49]);              /* descriptor tracks EVERY chunk */
+		CHK(m.filler_desc == f[REAC_CTRL_CKSUM_OFF]);              /* descriptor tracks EVERY chunk */
 		int chunk = m.scene_step - 1;             /* 0-based index into the body */
-		if (chunk == 31) {                        /* carries a MAC: OURS */
-			CHK(memcmp(f + 25, SRC, 6) == 0);     /* block[7:13] = frame [25:31] */
+		if (chunk == REACPW_SCENE_CHUNK_OF(REAC_SCENE_MAC_OFF)) {    /* carries a MAC: OURS */
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF + REACPW_SCENE_IN_CHUNK(REAC_SCENE_MAC_OFF), SRC, 6) == 0);
 			specials_seen++;
-		} else if (chunk == 32) {                 /* the "SYSP" token */
-			CHK(f[39] == 'S' && f[40] == 'Y' && f[41] == 'S' && f[42] == 'P');
+		} else if (chunk == REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SYSP_OFF)) {   /* the "SYSP" token */
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF + REACPW_SCENE_IN_CHUNK(REAC_SCENE_TAG_SYSP_OFF), "SYSP", 4) == 0);
 			specials_seen++;
-		} else if (chunk == 33) {                 /* the "SCEN" token */
-			CHK(f[33] == 'S' && f[34] == 'C' && f[35] == 'E' && f[36] == 'N');
+		} else if (chunk == REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SCEN_OFF)) {   /* the "SCEN" token */
+			CHK(memcmp(f + REAC_CTRL_BLOCK_OFF + REAC_SCENE_CHUNK_PAY_OFF + REACPW_SCENE_IN_CHUNK(REAC_SCENE_TAG_SCEN_OFF), "SCEN", 4) == 0);
 			specials_seen++;
 		}
 	}
@@ -535,8 +539,8 @@ int main(void)
 	 * GRANTING, see reac_pacer.c) and THAT is what fills the enrollment in. */
 	CHK(reac_master_has_box(&m) == 0);
 	CHK(m.grant_burst_len == 0);
-	reac_master_set_box(&m, 16, 8, S1608_BASE);
-	CHK(m.grant_burst_len == 56);
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
+	CHK(m.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 
 	/* collect the grant burst: ENROLL (0103000d) at slot 0, then the ~1.6 s
 	 * grant_dwell hold (matching the measured M-200 ENROLL->grant gap: Δ1.503 s
@@ -562,7 +566,7 @@ int main(void)
 			last_grant_slot = i;
 			CHK(idx == grants);                          /* blocks emitted in order */
 			build_and_stamp(&m, f, e, idx, planar);
-			CHK(memcmp(f + 16, m.grant_burst[idx], 34) == 0);  /* burst block, byte-exact */
+			CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, m.grant_burst[idx], REAC_TYPED_BLOCK_LEN) == 0);  /* burst block, byte-exact */
 			CHK(reac_ctrl_checksum_verify(f) == 0);
 			grants++;
 		}
@@ -623,7 +627,7 @@ int main(void)
 	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
-	reac_master_set_box(&m, 16, 8, S1608_BASE);              /* the box declares itself */
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);              /* the box declares itself */
 	for (int i = 0; i < m.grant_dwell + m.grant_burst_len * REAC_M_GRANT_STRIDE + 1; i++)
 		slot(&m, NULL, &cnt);
 	CHK(m.state == REAC_M_ESTABLISHED);          /* self-completed after dwell + full burst */
@@ -717,13 +721,13 @@ int main(void)
 		 *
 		 * `clamped` is retained in the signature and is always 0 — kept so a
 		 * real, demonstrated rule would have one place to live. */
-		CHK(reac_mixer_resolve_rate(m200, 0, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200, 48000, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200, 96000, &clamped) == 96000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m300, 96000, &clamped) == 96000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == 48000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 96000, &clamped) == 96000 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 48000, &clamped) == 48000 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, 0, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, REAC_SAMPLE_RATE_48K, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
+		CHK(reac_mixer_resolve_rate(m200, REAC_SAMPLE_RATE_96K, &clamped) == REAC_SAMPLE_RATE_96K && !clamped);
+		CHK(reac_mixer_resolve_rate(m300, REAC_SAMPLE_RATE_96K, &clamped) == REAC_SAMPLE_RATE_96K && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 0, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_96K, &clamped) == REAC_SAMPLE_RATE_96K && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_48K, &clamped) == REAC_SAMPLE_RATE_48K && !clamped);
 
 		/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz (operator, 2026-08-21).
 		 * A Roland desk offers exactly these and drives the segment at the one
@@ -731,19 +735,19 @@ int main(void)
 		 * need RE-PACING between the rig clock and the wire, which reac-pw cannot
 		 * do. Refuse it and SAY SO via `clamped`, rather than putting a cadence on
 		 * the wire no box can follow and calling it configuration. */
-		CHK(reac_mixer_resolve_rate(m200,  44100, &clamped) == 44100 && !clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 44100, &clamped) == 44100 && !clamped);
-		CHK(reac_mixer_resolve_rate(m200,  88200, &clamped) == 48000 && clamped);
-		CHK(reac_mixer_resolve_rate(m5000, 32000, &clamped) == 48000 && clamped);
-		CHK(reac_mixer_resolve_rate(m300,  1,     &clamped) == 48000 && clamped);
+		CHK(reac_mixer_resolve_rate(m200,  REAC_SAMPLE_RATE_44K1, &clamped) == REAC_SAMPLE_RATE_44K1 && !clamped);
+		CHK(reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_44K1, &clamped) == REAC_SAMPLE_RATE_44K1 && !clamped);
+		CHK(reac_mixer_resolve_rate(m200,  88200, &clamped) == REAC_SAMPLE_RATE_48K && clamped);
+		CHK(reac_mixer_resolve_rate(m5000, 32000, &clamped) == REAC_SAMPLE_RATE_48K && clamped);
+		CHK(reac_mixer_resolve_rate(m300,  1,     &clamped) == REAC_SAMPLE_RATE_48K && clamped);
 
 		/* fps = rate/REAC_SAMPLES_PER_PKT (reac_sink_node.c) for each resolved
 		 * rate; the pacer's per-fps period (reac_pacer_period_ns) is already
 		 * covered by test_reac_pacer.c — pin the rate->fps mapping here. */
 		int fps_m200_48k  = reac_mixer_resolve_rate(m200, 0, NULL) / REAC_SAMPLES_PER_PKT;
-		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, 96000, NULL) / REAC_SAMPLES_PER_PKT;
-		CHK(fps_m200_48k == 4000);
-		CHK(fps_m5000_96k == 8000);
+		int fps_m5000_96k = reac_mixer_resolve_rate(m5000, REAC_SAMPLE_RATE_96K, NULL) / REAC_SAMPLES_PER_PKT;
+		CHK(fps_m200_48k == REAC_PKT_RATE_48K);
+		CHK(fps_m5000_96k == REAC_PKT_RATE_96K);
 
 		/* frame SHAPE is identical for both: reac_downstream_build takes no mixer/rate
 		 * input at all, so the emitted frame is REAC_FRAME_BYTES regardless. */
@@ -760,7 +764,7 @@ int main(void)
 		/* any source MAC does — the cadence math under test is MAC-independent */
 		reac_master_init(&mm200, src, NULL, fps_m200_48k);
 		reac_master_init(&mm5000, src, NULL, fps_m5000_96k);
-		CHK(mm200.fps == 4000 && mm5000.fps == 8000);
+		CHK(mm200.fps == REAC_PKT_RATE_48K && mm5000.fps == REAC_PKT_RATE_96K);
 		CHK(mm5000.cycle_len == mm200.cycle_len * 2);      /* fps doubled -> cycle doubled */
 		CHK(mm5000.chanmap_off == mm200.chanmap_off * 2);
 
@@ -816,10 +820,10 @@ int main(void)
 
 		/* (c) THE BOX DECLARES ITSELF — an S-0808, 8 inputs. The window restarts
 		 * and the burst that reaches the wire enrolls 0x00..0x07, every record. */
-		reac_master_set_box(&mb, 8, 8, S0808_BASE);
+		reac_master_set_box(&mb, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);
 		CHK(reac_master_has_box(&mb) == 1);
 		CHK(mb.alloc.base == 0x00 && mb.alloc.width == 8);
-		CHK(mb.grant_burst_len == 32);              /* 8 + 8*3 */
+		CHK(mb.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
 		CHK(mb.grant_ticks == 0);                   /* window restarted */
 		int ga_records = 0;
 		emitted_grants = 0;
@@ -830,15 +834,16 @@ int main(void)
 				continue;
 			emitted_grants++;
 			build_and_stamp(&mb, f, e, gi, planar);
-			CHK(f[16] == 0xcd && f[17] == 0xea);    /* a real cdea grant frame */
+			CHK(REACPW_BE16(f + REAC_TYPED_BLOCK_OFF) == REAC_TYPE_CONTROL);    /* a real cdea grant frame */
 			CHK(reac_ctrl_checksum_verify(f) == 0);
-			if (f[32] == 0x12 && f[33] == 0x12 && f[34] == 0x01 && f[35] == 0x01) {
+			if (f[REACPW_FRAME_OF(REAC_DT1_MODEL_LO_OFF)] == REAC_DT1_MODEL_ID_LO && f[REACPW_FRAME_OF(REAC_DT1_CMD_OFF)] == REAC_DT_CMD_DT1 &&
+			    REACPW_BE16(f + REACPW_FRAME_OF(REAC_DT1_TAG_OFF)) == REAC_DT1_TAG_HEAD_AMP) {
 				ga_records++;
-				CHK(f[36] <= 0x07);                 /* the S-0808's own slots */
+				CHK(f[REACPW_FRAME_OF(REACPW_HA_CH_OFF)] <= REAC_BOX_S0808_IN - 1);   /* the S-0808's own slots */
 			}
 		}
-		CHK(emitted_grants == 32);
-		CHK(ga_records == 8 * 3);                   /* phantom+pad+sens per input */
+		CHK(emitted_grants == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
+		CHK(ga_records == REAC_BOX_S0808_IN * REAC_HEADAMP_SWEEP_RECORDS_PER_CH);                   /* phantom+pad+sens per input */
 		CHK(mb.state == REAC_M_ESTABLISHED);
 
 		/* (d) A BOX SWAP RE-DERIVES EVERYTHING. The 8-wide box goes; the master
@@ -852,13 +857,13 @@ int main(void)
 		/* a DIFFERENT box joins and declares 16 inputs: base moves to 0x20 */
 		deliver_scene(&mb, &bc);
 		CHK(reac_master_rx(&mb, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
-		reac_master_set_box(&mb, 16, 8, S1608_BASE);
-		CHK(mb.alloc.base == 0x20 && mb.alloc.width == 16);
-		CHK(mb.grant_burst_len == 56);
+		reac_master_set_box(&mb, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);
+		CHK(mb.alloc.base == REACPW_S1608_HEADAMP_BASE && mb.alloc.width == REAC_BOX_S1608_IN);
+		CHK(mb.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		for (int i = 0; i < mb.grant_burst_len; i++) {
 			const uint8_t *r = mb.grant_burst[i];
 			if (r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01)
-				CHK(r[20] >= 0x20 && r[20] <= 0x2f);   /* NOT the old box's slots */
+				CHK(r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] >= REACPW_S1608_HEADAMP_BASE && r[REACPW_TYPED_OF(REACPW_HA_CH_OFF)] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);   /* NOT the old box's slots */
 		}
 
 		/* (e) A BOX THAT NEVER DECLARES ITSELF is not guessed at. The hold expires

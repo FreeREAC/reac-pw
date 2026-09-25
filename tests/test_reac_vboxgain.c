@@ -16,6 +16,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdatomic.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 /* relative tolerance for float gain comparisons */
@@ -38,14 +39,14 @@ static struct reac_ctrl_parsed ha_rec(uint8_t ch, uint8_t param, uint8_t value)
 
 static void slave16(struct reac_slave *s)
 {
-	struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = 16,
-	                              .sample_rate = 48000, .src_mac = SRC };
+	struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
+	                              .sample_rate = REAC_SAMPLE_RATE_48K, .src_mac = SRC };
 	reac_slave_fsm_init(s, &cfg);
 }
 
 int main(void)
 {
-	const float STEP = powf(10.0f, 1.0f / 20.0f);   /* +1 dB in linear amplitude */
+	const float STEP = powf(10.0f, REAC_HEADAMP_SENS_STEP_CDB / 2000.0f);   /* one step (+1 dB), linear */
 
 	/* (a) DIRECTION: a higher SENS value is a more sensitive input (lower dBu) and
 	 * so MORE gain. STRICTLY increasing, by exactly one dB, at every one of the 55
@@ -70,7 +71,7 @@ int main(void)
 	 * already +10). A straight line, which is what the box does. The anchor stood
 	 * at -16.30 while the stage table was believed, on the reading that stage 3's
 	 * seven steps were 0.90 dB and the break carried nothing. */
-	CHK(reac_headamp_sens_cdb(0x08, 0) == -1800);
+	CHK(reac_headamp_sens_cdb(0x08, 0) == REACPW_SENS_CDB(0x08, 0));
 	CHK(reac_headamp_sens_cdb(0x07, 0) == -1700);        /* one dB apart, not a twin */
 	CHK(approx(reac_slave_headamp_gain(0x08, 0), powf(10.0f, 18.0f / 20.0f)));
 
@@ -79,7 +80,7 @@ int main(void)
 	{
 		struct reac_slave s;
 		slave16(&s);
-		CHK(s.ch_base == 0x20);                 /* 16-input S-1608 sits at 0x20 */
+		CHK(s.ch_base == REACPW_S1608_HEADAMP_BASE);                 /* 16-input S-1608 sits at 0x20 */
 		for (int c = 0; c < REAC_MAX_CHANNELS; c++)
 			CHK(s.ha_gain[c] == 1.0f);
 
@@ -103,21 +104,21 @@ int main(void)
 		struct reac_slave s;
 		slave16(&s);
 		struct reac_ctrl_parsed p;
-		p = ha_rec(0x20, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == 0);
-		p = ha_rec(0x2f, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == 15);
+		p = ha_rec(REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == 0);
+		p = ha_rec(REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == 15);
 		p = ha_rec(0x00, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == -1);
-		p = ha_rec(0x1f, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == -1);
-		p = ha_rec(0x30, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == -1);
+		p = ha_rec(REACPW_S1608_HEADAMP_BASE - 1, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == -1);
+		p = ha_rec(REAC_HEADAMP_CH_SPAN, REAC_HEADAMP_SENS, 0x10); CHK(reac_slave_headamp_rx(&s, &p) == -1);
 		/* an unknown param on an in-range channel is ignored too */
-		p = ha_rec(0x20, 0x7f, 0x00);              CHK(reac_slave_headamp_rx(&s, &p) == -1);
+		p = ha_rec(REACPW_S1608_HEADAMP_BASE, 0x7f, 0x00);              CHK(reac_slave_headamp_rx(&s, &p) == -1);
 	}
 
 	/* An 8-input box (S-0808) sits at base 0x00: ch 0x00 -> input 0, ch 0x07 ->
 	 * input 7, ch 0x08 -> another box (ignored). */
 	{
 		struct reac_slave s;
-		struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = 8,
-		                              .sample_rate = 48000, .src_mac = SRC };
+		struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = REAC_BOX_S0808_IN,
+		                              .sample_rate = REAC_SAMPLE_RATE_48K, .src_mac = SRC };
 		reac_slave_fsm_init(&s, &cfg);
 		CHK(s.ch_base == 0x00);
 		struct reac_ctrl_parsed p;

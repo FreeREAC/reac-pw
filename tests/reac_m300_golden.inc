@@ -42,5 +42,5 @@ static const uint8_t M300_CFEA[34] =
 
 /* Offsets into the 34-byte [type|block] cfea template. The MAC index is the
  * authoritative [11:17] (an early task note said "byte[14:17]"). */
-#define M300_CFEA_MAC_IDX   11
-#define M300_CFEA_CKSUM_IDX 33
+#define M300_CFEA_MAC_IDX   (REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_MAC_OFF)
+#define M300_CFEA_CKSUM_IDX (REAC_CTRL_CKSUM_OFF - REAC_TYPED_BLOCK_OFF)
