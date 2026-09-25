@@ -41,6 +41,7 @@
 
 #include <reac/reac_ctrl.h>   /* REAC_HEADAMP_MAX_CH, REAC_HEADAMP_SENS_MAX */
 #include <reac/reac_ctrlblk.h> /* REAC_HEADAMP_NPARAMS */
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 /* The READ-side node properties, published on the SAME master sink node
  * (`reac-playback[.<segment>]`) that consumes the `reac.headamp.<ch>.<param>`

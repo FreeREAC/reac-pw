@@ -47,7 +47,7 @@ static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
  * announce block[7]) times 0x10. It is a required argument now — the per-width
  * table it used to be inferred from is deleted, and a box that has not announced
  * is not a box. Same value the sibling master tests use. */
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 
 /* Stand in the quiet window between scene transfers, the way a box that joins
  * between two pushes does. A JOIN landing mid-push is HELD (reac_master_rx
@@ -102,7 +102,7 @@ int main(void)
 	deliver_scene(&m, &cnt);
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX, ZONEA_JOIN) == 1);
 	CHK(m.state == REAC_M_GRANTING);
-	CHK(m.grant_burst_len == 56);
+	CHK(m.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 
 	int grants = 0, last_grant_slot = -1, saw_enroll = 0;
 	int idx;

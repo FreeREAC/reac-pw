@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -34,7 +35,7 @@ static int test_pack(void)
 {
 	for (int ch = 0; ch < REAC_MAX_CHANNELS; ch++) {
 		for (int p = 0; p < REAC_HEADAMP_NPARAMS; p++) {
-			uint8_t v = (uint8_t)((ch * 7 + p * 13) & 0x37);
+			uint8_t v = (uint8_t)((ch * 7 + p * 13) % REAC_HEADAMP_SENS_STEPS);
 			uint32_t w = reac_headamp_pack((uint8_t)ch, (uint8_t)p, v);
 			uint8_t rc, rp, rv;
 			reac_headamp_unpack(w, &rc, &rp, &rv);
@@ -54,6 +55,10 @@ struct writer_ctx {
 	_Atomic int done;
 };
 
+/* The value a channel carries: the channel itself, folded into the legal SENS
+ * range (identical to ch while every channel is a legal step). */
+#define VAL(ch) ((uint8_t)((ch) % REAC_HEADAMP_SENS_STEPS))
+
 /* The PROP thread: floods the ring with (ch, SENS, value==ch) commands. It ONLY
  * produces (reac_pacer_headamp_set) — never touches the table or the tail. */
 static void *writer(void *arg)
@@ -61,7 +66,7 @@ static void *writer(void *arg)
 	struct writer_ctx *w = arg;
 	for (long i = 0; i < WRITER_CMDS; i++) {
 		uint8_t ch = (uint8_t)(i % REAC_MAX_CHANNELS);
-		reac_pacer_headamp_set(w->p, ch, REAC_HEADAMP_SENS, ch);
+		reac_pacer_headamp_set(w->p, ch, REAC_HEADAMP_SENS, VAL(ch));
 	}
 	atomic_store_explicit(&w->done, 1, memory_order_release);
 	return NULL;
@@ -151,7 +156,7 @@ int main(void)
 				CHK(ch < REAC_MAX_CHANNELS);
 				CHK(pr == REAC_HEADAMP_SENS);
 				CHK(v <= REAC_HEADAMP_SENS_MAX);
-				CHK(v == ch);            /* THE torn-triple assertion */
+				CHK(v == VAL(ch));       /* THE torn-triple assertion */
 				emitted++;
 			}
 			if (atomic_load_explicit(&w.done, memory_order_acquire) &&
@@ -163,7 +168,7 @@ int main(void)
 		/* Final sweep so no armed cell is left unverified. */
 		reac_pacer_headamp_drain(&p);
 		while (reac_headamp_tx_next(&p.headamp, &ch, &pr, &v)) {
-			CHK(pr == REAC_HEADAMP_SENS && v == ch);
+			CHK(pr == REAC_HEADAMP_SENS && v == VAL(ch));
 			emitted++;
 		}
 

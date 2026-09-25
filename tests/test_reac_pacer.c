@@ -219,13 +219,13 @@ int main(void)
 		/* THE VALUE, not the shape: an S-1608's inputs are enrolled at head-amp
 		 * 0x20..0x2f, and the enrollment that will reach the wire says so in every
 		 * group-A record. This is the agreement head-amp control depends on. */
-		CHK(p3.master.alloc.base == 0x20 && p3.master.alloc.width == 16);
-		CHK(p3.master.grant_burst_len == 56);
+		CHK(p3.master.alloc.base == REACPW_S1608_HEADAMP_BASE && p3.master.alloc.width == REAC_BOX_S1608_IN);
+		CHK(p3.master.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		for (int i = 0; i < p3.master.grant_burst_len; i++) {
 			const uint8_t *r = p3.master.grant_burst[i];
 			if (!(r[16] == 0x12 && r[17] == 0x12 && r[18] == 0x01 && r[19] == 0x01))
 				continue;                       /* not a group-A head-amp record */
-			CHK(r[20] >= 0x20 && r[20] <= 0x2f);
+			CHK(r[20] >= REACPW_S1608_HEADAMP_BASE && r[20] <= REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1);
 		}
 
 		/* the event ring contains a JOIN event with the exact 32-byte block */
@@ -275,7 +275,7 @@ int main(void)
 		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 5, REAC_BOX_S1608_IN);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(atomic_load(&p3.recognized_box) != NULL);
-		CHK(p3.master.alloc.base == 0x20 && p3.master.alloc.width == 16);
+		CHK(p3.master.alloc.base == REACPW_S1608_HEADAMP_BASE && p3.master.alloc.width == REAC_BOX_S1608_IN);
 
 		/* drain formats + counts every queued event, then returns 0 */
 		FILE *sink = tmpfile();

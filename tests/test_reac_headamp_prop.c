@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -65,7 +66,7 @@ int main(void)
 		 * (an S-1608 based at 0x20 owns 0x20..0x2f), so 48 is the first invalid
 		 * one. This previously read 40 and so pinned the too-narrow bound. */
 		kv_int(&b, "reac.headamp.48.phantom", 1);
-		kv_int(&b, "reac.headamp.7.sens", 0x38);              /* value > SENS_MAX */
+		kv_int(&b, "reac.headamp.7.sens", REAC_HEADAMP_SENS_STEPS);              /* value > SENS_MAX */
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 
 		int n = reac_headamp_prop_parse(pod, out, (int)(sizeof out / sizeof out[0]));

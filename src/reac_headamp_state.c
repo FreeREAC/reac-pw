@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 const char *reac_headamp_refuse_code(enum reac_headamp_refuse r)
 {

@@ -52,22 +52,22 @@ int main(void)
 	 * ---------------------------------------------------------------- */
 	struct reac_grant_alloc a;
 
-	CHK(reac_grant_allocate(&a, 0x20, REAC_BOX_S1608_IN) == 0);
-	CHK(a.base == 0x20 && a.width == 16);   /* S-1608 */
+	CHK(reac_grant_allocate(&a, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 0);
+	CHK(a.base == REACPW_S1608_HEADAMP_BASE && a.width == REAC_BOX_S1608_IN);   /* S-1608 */
 
 	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S0808_IN) == 0);
 	CHK(a.base == 0x00 && a.width == 8);    /* S-0808 */
 
 	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S4000S_3208_IN) == 0);
-	CHK(a.base == 0x00 && a.width == 32);   /* S-4000S */
+	CHK(a.base == 0x00 && a.width == REAC_BOX_S4000S_3208_IN);   /* S-4000S */
 
 	/* 1a. THE BASE IS NOT A FUNCTION OF THE WIDTH, and these are the cases the
 	 * retired per-width table could not express. A 16-wide box that straps 1 is
 	 * admitted at 0x10 — the table said every 16-wide box sits at 0x20. And two
 	 * boxes of different widths on the same strap land on the same base, which
 	 * is the observation that rules out an allocation keyed on width. */
-	CHK(reac_grant_allocate(&a, 0x10, REAC_BOX_S1608_IN) == 0);
-	CHK(a.base == 0x10);
+	CHK(reac_grant_allocate(&a, REAC_HEADAMP_BASE_MULTIPLIER, REAC_BOX_S1608_IN) == 0);
+	CHK(a.base == REAC_HEADAMP_BASE_MULTIPLIER);   /* strap 1 */
 	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S0808_IN) == 0);
 	uint8_t base_8 = a.base;
 	CHK(reac_grant_allocate(&a, 0x00, REAC_BOX_S4000S_3208_IN) == 0);
@@ -77,12 +77,12 @@ int main(void)
 	 * 40-slot audio fabric). This is the rule that FORCES a 32-wide box to base at
 	 * 0x00: at 0x20 it would run to 0x3f, past the ceiling. A per-width base
 	 * constant would have happily allocated it there. */
-	CHK(reac_grant_alloc_fits(0x20, 16) == 1);   /* 0x20..0x2f — exactly to the ceiling */
-	CHK(reac_grant_alloc_fits(0x20, 32) == 0);   /* 0x20..0x3f — REJECTED */
-	CHK(reac_grant_alloc_fits(0x00, 32) == 1);   /* 0x00..0x1f */
-	CHK(reac_grant_alloc_fits(0x2f, 1)  == 1);   /* the ceiling slot itself */
-	CHK(reac_grant_alloc_fits(0x30, 1)  == 0);   /* one past it */
-	CHK(reac_grant_alloc_fits(0x29, 8)  == 0);   /* 0x29..0x30 — one past */
+	CHK(reac_grant_alloc_fits(REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 1);   /* 0x20..0x2f — exactly to the ceiling */
+	CHK(reac_grant_alloc_fits(REACPW_S1608_HEADAMP_BASE, REAC_BOX_S4000S_3208_IN) == 0);   /* 0x20..0x3f — REJECTED */
+	CHK(reac_grant_alloc_fits(0x00, REAC_BOX_S4000S_3208_IN) == 1);   /* 0x00..0x1f */
+	CHK(reac_grant_alloc_fits(REACPW_HEADAMP_TOP_CH, 1)  == 1);   /* the ceiling slot itself */
+	CHK(reac_grant_alloc_fits(REAC_HEADAMP_CH_SPAN, 1)  == 0);   /* one past it */
+	CHK(reac_grant_alloc_fits(REAC_HEADAMP_CH_SPAN - 7, 8)  == 0);   /* 0x29..0x30 — one past */
 	CHK(reac_grant_alloc_fits(-1, 8)    == 0);
 	CHK(reac_grant_alloc_fits(0, 0)     == 0);
 
@@ -97,8 +97,8 @@ int main(void)
 	 * read the slots it strapped for, so a grant at any other base writes
 	 * head-amp records nothing will ever apply. Refusing is the only honest
 	 * answer, and the caller logs it. */
-	CHK(reac_grant_allocate(&a, 0x20, REAC_BOX_S4000S_3208_IN) == -1);   /* 0x20..0x3f, past 0x2f */
-	CHK(reac_grant_allocate(&a, 0x30, 1)  == -1);   /* one past the ceiling */
+	CHK(reac_grant_allocate(&a, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S4000S_3208_IN) == -1);   /* 0x20..0x3f, past 0x2f */
+	CHK(reac_grant_allocate(&a, REAC_HEADAMP_CH_SPAN, 1)  == -1);   /* one past the ceiling */
 	CHK(reac_grant_allocate(&a, -1,   REAC_BOX_S0808_IN)  == -1);   /* not a base at all */
 
 	/* A width nobody has captured is still admitted at the base it announces —
@@ -112,9 +112,9 @@ int main(void)
 	 *    frame-for-frame.
 	 * ---------------------------------------------------------------- */
 	uint8_t sweep[REAC_GRANT_SWEEP_MAX][REAC_TYPED_BLOCK_LEN];
-	struct reac_grant_alloc s1608 = { .base = 0x20, .width = REAC_BOX_S1608_IN };
+	struct reac_grant_alloc s1608 = { .base = REACPW_S1608_HEADAMP_BASE, .width = REAC_BOX_S1608_IN };
 	int n = reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s1608, NULL);
-	CHK(n == 56);
+	CHK(n == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 	CHK(n == REAC_GRANT_SWEEP_LEN(16));
 
 	/* 2a. Group A: width x 3 records, params 0/1/2 per channel, channels
@@ -133,7 +133,7 @@ int main(void)
 			gb++;
 		}
 	}
-	CHK(ga == 16 * 3);
+	CHK(ga == REAC_BOX_S1608_IN * REAC_HEADAMP_SWEEP_RECORDS_PER_CH);
 	CHK(gb == 6);
 	for (int c = 0; c < REAC_HEADAMP_SLOTS; c++) {
 		int in_box = (c >= s1608.base && c < s1608.base + s1608.width);
@@ -143,12 +143,12 @@ int main(void)
 
 	/* 2b. Widths scale, and each matches its golden's frame count exactly. */
 	struct reac_grant_alloc s0808 = { .base = 0x00, .width = REAC_BOX_S0808_IN };
-	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s0808, NULL) == 32);
+	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s0808, NULL) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
 	struct reac_grant_alloc s4000 = { .base = 0x00, .width = REAC_BOX_S4000S_3208_IN };
-	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s4000, NULL) == 104);
+	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s4000, NULL) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S4000S_3208_IN));
 
 	/* 2c. Bad args + capacity are refused, never truncated. */
-	struct reac_grant_alloc over = { .base = 0x20, .width = REAC_BOX_S4000S_3208_IN };   /* past the ceiling */
+	struct reac_grant_alloc over = { .base = REACPW_S1608_HEADAMP_BASE, .width = REAC_BOX_S4000S_3208_IN };   /* past the ceiling */
 	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &over, NULL) == -1);
 	CHK(reac_grant_build_sweep(sweep, 10, &s1608, NULL) == -1);     /* too small */
 	CHK(reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, NULL, NULL) == -1);
@@ -160,7 +160,7 @@ int main(void)
 	 *    This is what makes "generated" safe: we did not hand-roll record bytes.
 	 * ---------------------------------------------------------------- */
 	n = reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s1608, NULL);
-	CHK(n == 56);
+	CHK(n == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	static const uint8_t SRC[6]   = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 };
 	for (int i = 0; i < n; i++) {
@@ -173,7 +173,7 @@ int main(void)
 		CHK(len == REAC_FRAME_BYTES);
 		/* The builder's [16:50] IS the sweep row: type + the whole control block,
 		 * inner record checksum and outer block checksum alike. */
-		CHK(memcmp(sweep[i], ref + 16, 34) == 0);
+		CHK(memcmp(sweep[i], ref + REAC_TYPED_BLOCK_OFF, REAC_TYPED_BLOCK_LEN) == 0);
 	}
 
 	/* 3b. The outer block checksum holds on EVERY row (group A, group B and the
@@ -196,7 +196,7 @@ int main(void)
 	 * carries a real head-amp value; the old all-zero SENS default left every
 	 * un-preset channel un-enrollable, so no later op-0403 write ever committed it.
 	 * Phantom stays OFF — never default +48V. */
-	uint8_t def_sens = reac_grant_headamp_value(NULL, 0x20, REAC_HEADAMP_SENS);
+	uint8_t def_sens = reac_grant_headamp_value(NULL, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SENS);
 	CHK(def_sens != 0x00);   /* the enrol requirement: a real value, not minimum gain */
 	for (int i = 0; i < n; i++) {
 		if (!row_is_groupa(sweep[i]))
@@ -210,7 +210,7 @@ int main(void)
 	/* The head-amp law is unchanged — 0x00 is still -10 dBu (minimum gain); we
 	 * simply no longer DEFAULT there, because a channel must carry a real value to
 	 * be enrolled by the box. */
-	CHK(reac_headamp_sens_db(0x00, 0) == -10);
+	CHK(reac_headamp_sens_db(0x00, 0) == REACPW_SENS_CDB(0, 0) / 100);
 
 	/* 4b. Set cells are honoured; unset cells beside them still default. The
 	 * channels used are 0x20 (the S-1608's input 1) and 0x2f (its input 16) —
@@ -218,22 +218,22 @@ int main(void)
 	 * silently rejected. */
 	struct reac_headamp_tx tx;
 	reac_headamp_tx_init(&tx);
-	CHK(reac_headamp_tx_set(&tx, 0x20, REAC_HEADAMP_PHANTOM, 1) == 0);
-	CHK(reac_headamp_tx_set(&tx, 0x20, REAC_HEADAMP_SENS, 0x07) == 0);
-	CHK(reac_headamp_tx_set(&tx, 0x2f, REAC_HEADAMP_PAD, 1) == 0);
+	CHK(reac_headamp_tx_set(&tx, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PHANTOM, 1) == 0);
+	CHK(reac_headamp_tx_set(&tx, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SENS, 0x07) == 0);
+	CHK(reac_headamp_tx_set(&tx, REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1, REAC_HEADAMP_PAD, 1) == 0);
 
 	n = reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s1608, &tx);
-	CHK(n == 56);
+	CHK(n == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 	int checked = 0;
 	for (int i = 0; i < n; i++) {
 		if (!row_is_groupa(sweep[i]))
 			continue;
 		uint8_t ch = row_ch(sweep[i]), p = row_param(sweep[i]), v = row_value(sweep[i]);
-		if (ch == 0x20 && p == REAC_HEADAMP_PHANTOM) { CHK(v == 1);    checked++; }
-		if (ch == 0x20 && p == REAC_HEADAMP_SENS)    { CHK(v == 0x07); checked++; }
-		if (ch == 0x20 && p == REAC_HEADAMP_PAD)     { CHK(v == 0);    checked++; }  /* unset */
-		if (ch == 0x2f && p == REAC_HEADAMP_PAD)     { CHK(v == 1);    checked++; }
-		if (ch == 0x2f && p == REAC_HEADAMP_PHANTOM) { CHK(v == 0);    checked++; }  /* unset */
+		if (ch == REACPW_S1608_HEADAMP_BASE && p == REAC_HEADAMP_PHANTOM) { CHK(v == 1);    checked++; }
+		if (ch == REACPW_S1608_HEADAMP_BASE && p == REAC_HEADAMP_SENS)    { CHK(v == 0x07); checked++; }
+		if (ch == REACPW_S1608_HEADAMP_BASE && p == REAC_HEADAMP_PAD)     { CHK(v == 0);    checked++; }  /* unset */
+		if (ch == REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1 && p == REAC_HEADAMP_PAD)     { CHK(v == 1);    checked++; }
+		if (ch == REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1 && p == REAC_HEADAMP_PHANTOM) { CHK(v == 0);    checked++; }  /* unset */
 		if (ch == 0x21 && p == REAC_HEADAMP_SENS)    { CHK(v == def_sens); checked++; }  /* unset -> real default */
 		if (ch == 0x21 && p != REAC_HEADAMP_SENS)    { CHK(v == 0);        checked++; }  /* unset phantom/pad stay OFF */
 	}
@@ -247,10 +247,10 @@ int main(void)
 	CHK(reac_grant_headamp_value(&tx, 0x21, REAC_HEADAMP_SENS) == 0x00);
 
 	/* 4d. The sourcing helper agrees with what the sweep actually emitted. */
-	CHK(reac_grant_headamp_value(&tx, 0x20, REAC_HEADAMP_PHANTOM) == 1);
-	CHK(reac_grant_headamp_value(&tx, 0x20, REAC_HEADAMP_SENS)    == 0x07);
-	CHK(reac_grant_headamp_value(NULL, 0x20, REAC_HEADAMP_PHANTOM) == 0);
-	CHK(reac_grant_headamp_value(&tx, 0x20, 0x03) == 0);   /* bad param */
+	CHK(reac_grant_headamp_value(&tx, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PHANTOM) == 1);
+	CHK(reac_grant_headamp_value(&tx, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SENS)    == 0x07);
+	CHK(reac_grant_headamp_value(NULL, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PHANTOM) == 0);
+	CHK(reac_grant_headamp_value(&tx, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SWEEP_RECORDS_PER_CH) == 0);   /* bad param */
 
 	/* ---------------------------------------------------------------- *
 	 * 5. GROUP B is the fixed, WIDTH-INVARIANT 6-record constant — byte-identical
@@ -261,14 +261,14 @@ int main(void)
 	uint8_t sw8[REAC_GRANT_SWEEP_MAX][34], sw16[REAC_GRANT_SWEEP_MAX][34],
 	        sw32[REAC_GRANT_SWEEP_MAX][34];
 	CHK(reac_grant_build_sweep(sw8,  REAC_GRANT_SWEEP_MAX, &s0808, &tx) == 32);
-	CHK(reac_grant_build_sweep(sw16, REAC_GRANT_SWEEP_MAX, &s1608, &tx) == 56);
-	CHK(reac_grant_build_sweep(sw32, REAC_GRANT_SWEEP_MAX, &s4000, &tx) == 104);
+	CHK(reac_grant_build_sweep(sw16, REAC_GRANT_SWEEP_MAX, &s1608, &tx) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
+	CHK(reac_grant_build_sweep(sw32, REAC_GRANT_SWEEP_MAX, &s4000, &tx) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S4000S_3208_IN));
 
 	uint8_t b8[6][34], b16[6][34], b32[6][34];
 	int n8 = 0, n16 = 0, n32 = 0;
 	for (int i = 0; i < 32;  i++) if (row_is_groupb(sw8[i]))  memcpy(b8[n8++],   sw8[i],  34);
-	for (int i = 0; i < 56;  i++) if (row_is_groupb(sw16[i])) memcpy(b16[n16++], sw16[i], 34);
-	for (int i = 0; i < 104; i++) if (row_is_groupb(sw32[i])) memcpy(b32[n32++], sw32[i], 34);
+	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN); i++) if (row_is_groupb(sw16[i])) memcpy(b16[n16++], sw16[i], REAC_TYPED_BLOCK_LEN);
+	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S4000S_3208_IN); i++) if (row_is_groupb(sw32[i])) memcpy(b32[n32++], sw32[i], REAC_TYPED_BLOCK_LEN);
 	CHK(n8 == 6 && n16 == 6 && n32 == 6);
 	CHK(memcmp(b8, b16, sizeof b8) == 0);
 	CHK(memcmp(b8, b32, sizeof b8) == 0);
@@ -293,16 +293,16 @@ int main(void)
 	CHK(!row_is_groupa(sw16[0]) && !row_is_groupb(sw16[0]));   /* HEAD_ACK  */
 	for (int i = 1; i <= 3; i++) {
 		CHK(row_is_groupa(sw16[i]));
-		CHK(row_ch(sw16[i]) == 0x20 && row_param(sw16[i]) == i - 1);
+		CHK(row_ch(sw16[i]) == REACPW_S1608_HEADAMP_BASE && row_param(sw16[i]) == i - 1);
 	}
 	CHK(!row_is_groupa(sw16[4]) && !row_is_groupb(sw16[4]));   /* HEAD_MARK */
 	for (int i = 5; i <= 10; i++)
 		CHK(row_is_groupb(sw16[i]));
-	for (int i = 11; i < 56; i++) {
+	for (int i = 11; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN); i++) {
 		CHK(row_is_groupa(sw16[i]));
 		int k = i - 11;
-		CHK(row_ch(sw16[i]) == 0x21 + k / 3);
-		CHK(row_param(sw16[i]) == k % 3);
+		CHK(row_ch(sw16[i]) == REACPW_S1608_HEADAMP_BASE + 1 + k / REAC_HEADAMP_SWEEP_RECORDS_PER_CH);
+		CHK(row_param(sw16[i]) == k % REAC_HEADAMP_SWEEP_RECORDS_PER_CH);
 	}
 
 	/* ---------------------------------------------------------------- *
@@ -326,7 +326,7 @@ int main(void)
 			                        GOLD_S1608_CELLS[i][2]) == 0);
 
 		struct reac_grant_alloc ga;
-		CHK(reac_grant_allocate(&ga, 0x20, REAC_BOX_S1608_IN) == 0);  /* the box announced strap 2 */
+		CHK(reac_grant_allocate(&ga, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 0);  /* the box announced strap 2 */
 
 		uint8_t gen[REAC_GRANT_SWEEP_MAX][34];
 		int gn = reac_grant_build_sweep(gen, REAC_GRANT_SWEEP_MAX, &ga, &gtx);
@@ -359,18 +359,18 @@ int main(void)
 	 *    assertion below removed, and clamping the head-amp ceiling to 40 fails 5a.
 	 * ---------------------------------------------------------------- */
 	CHK(REAC_AUDIO_FABRIC_SLOTS == REAC_MAX_CHANNELS);      /* cfea [17] = 0x28              */
-	CHK(REAC_HEADAMP_SLOTS      == 48);      /* CH 0x00..0x2f                 */
-	CHK(REAC_HEADAMP_CEILING    == 0x2f);
+	CHK(REAC_HEADAMP_SLOTS      == REAC_HEADAMP_CH_SPAN);      /* CH 0x00..0x2f                 */
+	CHK(REAC_HEADAMP_CEILING    == REACPW_HEADAMP_TOP_CH);
 	CHK(REAC_HEADAMP_SLOTS > REAC_AUDIO_FABRIC_SLOTS);   /* the whole point   */
 
 	/* 5a. HEAD-AMP: an S-1608 based at 0x20 is legal THROUGH CH 47, and the sweep
 	 * really does address that top channel with all three params. */
-	CHK(reac_grant_alloc_fits(0x20, 16) == 1);
+	CHK(reac_grant_alloc_fits(REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 1);
 	{
-		struct reac_grant_alloc s1608_top = { .base = 0x20, .width = REAC_BOX_S1608_IN };
+		struct reac_grant_alloc s1608_top = { .base = REACPW_S1608_HEADAMP_BASE, .width = REAC_BOX_S1608_IN };
 		uint8_t top[REAC_GRANT_SWEEP_MAX][34];
 		int tn = reac_grant_build_sweep(top, REAC_GRANT_SWEEP_MAX, &s1608_top, NULL);
-		CHK(tn == 56);
+		CHK(tn == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		int seen47 = 0, max_ch = 0;
 		for (int i = 0; i < tn; i++) {
 			if (!row_is_groupa(top[i]))
@@ -378,10 +378,10 @@ int main(void)
 			int ch = row_ch(top[i]);
 			if (ch > max_ch)
 				max_ch = ch;
-			if (ch == 0x2f)
+			if (ch == REACPW_HEADAMP_TOP_CH)
 				seen47++;
 		}
-		CHK(max_ch == 0x2f);                   /* 47 — the box's input 16      */
+		CHK(max_ch == REACPW_HEADAMP_TOP_CH);                   /* 47 — the box's input 16      */
 		CHK(seen47 == REAC_HEADAMP_NPARAMS);   /* phantom + pad + sens         */
 		CHK(max_ch >= REAC_AUDIO_FABRIC_SLOTS);  /* past the audio fabric, and
 		                                          * correct — the whole finding */

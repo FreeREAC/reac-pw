@@ -296,7 +296,7 @@ static int test_every_refusal_is_visible(void)
 		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 		struct spa_pod_frame obj, st;
 		begin_props(&b, &obj, &st);
-		kv_int(&b, "reac.headamp.32.sens", 0x38);      /* refused: out of range */
+		kv_int(&b, "reac.headamp.32.sens", REAC_HEADAMP_SENS_STEPS);      /* refused: out of range */
 		kv_int(&b, "reac.headamp.33.sens", 0x20);      /* accepted              */
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 		CHK(reac_headamp_prop_parse_result(pod, out, MAX, &res) == 1);

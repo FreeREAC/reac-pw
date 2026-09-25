@@ -49,7 +49,7 @@
  * written out here rather than computed from in_ch on purpose — a helper
  * mapping width to base is the very table this law retired, and it would agree
  * with the wire on exactly the chassis we own. */
-#define S1608_BASE 0x20
+#define S1608_BASE REACPW_S1608_HEADAMP_BASE
 #define S0808_BASE 0x00
 
 #define FPS REAC_PKT_RATE_48K   /* irrelevant to the assertions below: we stamp directly,
@@ -198,8 +198,8 @@ int main(void)
 				                        GOLD_S1608_CELLS[i][2]) == 0);
 
 			struct reac_grant_alloc a;
-			CHK(reac_grant_allocate(&a, 0x20, REAC_BOX_S1608_IN) == 0);
-			CHK(a.base == 0x20 && a.width == 16);
+			CHK(reac_grant_allocate(&a, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 0);
+			CHK(a.base == REACPW_S1608_HEADAMP_BASE && a.width == REAC_BOX_S1608_IN);
 
 			uint8_t sw[REAC_GRANT_SWEEP_MAX][34];
 			int n = reac_grant_build_sweep(sw, REAC_GRANT_SWEEP_MAX, &a, &tx);

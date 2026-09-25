@@ -687,7 +687,7 @@ int main(int argc, char **argv)
 		 * MASTER — at a length that is unambiguously a box's. The block checksum is
 		 * re-applied after the stamp, or the sighting is discarded as corrupt. */
 		if (sent % fps == 0) {
-			if (reac_ctrl_stamp_headamp(f, 0x20, 0 /* phantom */, 1) != 0)
+			if (reac_ctrl_stamp_headamp(f, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1) != 0)
 				break;
 			reac_ctrl_checksum_apply(f);
 			announces++;

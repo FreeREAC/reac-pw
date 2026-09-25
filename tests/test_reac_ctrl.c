@@ -40,8 +40,8 @@ static int check_record_cksum_order(void)
 		{ 0x00, REAC_HEADAMP_PHANTOM, 0x01 },
 		{ 0x07, REAC_HEADAMP_PAD,     0x00 },
 		{ 0x07, REAC_HEADAMP_PAD,     0x01 },
-		{ 0x20, REAC_HEADAMP_SENS,    0x00 },   /* S-1608 base: input 1  */
-		{ 0x2f, REAC_HEADAMP_SENS,    0x1a },   /* S-1608 base: input 16 */
+		{ REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_SENS,    0x00 },   /* S-1608 base: input 1  */
+		{ REACPW_S1608_HEADAMP_BASE + REAC_BOX_S1608_IN - 1, REAC_HEADAMP_SENS, 0x1a },   /* S-1608 base: input 16 */
 		{ 0x10, REAC_HEADAMP_SENS,    REAC_HEADAMP_SENS_MAX },
 	};
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
