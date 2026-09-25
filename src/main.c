@@ -2546,6 +2546,15 @@ static void listener_close(struct listener *L, struct pw_loop *loop)
 		/* A VACANT TAP FELL THROUGH INTO THE DOOR and may hold `src` as well as
 		 * `tap_src[]`; one teardown owns every node either way. */
 		listener_drop_nodes(L, loop);
+		/* AND THE DOOR'S OWN RX (audit 2026-09-24, M6). A vacant tap fell through
+		 * listener_open's reac_rx_open, which sized and allocated L->ring (40 ch x
+		 * pow2(rate/4) floats, 5 MB at 96 kHz) for a door that never starts RX.
+		 * Nothing here freed it, and hearing_serve's memset then lost the pointer:
+		 * one ring per teardown of a pinned tap on an intermittent mirror. Both are
+		 * NULL-safe, and a real tap's feeders own their rings in L->tap, so this is
+		 * a no-op for them. */
+		reac_rx_close(&L->rx);
+		reac_ring_free(&L->ring);
 		reac_role_swap_closed(&L->role_swap);
 		return;
 	}

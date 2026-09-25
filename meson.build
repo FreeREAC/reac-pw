@@ -754,6 +754,19 @@ test('reac_tap_sends_nothing',
   args : [courtship_probe, tap_probe],
   timeout : 120)
 
+# --- whole-binary test: a vacant tap door frees its RX ring on teardown (audit M6) --------
+#
+# Audit 2026-09-24, M6: a tap pinned on a silent wire falls through into the vacant door,
+# which allocated L->ring through reac_rx_open, and listener_close's tap branch never freed
+# it -- 5 MB per teardown at 96 kHz. The link is held down past the ifscan hold five times,
+# and the daemon's VmData must stay flat across the re-opened doors.
+test('reac_vacant_tap_releases_its_ring',
+  find_program('tests/vacant-tap-releases-its-ring.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 180)
+
 # --- whole-binary test: a re-purposed cable stops being a trunk (#98) --------------
 #
 # Measured on the rig 2026-09-13: a USB NIC classified a trunk on a switch mirror was moved
