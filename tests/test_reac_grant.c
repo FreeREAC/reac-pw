@@ -117,7 +117,7 @@ int main(void)
 	 *    M-200 golden (matrix-m200-s1608-2026-07-11, deduped by frame counter)
 	 *    frame-for-frame.
 	 * ---------------------------------------------------------------- */
-	uint8_t sweep[REAC_GRANT_SWEEP_MAX][REAC_TYPED_BLOCK_LEN];
+	reacpw_libreac_row sweep[REAC_GRANT_SWEEP_MAX];
 	struct reac_grant_alloc s1608 = { .base = REACPW_S1608_HEADAMP_BASE, .width = REAC_BOX_S1608_IN };
 	int n = reac_grant_build_sweep(sweep, REAC_GRANT_SWEEP_MAX, &s1608, NULL);
 	CHK(n == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
@@ -264,17 +264,17 @@ int main(void)
 	 *    m200-s0808 and m200-s1608 goldens). Head-amp state must never leak into
 	 *    it, and it must not scale with the allocation.
 	 * ---------------------------------------------------------------- */
-	uint8_t sw8[REAC_GRANT_SWEEP_MAX][34], sw16[REAC_GRANT_SWEEP_MAX][34],
-	        sw32[REAC_GRANT_SWEEP_MAX][34];
-	CHK(reac_grant_build_sweep(sw8,  REAC_GRANT_SWEEP_MAX, &s0808, &tx) == 32);
+	reacpw_libreac_row sw8[REAC_GRANT_SWEEP_MAX], sw16[REAC_GRANT_SWEEP_MAX],
+	        sw32[REAC_GRANT_SWEEP_MAX];
+	CHK(reac_grant_build_sweep(sw8,  REAC_GRANT_SWEEP_MAX, &s0808, &tx) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN));
 	CHK(reac_grant_build_sweep(sw16, REAC_GRANT_SWEEP_MAX, &s1608, &tx) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 	CHK(reac_grant_build_sweep(sw32, REAC_GRANT_SWEEP_MAX, &s4000, &tx) == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S4000S_3208_IN));
 
-	uint8_t b8[6][34], b16[6][34], b32[6][34];
+	reacpw_libreac_row b8[6], b16[6], b32[6];   /* 6 group-B records: not declared yet */
 	int n8 = 0, n16 = 0, n32 = 0;
-	for (int i = 0; i < 32;  i++) if (row_is_groupb(sw8[i]))  memcpy(b8[n8++],   sw8[i],  34);
-	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN); i++) if (row_is_groupb(sw16[i])) memcpy(b16[n16++], sw16[i], REAC_TYPED_BLOCK_LEN);
-	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S4000S_3208_IN); i++) if (row_is_groupb(sw32[i])) memcpy(b32[n32++], sw32[i], REAC_TYPED_BLOCK_LEN);
+	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S0808_IN); i++) if (row_is_groupb(sw8[i])) memcpy(b8[n8++], sw8[i], sizeof b8[0]);
+	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN); i++) if (row_is_groupb(sw16[i])) memcpy(b16[n16++], sw16[i], sizeof b16[0]);
+	for (int i = 0; i < REACPW_GRANT_SWEEP_LEN(REAC_BOX_S4000S_3208_IN); i++) if (row_is_groupb(sw32[i])) memcpy(b32[n32++], sw32[i], sizeof b32[0]);
 	CHK(n8 == 6 && n16 == 6 && n32 == 6);
 	CHK(memcmp(b8, b16, sizeof b8) == 0);
 	CHK(memcmp(b8, b32, sizeof b8) == 0);
@@ -286,9 +286,9 @@ int main(void)
 		{ 0x10, 0x11, 0x09 }, { 0x11, 0x00, 0x11 }, { 0x11, 0x11, 0x09 },
 	};
 	for (int i = 0; i < 6; i++) {
-		CHK(b16[i][ROW(36)] == B_EXPECT[i][0]);
-		CHK(b16[i][ROW(37)] == B_EXPECT[i][1]);
-		CHK(b16[i][ROW(38)] == B_EXPECT[i][2]);
+		CHK(b16[i][REACPW_TYPED_OF(REACPW_HA_CH_OFF)] == B_EXPECT[i][0]);
+		CHK(b16[i][REACPW_TYPED_OF(REACPW_HA_PARAM_OFF)] == B_EXPECT[i][1]);
+		CHK(b16[i][REACPW_TYPED_OF(REACPW_HA_VALUE_OFF)] == B_EXPECT[i][2]);
 		CHK(b16[i][ROW(REAC_CTRL_CKSUM_OFF)] == 0x03);   /* group B's trailer byte */
 	}
 
@@ -334,11 +334,11 @@ int main(void)
 		struct reac_grant_alloc ga;
 		CHK(reac_grant_allocate(&ga, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 0);  /* the box announced strap 2 */
 
-		uint8_t gen[REAC_GRANT_SWEEP_MAX][34];
+		reacpw_libreac_row gen[REAC_GRANT_SWEEP_MAX];
 		int gn = reac_grant_build_sweep(gen, REAC_GRANT_SWEEP_MAX, &ga, &gtx);
 		CHK(gn == (int)(sizeof GOLD_S1608_SWEEP / sizeof GOLD_S1608_SWEEP[0]));
 		for (int i = 0; i < gn; i++)
-			CHK(memcmp(gen[i], GOLD_S1608_SWEEP[i], 34) == 0);
+			CHK(memcmp(gen[i], GOLD_S1608_SWEEP[i], sizeof gen[i]) == 0);
 	}
 
 	/* ---------------------------------------------------------------- *
@@ -374,7 +374,7 @@ int main(void)
 	CHK(reac_grant_alloc_fits(REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 1);
 	{
 		struct reac_grant_alloc s1608_top = { .base = REACPW_S1608_HEADAMP_BASE, .width = REAC_BOX_S1608_IN };
-		uint8_t top[REAC_GRANT_SWEEP_MAX][34];
+		reacpw_libreac_row top[REAC_GRANT_SWEEP_MAX];
 		int tn = reac_grant_build_sweep(top, REAC_GRANT_SWEEP_MAX, &s1608_top, NULL);
 		CHK(tn == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));
 		int seen47 = 0, max_ch = 0;

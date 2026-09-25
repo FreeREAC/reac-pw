@@ -30,9 +30,17 @@
 #include <reac/reac_ctrlblk.h>
 #include <reac/reac_identity.h>
 #include <reac/reac_ports.h>
+#include <reac/reac_master.h>
 
 #include "reac_facts_undef.h"
 #include "reac_facts.h"
+
+/* A ROW HANDED TO libreac IS libreac's ROW. libreac's grant-sweep builders take
+ * `uint8_t [][34]` and struct reac_master holds its blocks in that width: libreac's own
+ * copy of TYPED_BLOCK_LEN, until libreac reads reac_facts.h. A buffer passed across that
+ * boundary takes the type from libreac's struct, never from the fact (which a perturbed
+ * build moves) and never from a typed 34. */
+typedef __typeof__(((struct reac_master *)0)->announce_blk) reacpw_libreac_row;
 
 /* A FACT INSIDE A STRING. A help text or a log line that states a protocol number
  * spells it through this, so the text is the generated value too:
