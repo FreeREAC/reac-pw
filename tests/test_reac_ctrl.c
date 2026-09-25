@@ -358,12 +358,12 @@ int main(void)
 		int chunks = 0, total = -1;
 
 		for (int step = 0; step < REAC_SCENE_STEPS; step++) {
-			uint8_t blk[REAC_TYPED_BLOCK_LEN];
+			reacpw_libreac_row blk;     /* libreac writes its row */
 			CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, step) == 0);
 			CHK(REACPW_BE16(blk) == REAC_TYPE_CONTROL);
 			/* the block checksum rule holds for every step */
 			unsigned sum = 0;
-			for (int i = REAC_TYPE_WORD_BYTES; i < REAC_TYPED_BLOCK_LEN; i++)
+			for (int i = REAC_TYPE_WORD_BYTES; i < (int)sizeof blk; i++)
 				sum += blk[i];
 			CHK((sum & 0xff) == REAC_CTRL_BLOCK_SUM);
 
@@ -401,7 +401,7 @@ int main(void)
 		    REAC_SCENE_TAIL_BYTES == REAC_SCENE_BYTES);
 
 		/* A body that is not a whole transfer is refused, never half-sent. */
-		uint8_t blk[REAC_TYPED_BLOCK_LEN];
+		reacpw_libreac_row blk;
 		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body - 1, 0) == -1);
 		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, -1) == -1);
 		CHK(reac_ctrl_build_scene_step(blk, body, sizeof body, REAC_SCENE_STEPS) == -1);
@@ -421,7 +421,7 @@ int main(void)
 		/* and they must survive the chunker onto the wire, not just exist in the
 		 * body: SYSP rides chunk 32 and SCEN chunk 33. */
 		{
-			uint8_t c32[REAC_TYPED_BLOCK_LEN], c33[REAC_TYPED_BLOCK_LEN];
+			reacpw_libreac_row c32, c33;
 			CHK(reac_ctrl_build_scene_step(c32, gen, REAC_SCENE_BYTES,
 			                               REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SYSP_OFF) + 1) == 0);
 			CHK(reac_ctrl_build_scene_step(c33, gen, REAC_SCENE_BYTES,

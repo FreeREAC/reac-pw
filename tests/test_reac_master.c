@@ -353,13 +353,13 @@ int main(void)
 		 * group map and the cfea width byte move together or not at all. The
 		 * previous cut let the allocation be refused and then stamped the bad width
 		 * into the ENROLL and the announce anyway. */
-		uint8_t enroll_before[REAC_TYPED_BLOCK_LEN];
-		memcpy(enroll_before, mg.enroll_blk, 34);
+		reacpw_libreac_row enroll_before;
+		memcpy(enroll_before, mg.enroll_blk, sizeof mg.enroll_blk);
 		uint8_t cfea_before = mg.cfg.out_channels;
 		reac_master_set_box(&mg, 999, 8, S1608_BASE);                /* nonsense recognition */
 		CHK(mg.grant_burst_len == REACPW_GRANT_SWEEP_LEN(REAC_BOX_S1608_IN));                   /* previous sweep retained */
 		CHK(mg.alloc.base == REACPW_S1608_HEADAMP_BASE && mg.alloc.width == REAC_BOX_S1608_IN);
-		CHK(memcmp(enroll_before, mg.enroll_blk, 34) == 0);
+		CHK(memcmp(enroll_before, mg.enroll_blk, sizeof mg.enroll_blk) == 0);
 		CHK(mg.cfg.out_channels == cfea_before);
 	}
 

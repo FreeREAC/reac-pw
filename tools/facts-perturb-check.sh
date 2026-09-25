@@ -40,6 +40,10 @@ mkdir -p "$WORK"
 # root and is refused as an absolute include directory inside it, though it is not.
 WORK=$(cd "$WORK" && pwd -P)
 FAILED="$WORK/failed.txt"; : > "$FAILED"
+# THE COMPILER CI USES MAKES THESE ERRORS (GCC 14+), so every perturbed build does too: a
+# buffer sized by a fact and handed to libreac, whose prototypes carry their own copy of
+# the width, is an incompatible pointer, and a warning here is a red build there.
+STRICT="['-Werror=incompatible-pointer-types','-Werror=int-conversion','-Werror=implicit-function-declaration']"
 
 for seed in "${SEEDS[@]}"; do
 	dir="$WORK/facts-$seed" bld="$WORK/build-$seed"
@@ -47,9 +51,9 @@ for seed in "${SEEDS[@]}"; do
 	python3 "$HERE/tools/facts.py" perturb "$RP" "$seed" "$dir" \
 		|| { echo "seed $seed: reac-protocol could not perturb"; verdict FAIL 1; }
 	if [ -f "$bld/build.ninja" ]; then
-		meson configure "$bld" -Dfacts_dir="$dir" >/dev/null || verdict FAIL 1
+		meson configure "$bld" -Dfacts_dir="$dir" -Dc_args="$STRICT" >/dev/null || verdict FAIL 1
 	else
-		meson setup "$bld" "$HERE" -Dfacts_dir="$dir" >"$WORK/setup-$seed.log" 2>&1 \
+		meson setup "$bld" "$HERE" -Dfacts_dir="$dir" -Dc_args="$STRICT" >"$WORK/setup-$seed.log" 2>&1 \
 			|| { grep -E 'ERROR' "$WORK/setup-$seed.log" | head -5
 			     echo "seed $seed: meson setup failed"; verdict FAIL 1; }
 	fi

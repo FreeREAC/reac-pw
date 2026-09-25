@@ -76,7 +76,7 @@ int main(void)
 		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_OUT,
 		                                .console_field = cc->console_field };
 		struct reac_master m;
-	uint8_t first_scene_chunk[REAC_TYPED_BLOCK_LEN];
+	reacpw_libreac_row first_scene_chunk;
 	int first_scene_chunk_set = 0;
 		reac_master_init(&m, cc->mac, &cfg, FPS);
 
@@ -169,7 +169,7 @@ int main(void)
 			 * transfer is keyed to the mixer model. Byte-comparing against a
 			 * captured M-200i block would only assert that we replay THAT desk's
 			 * mixer state, which is the thing we deliberately stopped doing. */
-			uint8_t blk[REAC_TYPED_BLOCK_LEN];
+			reacpw_libreac_row blk;     /* libreac writes its row */
 			CHK(reac_ctrl_build_scene_step(blk, m.scene, sizeof m.scene, 1) == 0);
 			CHK(REACPW_BE16(blk) == REAC_TYPE_CONTROL);
 			CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
@@ -177,9 +177,9 @@ int main(void)
 			CHK(memcmp(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, m.scene + REAC_SCENE_HEAD_BYTES,
 			           REAC_SCENE_CHUNK_BYTES) == 0);
 			if (first_scene_chunk_set)
-				CHK(memcmp(blk, first_scene_chunk, REAC_TYPED_BLOCK_LEN) == 0);  /* profile-independent */
+				CHK(memcmp(blk, first_scene_chunk, sizeof blk) == 0);  /* profile-independent */
 			else {
-				memcpy(first_scene_chunk, blk, 34);
+				memcpy(first_scene_chunk, blk, sizeof blk);
 				first_scene_chunk_set = 1;
 			}
 		}
@@ -201,7 +201,7 @@ int main(void)
 			CHK(reac_grant_allocate(&a, REACPW_S1608_HEADAMP_BASE, REAC_BOX_S1608_IN) == 0);
 			CHK(a.base == REACPW_S1608_HEADAMP_BASE && a.width == REAC_BOX_S1608_IN);
 
-			uint8_t sw[REAC_GRANT_SWEEP_MAX][34];
+			reacpw_libreac_row sw[REAC_GRANT_SWEEP_MAX];
 			int n = reac_grant_build_sweep(sw, REAC_GRANT_SWEEP_MAX, &a, &tx);
 			CHK(n == (int)(sizeof GOLD_S1608_SWEEP / sizeof GOLD_S1608_SWEEP[0]));
 			for (int i = 0; i < n; i++)
