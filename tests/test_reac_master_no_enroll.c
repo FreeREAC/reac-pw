@@ -96,7 +96,7 @@ int main(void)
 	/* The box declares itself FIRST — this is what reac_pacer does on the
 	 * config-announce. There is no fabricated box to fall back to any more, so a
 	 * JOIN arriving with no declaration in force has no enrollment to grant. */
-	reac_master_set_box(&m, 16, 8, S1608_BASE);  /* S-1608: 16 in / 8 out */
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);  /* S-1608: 16 in / 8 out */
 	CHK(reac_master_has_box(&m) == 1);
 
 	deliver_scene(&m, &cnt);

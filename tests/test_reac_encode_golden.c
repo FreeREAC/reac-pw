@@ -105,7 +105,8 @@ static float *const *fill(uint32_t seed, float scale, int null_all)
 
 static uint64_t downstream_corpus(void)
 {
-	static const int NCH[8] = { 0, 1, 2, 7, 8, 16, 32, REAC_MAX_CHANNELS };
+	static const int NCH[8] = { 0, 1, 2, 7, REAC_BOX_S0808_IN, REAC_BOX_S1608_IN,
+	                               REAC_BOX_S4000S_3208_IN, REAC_MAX_CHANNELS };
 	uint32_t seed = 1;
 
 	fnv = FNV_INIT;
@@ -129,7 +130,8 @@ static uint64_t downstream_corpus(void)
 
 static uint64_t upstream_corpus(void)
 {
-	static const int NCH[6] = { 2, 8, 16, 32, REAC_MAX_CHANNELS - REAC_BRAID_PAIR_CHANNELS,
+	static const int NCH[6] = { 2, REAC_BOX_S0808_IN, REAC_BOX_S1608_IN, REAC_BOX_S4000S_3208_IN,
+	                               REAC_MAX_CHANNELS - REAC_BRAID_PAIR_CHANNELS,
 	                               REAC_MAX_CHANNELS };
 	static const uint8_t master[6] = { 0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e };
 	static const uint8_t bcast[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -206,7 +208,7 @@ int main(void)
 	/* Sanity: the corpus must actually have built frames, so a builder that
 	 * started returning 0 everywhere cannot pass by digesting nothing. */
 	CHK(reac_ctrl_build_upstream_filler(frame, (const uint8_t[6]){0}, (const uint8_t[6]){0},
-	                                    0, 16, NULL, REAC_SAMPLES_PER_PKT) == REACPW_FRAME_LEN(16));
+	                                    0, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT) == REACPW_FRAME_LEN(REAC_BOX_S1608_IN));
 	CHK(reac_downstream_build(frame, NULL, 0, REAC_SAMPLES_PER_PKT, 0,
 	                          (const uint8_t[6]){0}) == REAC_FRAME_BYTES);
 

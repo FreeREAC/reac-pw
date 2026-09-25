@@ -29,12 +29,13 @@
 #include "reac_node_ensure.h"
 
 #include <stdio.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 static int test_no_existing_node_always_rebuilds(void)
 {
-	CHK(reac_node_ensure_needs_rebuild(false, 0, NULL, 8, "S-0808") == true);
+	CHK(reac_node_ensure_needs_rebuild(false, 0, NULL, REAC_BOX_S0808_IN, "S-0808") == true);
 	CHK(reac_node_ensure_needs_rebuild(false, 0, "", 0, "") == true);
 	return 0;
 }

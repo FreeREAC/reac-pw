@@ -178,7 +178,7 @@ static int test_props_write_emits_the_golden_record(void)
 static int test_capability_decision(void)
 {
 	/* An enrolled S-1608: 16 preamps, strap 32. The only accepting case. */
-	CHK(reac_headamp_cfg_decide(0, 16, 32) == REAC_HEADAMP_REFUSE_NONE);
+	CHK(reac_headamp_cfg_decide(0, REAC_BOX_S1608_IN, 32) == REAC_HEADAMP_REFUSE_NONE);
 	CHK(strcmp(reac_headamp_cfg_state(0, 16, 32), REAC_HEADAMP_STATE_APPLIED) == 0);
 
 	/* No model recognised yet. */
@@ -189,12 +189,12 @@ static int test_capability_decision(void)
 	 * win — `no-box` cannot be rendered as "the box is master, its preamps are
 	 * preconfigured", and that sentence is the reason this code exists. */
 	CHK(reac_headamp_cfg_decide(1, 0, -1) == REAC_HEADAMP_REFUSE_BOX_MASTER);
-	CHK(reac_headamp_cfg_decide(1, 16, 32) == REAC_HEADAMP_REFUSE_BOX_MASTER);
+	CHK(reac_headamp_cfg_decide(1, REAC_BOX_S1608_IN, 32) == REAC_HEADAMP_REFUSE_BOX_MASTER);
 	CHK(strcmp(reac_headamp_cfg_state(1, 0, -1), REAC_HEADAMP_STATE_UNAVAILABLE) == 0);
 
 	/* A recognised box with no announced strap: there is no wire address, and 0
 	 * is not a safe guess — it would address an S-1608's preamps 32 slots low. */
-	CHK(reac_headamp_cfg_decide(0, 16, -1) == REAC_HEADAMP_REFUSE_NO_BASE);
+	CHK(reac_headamp_cfg_decide(0, REAC_BOX_S1608_IN, -1) == REAC_HEADAMP_REFUSE_NO_BASE);
 
 	/* The codes as a client reads them. */
 	CHK(strcmp(reac_headamp_refuse_code(REAC_HEADAMP_REFUSE_NONE), "none") == 0);
@@ -394,7 +394,7 @@ static int test_one_client_writes_another_reads(void)
 		const struct spa_pod *pod = end_props(&b, &obj, &st);
 		int n = reac_headamp_prop_parse_result(pod, ha, MAX, &res);
 		CHK(n == 2 && res.keys == 2);
-		CHK(reac_headamp_cfg_decide(0, 16, 32) == REAC_HEADAMP_REFUSE_NONE);
+		CHK(reac_headamp_cfg_decide(0, REAC_BOX_S1608_IN, 32) == REAC_HEADAMP_REFUSE_NONE);
 		for (int i = 0; i < n; i++) {
 			CHK(reac_pacer_headamp_set(&p, ha[i].ch, ha[i].param, ha[i].value) == 1);
 			CHK(reac_headamp_asserted_set(&mirror, ha[i].ch, ha[i].param,
@@ -421,7 +421,7 @@ static int test_one_client_writes_another_reads(void)
 	/* AN ESTABLISHMENT RE-PUSH CHANGES NOTHING ABOUT THE READBACK. Arming the
 	 * complete scene is what restores a power-cycled box's pins; the cells the
 	 * operator set are still the cells the client reads afterwards. */
-	reac_headamp_tx_arm_scene(&p.headamp, 32, 16);
+	reac_headamp_tx_arm_scene(&p.headamp, 32, REAC_BOX_S1608_IN);
 	char after[REAC_HEADAMP_ASSERTED_MAX];
 	reac_headamp_asserted_render(&mirror, after, sizeof after);
 	CHK(strcmp(after, rendered) == 0);

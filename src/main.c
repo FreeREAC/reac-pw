@@ -655,8 +655,9 @@ static void usage(const char *p)
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
 	  "                which no wire can tell us (even " REACPW_STR(REAC_BRAID_PAIR_CHANNELS) ".."
-	  REACPW_STR(REAC_MAX_CHANNELS) "; 8=S-0808, 16=S-1608,\n"
-	  "                32=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
+	  REACPW_STR(REAC_MAX_CHANNELS) "; " REACPW_STR(REAC_BOX_S0808_IN) "=S-0808, "
+	  REACPW_STR(REAC_BOX_S1608_IN) "=S-1608,\n"
+	  "                " REACPW_STR(REAC_BOX_S4000S_3208_IN) "=S-4000S). Default 16. Sets the cold-connect/upstream/heartbeat width.\n"
 	  "  --mixer M     master role: which desk NAME reac-pw logs as (m200|m300|m5000;\n"
 	  "                default m200). Does not set the wire's pace-code byte — that comes\n"
 	  "                from --rate alone; grants are box-defined so any box locks to any\n"
@@ -5580,7 +5581,9 @@ int main(int argc, char **argv)
 			    box_channels % REAC_BRAID_PAIR_CHANNELS) {
 				fprintf(stderr, "reac-pw: --box-channels must be even, "
 				        REACPW_STR(REAC_BRAID_PAIR_CHANNELS) "..%d "
-				        "(e.g. 8 = S-0808, 16 = S-1608, 32 = S-4000S)\n", REAC_MAX_CHANNELS);
+				        "(e.g. " REACPW_STR(REAC_BOX_S0808_IN) " = S-0808, "
+				        REACPW_STR(REAC_BOX_S1608_IN) " = S-1608, "
+				        REACPW_STR(REAC_BOX_S4000S_3208_IN) " = S-4000S)\n", REAC_MAX_CHANNELS);
 				return 2;
 			}
 		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {

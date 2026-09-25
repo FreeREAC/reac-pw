@@ -116,7 +116,7 @@ int main(void)
 	p.handle = NULL;
 	p.fps = REAC_PKT_RATE_96K;
 	memcpy(p.src, OUR, 6);
-	CHK(reac_frame_ring_init(&p.ring, 8, 2048) == 0);
+	CHK(reac_frame_ring_init(&p.ring, REAC_BOX_S0808_IN, 2048) == 0);
 	reac_master_init(&p.master, OUR, NULL, REAC_PKT_RATE_96K);
 
 	uint8_t frame[REAC_FRAME_BYTES];

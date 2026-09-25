@@ -268,7 +268,7 @@ static int shapes_equal(const struct establish_shape *a, const struct establish_
 static int run_establish(struct reac_master *m, struct establish_shape *out)
 {
 	uint16_t cnt;
-	reac_master_set_box(m, 16, 8, S1608_BASE);   /* S-1608: 16 in / 8 out */
+	reac_master_set_box(m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);   /* S-1608: 16 in / 8 out */
 	if (!reac_master_has_box(m))
 		return -1;
 
@@ -346,7 +346,7 @@ static void bare_pacer_init(struct reac_pacer *p, int fps,
  * re-establish — no process restart, same struct reac_pacer throughout. */
 static int test_apply_rate_shape(void)
 {
-	struct reac_console_cfg cfg = { .out_channels = 16, .console_field = REAC_PACE_CODE_96K };
+	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };
 	struct reac_pacer p;
 	bare_pacer_init(&p, REAC_PKT_RATE_48K, &cfg);   /* 48 kHz */
 
@@ -438,8 +438,8 @@ static int test_narrow_mask_refuses_and_defaults_lower(void)
  * fps, period, FSM state and rate props byte-for-byte untouched. */
 static int test_two_segments_are_independent(void)
 {
-	struct reac_console_cfg cfg_a = { .out_channels = 16, .console_field = REAC_PACE_CODE_48K };  /* m200 */
-	struct reac_console_cfg cfg_b = { .out_channels = 16, .console_field = REAC_PACE_CODE_96K };  /* m5000 */
+	struct reac_console_cfg cfg_a = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_48K };  /* m200 */
+	struct reac_console_cfg cfg_b = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };  /* m5000 */
 	struct reac_pacer a, b;
 	bare_pacer_init(&a, REAC_PKT_RATE_48K, &cfg_a);   /* 48 kHz, like this rig's segment A */
 	bare_pacer_init(&b, REAC_PKT_RATE_48K, &cfg_b);   /* 48 kHz, like this rig's segment B */
@@ -500,7 +500,7 @@ static int test_two_segments_are_independent(void)
  * touched the console. */
 static int test_link_edge_reestablishes_at_the_standing_rate(void)
 {
-	struct reac_console_cfg cfg = { .out_channels = 16, .console_field = REAC_PACE_CODE_96K };
+	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };
 	struct reac_pacer p;
 	bare_pacer_init(&p, REAC_PKT_RATE_48K, &cfg);   /* 48 kHz, asserted by nobody */
 

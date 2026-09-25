@@ -119,7 +119,7 @@ static int step(struct court *c)
 		return 0;
 	case REAC_SLAVE_EMIT_FLOOD_FILLER:
 		/* the bounded broadcast presence-flood (zero control block + live audio) */
-		n = reac_ctrl_build_flood_filler(sf, BCAST, S_SRC, sc, 16, NULL,
+		n = reac_ctrl_build_flood_filler(sf, BCAST, S_SRC, sc, REAC_BOX_S1608_IN, NULL,
 		                                 REAC_SAMPLES_PER_PKT);
 		c->s_floods_fed++;
 		break;
@@ -135,33 +135,33 @@ static int step(struct court *c)
 			switch (c->cc_phase++ % 8) {
 			case 4:
 				n = reac_ctrl_build_config_announce(sf, c->s.fsm.master_mac, S_SRC,
-				                                    sc, 16);
+				                                    sc, REAC_BOX_S1608_IN);
 				break;
 			default:
 				n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
-				                                16, NULL, REAC_SAMPLES_PER_PKT);
+				                                REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 				c->s_joins_fed++;
 				break;
 			}
 		} else {
 			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
-			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			                                    REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 			c->s_unicasts_fed++;
 		}
 		break;
 	case REAC_SLAVE_EMIT_UPSTREAM_AUDIO:
 		/* the ~1/s keep-alive REPLACES the audio frame on the slot the FSM flags */
 		if (d.with_heartbeat) {
-			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
+			n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, REAC_BOX_S1608_IN);
 			c->s_heartbeats_fed++;
 		} else {
 			n = reac_ctrl_build_upstream_filler(sf, c->s.fsm.master_mac, S_SRC, sc,
-			                                    16, NULL, REAC_SAMPLES_PER_PKT);
+			                                    REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 			c->s_unicasts_fed++;
 		}
 		break;
 	case REAC_SLAVE_EMIT_HEARTBEAT:
-		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, 16);
+		n = reac_ctrl_build_box_hb(sf, c->s.fsm.master_mac, S_SRC, sc, REAC_BOX_S1608_IN);
 		c->s_heartbeats_fed++;
 		break;
 	}
@@ -202,7 +202,7 @@ static int step(struct court *c)
 static int test_quiet_wire_recorder_never_leaves_the_hunt(void)
 {
 	struct reac_slave s;
-	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = 16,
+	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
 	                               .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = S_SRC };
 	reac_slave_fsm_init(&s, &scfg);
 
@@ -238,7 +238,7 @@ int main(void)
 	struct court c;
 	memset(&c, 0, sizeof c);
 	reac_master_init(&c.m, M_SRC, NULL, FPS);   /* S-1608 downstream (default) */
-	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = 16,
+	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
 	                               .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = S_SRC };
 	reac_slave_fsm_init(&c.s, &scfg);
 

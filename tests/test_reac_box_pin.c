@@ -23,6 +23,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -36,11 +37,11 @@ int main(void)
 	 * recognises in a patchbay. */
 	CHK(reac_box_pin_parse("s1608", &m, &label) == 0);
 	CHK(m != NULL && strcmp(m->token, "s1608") == 0);
-	CHK(m->in_ch == 16 && m->out_ch == 8);
+	CHK(m->in_ch == REAC_BOX_S1608_IN && m->out_ch == REAC_BOX_S1608_OUT);
 	CHK(strcmp(label, m->display) == 0);
 
 	CHK(reac_box_pin_parse("s0808", &m, &label) == 0);
-	CHK(m->in_ch == 8 && m->out_ch == 8);
+	CHK(m->in_ch == REAC_BOX_S0808_IN && m->out_ch == REAC_BOX_S0808_OUT);
 
 	/* 2. MODEL:LABEL takes the operator's own name. This is the fixed-install case —
 	 * "the box by the drum riser" reads better than "S-1608" when there are three. */

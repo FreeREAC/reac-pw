@@ -401,7 +401,7 @@ static int test_slave_answers_the_segment_aggregate(void)
 	 * and the answer says `box` because the WIDTH says box. It is not a refusal —
 	 * we joined it — and publishing the box's refusal CODE here would report this
 	 * segment as declining the very master it is following. */
-	reac_segment_answer_slave(&a, 1, mac48, REAC_SAMPLE_RATE_48K, 8);
+	reac_segment_answer_slave(&a, 1, mac48, REAC_SAMPLE_RATE_48K, REAC_BOX_S0808_IN);
 	CHK(strcmp(a.master_state, reac_segment_master_name(REAC_SEGMENT_FOREIGN)) == 0);
 	CHK(strcmp(a.rival_kind, reac_rival_kind_name(REAC_RIVAL_BOX)) == 0);
 	CHK(strcmp(a.refusal, reac_rival_refusal(REAC_RIVAL_NONE)) == 0);

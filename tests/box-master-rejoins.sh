@@ -27,6 +27,7 @@
 # the wire and not the audio graph. The peer end of the veth lives in a NESTED network
 # namespace so the daemon can never hear its own transmissions as another host's.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -119,7 +120,7 @@ ip link set rbox0 netns $NSPID || exit 90
 BOXMAC=00:40:ab:c4:dc:9c
 # The box is on the wire before the carrier is, so the wire carries a box master from the
 # first instant of link and the masterless licence is never in the race.
-$in_peer "$FAKE" rbox0 "$BOXMAC" 8 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
+$in_peer "$FAKE" rbox0 "$BOXMAC" "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
 FAKEPID=$!
 sleep 0.5
 ip link set rej0 up; peer ip link set rbox0 up
@@ -162,7 +163,7 @@ check_joined() {   # check_joined <cycle-name> <log-line-floor>
 	# The door is sized to the box's own 8 ch AND NAMES IT, the way the master path's
 	# capture node does — a console reads this description for the operator-facing name.
 	case "$(fld "$P" 5)" in
-	  "S-0808 (8 in / 8 out)"*"8 ch"*) : ;;
+	  "S-0808 ($FACT_BOX_S0808_IN in / $FACT_BOX_S0808_OUT out)"*"$FACT_BOX_S0808_IN ch"*) : ;;
 	  *) echo "FAIL ($what): the door should name the box and its width: $P"; return 1 ;;
 	esac
 	# AND THE FRAMES ARE STILL ARRIVING, counted only from the log this cycle wrote.

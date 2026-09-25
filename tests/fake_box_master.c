@@ -581,7 +581,7 @@ int main(int argc, char **argv)
 	 * — 0x10 measured on the S-1608, 0x20 on the S-4000S, same analysis §2. This
 	 * emulator is a box, so it declares n_ch. */
 	static struct reac_master ann;
-	struct reac_console_cfg ann_cfg = { .out_channels = 8,
+	struct reac_console_cfg ann_cfg = { .out_channels = REAC_BOX_S1608_OUT,
 	                                    .console_field = reac_pace_code(fps) };
 	reac_master_init(&ann, src, &ann_cfg, fps);
 	ann.announce_blk[17] = (uint8_t)n_ch;
@@ -616,7 +616,7 @@ int main(int argc, char **argv)
 			          + (double)(now.tv_nsec - last_report.tv_nsec) / 1e9;
 			if (report && dt > 0.3) {
 				last_report = now;
-				ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
+				ear_report(&ear, report, (unsigned long)sent, n_ch > REAC_BOX_S0808_IN ? n_ch : REAC_BOX_S0808_IN);
 			}
 		}
 		if (tx_paused || listen_only) {
@@ -706,7 +706,7 @@ send:
 	        "%ld grants echoed), heard %lu downstream / %lu upstream frames back\n",
 	        sent, announces, granted, ear.rx_down, ear.up_frames);
 	if (report)
-		ear_report(&ear, report, (unsigned long)sent, n_ch > 8 ? n_ch : 8);
+		ear_report(&ear, report, (unsigned long)sent, n_ch > REAC_BOX_S0808_IN ? n_ch : REAC_BOX_S0808_IN);
 	if (ear.fd >= 0)
 		close(ear.fd);
 	close(fd);

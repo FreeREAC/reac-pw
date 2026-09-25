@@ -126,7 +126,7 @@ int main(void)
 	p.handle = NULL;
 	p.fps = REAC_PKT_RATE_96K;
 	memcpy(p.src, OUR, 6);
-	CHK(reac_frame_ring_init(&p.ring, 8, 2048) == 0);
+	CHK(reac_frame_ring_init(&p.ring, REAC_BOX_S0808_IN, 2048) == 0);
 	reac_master_init(&p.master, OUR, NULL, REAC_PKT_RATE_96K);
 	p.prev_state = REAC_M_IDLE;
 
@@ -137,7 +137,7 @@ int main(void)
 	/* (a) A box FLOODING presence is not a box we have joined. Hearing a chassis
 	 * and enrolling it are different facts, and the badge answers only the second
 	 * — the segment's discovery list is where a mere sighting belongs. */
-	bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, 16, NULL, REAC_SAMPLES_PER_PKT);
+	bn = reac_ctrl_build_upstream_filler(bf, BCAST, BOX, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
@@ -145,7 +145,7 @@ int main(void)
 	/* (b) The cold-connect. Its forward edge is HELD until the scene push
 	 * completes (reac_master.c), so drive the cadence to the end of a transfer
 	 * the way a box that joins between two pushes stands. */
-	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, 16, NULL, REAC_SAMPLES_PER_PKT);
+	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX, 2, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	{
 		uint16_t c; int ix;
@@ -161,7 +161,7 @@ int main(void)
 	 * PEER'S, and this is the assertion the defect would have failed: reading
 	 * p.src here gives our own NIC, which is what a consumer keying a Roland
 	 * registry matched against and missed. */
-	bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 3, 16);
+	bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 3, REAC_BOX_S1608_IN);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "00:40:ab:c4:80:3b") == 0);
@@ -179,7 +179,7 @@ int main(void)
 	 * has to go with the box, because a stale address names a chassis that has
 	 * left the wire — worse than no name, since the console would keep a patch
 	 * label for equipment nobody can address. */
-	bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, 16);
+	bn = reac_ctrl_build_box_hb(bf, OUR, BOX, 4, REAC_BOX_S1608_IN);
 	bf[22] = 0x00;                  /* selector 0x00 = the box's BYE */
 	reac_ctrl_checksum_apply(bf);   /* a corrupt block is not a BYE */
 	reac_pacer_rx_ingest(&p, bf, bn);
@@ -193,7 +193,7 @@ int main(void)
 	 * ever seen — a swapped stagebox that inherited its predecessor's name is the
 	 * same class of fault as a stale model or a stale head-amp base. */
 	static const uint8_t BOX2[6] = { 0x00, 0x40, 0xab, 0x09, 0x09, 0x09 };
-	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX2, 5, 16, NULL, REAC_SAMPLES_PER_PKT);
+	bn = reac_ctrl_build_coldconnect(bf, OUR, BOX2, 5, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	{
 		uint16_t c; int ix;
@@ -201,7 +201,7 @@ int main(void)
 		while (p.master.state != REAC_M_GRANTING && guard++ < 4L * p.master.cycle_len)
 			(void)reac_master_next(&p.master, &c, &ix);
 	}
-	bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 6, 16);
+	bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 6, REAC_BOX_S1608_IN);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "00:40:ab:09:09:09") == 0);

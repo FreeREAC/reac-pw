@@ -39,7 +39,7 @@ static struct reac_ctrl_parsed ha_rec(uint8_t ch, uint8_t param, uint8_t value)
 
 static void slave16(struct reac_slave *s)
 {
-	struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = 16,
+	struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
 	                              .sample_rate = REAC_SAMPLE_RATE_48K, .src_mac = SRC };
 	reac_slave_fsm_init(s, &cfg);
 }
@@ -117,7 +117,7 @@ int main(void)
 	 * input 7, ch 0x08 -> another box (ignored). */
 	{
 		struct reac_slave s;
-		struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = 8,
+		struct reac_slave_cfg cfg = { .ifname = NULL, .box_channels = REAC_BOX_S0808_IN,
 		                              .sample_rate = REAC_SAMPLE_RATE_48K, .src_mac = SRC };
 		reac_slave_fsm_init(&s, &cfg);
 		CHK(s.ch_base == 0x00);

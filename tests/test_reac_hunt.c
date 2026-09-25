@@ -38,7 +38,7 @@ static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 static int box_heartbeat(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
-	size_t n = reac_ctrl_build_box_hb(f, DESK, BOX, 0x11, 16);
+	size_t n = reac_ctrl_build_box_hb(f, DESK, BOX, 0x11, REAC_BOX_S1608_IN);
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
@@ -90,7 +90,7 @@ static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 static int box_on_m(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
-	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, 32, NULL, REAC_SAMPLES_PER_PKT);
+	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, REAC_BOX_S4000S_3208_IN, NULL, REAC_SAMPLES_PER_PKT);
 	if (n == 0 || reac_ctrl_stamp_headamp(f, 0x20, 0 /* phantom */, 1) != 0)
 		return -2;
 	reac_ctrl_checksum_apply(f);
@@ -162,7 +162,7 @@ int main(void)
 	 * role would hunt forever with a box in plain sight. Its 16-channel width is not
 	 * ambiguous at all. */
 	reac_hunt_init(&h, OURS, t0);
-	CHK(box_flood(&h, BOX, 16, t0) == 1);
+	CHK(box_flood(&h, BOX, REAC_BOX_S1608_IN, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS) == 1);
 	CHK(h.verdict == REAC_HUNT_MASTER);
 
@@ -190,7 +190,7 @@ int main(void)
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(h.arb.rival == REAC_RIVAL_BOX);
-	CHK(h.arb.rival_channels == 32);          /* the S-4000S on M: 1204 B frames */
+	CHK(h.arb.rival_channels == REAC_BOX_S4000S_3208_IN);          /* the S-4000S on M: 1204 B frames */
 	CHK(strcmp(reac_rival_refusal(h.arb.rival), "rival-master-box") == 0);  /* the CODE stands */
 	CHK(memcmp(h.arb.mac, BOXM, 6) == 0);
 	/* And it stays joined past the window: a wire with a master on it is not vacant. */
@@ -284,7 +284,7 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_HUNTING);
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_MASTER);
-	CHK(box_flood(&h, BOX, 16, t0) == 1);
+	CHK(box_flood(&h, BOX, REAC_BOX_S1608_IN, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);  /* 10 ms in, not 3 s */
 	CHK(h.verdict == REAC_HUNT_MASTER);
 	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
@@ -295,7 +295,7 @@ int main(void)
 	 * (the intent-versus-observation disagreement, which needs the segment up to exist). */
 	reac_hunt_init(&h, OURS, t0);
 	reac_hunt_pin(&h, REAC_ROLE_SLAVE);
-	CHK(box_flood(&h, BOX, 16, t0) == 1);
+	CHK(box_flood(&h, BOX, REAC_BOX_S1608_IN, t0) == 1);
 	CHK(reac_hunt_step(&h, t0 + SEC / 100) == 1);
 	CHK(h.verdict == REAC_HUNT_SLAVE);
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
@@ -317,7 +317,7 @@ int main(void)
 	CHK(h.verdict == REAC_HUNT_SLAVE);
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 	CHK(h.arb.rival == REAC_RIVAL_BOX);
-	CHK(h.arb.rival_channels == 32);
+	CHK(h.arb.rival_channels == REAC_BOX_S4000S_3208_IN);
 	CHK(memcmp(h.arb.mac, BOXM, 6) == 0);
 	/* Nothing latches here either: the box is switched to S and stops mastering, the
 	 * sighting ages out, and the pin drives the wire it was pinned for. */

@@ -54,7 +54,7 @@ static int test_build_round_trips_the_rate(void)
 	uint8_t buf[1024];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 
-	const struct spa_pod *pod = reac_sink_format_build(&b, 8, REAC_SAMPLE_RATE_48K);
+	const struct spa_pod *pod = reac_sink_format_build(&b, REAC_BOX_S0808_IN, REAC_SAMPLE_RATE_48K);
 	CHK(pod != NULL);
 
 	struct spa_audio_info_raw info;
@@ -62,8 +62,8 @@ static int test_build_round_trips_the_rate(void)
 	CHK(spa_format_audio_raw_parse(pod, &info) >= 0);
 	CHK(info.format == SPA_AUDIO_FORMAT_F32P);
 	CHK(info.rate == REAC_SAMPLE_RATE_48K);
-	CHK(info.channels == 8);
-	for (int c = 0; c < 8; c++)
+	CHK(info.channels == REAC_BOX_S0808_IN);
+	for (int c = 0; c < REAC_BOX_S0808_IN; c++)
 		CHK(info.position[c] == (uint32_t)(SPA_AUDIO_CHANNEL_AUX0 + c));
 	return 0;
 }
@@ -77,14 +77,14 @@ static int test_build_after_a_rate_change(void)
 	uint8_t buf[1024];
 	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
 
-	const struct spa_pod *pod = reac_sink_format_build(&b, 16, REAC_SAMPLE_RATE_96K);
+	const struct spa_pod *pod = reac_sink_format_build(&b, REAC_BOX_S1608_IN, REAC_SAMPLE_RATE_96K);
 	CHK(pod != NULL);
 
 	struct spa_audio_info_raw info;
 	memset(&info, 0, sizeof info);
 	CHK(spa_format_audio_raw_parse(pod, &info) >= 0);
 	CHK(info.rate == REAC_SAMPLE_RATE_96K);
-	CHK(info.channels == 16);
+	CHK(info.channels == REAC_BOX_S1608_IN);
 	return 0;
 }
 

@@ -63,14 +63,14 @@ static const char *rec_get(const struct rec *r, const char *key)
 int main(void)
 {
 	/* ---- 1. the width names the model, exactly ---------------------------------- */
-	const struct reac_box_model *m8 = reac_box_master_model(8);
+	const struct reac_box_model *m8 = reac_box_master_model(REAC_BOX_S0808_IN);
 	CHK(m8 != NULL);
 	CHK(m8 && strcmp(m8->token, "s0808") == 0);
-	CHK(m8 && m8->in_ch == 8 && m8->out_ch == 8);
+	CHK(m8 && m8->in_ch == REAC_BOX_S0808_IN && m8->out_ch == REAC_BOX_S0808_OUT);
 
-	const struct reac_box_model *m16 = reac_box_master_model(16);
+	const struct reac_box_model *m16 = reac_box_master_model(REAC_BOX_S1608_IN);
 	CHK(m16 && strcmp(m16->token, "s1608") == 0);
-	const struct reac_box_model *m32 = reac_box_master_model(32);
+	const struct reac_box_model *m32 = reac_box_master_model(REAC_BOX_S4000S_3208_IN);
 	CHK(m32 && strcmp(m32->token, "s4000s") == 0);
 
 	/* THE DEFAULT THAT MUST NOT HAPPEN. reac_box_model_by_channels answers the S-1608

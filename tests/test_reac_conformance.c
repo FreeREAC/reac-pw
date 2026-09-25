@@ -73,7 +73,7 @@ int main(void)
 
 	for (size_t c = 0; c < sizeof CONF_CONSOLES / sizeof CONF_CONSOLES[0]; c++) {
 		const struct conf_console *cc = &CONF_CONSOLES[c];
-		struct reac_console_cfg cfg = { .out_channels = 8,
+		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_OUT,
 		                                .console_field = cc->console_field };
 		struct reac_master m;
 	uint8_t first_scene_chunk[34];
@@ -89,14 +89,14 @@ int main(void)
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
 		/* ---- (a) recognized S-1608 (w=0x10) / S-0808 (w=0x08), GRANTED (count=1) ---- */
-		reac_master_set_box(&m, 16, 8, S1608_BASE);         /* recognized while still un-granted (count stays 0) */
+		reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);         /* recognized while still un-granted (count stays 0) */
 		m.state = REAC_M_ESTABLISHED;           /* force the granted branch (mirrors enter_established) */
-		reac_master_set_box(&m, 16, 8, S1608_BASE);         /* re-stamp now that we're "granted": count -> 1 */
+		reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);         /* re-stamp now that we're "granted": count -> 1 */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
 		CHK(memcmp(f + 16, cc->cfea_s1608, 34) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
-		reac_master_set_box(&m, 8, 8, S0808_BASE);          /* an S-0808 instead, still granted */
+		reac_master_set_box(&m, REAC_BOX_S0808_IN, REAC_BOX_S0808_OUT, S0808_BASE);          /* an S-0808 instead, still granted */
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
 		CHK(memcmp(f + 16, cc->cfea_s0808, 34) == 0);
 		CHK(reac_ctrl_checksum_verify(f) == 0);
@@ -198,7 +198,7 @@ int main(void)
 				                        GOLD_S1608_CELLS[i][2]) == 0);
 
 			struct reac_grant_alloc a;
-			CHK(reac_grant_allocate(&a, 0x20, 16) == 0);
+			CHK(reac_grant_allocate(&a, 0x20, REAC_BOX_S1608_IN) == 0);
 			CHK(a.base == 0x20 && a.width == 16);
 
 			uint8_t sw[REAC_GRANT_SWEEP_MAX][34];
