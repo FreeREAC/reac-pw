@@ -13,3 +13,12 @@ option('libreac_transport_srcdir', type : 'string', value : '',
 # which is the only honest alternative to running a proof with nothing at the far end.
 option('fake_box', type : 'string', value : '',
   description : 'Path to libreacs built tools/fake_box, for tests/box-wakes-on-a-phy-edge.sh.')
+
+# THE PROTOCOL FACTS (tools/facts.py). facts_dir: the directory holding reac_facts.h and
+# reac_facts_undef.h; empty = the committed facts/. reac_protocol: a reac-protocol
+# checkout the facts_drift test regenerates from; unreachable -> the test SKIPS and the
+# build uses the committed copy, the same rule as libreac's facts-drift-check.
+option('facts_dir', type : 'string', value : '',
+  description : 'Directory with reac_facts.h + reac_facts_undef.h (empty: the committed facts/).')
+option('reac_protocol', type : 'string', value : '../reac-protocol',
+  description : 'reac-protocol checkout for the facts_drift test (relative to the source root).')
