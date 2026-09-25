@@ -28,7 +28,7 @@
 #include <reac/transport/reac_conf.h>
 #include <reac/transport/reac_pacer.h>
 
-#include <assert.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +40,34 @@
 
 static char home[512];
 static int fails;
+
+/* A SCRATCH HOME THAT IS THIS RUN'S ALONE, AND GONE WHEN IT ENDS. It used to be
+ * /tmp/reacpw-knob-<pid>, created and never removed: a later run that drew the same pid
+ * found the earlier run's ~/.config/reac-pw/reac-pw.env already there, and every "nothing
+ * is set" arm read REACPW_PACER=thread from a file this run never wrote. mkdtemp makes
+ * the directory unique, and cleanup() removes it on every way out: a return (atexit) and
+ * a fatal signal (the handler, then the signal re-raised so the exit status still says
+ * what happened). The test only ever writes one file (HOST_REL), so cleanup() unlinks
+ * exactly that and the directories above it — unlink and rmdir, both async-signal-safe. */
+#define HOST_REL ".config/reac-pw/reac-pw.env"
+static char p_file[640], p_dir1[640], p_dir2[640];
+
+static void cleanup(void)
+{
+	if (!home[0])
+		return;
+	unlink(p_file);
+	rmdir(p_dir1);
+	rmdir(p_dir2);
+	rmdir(home);
+}
+
+static void on_fatal(int sig)
+{
+	cleanup();
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
 
 #define CHECK(cond, ...) do { \
 	if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
@@ -67,15 +95,33 @@ static void wr(const char *rel, const char *body)
 		}
 	}
 	FILE *f = fopen(path, "w");
-	assert(f);
+	if (!f) {
+		fails++;
+		printf("FAIL %s:%d: could not write %s\n", __FILE__, __LINE__, path);
+		return;
+	}
 	fputs(body, f);
 	fclose(f);
 }
 
 int main(void)
 {
-	snprintf(home, sizeof home, "/tmp/reacpw-knob-%d", (int)getpid());
-	mkdir(home, 0700);
+	const char *tmp = getenv("TMPDIR");
+	snprintf(home, sizeof home, "%s/reacpw-knob-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+	if (!mkdtemp(home)) {
+		printf("FAIL %s:%d: mkdtemp(%s) failed — no scratch HOME, NOT A RESULT\n",
+		       __FILE__, __LINE__, home);
+		return 1;
+	}
+	snprintf(p_file, sizeof p_file, "%s/%s", home, HOST_REL);
+	snprintf(p_dir1, sizeof p_dir1, "%s/.config/reac-pw", home);
+	snprintf(p_dir2, sizeof p_dir2, "%s/.config", home);
+	atexit(cleanup);
+	signal(SIGABRT, on_fatal);
+	signal(SIGSEGV, on_fatal);
+	signal(SIGBUS, on_fatal);
+	signal(SIGTERM, on_fatal);
+	signal(SIGINT, on_fatal);
 
 	char v[64];
 	enum reac_conf_layer l;
@@ -169,7 +215,7 @@ int main(void)
 	 * The operator's one-run override has to beat the host file, or a comparative
 	 * run cannot be set up without editing (and then remembering to restore) a
 	 * file that describes every run. */
-	wr(".config/reac-pw/reac-pw.env", "REACPW_PACER=thread\n");
+	wr(HOST_REL, "REACPW_PACER=thread\n");
 	setenv(KEY, "etf", 1);
 	l = reac_conf_lookup(KEY, NULL, home, v, sizeof v);
 	CHECK(l == REAC_CONF_ENV && !strcmp(v, "etf"),
