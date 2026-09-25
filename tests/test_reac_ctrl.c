@@ -368,21 +368,21 @@ int main(void)
 
 			int len = (int)REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_HDR_LEN_OFF);
 			if (step == 0) {
-				CHK(blk[2] == 0x01 && blk[3] == 0x01);
+				CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_HEADER);
 				CHK(len == REAC_SCENE_HEAD_BYTES);
-				total = (blk[7] << 8) | blk[8];
-				memcpy(back + got, blk + 9, REAC_SCENE_HEAD_BYTES);
+				total = (int)REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_HEAD_TOTAL_OFF);
+				memcpy(back + got, blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_HEAD_PAY_OFF, REAC_SCENE_HEAD_BYTES);
 				got += REAC_SCENE_HEAD_BYTES;
 			} else if (step < REAC_SCENE_STEPS - 1) {
-				CHK(blk[2] == 0x01 && blk[3] == 0x00);
+				CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_CHUNK);
 				CHK(len == REAC_SCENE_CHUNK_BYTES);
-				memcpy(back + got, blk + 7, REAC_SCENE_CHUNK_BYTES);
+				memcpy(back + got, blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_CHUNK_BYTES);
 				got += REAC_SCENE_CHUNK_BYTES;
 				chunks++;
 			} else {
-				CHK(blk[2] == 0x01 && blk[3] == 0x02);
+				CHK(REACPW_BE16(blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_OP_OFF) == REAC_OP_SCENE_FINAL);
 				CHK(len == REAC_SCENE_TAIL_BYTES);
-				memcpy(back + got, blk + 7, REAC_SCENE_TAIL_BYTES);
+				memcpy(back + got, blk + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_TAIL_BYTES);
 				got += REAC_SCENE_TAIL_BYTES;
 			}
 		}
@@ -420,11 +420,13 @@ int main(void)
 		/* and they must survive the chunker onto the wire, not just exist in the
 		 * body: SYSP rides chunk 32 and SCEN chunk 33. */
 		{
-			uint8_t c32[34], c33[34];
-			CHK(reac_ctrl_build_scene_step(c32, gen, REAC_SCENE_BYTES, 33) == 0);
-			CHK(reac_ctrl_build_scene_step(c33, gen, REAC_SCENE_BYTES, 34) == 0);
-			CHK(memmem(c32 + 7, 26, "SYSP", 4) != NULL);
-			CHK(memmem(c33 + 7, 26, "SCEN", 4) != NULL);
+			uint8_t c32[REAC_TYPED_BLOCK_LEN], c33[REAC_TYPED_BLOCK_LEN];
+			CHK(reac_ctrl_build_scene_step(c32, gen, REAC_SCENE_BYTES,
+			                               REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SYSP_OFF) + 1) == 0);
+			CHK(reac_ctrl_build_scene_step(c33, gen, REAC_SCENE_BYTES,
+			                               REACPW_SCENE_CHUNK_OF(REAC_SCENE_TAG_SCEN_OFF) + 1) == 0);
+			CHK(memmem(c32 + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_CHUNK_BYTES, "SYSP", 4) != NULL);
+			CHK(memmem(c33 + REAC_TYPE_WORD_BYTES + REAC_SCENE_CHUNK_PAY_OFF, REAC_SCENE_CHUNK_BYTES, "SCEN", 4) != NULL);
 		}
 
 		/* Our identity goes into the body, replacing the capturing desk's. */
@@ -439,6 +441,7 @@ int main(void)
 	       "parser + descriptor + audio round-trip + box-frame classifier clean, "
 	       "DT1 record checksum stamped before the block checksum, "
 	       "retired --box pin disagreement reported exactly once, "
-	       "scene push round-trips 8904 B in 341 chunks\n");
+	       "scene push round-trips " REACPW_STR(REAC_SCENE_BYTES) " B in "
+	       REACPW_STR(REAC_SCENE_CHUNKS) " chunks\n");
 	return 0;
 }
