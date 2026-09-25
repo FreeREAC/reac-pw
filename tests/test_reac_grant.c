@@ -24,6 +24,7 @@
 #include <reac/reac.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -357,7 +358,7 @@ int main(void)
 	 *    REAC_AUDIO_FABRIC_SLOTS to 48 fails 5b even with every named-constant
 	 *    assertion below removed, and clamping the head-amp ceiling to 40 fails 5a.
 	 * ---------------------------------------------------------------- */
-	CHK(REAC_AUDIO_FABRIC_SLOTS == 40);      /* cfea [17] = 0x28              */
+	CHK(REAC_AUDIO_FABRIC_SLOTS == REAC_MAX_CHANNELS);      /* cfea [17] = 0x28              */
 	CHK(REAC_HEADAMP_SLOTS      == 48);      /* CH 0x00..0x2f                 */
 	CHK(REAC_HEADAMP_CEILING    == 0x2f);
 	CHK(REAC_HEADAMP_SLOTS > REAC_AUDIO_FABRIC_SLOTS);   /* the whole point   */
@@ -411,7 +412,7 @@ int main(void)
 		CHK(q.box[0].base == 0 && q.box[0].nch == 32);
 		CHK(reac_boxreg_add(&q, B, 16) == -1);         /* would end at 47 — NO */
 		CHK(reac_boxreg_add(&q, B, 8)  == 1);          /* 32..39 fits exactly */
-		CHK(q.box[1].base == 32 && q.box[1].base + q.box[1].nch == 40);
+		CHK(q.box[1].base == 32 && q.box[1].base + q.box[1].nch == REAC_MAX_CHANNELS);
 	}
 
 	printf("OK: grant enrollment sweep — allocator (8->0x00 16->0x20 32->0x00, 0x2f ceiling), "

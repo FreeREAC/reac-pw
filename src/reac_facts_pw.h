@@ -41,6 +41,15 @@
 #define REACPW_STR_(x) #x
 #define REACPW_STR(x)  REACPW_STR_(x)
 
+/* A frame's length at n channels: the protocol's one geometry law, 52 + n*36, from its
+ * facts (REAC_FRAME_OVERHEAD, REAC_BYTES_PER_CHANNEL). */
+#define REACPW_FRAME_LEN(n) (REAC_FRAME_OVERHEAD + (n) * REAC_BYTES_PER_CHANNEL)
+
+/* A sample's width in bits (24 today): its sign bit, its mask and its full scale follow. */
+#define REACPW_SAMPLE_BITS  (8 * REAC_RESOLUTION)
+#define REACPW_SAMPLE_SIGN  (1LL << (REACPW_SAMPLE_BITS - 1))
+#define REACPW_SAMPLE_MASK  ((1LL << REACPW_SAMPLE_BITS) - 1)
+
 /* The legal paces, as text: "44100, 48000 or 96000" and "44100|48000|96000". */
 #define REACPW_RATES_OR   REACPW_STR(REAC_SAMPLE_RATE_44K1) ", " \
                           REACPW_STR(REAC_SAMPLE_RATE_48K) " or " \

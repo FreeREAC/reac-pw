@@ -61,6 +61,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static volatile sig_atomic_t stop_now;
 static void on_term(int sig) { (void)sig; stop_now = 1; }
@@ -239,7 +240,7 @@ static void ear_control(struct ear *e, const uint8_t *f, size_t n, double t)
 static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t src[6],
                        unsigned long tx_so_far, const struct reac_mode *mode)
 {
-	if (n < 14 || f[12] != 0x88 || f[13] != 0x19)
+	if (n < REAC_HDR_COUNTER_OFF || f[REAC_ETHERTYPE_OFF] != (REAC_ETHERTYPE >> 8) || f[REAC_ETHERTYPE_OFF + 1] != (REAC_ETHERTYPE & 0xff))
 		return;
 	if (memcmp(f + 6, src, 6) == 0)
 		return;                    /* our own egress, if the kernel ever echoes it */
@@ -266,7 +267,7 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 		if (uns > 0) {
 			for (int c = 0; c < nch && c < REAC_MAX_CHANNELS; c++)
 				for (int i = 0; i < uns; i++) {
-					float v = reac_s24le_to_f32(&us24[(size_t)(c * uns + i) * 3]);
+					float v = reac_s24le_to_f32(&us24[(size_t)(c * uns + i) * REAC_RESOLUTION]);
 					e->up_sq[c] += (double)v * v;
 					double a = v < 0 ? -(double)v : (double)v;
 					if (a > e->up_pk[c]) e->up_pk[c] = a;
@@ -311,7 +312,7 @@ static void ear_ingest(struct ear *e, const uint8_t *f, size_t n, const uint8_t 
 	} else {
 		for (int c = 0; c < mode->n_channels && c < REAC_MAX_CHANNELS; c++)
 			for (int i = 0; i < ns; i++) {
-				float v = reac_s24le_to_f32(&s24[(size_t)(c * ns + i) * 3]);
+				float v = reac_s24le_to_f32(&s24[(size_t)(c * ns + i) * REAC_RESOLUTION]);
 				e->sumsq[c] += (double)v * (double)v;
 				double a = v < 0 ? -(double)v : (double)v;
 				if (a > e->peak[c])
@@ -478,7 +479,7 @@ int main(int argc, char **argv)
 	if (listen_only)
 		fps = 2000;   /* the drain/report cadence only; nothing is transmitted */
 
-	int fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
+	int fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 	if (fd < 0) {
 		fprintf(stderr, "fake-box-master: AF_PACKET: %s (need CAP_NET_RAW)\n",
 		        strerror(errno));
@@ -494,7 +495,7 @@ int main(int argc, char **argv)
 	struct sockaddr_ll sll;
 	memset(&sll, 0, sizeof sll);
 	sll.sll_family = AF_PACKET;
-	sll.sll_protocol = htons(0x8819);
+	sll.sll_protocol = htons(REAC_ETHERTYPE);
 	sll.sll_ifindex = ifr.ifr_ifindex;
 	sll.sll_halen = 6;
 	memset(sll.sll_addr, 0xff, 6);
@@ -523,7 +524,7 @@ int main(int argc, char **argv)
 	 * `probing` a console must not see. The socket is always opened; `report` only says
 	 * whether a snapshot is also written. */
 	{
-		ear.fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
+		ear.fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 		if (ear.fd < 0) {
 			fprintf(stderr, "fake-box-master: RX socket: %s\n", strerror(errno));
 			return 1;
@@ -531,7 +532,7 @@ int main(int argc, char **argv)
 		struct sockaddr_ll rsll;
 		memset(&rsll, 0, sizeof rsll);
 		rsll.sll_family = AF_PACKET;
-		rsll.sll_protocol = htons(0x8819);
+		rsll.sll_protocol = htons(REAC_ETHERTYPE);
 		rsll.sll_ifindex = ifr.ifr_ifindex;
 		if (bind(ear.fd, (struct sockaddr *)&rsll, sizeof rsll) < 0) {
 			fprintf(stderr, "fake-box-master: RX bind: %s\n", strerror(errno));

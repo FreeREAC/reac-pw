@@ -46,6 +46,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 static volatile sig_atomic_t stop_now;
 static void on_term(int sig) { (void)sig; stop_now = 1; }
@@ -69,7 +70,7 @@ static int parse_mac(const char *s, uint8_t out[6])
 
 static int open_packet(const char *iface, int *ifindex)
 {
-	int fd = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
+	int fd = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 	if (fd < 0) {
 		fprintf(stderr, "courtship-probe: AF_PACKET: %s (need CAP_NET_RAW)\n",
 		        strerror(errno));
@@ -93,7 +94,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 {
 	/* The desk's own width: reac_ctrl_build_flood_filler at 40 slots is 52 + 40*36 =
 	 * 1492 B, the M-200's downstream length. Nothing here hand-rolls a frame. */
-	enum { N_CH = 40 };
+	enum { N_CH = REAC_MAX_CHANNELS };
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	/* the M-200 of the capture */
 	static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0xc9, 0xcc, 0x03 };
@@ -122,14 +123,14 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 	struct sockaddr_ll sll;
 	memset(&sll, 0, sizeof sll);
 	sll.sll_family = AF_PACKET;
-	sll.sll_protocol = htons(0x8819);
+	sll.sll_protocol = htons(REAC_ETHERTYPE);
 	sll.sll_ifindex = ifindex;
 	sll.sll_halen = 6;
 	memcpy(sll.sll_addr, BCAST, 6);
 
 	/* A SECOND SOCKET FOR THE EAR. Bound to 0x8819 it is handed RECEIVED frames only,
 	 * so what it counts is unambiguously the OTHER end's. */
-	int rx = socket(AF_PACKET, SOCK_RAW, htons(0x8819));
+	int rx = socket(AF_PACKET, SOCK_RAW, htons(REAC_ETHERTYPE));
 	if (rx < 0) {
 		close(tx);
 		return 77;
@@ -137,7 +138,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 	struct sockaddr_ll rsll;
 	memset(&rsll, 0, sizeof rsll);
 	rsll.sll_family = AF_PACKET;
-	rsll.sll_protocol = htons(0x8819);
+	rsll.sll_protocol = htons(REAC_ETHERTYPE);
 	rsll.sll_ifindex = ifindex;
 	if (bind(rx, (struct sockaddr *)&rsll, sizeof rsll) < 0) {
 		fprintf(stderr, "courtship-probe: RX bind: %s\n", strerror(errno));
@@ -173,7 +174,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 			ssize_t rn = recv(rx, rxf, sizeof rxf, MSG_DONTWAIT);
 			if (rn <= 0)
 				break;
-			if (rn < 14 || memcmp(rxf + 6, slave_mac, 6) != 0)
+			if (rn < REAC_HDR_COUNTER_OFF || memcmp(rxf + 6, slave_mac, 6) != 0)
 				continue;   /* not the slave's */
 			double t = now_s();
 			if (first < 0) { first = t; in_burst = 1; bursts = 1; }

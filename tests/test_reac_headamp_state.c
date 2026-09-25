@@ -52,6 +52,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -152,7 +153,7 @@ static int test_props_write_emits_the_golden_record(void)
 	CHK(memcmp(frame + CTRL_OFF, FX_L4_HEADAMP, sizeof FX_L4_HEADAMP) == 0);
 	CHK(reac_ctrl_headamp_record_verify(frame) == 0);
 	CHK(reac_ctrl_checksum_verify(frame) == 0);
-	CHK(frame[REAC_FRAME_BYTES - 2] == 0xc2 && frame[REAC_FRAME_BYTES - 1] == 0xea);
+	CHK(frame[REAC_FRAME_BYTES - 2] == REAC_END_MARKER_0 && frame[REAC_FRAME_BYTES - 1] == REAC_END_MARKER_1);
 
 	/* The edge is consumed: a master that has said it once goes quiet, as a real
 	 * M-200 does (no re-assert cadence is set here). */

@@ -14,6 +14,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -137,14 +138,14 @@ int main(void)
 	 * master — so arbitration reads the length, not only the control plane. The
 	 * widths are the chassis we own; 1494 carries the FCS residue and is no geometry. */
 	CHK(reac_frame_is_master_downstream(REAC_FRAME_BYTES));
-	CHK(!reac_frame_is_master_downstream(1204));
-	CHK(!reac_frame_is_master_downstream(628));
-	CHK(!reac_frame_is_master_downstream(340));
+	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(32)));
+	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(16)));
+	CHK(!reac_frame_is_master_downstream(REACPW_FRAME_LEN(8)));
 	CHK(!reac_frame_is_master_downstream(REAC_FRAME_BYTES_OHRCA));
-	CHK(reac_frame_channels(1204) == 32);   /* S-4000S */
-	CHK(reac_frame_channels(628) == 16);    /* S-1608  */
-	CHK(reac_frame_channels(340) == 8);     /* S-0808  */
-	CHK(reac_frame_channels(REAC_FRAME_BYTES) == 40);
+	CHK(reac_frame_channels(REACPW_FRAME_LEN(32)) == 32);   /* S-4000S */
+	CHK(reac_frame_channels(REACPW_FRAME_LEN(16)) == 16);    /* S-1608  */
+	CHK(reac_frame_channels(REACPW_FRAME_LEN(8)) == 8);     /* S-0808  */
+	CHK(reac_frame_channels(REAC_FRAME_BYTES) == REAC_MAX_CHANNELS);
 	CHK(reac_frame_channels(REAC_FRAME_BYTES_OHRCA) == 0);
 
 	/* ---- §2b: WHAT the rival is, decided by geometry, not by what it claims.
@@ -153,7 +154,7 @@ int main(void)
 	 * cold-connects, and classifies MASTER by every control-frame rule — while emitting 1204 B,
 	 * a 32-channel BOX upstream. A master never joins another master, so that peer is a
 	 * misconfigured box to REPORT, not a master to follow. */
-	CHK(reac_rival_kind_from_channels(40) == REAC_RIVAL_DESK);
+	CHK(reac_rival_kind_from_channels(REAC_MAX_CHANNELS) == REAC_RIVAL_DESK);
 	CHK(reac_rival_kind_from_channels(32) == REAC_RIVAL_BOX);   /* S-4000S */
 	CHK(reac_rival_kind_from_channels(16) == REAC_RIVAL_BOX);   /* S-1608  */
 	CHK(reac_rival_kind_from_channels(8)  == REAC_RIVAL_BOX);   /* S-0808  */

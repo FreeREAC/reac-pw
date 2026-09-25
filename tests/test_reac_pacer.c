@@ -50,18 +50,18 @@ int main(void)
 
 	/* FIFO order: push 3 frames with distinct markers, pop in order. */
 	for (int i = 0; i < 3; i++) {
-		in[14] = (uint8_t)i;                       /* tag at the counter slot */
+		in[REAC_HDR_COUNTER_OFF] = (uint8_t)i;                       /* tag at the counter slot */
 		CHK(reac_frame_ring_push(&r, in, REAC_FRAME_BYTES) == 1);
 	}
 	CHK(reac_frame_ring_readable(&r) == 3);
 	/* ring full (3 usable): the 4th push drops the NEWEST and bumps overruns. */
-	in[14] = 0x99;
+	in[REAC_HDR_COUNTER_OFF] = 0x99;
 	CHK(reac_frame_ring_push(&r, in, REAC_FRAME_BYTES) == 0);
 	CHK(r.overruns == 1);
 	for (int i = 0; i < 3; i++) {
 		uint16_t n = reac_frame_ring_pop(&r, out);
 		CHK(n == REAC_FRAME_BYTES);
-		CHK(out[14] == (uint8_t)i);                /* FIFO: 0,1,2 — never the dropped 0x99 */
+		CHK(out[REAC_HDR_COUNTER_OFF] == (uint8_t)i);                /* FIFO: 0,1,2 — never the dropped 0x99 */
 	}
 	/* underrun: empty pop returns 0 + bumps underruns (the pacer fills silence). */
 	CHK(reac_frame_ring_pop(&r, out) == 0);
@@ -329,7 +329,7 @@ int main(void)
 			size_t _n = sizeof _pl; \
 			memset((FR), 0, REAC_FRAME_BYTES); \
 			memcpy((FR), OUR, 6); memcpy((FR) + 6, BOX, 6); \
-			(FR)[12] = 0x88; (FR)[13] = 0x19; (FR)[16] = 0xcd; (FR)[17] = 0xea; \
+			(FR)[REAC_ETHERTYPE_OFF] = REAC_ETHERTYPE >> 8; (FR)[REAC_ETHERTYPE_OFF + 1] = REAC_ETHERTYPE & 0xff; (FR)[16] = 0xcd; (FR)[17] = 0xea; \
 			uint8_t *_b = (FR) + 18; unsigned _sx = (unsigned)(13 + _n); \
 			_b[0] = 0x04; _b[1] = 0x03; _b[3] = (uint8_t)(_sx + 5); \
 			_b[5] = 0x02; _b[7] = 0xfe; _b[8] = (uint8_t)_sx; \

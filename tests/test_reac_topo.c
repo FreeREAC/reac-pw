@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(cond) do { if (!(cond)) { \
 	fprintf(stderr, "FAIL: %s (line %d)\n", #cond, __LINE__); return 1; } } while (0)
@@ -38,7 +39,7 @@ static size_t frame(uint8_t *b, const uint16_t *ets, int n)
 {
 	memset(b, 0, 64);
 	memcpy(b, "\x00\x40\xab\xc9\xcc\x03\x00\x40\xab\xc4\x80\x41", 12);
-	size_t off = 12;
+	size_t off = REAC_ETHERTYPE_OFF;
 	for (int i = 0; i < n; i++) {
 		b[off] = (uint8_t)(ets[i] >> 8);
 		b[off + 1] = (uint8_t)(ets[i] & 0xff);
@@ -54,7 +55,7 @@ int main(void)
 
 	/* ---- (a) the accelerated tag: no header in the bytes, the VID from auxdata. This is
 	 * the shape this kernel produces and the one the daemon will meet on the rig. */
-	uint16_t plain[] = { 0x8819 };
+	uint16_t plain[] = { REAC_ETHERTYPE };
 	size_t n = frame(b, plain, 1);
 	CHK(reac_topo_classify(b, n, 1, 111, &vid) == REAC_TOPO_TAGGED);
 	CHK(vid == 111);
@@ -71,18 +72,18 @@ int main(void)
 	CHK(vid == 0);
 
 	/* ---- (b) the in-buffer tag, for a driver that does not strip it. */
-	uint16_t ctag[] = { 0x8100, 12, 0x8819 };
+	uint16_t ctag[] = { 0x8100, 12, REAC_ETHERTYPE };
 	n = frame(b, ctag, 3);
 	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_TAGGED);
 	CHK(vid == 12);
-	uint16_t stag[] = { 0x88a8, 3001, 0x8819 };
+	uint16_t stag[] = { 0x88a8, 3001, REAC_ETHERTYPE };
 	n = frame(b, stag, 3);
 	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_TAGGED);
 	CHK(vid == 3001);
 
 	/* ---- (c) QinQ: outer stripped into metadata, inner left in the bytes. The netdev a
 	 * frame arrives on is named by the OUTER tag, so 11 wins over 12. */
-	uint16_t inner[] = { 0x8100, 12, 0x8819 };
+	uint16_t inner[] = { 0x8100, 12, REAC_ETHERTYPE };
 	n = frame(b, inner, 3);
 	CHK(reac_topo_classify(b, n, 1, 11, &vid) == REAC_TOPO_TAGGED);
 	CHK(vid == 11);
@@ -91,7 +92,7 @@ int main(void)
 	n = frame(b, plain, 1);
 	CHK(reac_topo_classify(b, n, 1, 0xe000, &vid) == REAC_TOPO_UNTAGGED);
 	CHK(vid == 0);
-	uint16_t ctag0[] = { 0x8100, 0, 0x8819 };
+	uint16_t ctag0[] = { 0x8100, 0, REAC_ETHERTYPE };
 	n = frame(b, ctag0, 3);
 	CHK(reac_topo_classify(b, n, 0, 0, &vid) == REAC_TOPO_UNTAGGED);
 

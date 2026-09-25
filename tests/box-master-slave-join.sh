@@ -26,6 +26,7 @@
 # hardware monitor disabled — the namespace owns no devices and the ones it can see through
 # /dev are the operator's live rig.
 set -u
+. "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
 BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 FAKE="${2:?usage: $0 /path/to/reac-pw /path/to/fake-box-master}"
 SKIP=77
@@ -221,8 +222,9 @@ FL=$(rep_f flood 3 "$RT/box.rep"); FLEN=$(rep_f flood 5 "$RT/box.rep")
 # after the grant. REACPW_BOX_MASTER_FRAME=box is the other corner the two rig runs left
 # open: an exact S-1608 imitation at 340 B. The proof measures whichever it was told to run,
 # and asserts the geometry it asked for rather than a constant.
-WANT_LEN=1492; WANT_WHAT="the mixer's 40 slots"
-[ "${REACPW_BOX_MASTER_FRAME:-mixer}" = "box" ] && { WANT_LEN=340; WANT_WHAT="the box's own 8 slots"; }
+BOX_LEN=$((FACT_FRAME_OVERHEAD + 8 * FACT_BYTES_PER_CHANNEL))
+WANT_LEN=$FACT_FRAME_BYTES; WANT_WHAT="the mixer's $FACT_MAX_CHANNELS slots"
+[ "${REACPW_BOX_MASTER_FRAME:-mixer}" = "box" ] && { WANT_LEN=$BOX_LEN; WANT_WHAT="the box's own 8 slots"; }
 [ "$FLEN" = "$WANT_LEN" ] || {
 	echo "FAIL: the flood frames are $FLEN B; REACPW_BOX_MASTER_FRAME=${REACPW_BOX_MASTER_FRAME:-mixer}"
 	echo "      asks for $WANT_LEN B ($WANT_WHAT)"; exit 1; }
@@ -408,7 +410,7 @@ PYEOF
 		echo "UNLINKED"; kill -TERM $CATPID 2>/dev/null; return
 	fi
 	sleep 1
-	if [ "$WANT_LEN" = "340" ]; then
+	if [ "$WANT_LEN" = "$BOX_LEN" ]; then
 		echo "$(up_ch 0 rms) $(up_ch 1 rms) $(up_ch 0 peak) $(up_ch 5 rms)"
 	else
 		echo "$(rep_ch 0 rms) $(rep_ch 1 rms) $(rep_ch 0 peak) $(rep_ch 5 rms)"
@@ -594,7 +596,7 @@ FL2=$(rep_f flood 3 "$RT/box2.rep")
 # not a flood at all and counting them as one would assert against the ruling. What both
 # shapes share — the cfea noticed, the announce accepted, none of it inside the transfer — is
 # asserted above for either.
-[ "$WANT_LEN" = "340" ] || FL2=0
+[ "$WANT_LEN" = "$BOX_LEN" ] || FL2=0
 [ "${FL2:-0}" -lt 500 ] || {
 	echo "FAIL: we broadcast $FL2 flood frames at a master that announces itself; a flood is"
 	echo "      how a SILENT master is found, and noise at one that is calling"

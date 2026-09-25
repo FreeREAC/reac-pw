@@ -4,6 +4,7 @@
 #include <reac/reac_boxreg.h>
 #include <stdio.h>
 #include <string.h>
+#include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -18,8 +19,8 @@ int main(void)
 	struct reac_boxreg r;
 
 	/* --- auto-allocation: contiguous, by join order --- */
-	reac_boxreg_init(&r, 40);
-	CHK(r.n == 0 && r.fabric == 40);
+	reac_boxreg_init(&r, REAC_MAX_CHANNELS);
+	CHK(r.n == 0 && r.fabric == REAC_MAX_CHANNELS);
 	int ia = reac_boxreg_add(&r, A, 16);          /* S-1608 -> slots 0..15  */
 	CHK(ia == 0 && r.box[0].base == 0 && r.box[0].nch == 16);
 	int ib = reac_boxreg_add(&r, B, 8);           /* S-0808 -> slots 16..23 */
@@ -40,7 +41,7 @@ int main(void)
 	uint8_t D[6] = { 1,2,3,4,5,6 };
 	CHK(reac_boxreg_add(&r, D, 7) == -1);
 	CHK(reac_boxreg_add(&r, D, 0) == -1);
-	CHK(reac_boxreg_add(&r, D, 42) == -1);
+	CHK(reac_boxreg_add(&r, D, REAC_MAX_CHANNELS + REAC_BRAID_PAIR_CHANNELS) == -1);
 
 	/* --- gap reuse: a departed box's slots are reclaimed by the next add --- */
 	struct reac_boxreg g;
@@ -76,11 +77,11 @@ int main(void)
 
 	/* --- fabric full: no room for a 6th box beyond 40 slots --- */
 	struct reac_boxreg f;
-	reac_boxreg_init(&f, 40);
+	reac_boxreg_init(&f, REAC_MAX_CHANNELS);
 	uint8_t m[6] = { 0x00,0x40,0xab,0,0,0 };
 	int placed = 0;
 	for (int i = 0; i < 8; i++) { m[5] = (uint8_t)i; if (reac_boxreg_add(&f, m, 8) >= 0) placed++; }
-	CHK(placed == 5);                                       /* 5 x 8 = 40, 6th rejected */
+	CHK(placed == REAC_MAX_CHANNELS / 8);                   /* the fabric in 8-wide boxes; one more is rejected */
 
 	printf("test_reac_boxreg: OK\n");
 	return 0;

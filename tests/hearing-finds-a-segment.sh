@@ -1058,7 +1058,7 @@ RP=$(daemon_node_props $PID reac-capture.pinm0)
 [ "$(fld "$RP" 2)" = "box" ] && [ "$(fld "$RP" 3)" = "none" ] || {
 	echo "FAIL: a role write knocked the box-master join off the wire: $RP"
 	tail -n "+$PINM_FLOOR" "$LOG" | grep pinm0 | tail -12; exit 1; }
-if tail -n "+$PINM_FLOOR" "$LOG" | grep -q "\[pinm0\] .*rx stream = master downstream (40 ch)"; then
+if tail -n "+$PINM_FLOOR" "$LOG" | grep -q "\[pinm0\] .*rx stream = master downstream ($FACT_MAX_CHANNELS ch)"; then
 	echo "FAIL: the segment opened the DESK-slave engine -- the wire carries a box's own"
 	echo "      geometry, not a desk's 40-channel downstream"; exit 1
 fi
