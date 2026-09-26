@@ -1129,8 +1129,11 @@ peer ip link add link tbox1 name tbox1.13 type vlan id 13 || exit 90
 TBOX11=00:40:ab:c4:11:11
 TBOX12=00:40:ab:c4:12:12
 TBOX13=00:40:ab:c4:13:13
-$in_peer "$FAKE" tbox0.11 "$TBOX11" "$FACT_BOX_S0808_IN" 2000 >"$RT/tb11.log" 2>&1 & TFAKE1=$!
-$in_peer "$FAKE" tbox0.12 "$TBOX12" "$FACT_BOX_S1608_IN" 2000 >"$RT/tb12.log" 2>&1 & TFAKE2=$!
+# The two VLAN fakes write their own report (#99): its `tx` line is the fake's own frame
+# counter, which the audio check below reads to tell a fake that stopped from a daemon
+# that went deaf.
+$in_peer "$FAKE" tbox0.11 "$TBOX11" "$FACT_BOX_S0808_IN" 2000 "$RT/tb11.rep" >"$RT/tb11.log" 2>&1 & TFAKE1=$!
+$in_peer "$FAKE" tbox0.12 "$TBOX12" "$FACT_BOX_S1608_IN" 2000 "$RT/tb12.rep" >"$RT/tb12.log" 2>&1 & TFAKE2=$!
 $in_peer "$FAKE" tbox1.13 "$TBOX13" "$FACT_BOX_S0808_IN" 2000 >"$RT/tb13.log" 2>&1 & TFAKE3=$!
 sleep 0.5
 up_pair trunk0 tbox0
@@ -1246,15 +1249,46 @@ esac
 # AND THE AUDIO IS ARRIVING ON BOTH, decoded into the ring the ports read from -- the
 # feeder's own counter, per segment. A tag we could see and a stream we could not decode
 # would be a topology detector with no product behind it.
+#
+# AND A MISS IS ATTRIBUTED BEFORE IT IS A VERDICT (#99). This arm went red at 128 s under a
+# full openmixer gate (load ~2.8) and green alone minutes later: `ok=1`, one frame and then
+# nothing. The fake box master and the slave live in nested namespaces on one loaded host,
+# and "the slave went deaf" and "the fake stopped sending" read identically off the daemon's
+# counter alone. So the fake's OWN counter (`tx` in its report) is read across the SAME
+# window. The daemon's claim is untouched: if the fake sent at least as many frames in the
+# window as the assertion asks the daemon to have decoded, the daemon had them to decode
+# and the miss is a FAIL. Only a fake that did not supply them is a SKIP, and it says so.
+# A report that cannot be read at all is a harness fault, never a licence to skip. The
+# fake counts a send the kernel dropped with ENOBUFS as sent, which can only turn a SKIP
+# into a FAIL, never the other way.
+NEED=100
+fake_tx() { [ -s "$1" ] && awk '$1 == "tx" { print $2; f = 1 } END { exit !f }' "$1"; }
 for SEG in trunk0.11 trunk0.12; do
+	REP="$RT/tb${SEG##*.}.rep"
+	TX0=$(fake_tx "$REP")
 	OK=0
 	for _i in $(seq 30); do
 		OK=$(sed -n "s/^reac_rx: \[$SEG\] ok=\([0-9]*\) .*/\1/p" "$LOG" | tail -1)
-		[ -n "$OK" ] && [ "$OK" -gt 100 ] && break
+		[ -n "$OK" ] && [ "$OK" -gt $NEED ] && break
 		sleep 0.4
 	done
-	[ -n "$OK" ] && [ "$OK" -gt 100 ] || {
+	TX1=$(fake_tx "$REP")
+	[ -n "$OK" ] && [ "$OK" -gt $NEED ] || {
+		[ -n "$TX0" ] && [ -n "$TX1" ] || {
+			echo "FAIL: $SEG decoded no audio (ok='$OK') and the fake's own counter could not"
+			echo "      be read ($REP: tx '$TX0' -> '$TX1'), so the miss cannot be attributed —"
+			echo "      a harness that cannot see its fake does not get to call it stopped"
+			exit 1; }
+		if [ $((TX1 - TX0)) -le $NEED ]; then
+			echo "SKIP: $SEG decoded no audio (ok='$OK'), and the fake box master feeding it"
+			echo "      sent $((TX1 - TX0)) frame(s) in the same 12 s window (tx $TX0 -> $TX1;"
+			echo "      the check needs $NEED). The fake stopped, not the daemon (#99)."
+			kill -0 $TFAKE1 $TFAKE2 2>/dev/null || echo "      (a fake process is gone)"
+			tail -3 "$RT/tb${SEG##*.}.log" | sed 's/^/        /'
+			exit 77
+		fi
 		echo "FAIL: $SEG is up and decoded no audio (ok='$OK'), so its ports carry nothing"
+		echo "      and the fake WAS sending: tx $TX0 -> $TX1 in the same window"
 		# WHAT THE COUNTER WAS DOING, not just what it ended at. ok=1 with a live wire has
 		# two very different causes and the line already carries both: `other=` climbing is
 		# the gate refusing a source it locked onto, and a SEQUENCE of ok=1 lines is a
