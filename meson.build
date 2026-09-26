@@ -690,6 +690,20 @@ test('empty-master-yields-the-budget',
   args : [reac_pw_exe],
   timeout : 420)
 
+# --- whole-binary: the untagged parent with a box takes the budget from an empty VLAN (#107)
+#
+# The rig's own geometry, which the test above leaves out (it ignores the parent): the box
+# on the UNTAGGED parent, an empty `.11` that won the port first on the silence licence --
+# the 20:10 ordering the rig run of the fix could not force. The port is grouped by NAME
+# (link_port_of), so a veth called `lb0.11` needs no 8021q and this runs where the VLAN
+# test SKIPs.
+test('parent-with-a-box-takes-the-budget',
+  find_program('tests/parent-with-a-box-takes-the-budget.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 240)
+
 # --- whole-binary test: a box master is ENROLLED WITH, its own way (0.5.6) ----
 #
 # "It is only a matter of following the same protocol that we expect." Measured at the far
