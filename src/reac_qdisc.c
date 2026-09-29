@@ -184,11 +184,6 @@ void reac_qdisc_release(struct reac_qdisc *q)
  * queue under an `mq` root, so the total is over however many there are — but an
  * fq_codel that happens to share the device is somebody else's ledger and its drops
  * are not ours to report. */
-struct qd_sum {
-	int ifindex;
-	struct reac_qdisc_stats *out;
-};
-
 static void qd_take_stats2(const struct rtattr *rta, struct reac_qdisc_stats *o)
 {
 	int len = (int)RTA_PAYLOAD(rta);
@@ -224,18 +219,14 @@ static void qd_take_stats1(const struct rtattr *rta, struct reac_qdisc_stats *o)
 	o->overlimits += s.overlimits;
 }
 
-static void qd_take_qdisc(const struct nlmsghdr *nh, struct qd_sum *sum)
+static void qd_take_qdisc(const struct tcmsg *tcm, const struct rtattr *attrs,
+                         size_t attrlen, void *ctx)
 {
-	if (nh->nlmsg_len < NLMSG_LENGTH(sizeof(struct tcmsg)))
-		return;
-	const struct tcmsg *tcm = NLMSG_DATA(nh);
-	if (tcm->tcm_ifindex != sum->ifindex)
-		return;
-
-	int len = (int)(nh->nlmsg_len - NLMSG_LENGTH(sizeof *tcm));
+	struct reac_qdisc_stats *out = ctx;
+	(void)tcm;
+	int len = (int)attrlen;
 	const struct rtattr *kind = NULL, *st2 = NULL, *st1 = NULL;
-	for (const struct rtattr *a = (const struct rtattr *)((const char *)tcm + NLMSG_ALIGN(sizeof *tcm));
-	     RTA_OK(a, len); a = RTA_NEXT(a, len)) {
+	for (const struct rtattr *a = attrs; RTA_OK(a, len); a = RTA_NEXT(a, len)) {
 		if (a->rta_type == TCA_KIND)        kind = a;
 		else if (a->rta_type == TCA_STATS2) st2  = a;
 		else if (a->rta_type == TCA_STATS)  st1  = a;
@@ -246,68 +237,22 @@ static void qd_take_qdisc(const struct nlmsghdr *nh, struct qd_sum *sum)
 	if (strnlen(name, RTA_PAYLOAD(kind)) >= RTA_PAYLOAD(kind) || strcmp(name, "etf") != 0)
 		return;
 
-	sum->out->qdiscs++;
+	out->qdiscs++;
 	if (st2)
-		qd_take_stats2(st2, sum->out);
+		qd_take_stats2(st2, out);
 	else if (st1)
-		qd_take_stats1(st1, sum->out);
+		qd_take_stats1(st1, out);
 }
 
+/* The dump is libreac's (reac_etf_qdisc_dump): bounded, filtered to the device, and
+ * complete or an error — this only sums what it hands over. */
 int reac_qdisc_stats_read(int ifindex, struct reac_qdisc_stats *out)
 {
 	if (!out || ifindex <= 0)
 		return -EINVAL;
-
-	int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-	if (fd < 0)
-		return -errno;
-
-	struct {
-		struct nlmsghdr nh;
-		struct tcmsg    tcm;
-	} req;
-	memset(&req, 0, sizeof req);
-	req.nh.nlmsg_len   = NLMSG_LENGTH(sizeof req.tcm);
-	req.nh.nlmsg_type  = RTM_GETQDISC;
-	req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-	req.nh.nlmsg_seq   = 1;
-	req.tcm.tcm_family  = AF_UNSPEC;
-	req.tcm.tcm_ifindex = ifindex;
-
-	if (send(fd, &req, req.nh.nlmsg_len, 0) < 0) {
-		int e = -errno;
-		close(fd);
-		return e;
-	}
-
 	struct reac_qdisc_stats acc;
 	memset(&acc, 0, sizeof acc);
-	struct qd_sum sum = { .ifindex = ifindex, .out = &acc };
-
-	char buf[16384];
-	int done = 0, rc = 0;
-	while (!done) {
-		ssize_t n = recv(fd, buf, sizeof buf, 0);
-		if (n < 0) {
-			rc = -errno;
-			break;
-		}
-		if (n == 0)
-			break;
-		for (struct nlmsghdr *nh = (struct nlmsghdr *)buf;
-		     NLMSG_OK(nh, (unsigned)n); nh = NLMSG_NEXT(nh, n)) {
-			if (nh->nlmsg_type == NLMSG_DONE) { done = 1; break; }
-			if (nh->nlmsg_type == NLMSG_ERROR) {
-				const struct nlmsgerr *err = NLMSG_DATA(nh);
-				rc = err->error ? err->error : -EIO;
-				done = 1;
-				break;
-			}
-			if (nh->nlmsg_type == RTM_NEWQDISC)
-				qd_take_qdisc(nh, &sum);
-		}
-	}
-	close(fd);
+	int rc = reac_etf_qdisc_dump(ifindex, qd_take_qdisc, &acc);
 	if (rc != 0)
 		return rc;
 	*out = acc;

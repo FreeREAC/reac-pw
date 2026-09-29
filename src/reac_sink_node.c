@@ -582,10 +582,12 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		SPA_PROP_INFO_id,          SPA_POD_Id(SPA_PROP_params),
 		SPA_PROP_INFO_description, SPA_POD_String(
 			"REAC head-amp: \"reac.headamp.<ch>.{phantom,pad,sens}\" = value; "
-			"REAC rate: \"reac.cfg.rate\" = " REACPW_RATES_BAR "; "
-			"REAC role: \"reac.cfg.role\" = 0 (master) | 1 (slave)"),
+			"REAC rate: \"" REAC_CFG_RATE_PROP "\" = " REACPW_RATES_BAR "; "
+			"REAC role: \"" REAC_CFG_ROLE_PROP "\" = "
+			REACPW_STR(REAC_CFG_ROLE_MASTER) " (master) | "
+			REACPW_STR(REAC_CFG_ROLE_SLAVE) " (slave)"),
 		SPA_PROP_INFO_type,        SPA_POD_String(
-			"reac.headamp.<ch>.<param> | reac.cfg.rate | reac.cfg.role"));
+			"reac.headamp.<ch>.<param> | " REAC_CFG_RATE_PROP " | " REAC_CFG_ROLE_PROP));
 
 	/* Current state. The channelMap mirrors the AUX ports (playback_NN -> AUXc),
 	 * so a controller's per-channel sliders line up with the box outputs; `volume`

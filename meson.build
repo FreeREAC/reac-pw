@@ -93,7 +93,11 @@ m_dep        = cc.find_library('m', required : false)
 # is how a COLD one is found) and reac_topo_heard_vids() are 1.5.0 surface, and this daemon
 # reads both. An older header does not compile; the floor turns that into a configure-time
 # refusal.
-libreac_dep = dependency('libreac', version : '>=1.5.0',
+# >=1.6.0 SINCE this change: <reac/reac_code.h> carries reac-pw's own codes (its
+# DAEMON half) and <reac/reac_cfg.h> the rate/role refusal enums, their code tables and
+# the rate bits, so src/reac_code.h, reac_rate_cfg.h and reac_role_cfg.h hold no copy.
+# Against 1.5.0 the build dies on the first RC_E_LINK_BUDGET or enum reac_rate_refuse.
+libreac_dep = dependency('libreac', version : '>=1.6.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -116,7 +120,10 @@ libreac_dep = dependency('libreac', version : '>=1.5.0',
 # >=1.5.0 SINCE 1.0.24: the tap's BPF is what admits a tagged non-REAC frame at all. A
 # 1.2.x transport has every symbol this daemon links and simply never hears a cold VLAN --
 # behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.0', required : true)
+# >=1.6.0: reac_topo_tap_read() (the frame's own ifindex, direction and source) and
+# reac_etf_qdisc_dump() (the one bounded qdisc dump) are 1.6.0 symbols, and reac_pacer.h
+# includes <reac/reac_cfg.h> instead of this repo's reac_rate_cfg.h.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.6.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
@@ -1757,10 +1764,13 @@ test('meson_headers_sit_above_their_test', python3,
 # src/*.c, and a REFUSED/FATAL/failed-shaped bare fprintf that still bypasses the helper
 # is counted against a floor that may only fall (proportionate migration, spec §2) — a
 # change that adds a new one, or un-migrates one already counted, fails the build.
+# Its ONE-HOME arm (libreac's 2026-09-29-shared-code-has-one-home.md) reads the libreac
+# headers this build resolved: no code list, cfg literal, tap read or qdisc dump of its own.
 test('reac_code_conformance', python3,
   args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
           meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'src' / 'reac_code.h'])
+          meson.current_source_dir() / 'src' / 'reac_code.h',
+          libreac_dep.get_variable(pkgconfig : 'includedir', internal : 'includedir')])
 
 # --- text: every tests/*.sh grep/wait_for pattern maps to a producer, or is debt ------
 # "Let's be precise, let's organise tests to not depend on greps" (2026-09-17). Matches

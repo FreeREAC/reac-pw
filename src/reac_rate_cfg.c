@@ -13,15 +13,10 @@
 
 const char *reac_rate_refuse_code(enum reac_rate_refuse r)
 {
-	switch (r) {
-	case REAC_RATE_REFUSE_NOT_CLOSED:   return "not_closed";
-	case REAC_RATE_REFUSE_NOT_DRIVABLE: return "not_drivable";
-	case REAC_RATE_REFUSE_ROLE_SLAVE:   return "role_slave";
-	case REAC_RATE_REFUSE_MALFORMED:    return "malformed";
-	case REAC_RATE_REFUSE_NONE:
-	default:
-		return "none";
-	}
+	static const char *const codes[] = REAC_RATE_REFUSE_CODES_INIT;
+	if ((unsigned)r >= sizeof codes / sizeof codes[0] || !codes[r])
+		return REAC_CFG_REFUSED_NONE;
+	return codes[r];
 }
 
 int reac_rate_is_closed(int hz)

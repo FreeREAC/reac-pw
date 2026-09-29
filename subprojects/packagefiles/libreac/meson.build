@@ -32,4 +32,5 @@ libreac_lib = static_library('reac',
 libreac_dep = declare_dependency(
   link_with : libreac_lib,
   dependencies : [libreac_m],
-  include_directories : libreac_inc)
+  include_directories : libreac_inc,
+  variables : {'includedir' : meson.current_source_dir() / 'include'})

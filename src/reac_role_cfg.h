@@ -5,30 +5,12 @@
  * config alongside reac_rate_cfg's pace half
  * (docs/design/specs/2026-08-26-reac-runtime-config.md, in the openmixer tree).
  *
- * THE WRITE-SIDE PROP NAME AND ENCODING ARE ALREADY SHARED VOCABULARY. Unlike
- * rate (where reac-pw's own module came first and libreac's reac_cfg.h caught
- * up afterward), openmixer's side got here first: libreac's
- * include/reac/reac_cfg.h (checked out beside this repo) already declares
- *
- *     #define REAC_CFG_ROLE_PROP   "reac.cfg.role"
- *     #define REAC_CFG_ROLE_MASTER 0
- *     #define REAC_CFG_ROLE_SLAVE  1
- *
- * — a NUMERIC flag, the same two-state convention `reac.headamp.<ch>.phantom`
- * already uses, NOT the "master"/"slave" strings reac_role.h's --role CLI
- * argument takes. REAC_CFG_PROP_ROLE / REAC_CFG_ROLE_VALUE_MASTER / _SLAVE
- * below match those three byte-for-byte (verified against the checked-out
- * header, 2026-08-26); this module conforms to an already-settled wire shape
- * rather than inventing one.
- *
- * THE ANSWER SIDE IS NOT YET SHARED VOCABULARY. reac_rate_cfg's own answer
- * props (reac.cfg.rate.state / .refused) were implemented here first and only
- * mirrored into libreac + openmixer's TS afterward — this module follows that
- * same order. REAC_PROP_ROLE / REAC_PROP_ROLE_STATE / REAC_PROP_ROLE_REFUSED
- * and the REAC_ROLE_STATE_* strings are LOCAL to reac-pw until a later
- * increment mirrors them the way rate's were (see this repo's own history:
- * effe386 landed reac_rate_cfg locally, libreac's 6b9b0f3/1aaff657 unified it
- * afterward).
+ * THE VOCABULARY — write side and answer side — IS libreac's <reac/reac_cfg.h>, the one
+ * declaration, and since libreac 1.6.0 so is enum reac_role_refuse with its code table.
+ * The write side is a NUMERIC flag (SPA Int or Float, 0 or 1), the convention
+ * `reac.headamp.<ch>.phantom` already uses, NOT the "master"/"slave" strings
+ * reac_role_parse takes for --role. The answer strings a swap publishes, HUNTING and
+ * the tap's own TAP included, are reac_role_swap.h's names for the same declaration.
  *
  * HONESTY (spec §1: an unfinished actuation is a state, never a silent
  * success). A rate change re-establishes INSIDE one running engine
@@ -72,59 +54,26 @@
 #include <stddef.h>
 
 #include <reac/reac_role.h>
+#include <reac/reac_cfg.h>   /* the vocabulary and enum reac_role_refuse */
 
 struct spa_pod;
 
-/* The cfg namespace key this increment adds. Byte-for-byte libreac's
- * REAC_CFG_ROLE_PROP. */
-#define REAC_CFG_PROP_ROLE "reac.cfg.role"
+/* Aliases of <reac/reac_cfg.h> kept for reac-pw's existing callers, never a second
+ * spelling of a string or a number. */
+#define REAC_CFG_PROP_ROLE                  REAC_CFG_ROLE_PROP
+#define REAC_CFG_ROLE_VALUE_MASTER          REAC_CFG_ROLE_MASTER
+#define REAC_CFG_ROLE_VALUE_SLAVE           REAC_CFG_ROLE_SLAVE
+#define REAC_PROP_ROLE                      REAC_ROLE_PROP             /* the RUNNING role */
+#define REAC_PROP_ROLE_STATE                REAC_CFG_ROLE_STATE_PROP
+#define REAC_PROP_ROLE_REFUSED              REAC_CFG_ROLE_REFUSED_PROP
+/* A same-role assertion is genuinely, immediately true. */
+#define REAC_ROLE_STATE_APPLIED             REAC_CFG_ROLE_STATE_APPLIED
+/* The answer while the cross-engine swap is OWED or IN FLIGHT — published INSTEAD OF
+ * ever claiming "applied" for a change that has not finished. reac_role_swap_state
+ * moves it on only when the NEW engine is performing its role. */
+#define REAC_ROLE_STATE_REESTABLISH_PENDING REAC_CFG_ROLE_STATE_PENDING
 
-/* The wire ENCODING for reac.cfg.role: SPA Int (or Float, same tolerance as
- * rate) 0 or 1 — NOT the "master"/"slave" strings reac_role_parse takes for
- * --role. Byte-for-byte libreac's REAC_CFG_ROLE_MASTER / REAC_CFG_ROLE_SLAVE. */
-#define REAC_CFG_ROLE_VALUE_MASTER 0
-#define REAC_CFG_ROLE_VALUE_SLAVE  1
-
-/* Published, read-side props (see this header's own "ANSWER SIDE" note: local
- * to reac-pw for now). "none" is this codebase's established sentinel for "no
- * value applies" (see reac.master.mac in reac_link_state.h). */
-#define REAC_PROP_ROLE         "reac.role"              /* "0" | "1": the RUNNING role */
-#define REAC_PROP_ROLE_STATE   "reac.cfg.role.state"     /* applied | reestablish-pending */
-#define REAC_PROP_ROLE_REFUSED "reac.cfg.role.refused"   /* code, or "none"     */
-
-/* A same-role assertion is genuinely, immediately true: nothing needed to
- * change, so nothing is left undone. */
-#define REAC_ROLE_STATE_APPLIED "applied"
-/* The answer while the cross-engine swap is OWED or IN FLIGHT: the request is
- * well-formed and accepted, and either nothing owns the segment right now or the
- * engine that does is not the one asked for. Published INSTEAD OF ever claiming
- * "applied" for a change that has not finished. reac_role_swap_state is what
- * moves it on, and only when the NEW engine is performing its role — for a
- * slave that means enrolled by a desk, which on a quiet wire never happens and
- * reads REAC_ROLE_STATE_HUNTING for as long as the hunt lasts. */
-#define REAC_ROLE_STATE_REESTABLISH_PENDING "role_reestablish_pending"
-
-/* THE TAP'S OWN ANSWER: serving, asserting nothing, and it will never read
- * `applied`. `applied` means the engine PERFORMED a role change on the wire, and
- * a tap performs none — it opens no TX socket, announces nothing and is granted
- * nothing (openmixer master-arbitration, eighth amendment, 2026-09-13). A tap
- * that published `applied` would be claiming the one thing about itself that is
- * definitionally false; one that published `role_hunting` would be claiming a
- * courtship it is defined by not running. So it publishes neither. */
-#define REAC_ROLE_STATE_TAP "role_tap"
-
-/* Why a `reac.cfg.role` assertion was refused. REFUSE_NONE doubles as the
- * published state once a refusal is superseded by an accepted role. There is
- * only one refusal today: role has no drivability-style constraint the way
- * rate does (every well-formed role value is a value we can, in principle,
- * become) — a future increment that DOES bar a transition (e.g.
- * reac_role_validate's "slave needs --tx") has exactly this enum to extend. */
-enum reac_role_refuse {
-	REAC_ROLE_REFUSE_NONE = 0,
-	REAC_ROLE_REFUSE_MALFORMED,   /* the prop value was not 0 or 1 */
-};
-
-/* Short code for REAC_PROP_ROLE_REFUSED; "none" when nothing is refused. */
+/* Short code for REAC_PROP_ROLE_REFUSED, from REAC_ROLE_REFUSE_CODES_INIT. */
 const char *reac_role_refuse_code(enum reac_role_refuse r);
 
 /* Does applying requested_role on a daemon currently running current_role

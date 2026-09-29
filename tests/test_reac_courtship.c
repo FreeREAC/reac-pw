@@ -30,6 +30,7 @@
 #include <reac/reac_ctrl.h>
 #include <reac/reac_fsm.h>
 #include <reac/transport/reac_role_swap.h>   /* the role lifecycle answers off THESE FSMs */
+#include "reac_role_cfg.h"   /* REAC_ROLE_STATE_APPLIED / _REESTABLISH_PENDING */
 #include <reac/transport/reac_segment_ident.h> /* W1: the SEGMENT's answer, off the same FSMs */
 #include <reac/transport/reac_tx.h>
 #include <reac/reac.h>

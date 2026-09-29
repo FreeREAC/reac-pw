@@ -35,13 +35,8 @@ ver() { sed -n 's/^Version: *//p' "$LIBREAC/packaging/$1.spec" | head -1; }
 V=$(ver libreac); VT=$(ver libreac-transport)
 [ -n "$V" ] && [ -n "$VT" ] || { echo "$0: no Version in libreac's specs" >&2; exit 2; }
 
-# REACPW_INCLUDE IS REQUIRED, NOT OPTIONAL, FOR THE TRANSPORT HALF. Two transport headers
-# still #include reac-pw's own reac_rate_cfg.h / reac_role_cfg.h for their pure
-# declarations (the transport-library spec names that seam), and libreac's Makefile leaves
-# the path unset so those two objects fail LOUDLY instead of being skipped. We are the
-# reac-pw checkout it wants, so we point it at ourselves.
 echo "== libreac $V / libreac-transport $VT from $LIBREAC"
-make -C "$LIBREAC" -j"$(nproc)" REACPW_INCLUDE="$HERE/src" all transport || exit 1
+make -C "$LIBREAC" -j"$(nproc)" all transport || exit 1
 
 rm -rf "$PREFIX"
 mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include/reac/transport"

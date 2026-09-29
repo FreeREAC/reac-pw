@@ -11,12 +11,10 @@
 
 const char *reac_role_refuse_code(enum reac_role_refuse r)
 {
-	switch (r) {
-	case REAC_ROLE_REFUSE_MALFORMED: return "malformed";
-	case REAC_ROLE_REFUSE_NONE:
-	default:
-		return "none";
-	}
+	static const char *const codes[] = REAC_ROLE_REFUSE_CODES_INIT;
+	if ((unsigned)r >= sizeof codes / sizeof codes[0] || !codes[r])
+		return REAC_CFG_REFUSED_NONE;
+	return codes[r];
 }
 
 int reac_role_cfg_changes(enum reac_role current_role, enum reac_role requested_role)

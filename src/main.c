@@ -3608,65 +3608,11 @@ static struct topo_tap *tap_find(struct hearing *h, const char *parent)
  * not about another interface's INBOUND traffic at all. Reading its presence as protection
  * is what kept the bug alive after #98.
  *
- * So the frame's own ifindex is the only honest answer, and the kernel puts it in
- * `sockaddr_ll.sll_ifindex` on every packet-socket read. This reads the tap directly to get
- * it — libreac's `reac_topo_tap_next()` passes no `msg_name`, so it cannot — and hands the
- * bytes to the SAME pure classifier libreac exports (`reac_topo_classify`), so no part of
- * the wire format is re-implemented here. It keeps the source MAC too: the next report of
- * this shape answers itself, because the "tagged REAC heard" line names who sent the frame
- * and which ifindex it arrived on. */
-struct topo_frame {
-	enum reac_topo_kind kind;
-	uint16_t vid;
-	uint8_t src[6];
-	unsigned ifindex;       /* the kernel's answer: where this frame really came from */
-	int outgoing;           /* sll_pkttype == PACKET_OUTGOING: our own transmission */
-};
-
-/* One frame off the tap. 1 = a frame, 0 = the socket is dry, -1 = error. */
-static int topo_tap_read(struct reac_topo_tap *tap, struct topo_frame *f)
-{
-	uint8_t frame[2048];
-	uint8_t control[CMSG_SPACE(sizeof(struct tpacket_auxdata))];
-	struct sockaddr_ll from;
-	struct iovec iov = { .iov_base = frame, .iov_len = sizeof frame };
-	struct msghdr msg;
-	memset(&from, 0, sizeof from);
-	memset(&msg, 0, sizeof msg);
-	msg.msg_name = &from;
-	msg.msg_namelen = sizeof from;
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-	msg.msg_control = control;
-	msg.msg_controllen = sizeof control;
-
-	ssize_t n = recvmsg(reac_topo_tap_fd(tap), &msg, MSG_DONTWAIT);
-	if (n < 0)
-		return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? 0 : -1;
-
-	int tci_valid = 0;
-	uint16_t tci = 0;
-	for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
-		if (cm->cmsg_level != SOL_PACKET || cm->cmsg_type != PACKET_AUXDATA)
-			continue;
-		struct tpacket_auxdata aux;
-		memcpy(&aux, CMSG_DATA(cm), sizeof aux);
-		/* TP_STATUS_VLAN_VALID is what separates "vid 0" from "no tag" — the kernel
-		 * zeroes tp_vlan_tci for an untagged frame and a priority-tagged one alike
-		 * (reac_topo.h carries the measurement). */
-		if (aux.tp_status & TP_STATUS_VLAN_VALID) {
-			tci_valid = 1;
-			tci = aux.tp_vlan_tci;
-		}
-	}
-	memset(f, 0, sizeof *f);
-	f->ifindex = (unsigned)from.sll_ifindex;
-	f->outgoing = (from.sll_pkttype == PACKET_OUTGOING);
-	if ((size_t)n >= 12)
-		memcpy(f->src, frame + 6, 6);   /* the source MAC, for the line that names it */
-	f->kind = reac_topo_classify(frame, (size_t)n, tci_valid, tci, &f->vid);
-	return 1;
-}
+ * So the frame's own ifindex is the only honest answer: the kernel puts it in
+ * `sockaddr_ll.sll_ifindex` on every packet-socket read, and libreac's `reac_topo_tap_read()`
+ * (1.6.0) returns it in `struct reac_topo_frame` with the direction and the source MAC, so
+ * the next report of this shape answers itself — the line names who sent the frame and
+ * which ifindex it arrived on. */
 
 /* TAGGED REAC ON THIS VID, SAID WHERE IT BECOMES TRUE AND NOT WHERE A NETDEV IS MADE.
  * Two facts arrive on a trunk now — this VLAN exists (any tag) and REAC rides it — and
@@ -3707,8 +3653,8 @@ static void on_topo_io(void *data, int fd, uint32_t mask)
 		return;
 	uint64_t now = monotonic_ns();
 	for (int i = 0; i < 256; i++) {
-		struct topo_frame f;
-		if (topo_tap_read(&tp->tap, &f) <= 0)
+		struct reac_topo_frame f;
+		if (reac_topo_tap_read(&tp->tap, &f) <= 0)
 			break;
 		/* #102: EVIDENCE ABOUT THIS PARENT IS WHAT ARRIVED INBOUND ON THIS PARENT.
 		 * With libreac >= 1.2.2 the foreign half can no longer happen (#18) and this
