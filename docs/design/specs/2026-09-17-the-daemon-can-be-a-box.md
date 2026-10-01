@@ -199,7 +199,7 @@ than inventing a second one:
   which is the only thing it could honestly move.
 - **PHANTOM is recorded and actuates nothing.** +48 V is a voltage, not a gain. It is kept as
   state, published where the other two are, and claimed nowhere: no hardware claim ever comes
-  from a soft value on this project (`CLAUDE.md`, and the head-amp rulings of 2026-09-14).
+  from a soft value on this project (see the head-amp rulings of 2026-09-14).
 - **A record for a channel outside our declared width is dropped**, by the row's own head-amp
   base — `model_base + (input − 1)`, and the base is the ROW's chassis strap, not a per-width
   table (`reac_ports.h` retired that table and the box role conforms: the engine takes
@@ -380,7 +380,7 @@ entry for that MAC — the corroborated verdict, where facts only sharpen — so
 4. **Which upstream slots carry the 8 inputs.** The box returns 32 channels; a 4 s capture cannot
    say which 8 are its preamps (nothing was plugged in, and the pre-grant 340 B frames are
    digitally silent). Inject a tone into input 1 and require the level to follow it — a null from
-   an un-granted box is not evidence (`CLAUDE.md`: prove the injection landed).
+   an un-granted box is not evidence (prove the injection landed).
 5. **The identity page**, once the grant sustains: `tcpdump -i enp131s0.13 -w … ether proto 0x8819
    and ether host 00:40:ab:c4:25:80`, 20 s from a box power-cycle, which spans the grant sweep's
    group-B poll. The row's `fw_milli` / `reac_*` / `name` stay zero until it lands.

@@ -20,3 +20,8 @@
 reac-pw-*.tar.gz
 logs/
 /_build/
+
+# AI tooling stays out of the tree
+/.claude/
+CLAUDE.md
+AGENTS.md
