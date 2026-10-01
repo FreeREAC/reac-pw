@@ -438,8 +438,10 @@ int reac_segconf_load(struct reac_segconf *c, const char *home)
 	 * (reac_segconf.h's REAC_SEGCONF_DIRD has the four reasons). An absent hand-written
 	 * file is the normal case and `present` is what says so — "absent" and "empty" must
 	 * not read alike. */
-	if (read_one(c, REAC_SEGCONF_FILE, &c->stamp[0]) > 0)
+	if (read_one(c, REAC_SEGCONF_FILE, &c->stamp_main) > 0) {
 		c->present = 1;
+		c->stamp[0] = c->stamp_main;   /* file[0] is the hand-written file */
+	}
 	load_dropins(c);
 	/* EVERY FILE HAS BEEN READ NOW, which is the only moment the cross-key rules can
 	 * be judged: a drop-in may supply the role for a model the hand-written file
@@ -469,7 +471,7 @@ int reac_segconf_refresh(struct reac_segconf *c)
 {
 	if (!c || !c->base[0])
 		return 0;
-	int move = moved(c, REAC_SEGCONF_FILE, &c->stamp[0]) ||
+	int move = moved(c, REAC_SEGCONF_FILE, &c->stamp_main) ||
 	           moved(c, REAC_SEGCONF_DIRD, &c->stamp_dir);
 	/* Only if neither moved: the files the directory listed last time. A file REWRITTEN
 	 * in place does not move the directory, which is exactly what a console rewriting

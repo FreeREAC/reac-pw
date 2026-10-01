@@ -277,6 +277,38 @@ int main(void)
 	CHECK(reac_segconf_refresh(&c) == 1, "a drop-in rewritten in the same second was not seen");
 	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_MASTER, "the rewritten drop-in was not applied");
 
+	/* DROP-INS AND NO HAND-WRITTEN FILE: AN UNCHANGED CONF IS NOT RE-READ (audit
+	 * 2026-09-24, M11). The first drop-in was stamped into the hand-written file's own
+	 * slot, so refresh compared an absent reac-pw.conf with a present stamp, answered
+	 * "moved" every time, and re-read and re-parsed every file on the main loop on
+	 * every lookup. The packaged shape is exactly this one: a console's drop-in and no
+	 * hand-written file. */
+	{
+		char h2[] = "/tmp/reac_segconf_dropin_only_XXXXXX";
+		CHECK(mkdtemp(h2) != NULL, "mkdtemp");
+		char d2[512];
+		snprintf(d2, sizeof d2, "%s/.config/reac-pw/reac-pw.conf.d", h2);
+		snprintf(cmd, sizeof cmd, "mkdir -p '%s'", d2);
+		CHECK(system(cmd) == 0, "could not make the drop-in directory");
+		snprintf(dp, sizeof dp, "%s/50-openmixer.conf", d2);
+		f = fopen(dp, "we");
+		if (f) { fputs("[segment s9]\nrole = tap\n", f); fclose(f); }
+		reac_segconf_init(&c);
+		reac_segconf_load(&c, h2);
+		CHECK(!c.present && c.n_files == 1 && role_of(&c, "s9") == REAC_ROLE_INTENT_TAP,
+		      "the drop-in-only fixture did not load as one drop-in and no conf");
+		CHECK(reac_segconf_refresh(&c) == 0,
+		      "an unchanged drop-in-only conf reported moved on the first refresh");
+		CHECK(reac_segconf_refresh(&c) == 0,
+		      "an unchanged drop-in-only conf reported moved on the second refresh");
+		/* The control: the same refresh still sees the drop-in change. */
+		f = fopen(dp, "we");
+		if (f) { fputs("[segment s9]\nrole = slave\n", f); fclose(f); }
+		CHECK(reac_segconf_refresh(&c) == 1, "a rewritten drop-in was not seen");
+		snprintf(cmd, sizeof cmd, "rm -rf '%s'", h2);
+		CHECK(system(cmd) == 0, "cleanup");
+	}
+
 	/* ---- THE BOX ROLE AND ITS MODEL ROW (2026-09-17 spec §4) ----
 	 * A box declares a MODEL, and a box that declares the wrong width to a mixer
 	 * is a patch that silently lands on the wrong channels. So there is no

@@ -136,6 +136,10 @@ struct reac_segconf {
 	 * or removed moves the directory's own mtime and nothing else. */
 	struct reac_segconf_stamp stamp[REAC_SEGCONF_FILES];
 	struct reac_segconf_stamp stamp_dir;
+	/* The hand-written file's own, present or not. stamp[] runs parallel to file[], so
+	 * with no hand-written file its slot 0 is the first drop-in's, and reading the
+	 * hand-written file's absence off it answered "moved" on every refresh (M11). */
+	struct reac_segconf_stamp stamp_main;
 	char home[256];              /* what _load was given, so a refresh can repeat it */
 	char base[512];              /* `<home>/.config/reac-pw`: every file path is base/file[i] */
 	char reading[REAC_SEGCONF_FILE_LEN];  /* the file being parsed, for the refusals */
