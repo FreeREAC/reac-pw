@@ -3,7 +3,7 @@
 A read-only audit of the reac-pw driver at `e7656a3` (1.0.26, after the #109 fix). No code
 was changed. libreac is out of scope; where a finding depends on library behaviour it was
 checked against a read-only clone of libreac `main` (`ee205b6`, 1.5.0, the floor
-`meson.build` requires). The repo has no `the working notes` or `CONTRIBUTING`. The house rules this
+`meson.build` requires). The repo has no `CONTRIBUTING`. The house rules this
 review holds the code to come from `README.md`, `docs/*.md` and the design notes and specs
 under `docs/design/`.
 

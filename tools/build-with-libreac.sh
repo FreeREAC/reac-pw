@@ -4,7 +4,7 @@
 #
 # Build reac-pw against a SIBLING libreac CHECKOUT, with no RPM and nothing installed on
 # the machine. The documented path for a lane whose libreac half is unreleased, and for the
-# r1 build container, where the only libreac that exists is the one rsynced in beside us.
+# remote build container, where the only libreac that exists is the one rsynced in beside us.
 #
 #   tools/build-with-libreac.sh ../libreac-wt-<lane> [builddir] [-- meson-test-args...]
 #
@@ -81,7 +81,7 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 # exactly that order, and this line exists to say so rather than to be rediscovered.
 # A BUILD DIR CARRIES THE ABSOLUTE PATHS OF THE TREE THAT CONFIGURED IT, so one rsynced
 # to another machine (or copied between worktrees) reconfigures into directories that are
-# not there — met on the build node, where `meson setup --reconfigure` died inside tempfile.mkdtemp on
+# not there — met on a remote build node, where `meson setup --reconfigure` died inside tempfile.mkdtemp on
 # the desk's own path. A reconfigure that fails is therefore not an error to report: it is
 # a build dir that belongs to somewhere else, and the answer is to throw it away.
 if [ -f "$HERE/$BUILD/build.ninja" ] && meson setup --reconfigure "$HERE/$BUILD" "$HERE" >/dev/null 2>&1; then
