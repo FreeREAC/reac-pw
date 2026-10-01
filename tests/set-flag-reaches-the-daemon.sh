@@ -52,6 +52,29 @@ grep -qa "S_KNOB_SET knob REAC_DEBUG=1 (cli)" "$D/set.log" \
 	|| { fail "--set did not announce its knob at the cli layer"; head -5 "$D/set.log" | sed 's/^/  /'; }
 
 # ---- 3. AND AN UNKNOWN KNOB IS STILL REFUSED, with its code, before anything opens.
+# AND IT REACHES A KNOB THE DAEMON NEVER READS ITSELF (audit 2026-09-24, M5). --set fed
+# a private table that only reac_knobs_resolve read; libreac's own reac_conf_lookup never
+# saw it, so `--set REACPW_PACER=thread` was announced "(cli)" while the pacer ran ETF.
+# The effect is libreac's own backend line, on a master over a dummy device in this
+# namespace. The CONTROL is the same launch without --set: it must read ETF, or the
+# host's default is thread already and this arm proves nothing.
+pacer_backend() {   # pacer_backend [--set ...]: the backend libreac's pacer names
+	unshare -r -n bash -c 'ip link add d0 type dummy && ip link set d0 up &&
+		HOME="$0" timeout 4 "$1" --live d0 --tx d0 "${@:2}"' "$D" "$BIN" "$@" 2>&1 \
+		| grep -ao "reac-pacer: backend [A-Za-z]*" | head -1 | awk '{print $3}'
+}
+if command -v ip >/dev/null 2>&1 && unshare -r -n bash -c 'ip link add d0 type dummy' 2>/dev/null; then
+	CTL=$(pacer_backend)
+	SET=$(pacer_backend --set REACPW_PACER=thread)
+	echo "pacer backend: default '$CTL', --set REACPW_PACER=thread '$SET'"
+	[ "$CTL" = "ETF" ] \
+		|| fail "the control launch named backend '$CTL', not ETF — this arm cannot show --set moving it"
+	[ "$SET" = "thread" ] \
+		|| fail "--set REACPW_PACER=thread left libreac's pacer on '$SET' — announced at the cli layer and never applied (M5)"
+else
+	echo "note: no dummy device in this namespace; the REACPW_PACER arm is not measured"
+fi
+
 OUT=$(unshare -r -n env HOME=/nonexistent "$BIN" --set NOPE=1 --pcap /dev/null 2>&1); rc=$?
 [ "$rc" = "2" ] || fail "--set with an unknown key did not exit 2 (got $rc)"
 echo "$OUT" | grep -q "E_UNKNOWN_KNOB" \

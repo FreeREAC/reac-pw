@@ -97,17 +97,22 @@ int reac_knobs_set_argv(const char *key, const char *value)
 {
 	if (!key || !*key || !knob_known(key))
 		return 0;
-	for (int i = 0; i < g_argv_n; i++) {
-		if (strcmp(g_argv[i].key, key) == 0) {
-			snprintf(g_argv[i].value, sizeof g_argv[i].value, "%s", value ? value : "");
-			return 1;
-		}
+	int i;
+	for (i = 0; i < g_argv_n; i++)
+		if (strcmp(g_argv[i].key, key) == 0)
+			break;
+	if (i == g_argv_n) {
+		if (g_argv_n >= REAC_KNOBS_ARGV_MAX)
+			return 0;   /* --set given more times than any real command line has knobs */
+		g_argv[g_argv_n++].key = key;
 	}
-	if (g_argv_n >= REAC_KNOBS_ARGV_MAX)
-		return 0;   /* --set given more times than any real command line has knobs */
-	g_argv[g_argv_n].key = key;
-	snprintf(g_argv[g_argv_n].value, sizeof g_argv[g_argv_n].value, "%s", value ? value : "");
-	g_argv_n++;
+	snprintf(g_argv[i].value, sizeof g_argv[i].value, "%s", value ? value : "");
+	/* AND INTO THE ENVIRONMENT, the layer every reac_conf_lookup reads -- reac-pw's own
+	 * and libreac's (audit 2026-09-24, M5). The table above answers reac_knobs_resolve
+	 * and nothing else, so `--set REACPW_PACER=thread` was announced "(cli)" while
+	 * libreac's pacer, reading its own key, never saw it. The environment is the
+	 * highest layer reac_conf_lookup has, which is where a command line belongs. */
+	setenv(key, g_argv[i].value, 1);
 	return 1;
 }
 
