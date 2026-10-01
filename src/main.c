@@ -1045,19 +1045,20 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 			return;
 		case REAC_RECOVER_GIVE_UP:
 			fprintf(stderr, "reac-pw: %s%s for %s is STILL not on the graph "
-			        "after %d rebuilds (%s) — giving up on it. %s Nothing here will "
-			        "change that; it is retried the moment the node appears or the box "
-			        "is re-recognized.\n",
+			        "after %d rebuilds (%s) — giving up on saying so. %s It is still "
+			        "rebuilt, quietly, every %d s, and a line says when it is back.\n",
 			        c->tag, reac_node_pair_name(&v), bm->display,
-			        REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v));
+			        REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v),
+			        (REAC_RECOVER_GRACE_TICKS << REAC_RECOVER_MAX_SHIFT) / 5);
 			return;
 		case REAC_RECOVER_REBUILD:
 			c->rebuilt = reac_node_pair_name(&v);
-			fprintf(stderr, "reac-pw: %s%s is NOT on the graph %.1f s after it "
-			        "was sized to %s (%s) — rebuilding it (attempt %d of %d). %s\n",
-			        c->tag, c->rebuilt, reac_node_recover_spent(&c->recover) * 0.2,
-			        bm->display, v.why, c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS,
-			        pair_cost(&v));
+			if (!c->recover.gave_up)     /* past the give-up line: rebuilt, not said */
+				fprintf(stderr, "reac-pw: %s%s is NOT on the graph %.1f s after it "
+				        "was sized to %s (%s) — rebuilding it (attempt %d of %d). %s\n",
+				        c->tag, c->rebuilt, reac_node_recover_spent(&c->recover) * 0.2,
+				        bm->display, v.why, c->recover.attempts,
+				        REAC_RECOVER_MAX_ATTEMPTS, pair_cost(&v));
 			/* FORCE IT. reac_source_node_ensure rebuilds on a CHANGE of width or
 			 * label, and neither moved — the node it would compare against is the one
 			 * that failed, at exactly the width we want. Tearing it down first is what
@@ -5243,21 +5244,23 @@ static void listener_recover(struct listener *L)
 		return;
 	case REAC_RECOVER_GIVE_UP:
 		fprintf(stderr, "reac-pw: %s%s is STILL not on the graph after %d rebuilds "
-		        "(%s) — giving up on it. %s It is retried the moment the node "
-		        "appears.\n", c->tag, reac_node_pair_name(&v),
-		        REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v));
+		        "(%s) — giving up on saying so. %s It is still rebuilt, quietly, every "
+		        "%d s, and a line says when it is back.\n", c->tag,
+		        reac_node_pair_name(&v), REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v),
+		        (REAC_RECOVER_GRACE_TICKS << REAC_RECOVER_MAX_SHIFT) / 5);
 		return;
 	case REAC_RECOVER_REBUILD:
 		break;
 	}
 
 	L->rebuilt = L->sink ? reac_node_pair_name(&v) : "reac-capture";
-	fprintf(stderr, "reac-pw: %s%s is NOT on the graph %.1f s after it was built (%s) "
-	        "— rebuilding it (attempt %d of %d). %s\n", c->tag, L->rebuilt,
-	        reac_node_recover_spent(&L->recover) * 0.2, v.why, L->recover.attempts,
-	        REAC_RECOVER_MAX_ATTEMPTS, L->sink ? pair_cost(&v)
-	                                           : "A segment without its capture node "
-	                                             "has no input patches at all.");
+	if (!L->recover.gave_up)             /* past the give-up line: rebuilt, not said */
+		fprintf(stderr, "reac-pw: %s%s is NOT on the graph %.1f s after it was "
+		        "built (%s) — rebuilding it (attempt %d of %d). %s\n", c->tag,
+		        L->rebuilt, reac_node_recover_spent(&L->recover) * 0.2, v.why,
+		        L->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS,
+		        L->sink ? pair_cost(&v) : "A segment without its capture node has "
+		                                  "no input patches at all.");
 	if (v.sink_gone && L->sink) {
 		const char *label;
 		int ch = listener_playback_shape(c, &label);

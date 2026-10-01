@@ -43,8 +43,17 @@ enum reac_node_recover_act reac_node_recover_step(struct reac_node_recover *r, i
 		return REAC_RECOVER_WAIT;
 	}
 
-	if (r->gave_up)
-		return REAC_RECOVER_WAIT;   /* said once; a repeat is noise, not information */
+	if (r->gave_up) {
+		/* SAID ONCE, AND STILL TRIED (audit 2026-09-24, M1). A repeated line is noise,
+		 * not information; but a ladder that stopped here left the nodes gone for good
+		 * after ~94 s of outage, under a line promising a retry. So a quiet rebuild at
+		 * the ceiling, for as long as the absence lasts: gave_up stays set, and that is
+		 * what tells the caller to say nothing. */
+		if (++r->absent < reac_node_recover_window(r))
+			return REAC_RECOVER_WAIT;
+		r->absent = 0;
+		return REAC_RECOVER_REBUILD;
+	}
 
 	if (++r->absent < reac_node_recover_window(r))
 		return REAC_RECOVER_WAIT;   /* still inside this attempt's window */

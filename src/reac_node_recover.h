@@ -19,7 +19,9 @@
  * a whole grace window. Each rebuild doubles the window, up to a ceiling: a graph that
  * refused us once usually refuses us again immediately, and a graph that is merely busy
  * gets more time on each pass. After the last attempt there is ONE terminal line and
- * then silence — the state is reported, not narrated.
+ * then silence — the state is reported, not narrated — but not idleness: the ladder
+ * keeps rebuilding at the ceiling, quietly, for as long as the node is missing (audit
+ * 2026-09-24, M1: a give-up that stopped trying left the nodes gone for good).
  *
  * A NODE THAT COMES BACK RESETS EVERYTHING, including a give-up: the box may have been
  * re-plugged, the session manager restarted, the segment re-served. Giving up is about
@@ -42,15 +44,17 @@
 #define REAC_RECOVER_MAX_SHIFT 4
 
 enum reac_node_recover_act {
-	REAC_RECOVER_WAIT = 0,   /* nothing to do: healthy, inside the window, or given up */
-	REAC_RECOVER_REBUILD,    /* destroy and build it again, and say which attempt this is */
+	REAC_RECOVER_WAIT = 0,   /* nothing to do: healthy, or inside the window */
+	REAC_RECOVER_REBUILD,    /* destroy and build it again, and say which attempt this is —
+	                          * unless gave_up is set: then it is the quiet retry at the
+	                          * ceiling, and there is nothing new to say */
 	REAC_RECOVER_GIVE_UP,    /* say it ONCE, name the reason, then stay quiet */
 };
 
 struct reac_node_recover {
 	int absent;     /* consecutive ticks the node has not been on the graph */
 	int attempts;   /* rebuilds already tried for this absence */
-	int gave_up;    /* the terminal line has been said */
+	int gave_up;    /* the terminal line has been said; rebuilds go on, unannounced */
 };
 
 void reac_node_recover_init(struct reac_node_recover *r);

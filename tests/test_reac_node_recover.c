@@ -91,8 +91,19 @@ int main(void)
 	 * is what hid the original defect. */
 	CHK(run_absent(&r, 10000, &at) == REAC_RECOVER_GIVE_UP);
 	CHK(r.gave_up == 1);
-	for (int i = 0; i < 10000; i++)
-		CHK(reac_node_recover_step(&r, 0) == REAC_RECOVER_WAIT);
+
+	/* ---- AND GIVING UP THE LINE IS NOT GIVING UP THE NODE (audit 2026-09-24, M1). The
+	 * terminal line promises a retry; a ladder that stopped here left the nodes gone for
+	 * good after ~94 s of outage. So it keeps rebuilding at the ceiling, QUIETLY: the
+	 * rebuild arrives every GRACE << MAX_SHIFT ticks, exactly, with gave_up still set
+	 * (which is what tells the caller to say nothing) and the attempt count where the
+	 * line left it. */
+	const int ceiling = REAC_RECOVER_GRACE_TICKS << REAC_RECOVER_MAX_SHIFT;
+	for (int k = 0; k < 3; k++) {
+		CHK(run_absent(&r, 10000, &at) == REAC_RECOVER_REBUILD);
+		CHK(at == ceiling);
+		CHK(r.gave_up == 1 && r.attempts == REAC_RECOVER_MAX_ATTEMPTS);
+	}
 
 	/* ---- GIVING UP IS ABOUT THIS ABSENCE, NOT ABOUT THE SEGMENT. The box is replugged,
 	 * the session manager restarts, the node appears: the ladder starts over. */
