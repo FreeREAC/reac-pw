@@ -1788,3 +1788,13 @@ test('reac_asserted_lines_have_a_producer', python3,
           meson.current_source_dir() / 'tests',
           meson.current_source_dir() / 'src',
           meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt'])
+
+# --- text: the public tree cites internal documents by slug; the README builds nothing --
+# Specs, notes, audits and rig files live in the private ops repository. A citation in
+# code, tests, packaging or the user docs is the bare slug, never a docs path or a dated
+# `.md` filename that resolves to nothing in a public checkout; README.md carries no build
+# command and BUILDING.md carries the build. Sabotage-verified by putting a spec path back
+# into a src/ comment and requiring it to be refused by file and line.
+test('reac_public_tree_cites_slugs', python3,
+  args : [meson.current_source_dir() / 'tests' / 'public-tree-cites-slugs.py',
+          meson.current_source_dir()])
