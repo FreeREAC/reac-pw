@@ -1394,6 +1394,16 @@ recover_test = executable('test_reac_node_recover',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_node_recover', recover_test)
 
+# --- unit test: a refused node says why, in both directions (audit M12) ------------
+# reac-capture named its stream's ERROR; reac-playback had no handler at all, so a refused
+# playback node was silent. One handler in reac_node_graph.c, registered by both nodes.
+state_changed_test = executable('test_reac_node_state_changed',
+  ['tests/test_reac_node_state_changed.c', 'src/reac_node_graph.c'],
+  include_directories : src_inc,
+  dependencies : [pipewire_dep])
+test('reac_node_state_changed', state_changed_test,
+  args : [meson.current_source_dir() / 'src'])
+
 # --- unit test: the vacant-wire hunt (trunk-VLAN spec S7 step 4, arbitration S8b) --
 # Which end of the pairing a HEARD segment takes when nobody configured one. Frames come
 # from the reac_ctrl builders (the bytes the wire carries, checksum and all), so the four

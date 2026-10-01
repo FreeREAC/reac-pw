@@ -28,11 +28,18 @@
 #ifndef REAC_NODE_GRAPH_H
 #define REAC_NODE_GRAPH_H
 
-struct pw_stream;
+#include <pipewire/stream.h>
 
 /* Returns 1 when `stream` is on the graph, 0 otherwise — and then `*why` (never
  * NULL) names the reason: a NULL stream ("no node was ever created"), the stream's
  * own error text, the lost server, or the missing id. `why` itself may be NULL. */
 int reac_node_on_graph(struct pw_stream *stream, const char **why);
+
+/* The pw_stream state_changed reading both nodes share (audit 2026-09-24, M12: the
+ * playback node had none, so a refused reac-playback was silent while its capture
+ * sibling said why). ERROR is always printed, naming `nodename` and the server's own
+ * reason; any other transition only when `debug` is set. MAIN LOOP. */
+void reac_node_state_changed(const char *nodename, int debug, enum pw_stream_state old,
+                             enum pw_stream_state state, const char *error);
 
 #endif /* REAC_NODE_GRAPH_H */

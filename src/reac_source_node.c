@@ -293,12 +293,7 @@ static void on_state_changed(void *data, enum pw_stream_state old,
                              enum pw_stream_state state, const char *error)
 {
 	struct reac_source_node *n = data;
-	if (state == PW_STREAM_STATE_ERROR)
-		fprintf(stderr, "reac-pw: %s: stream ERROR — %s (this node is NOT in the graph; "
-		        "its patches cannot exist)\n", n->nodename, error ? error : "no reason given");
-	else if (n->debug)
-		fprintf(stderr, "reac-pw: %s: stream %s -> %s\n", n->nodename,
-		        pw_stream_state_as_string(old), pw_stream_state_as_string(state));
+	reac_node_state_changed(n->nodename, n->debug, old, state, error);
 }
 
 static const struct pw_stream_events stream_events = {

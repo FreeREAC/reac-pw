@@ -26,7 +26,8 @@
 #include "reac_sink_node.h"
 #include <reac/transport/reac_segment_ident.h> /* REAC_PROP_SEGMENT — the segment names itself */
 #include "reac_source_node.h" /* peer reac-capture badge push (#208) */
-#include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
+#include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading + state line */
+#include <reac/transport/reac_conf.h>    /* REAC_DEBUG, layered as the capture side reads it */
 #include <reac/transport/reac_tx.h>
 #include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
@@ -119,6 +120,8 @@ struct reac_sink_node {
 	uint8_t src[6];           /* our master MAC */
 	struct pw_loop *loop;
 	const char *inst;         /* per-instance node suffix (for filter (re)build) */
+	char nodename[64];        /* reac-playback[.inst]: the node names itself in its lines */
+	int debug;                /* REAC_DEBUG: every stream state transition, not only ERROR */
 	char label[64];           /* effective box label on the node description ("" = none) */
 	char clock_ref[64];       /* operator-designated clock reference (#77); "" = none.
 	                           * OWN copy, not the caller's pointer: it is read from
@@ -856,8 +859,17 @@ static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 		n->rate_match = (size >= sizeof(struct spa_io_rate_match)) ? area : NULL;
 }
 
+/* A refused playback node says why, as its capture sibling does (audit M12). */
+static void on_state_changed(void *data, enum pw_stream_state old,
+                             enum pw_stream_state state, const char *error)
+{
+	struct reac_sink_node *n = data;
+	reac_node_state_changed(n->nodename, n->debug, old, state, error);
+}
+
 static const struct pw_stream_events stream_events = {
 	PW_VERSION_STREAM_EVENTS,
+	.state_changed = on_state_changed,
 	.io_changed = on_io_changed,
 	.process = on_process,
 	.param_changed = on_param_changed,
@@ -1806,11 +1818,10 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", n->sample_rate);
 
-	char nodename[64];
 	if (n->inst && *n->inst)
-		snprintf(nodename, sizeof nodename, "reac-playback.%s", n->inst);
+		snprintf(n->nodename, sizeof n->nodename, "reac-playback.%s", n->inst);
 	else
-		snprintf(nodename, sizeof nodename, "reac-playback");
+		snprintf(n->nodename, sizeof n->nodename, "reac-playback");
 
 	snprintf(n->label, sizeof n->label, "%s", label ? label : "");
 	char desc[128];
@@ -1849,7 +1860,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			PW_KEY_MEDIA_TYPE, "Audio",
 			PW_KEY_MEDIA_CATEGORY, "Playback", /* a sink consumes audio */
 			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
-			PW_KEY_NODE_NAME, nodename,
+			PW_KEY_NODE_NAME, n->nodename,
 			PW_KEY_NODE_DESCRIPTION, desc,
 			/* THE SEGMENT'S IDENTITY (reac_segment_ident.h). This node is the
 			 * master role's door — it accepts reac.cfg.rate / reac.cfg.role and
@@ -1988,6 +1999,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		return NULL;
 	n->loop = loop;
 	n->inst = cfg->inst;          /* stable for the process; used by every filter build */
+	{
+		char v[16];
+		n->debug = reac_conf_lookup("REAC_DEBUG", NULL, NULL, v, sizeof v) != REAC_CONF_NONE;
+	}
 	n->disco_ifname = cfg->ifname;
 	n->upstream_ring = cfg->upstream_ring;
 	n->channels = 0;              /* no graph filter yet — DEFERRED to reac_sink_node_ensure */

@@ -8,6 +8,7 @@
 
 #include <pipewire/stream.h>
 #include <spa/utils/defs.h>
+#include <stdio.h>
 
 int reac_node_on_graph(struct pw_stream *stream, const char **why)
 {
@@ -31,4 +32,15 @@ int reac_node_on_graph(struct pw_stream *stream, const char **why)
 	if (why)
 		*why = reason;
 	return 0;
+}
+
+void reac_node_state_changed(const char *nodename, int debug, enum pw_stream_state old,
+                             enum pw_stream_state state, const char *error)
+{
+	if (state == PW_STREAM_STATE_ERROR)
+		fprintf(stderr, "reac-pw: %s: stream ERROR — %s (this node is NOT in the graph; "
+		        "its patches cannot exist)\n", nodename, error ? error : "no reason given");
+	else if (debug)
+		fprintf(stderr, "reac-pw: %s: stream %s -> %s\n", nodename,
+		        pw_stream_state_as_string(old), pw_stream_state_as_string(state));
 }
