@@ -804,6 +804,10 @@ struct autodetect_ctx {
 	                                     * notice; NULL once reported (report ONCE)  */
 	int                          pinned; /* --box: the nodes are the operator's statement
 	                                      * about this wire and survive an absent box  */
+	const struct reac_box_model *pin_model; /* --box: the pinned row and label, which */
+	const char                  *pin_label; /* size the pair while no box is here     */
+	int                          box_here;  /* a box was recognized on the last tick:  */
+	                                        /* the pinned arm's present->absent edge  */
 	const char                  *tag;   /* "[iface] " once N>1, "" for a lone listener */
 	/* The bounded rebuild ladder for a reac-capture that never reached the graph
 	 * (reac_node_recover.h). Separate from `last` because a rebuild is not a model
@@ -968,6 +972,74 @@ static const char *pair_cost(const struct reac_node_pair_verdict *v)
 	return "A segment without both its nodes has no patches at all.";
 }
 
+/* THE PINNED PAIR WITH NO BOX ON THE WIRE (audit 2026-09-24, M2 and M3). The pin's whole
+ * purpose is that the patch is there before the box is powered, so the pair must outlive
+ * a lost PipeWire server in exactly that state; the ladder below the recognition gate
+ * never ran for it, and a restart while the box was off killed the patch. The same pair
+ * judgement as a recognized box, rebuilt at the pinned row's widths and label. And the
+ * box that leaves resets the ladder (M3): a give-up earned while the box was here is
+ * about that absence, not about the pinned pair that follows it. */
+static void pinned_pair_step(struct autodetect_ctx *c)
+{
+	if (c->box_here) {
+		c->box_here = 0;
+		reac_node_recover_init(&c->recover);
+	}
+	const char *why = NULL, *sink_why = NULL;
+	int on_graph = reac_source_node_on_graph(*c->src, &why);
+	int sink_on_graph = reac_sink_node_on_graph(c->sink, &sink_why);
+	int attempts = c->recover.attempts;
+	struct reac_node_pair_verdict v =
+		reac_node_recover_step_pair(&c->recover, on_graph, why, sink_on_graph, sink_why);
+	switch (v.act) {
+	case REAC_RECOVER_WAIT:
+		if (on_graph && sink_on_graph && attempts > 0)
+			fprintf(stderr, "reac-pw: %s%s is back on the graph (attempt %d) — the "
+			        "pinned %s's patches can be made again.\n", c->tag,
+			        c->rebuilt ? c->rebuilt : "reac-capture and reac-playback",
+			        attempts, c->pin_model->display);
+		return;
+	case REAC_RECOVER_GIVE_UP:
+		fprintf(stderr, "reac-pw: %s%s for the pinned %s is STILL not on the graph "
+		        "after %d rebuilds (%s) — giving up on saying so. %s It is still "
+		        "rebuilt, quietly, every %d s, and a line says when it is back.\n",
+		        c->tag, reac_node_pair_name(&v), c->pin_model->display,
+		        REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v),
+		        (REAC_RECOVER_GRACE_TICKS << REAC_RECOVER_MAX_SHIFT) / 5);
+		return;
+	case REAC_RECOVER_REBUILD:
+		break;
+	}
+	c->rebuilt = reac_node_pair_name(&v);
+	/* Rebuilt at the PIN's widths, so a box that returns is a change to size to, not
+	 * the model we last acted on. */
+	c->last = NULL;
+	c->announced = NULL;
+	if (!c->recover.gave_up)
+		fprintf(stderr, "reac-pw: %s%s for the pinned %s is NOT on the graph %.1f s "
+		        "after it was built (%s) — rebuilding it (attempt %d of %d). %s\n",
+		        c->tag, c->rebuilt, c->pin_model->display,
+		        reac_node_recover_spent(&c->recover) * 0.2, v.why,
+		        c->recover.attempts, REAC_RECOVER_MAX_ATTEMPTS, pair_cost(&v));
+	if (v.src_gone) {
+		reac_source_node_destroy(*c->src);
+		*c->src = NULL;
+		if (reac_source_node_ensure(c->src, &c->scfg, c->pin_model->in_ch,
+		                            c->pin_label) != 0)
+			reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+			        "%scould not size reac-capture to %d ch (pinned %s)\n",
+			        c->tag, c->pin_model->in_ch, c->pin_model->display);
+		reac_sink_node_restamp_peer(c->sink);   /* the new node starts blank */
+	}
+	if (v.sink_gone) {
+		reac_sink_node_unpublish(c->sink);
+		if (reac_sink_node_ensure(c->sink, c->pin_model->out_ch, c->pin_label) != 0)
+			reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+			        "%scould not size reac-playback to %d ch (pinned %s)\n",
+			        c->tag, c->pin_model->out_ch, c->pin_model->display);
+	}
+}
+
 static void on_autodetect_timer(void *data, uint64_t expirations)
 {
 	(void)expirations;
@@ -989,6 +1061,10 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		 * A PINNED --box IS EXEMPT, and deliberately: the pin says this box BELONGS on
 		 * this wire, and its whole purpose is that the patch survives a box that is
 		 * not powered yet. Removing its nodes would be removing the pin. */
+		if (c->pinned && c->pin_model) {
+			pinned_pair_step(c);
+			return;
+		}
 		if (c->last && !c->pinned) {
 			fprintf(stderr, "reac-pw: %sthe box is gone — removing reac-capture and "
 			        "reac-playback for this segment. They come back, sized to it, "
@@ -1003,6 +1079,7 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		}
 		return;                      /* nothing recognized yet */
 	}
+	c->box_here = 1;
 	if (bm == c->last) {
 		/* SAME MODEL AS LAST POLL — so the only question left is whether the node we
 		 * SAID we built is really there. Announcing a resize and never checking is
@@ -2471,6 +2548,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			pw_loop_update_timer(loop, L->ad_timer, &first, &interval, false);
 		}
 		L->adc.pinned = (c->pin_model != NULL);
+		L->adc.pin_model = c->pin_model;
+		L->adc.pin_label = c->pin_label;
 		if (c->pin_model) {
 			/* The fixed-install pin: put the nodes on the graph NOW, at the pinned
 			 * width and name, so the patch exists before the box is powered. This

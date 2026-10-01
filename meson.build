@@ -895,13 +895,15 @@ test('reac_graph_survives_a_pipewire_restart',
   args : [reac_pw_exe, fake_box_path],
   timeout : 300)
 
-# --- whole-binary test: a SLAVE and a TAP segment outlive a PipeWire restart (H2) -------
+# --- whole-binary test: SLAVE, TAP and PINNED segments outlive a PipeWire restart -------
 #
 # The sibling above holds the master autodetect pair to it; the ladder that rebuilds them
 # ran from the autodetect timer, which only a master segment has (audit 2026-09-24, H2).
 # The same restart under a joined box master (slave: capture + playback) and under
-# `role = tap` (one capture per heard stream): new node ids, announced.
-foreach mode : ['slave', 'tap']
+# `role = tap` (one capture per heard stream), and a master pinned `--box s1608` with no
+# box on the wire, whose ladder ran only once a box was recognized (M2): new node ids,
+# announced.
+foreach mode : ['slave', 'tap', 'pinned']
   test('reac_graph_survives_a_pipewire_restart_as_' + mode,
     find_program('tests/graph-survives-a-pipewire-restart-in-every-role.sh'),
     suite : 'netns',

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# WHOLE-BINARY: a SLAVE and a TAP segment's nodes outlive a PipeWire restart too
-# (audit 2026-09-24, H2).
+# WHOLE-BINARY: a SLAVE, a TAP and a PINNED segment's nodes outlive a PipeWire restart
+# too (audit 2026-09-24, H2 and M2).
 #
 # graph-survives-a-pipewire-restart.sh holds the master autodetect pair to it. The ladder
 # that rebuilds them ran from the autodetect timer, which only a master segment has, so
@@ -14,18 +14,21 @@
 #          autodetects the wire and JOINS it as a slave -- reac-capture AND reac-playback.
 #   tap    the same wire, with `role = tap` in reac-pw.conf -- one reac-capture per heard
 #          stream, nothing transmitted.
+#   pinned a master with `--box s1608` and NO box on the wire: the pin keeps the pair on
+#          the graph before the box is powered, and its ladder ran only once a box was
+#          recognized (M2), so a restart while the box was off killed the patch.
 #
 # PRESENCE BEFORE ABSENCE: the nodes must be on the graph before the restart, or their
 # absence after it measures nothing. The proof is NEW node ids for every node the segment
 # had, and the daemon's own "rebuilding it" / "back on the graph" lines.
 set -u
 . "$(dirname "$0")/facts.sh"   # FACT_<NAME>, exported into the namespace body
-BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master slave|tap}"
+BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake-box-master slave|tap|pinned}"
 FAKE="${2:-}"
-MODE="${3:?usage: $0 /path/to/reac-pw /path/to/fake-box-master slave|tap}"
+MODE="${3:?usage: $0 /path/to/reac-pw /path/to/fake-box-master slave|tap|pinned}"
 SKIP=77
 
-case "$MODE" in slave|tap) ;; *) echo "FAIL: mode '$MODE' is neither slave nor tap"; exit 1 ;; esac
+case "$MODE" in slave|tap|pinned) ;; *) echo "FAIL: mode '$MODE' is not slave, tap or pinned"; exit 1 ;; esac
 [ -n "$FAKE" ] && [ -x "$FAKE" ] || { echo "SKIP: no fake-box-master at '$FAKE'"; exit $SKIP; }
 for t in unshare nsenter ip pipewire pw-cli pw-dump python3; do
 	command -v $t >/dev/null 2>&1 || { echo "SKIP: no $t"; exit $SKIP; }
@@ -81,14 +84,16 @@ ip link set grsb0 netns $NSPID || exit 90
 
 # The box masters the wire before the carrier exists, so the daemon hears a master from
 # the first instant and never races to master it itself.
-$in_peer "$FAKE" grsb0 00:40:ab:c4:08:bc "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
+[ "$MODE" = pinned ] ||
+	$in_peer "$FAKE" grsb0 00:40:ab:c4:08:bc "$FACT_BOX_S0808_IN" 2000 "$RT/box.rep" >"$RT/box.log" 2>&1 &
 sleep 0.5
 ip link set grs0 up; $in_peer ip link set grsb0 up
 
 mkdir -p "$CONF/.config/reac-pw"
 [ "$MODE" = tap ] && printf '[segment grs0]\nrole = tap\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 WANT=2; [ "$MODE" = tap ] && WANT=1
-HOME="$CONF" REACPW_BOX_MASTER_FRAME=mixer "$BIN" >"$LOG" 2>&1 &
+ARGS=(); [ "$MODE" = pinned ] && ARGS=(--live grs0 --tx grs0 --name grs0 --box s1608)
+HOME="$CONF" REACPW_BOX_MASTER_FRAME=mixer "$BIN" "${ARGS[@]}" >"$LOG" 2>&1 &
 PID=$!
 for ((i = 0; i < 80; i++)); do
 	[ "$(seg_nodes $PID grs0 | wc -l)" -ge $WANT ] && break
