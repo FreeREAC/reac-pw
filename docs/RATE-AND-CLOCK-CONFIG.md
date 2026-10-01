@@ -37,10 +37,11 @@ from `~/.config/reac-pw/reac-pw.env`, keyed by its interface name
 | 3 | `<KEY>_<segment>` (e.g. `REAC_RATE_enp131s0`) | per-segment — outranks the bare key in every layer below, because segments can differ |
 | 4 | `~/.config/reac-pw/reac-pw.env` | per-host: what every segment on this host shares |
 | 5 | `~/.config/openmixer/reac.env` | the last resort — makes a standalone install work with no console present; a console overrides it and shows the operator the result |
-| 6 | the built-in default (`REAC_MASTER_DEFAULT_RATE` = 96000) | reached only when every layer above is silent |
+| 6 | the built-in default: the highest rate this build can drive, 96000 (`reac_rate_best_drivable`) | reached when every layer above is silent, or when the layer that answered is refused |
 
 An empty value (`REAC_RATE=`) sets nothing and falls through to the next layer. A
-layer that answers with nonsense is named and skipped, not silently dropped
+layer that answers with nonsense is named, and the built-in default is used: the
+layers below it are NOT consulted
 (`ignoring REAC_RATE='999' from the process environment`).
 
 The startup line names the layer that won, for example:

@@ -29,7 +29,9 @@ from pathlib import Path
 # bare-fprintf into the other's would not quietly duck the ratchet.
 # 2026-09-20 (#106): the two roster-node failures now emit E_ROSTER_NODE, so the floor
 # falls 31 -> 30. It only ever falls.
-FLOOR = 30
+# 2026-10-01 (audit 2026-09-24, low): the count had already fallen to 29 with the floor
+# left at 30, a slack of one bare line nobody would have been told about.
+FLOOR = 29
 
 REFUSAL_WORDS = re.compile(r'REFUSED|FATAL|failed|FAILED|could not|COULD NOT')
 FPRINTF_START = re.compile(r'fprintf\(stderr,\s*"reac-pw:')

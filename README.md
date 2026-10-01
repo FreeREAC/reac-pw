@@ -22,7 +22,7 @@ role properties, and `main()`. The REAC byte layout, the cdea/cfea control
 plane, the master and slave establishment FSMs, and the transport underneath
 them (sockets, the lock-free ring, the cadence pacer, interface/VLAN scanning)
 all live in [libreac](https://github.com/FreeREAC/libreac) and
-libreac-transport, both at `>= 1.0.1`; reac-pw links against them rather than
+libreac-transport, both at `>= 1.5.0`; reac-pw links against them rather than
 reimplementing any of it.
 
 Target: Fedora + PipeWire 1.4.
@@ -37,8 +37,8 @@ gh release download v1.0.1 -R FreeREAC/reac-pw -p 'reac-pw-*.rpm' -p 'libreac-*.
 sudo dnf install ./libreac-*.rpm ./libreac-transport-*.rpm ./reac-pw-*.rpm
 ```
 
-`reac-pw` needs `libreac >= 1.0.1` (the REAC control plane) and
-`libreac-transport >= 1.0.1` (the sockets/pacer/RT-thread/VLAN transport) —
+`reac-pw` needs `libreac >= 1.5.0` (the REAC control plane) and
+`libreac-transport >= 1.5.0` (the sockets/pacer/RT-thread/VLAN transport) —
 install all three from the same release. The RPM sets the file capabilities
 the daemon needs (`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without
 root.

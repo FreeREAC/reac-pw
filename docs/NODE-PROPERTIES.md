@@ -32,7 +32,7 @@ vocabulary in its `SPA_PARAM_PropInfo`, so a client discovers it:
 | `reac.headamp.<wireCh>.phantom` | `0` \| `1` | playback | 48 V on one box preamp |
 | `reac.headamp.<wireCh>.pad` | `0` \| `1` | playback | the box's own −20 dB pad |
 | `reac.headamp.<wireCh>.sens` | `0 .. reac.headamp.sens.max` | playback | preamp sensitivity, 1 dB per step under `dBu = -10 - value + (pad ? 20 : 0)` |
-| `reac.cfg.rate` | `44100` \| `48000` \| `96000` | playback, capture | the REAC pace this segment runs at; an accepted change re-clocks the segment and the box re-enrols |
+| `reac.cfg.rate` | `44100` \| `48000` \| `96000` | playback | the REAC pace this segment runs at; an accepted change re-clocks the segment and the box re-enrols |
 | `reac.cfg.role` | `0` (master) \| `1` (slave) | playback, capture | which end of the desk↔stagebox pairing this segment presents |
 
 `<wireCh>` is the absolute REAC wire channel in decimal — `reac.headamp.base + (box input −
