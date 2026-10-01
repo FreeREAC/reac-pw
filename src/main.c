@@ -5438,7 +5438,10 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 			listener_publish_tap(L);
 			continue;
 		}
-		if (!L->sink || L->cfg.join_box_master) {
+		/* AND SO DOES A BOX ROLE (audit 2026-09-24, M9): its reac-playback is the same
+		 * upstream carrier, so the role door and its answer are the capture node's;
+		 * reading the playback node's door instead left a role write pending for ever. */
+		if (!L->sink || L->cfg.join_box_master || L->cfg.box_model) {
 			int back = reac_source_node_take_reopen_role(L->src);
 			if (back >= 0) {
 				if (!listener_reopen_role_reclassify(L, c->loop,

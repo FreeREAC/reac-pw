@@ -213,13 +213,16 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	# down and rebuilt around that edge — a single sample lands in a gap and reports an
 	# absence that never happened. What is claimed is that these facts WERE true, which
 	# is what "the mixer enrolled us" means.
-	local cap=0 play=0 rrole="" rwidth="" rmodel="" mmodel="none" mstate=""
+	local cap=0 play=0 rrole="" rwidth="" rmodel="" mmodel="none" mstate="" prole=""
 	local i
 	for ((i = 0; i < 40; i++)); do
 		sleep 0.6
 		[ "$(node_names | grep -c "^reac-capture.$ifc$")" -ge 1 ] && cap=1
 		[ "$(node_names | grep -c "^reac-playback.$ifc$")" -ge 1 ] && play=1
 		local v
+		# THE PLAYBACK NODE IS THE UPSTREAM CARRIER, NOT A MASTER'S DOOR (audit M10): it
+		# carried reac.role=master beside a capture node saying slave.
+		v=$(node_prop "reac-playback.$ifc" reac.role); [ -n "$v" ] && prole="$v"
 		v=$(roster_key "$ifc" role);  [ -n "$v" ] && rrole="$v"
 		# `0/0` IS WHAT A SEGMENT READS WHILE ITS PAIR IS BEING REBUILT, and it is a
 		# legitimate value of this key — so it is skipped here the same way `none` is
@@ -245,6 +248,33 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	echo "$tag master-joins $(grep -ao "rx_joins=[0-9]*" "$RT/$tag.master.log" | tail -1 | cut -d= -f2)"
 	echo "$tag env-width-ignored $(grep -ac "REAC_BOX_CHANNELS.*IGNORED" "$RT/$tag.log")"
 	echo "$tag mac-standin $(grep -ac "slave box source MAC = .*Roland OUI" "$RT/$tag.log")"
+	echo "$tag playback-role ${prole:-absent}"
+	# A ROLE WRITE TO THE CAPTURE NODE IS TAKEN (audit M9). The box role has a playback
+	# node, so the poll read that node's door and never the capture node's: a write
+	# stayed pending for ever. Last in the arm, because a taken write re-opens the
+	# segment as the role it names.
+	if [ "$tag" = A ]; then
+		local cid=""
+		for ((i = 0; i < 10 && -z "$cid"; i++)); do
+			cid=$(pw-dump | python3 -c '
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get("type")=="PipeWire:Interface:Node" and \
+       o["info"]["props"].get("node.name")==sys.argv[1]:
+        print(o["id"]); break
+' "reac-capture.$ifc")
+			[ -n "$cid" ] || sleep 0.5
+		done
+		echo "$tag role-write-node ${cid:-none}"
+		# 0 is reac.cfg.role's master value (REAC_CFG_ROLE_VALUE_MASTER, reac_role_cfg.h).
+		[ -n "$cid" ] && pw-cli set-param "$cid" Props \
+			"{ params = [ \"reac.cfg.role\", 0 ] }" >/dev/null 2>&1
+		for ((i = 0; i < 20; i++)); do
+			grep -aq "\[$ifc\] REAC role -> " "$RT/$tag.log" && break
+			sleep 0.5
+		done
+		echo "$tag role-write-taken $(grep -ac "\[$ifc\] REAC role -> " "$RT/$tag.log")"
+	fi
 	grep -a "role = box —" "$RT/$tag.log" | head -1 | sed "s/^/  $tag saidbox /"
 	grep -aiE "establish|grant|enrol|announce" "$RT/$tag.log" | tail -4 | sed "s/^/  $tag boxlog /"
 	grep -aiE "establish|grant|recogniz|autodetect|box" "$RT/$tag.master.log" | tail -5 | sed "s/^/  $tag mixlog /"
@@ -292,6 +322,14 @@ SEL=$(printf '0x%02x' "$FACT_SUB_0103_COMMIT_REPORT")
 [ "$(get A reacver)" = "2.302" ] || say "arm A's REAC version reads '$(get A reacver)'; the S-1608 row says 2.302"
 NM=$(get A name) && say "arm A sent a NAME record ('$NM'); the 0x82 family is named by its selector and sends none"
 [ "$(get A broadcast)" -gt 10 ] 2>/dev/null || say "arm A never flooded broadcast — a box announces itself before any master answers"
+
+# ---- THE BOX ROLE'S TWO NODES AGREE, AND ITS ROLE DOOR IS DRAINED (audit M9, M10) -------
+[ "$(get A has-playback)" = "1" ] || say "arm A never showed reac-playback, so its reac.role absence is no measurement"
+[ "$(get A playback-role)" = "absent" ] \
+	|| say "arm A's reac-playback carries reac.role=$(get A playback-role) — the upstream carrier claims a role its capture sibling contradicts (M10)"
+[ "$(get A role-write-node)" != "none" ] || say "arm A had no reac-capture to write a role to"
+[ "$(get A role-write-taken)" -ge 1 ] 2>/dev/null \
+	|| say "a reac.cfg.role write on arm A's capture node was never taken — the box role's door is not drained (M9)"
 
 # ---- ARM B: the 40-channel experiment, with OUR identity on it -------------------------
 [ "$(get B in)" = "$FACT_MAX_CHANNELS" ] || say "arm B declared $(get B in) inputs; the experiment row says $FACT_MAX_CHANNELS"

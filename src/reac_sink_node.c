@@ -753,14 +753,23 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		 * by a later well-formed write that is refused for the same reason. */
 	}
 
+	/* NO RATE OR ROLE DOOR ON THE UPSTREAM CARRIER (audit 2026-09-24, M10). The segment's
+	 * door is its capture node, which main's poll drains; a write taken here would be
+	 * answered by nobody. */
+	if (n->upstream_ring) {
+		if (changed)
+			sink_publish(n);
+		return;
+	}
+
 	/* LIVE rate control (2026-08-26-reac-runtime-config.md): the same Props
 	 * object may carry a `reac.cfg.rate` assertion under SPA_PROP_params. The
 	 * DECISION (reac_rate_cfg_decide) is pure and runs right here on the main
 	 * loop; only an ACCEPTED rate crosses to the RT pacer thread
 	 * (reac_pacer_request_rate), which is the only thing that actually needs
 	 * to run there (period_ns/fps/the master FSM are pacer-thread-owned state,
-	 * same reasoning as the head-amp table above). This node exists ONLY in
-	 * the master role (reac_sink_node_new is never called for a slave), so
+	 * same reasoning as the head-amp table above). This door exists ONLY
+	 * in the master role (the upstream carrier returned above), so
 	 * REAC_ROLE_MASTER is a fact of this call site, not a read of some stored
 	 * role — a slave's own REFUSE_ROLE_SLAVE answer is exercised at the
 	 * decision-core level (test_reac_rate_cfg.c), because a slave has no
@@ -787,8 +796,8 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 
 	/* LIVE role control (2026-08-26-reac-runtime-config.md, the ROLE half):
 	 * the same Props object may carry a `reac.cfg.role` assertion under
-	 * SPA_PROP_params. This node exists ONLY in the master role
-	 * (reac_sink_node_new is never called for a slave), so REAC_ROLE_MASTER
+	 * SPA_PROP_params. This door exists ONLY in the master role (the
+	 * upstream carrier returned above), so REAC_ROLE_MASTER
 	 * is a fact of this call site exactly as it is for rate above — a
 	 * slave's own answer is exercised at the decision-core level
 	 * (test_reac_role_cfg.c), because a slave has no props-carrying node to
@@ -1106,7 +1115,10 @@ static int sink_reconnect_rate(struct reac_sink_node *n, int hz)
  * it can only ever agree with itself. */
 static void sink_publish_rate_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	/* THE UPSTREAM CARRIER IS NOT THE MASTER'S DOOR (audit 2026-09-24, M10): on a box
+	 * role or a box-master join this node carries what we send upstream, and the
+	 * capture node answers for the segment. */
+	if (!n->stream || n->upstream_ring)
 		return;
 
 	int hz = atomic_load_explicit(&n->pacer.rate_hz, memory_order_acquire);
@@ -1186,9 +1198,9 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
  * reaches the pacer/RT thread at all (reac_role_cfg.h's HONESTY note).
  *
  * reac.role reports the FACT that this node is running, never the console's
- * latest reac.cfg.role request: this node exists ONLY in the master role
- * (reac_sink_node_new is never called for a slave), so while it is alive the
- * running role IS master — even while reac.cfg.role.state says a change is
+ * latest reac.cfg.role request: it is published ONLY in the master role (the
+ * upstream carrier, a slave's playback node, publishes none — M10), so wherever it
+ * is published the running role IS master — even while reac.cfg.role.state says a change is
  * owed. Publishing anything else here would be the "fake success"
  * reac_role_cfg.h refuses to produce.
  *
@@ -1200,7 +1212,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
  * (or none) owns the segment, read honestly instead. */
 static void sink_publish_role_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	if (!n->stream || n->upstream_ring)   /* the upstream carrier: see the rate pair */
 		return;
 
 	const char *state = n->role_state;
@@ -1305,7 +1317,7 @@ static void sink_publish_headamp_props(struct reac_sink_node *n)
  * this same timer just above) — no atomics needed and none used. */
 static void sink_publish_disco_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	if (!n->stream || n->upstream_ring)   /* the upstream carrier: see the rate pair */
 		return;
 	/* THE AGGREGATE IS DECIDED FIRST, because it is half of what this publish is for and
 	 * the guard has to be able to see it move. */
@@ -1775,14 +1787,6 @@ static void sink_build_desc(char *desc, size_t sz, const char *label, int channe
 		snprintf(desc, sz, "REAC %dch playback (downstream master TX)", channels);
 }
 
-/* Build (or rebuild) the reac-playback pw_filter at n->channels INPUT ports
- * labelled `label`, connect it, and stamp the live badge props onto the fresh
- * node. THE PACER IS NOT TOUCHED — this manages only the graph filter, so a resize
- * never disturbs the running master/recognizer. On a rebuild the caller has already
- * destroyed the old filter and nulled n->ports; the badge-prop shadows are reset to
- * the create-time seeds here and immediately re-published from the pacer snapshot,
- * so a rebuilt node shows the live link-state/box-model/discovery/latency at once
- * (not only after the next 200 ms poll). Returns 0, or -1 (n->filter left NULL). */
 /* MAIN LOOP: seed every sink_publish_* shadow to an answer no real one equals, so
  * the next publish always fires. Called at create and on EVERY (re)build: a rebuilt
  * node is a new pw_stream carrying only its seed props, and a shadow still holding
@@ -1813,6 +1817,14 @@ static void sink_seed_publish_shadows(struct reac_sink_node *n)
 	n->arb_mac_last = UINT64_MAX;
 }
 
+/* Build (or rebuild) the reac-playback pw_filter at n->channels INPUT ports
+ * labelled `label`, connect it, and stamp the live badge props onto the fresh
+ * node. THE PACER IS NOT TOUCHED — this manages only the graph filter, so a resize
+ * never disturbs the running master/recognizer. On a rebuild the caller has already
+ * destroyed the old filter and nulled n->ports; the badge-prop shadows are reset to
+ * the create-time seeds here and immediately re-published from the pacer snapshot,
+ * so a rebuilt node shows the live link-state/box-model/discovery/latency at once
+ * (not only after the next 200 ms poll). Returns 0, or -1 (n->filter left NULL). */
 static int sink_open_filter(struct reac_sink_node *n, const char *label)
 {
 	char rate_str[16];
@@ -1853,61 +1865,64 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	                             sizeof ha_seed_asserted);
 
 
-	n->stream = pw_stream_new_simple(
-		n->loop,
-		"reac:playback",
-		pw_properties_new(
-			PW_KEY_MEDIA_TYPE, "Audio",
-			PW_KEY_MEDIA_CATEGORY, "Playback", /* a sink consumes audio */
-			PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
-			PW_KEY_NODE_NAME, n->nodename,
-			PW_KEY_NODE_DESCRIPTION, desc,
-			/* THE SEGMENT'S IDENTITY (reac_segment_ident.h). This node is the
-			 * master role's door — it accepts reac.cfg.rate / reac.cfg.role and
-			 * publishes the answer — so it is the node that names the segment.
-			 * A console keys its row on this value instead of parsing the node
-			 * name, which is what makes the same segment addressable when the
-			 * role swaps and the reac-capture node carries the key instead. */
-			REAC_PROP_SEGMENT, reac_segment_name(n->inst),
-			/* NO node.rate: on a filter that was a REQUEST for the graph to run at
-			 * the REAC rate, which an RME-driven graph refuses. The rate that matters
-			 * is the one in our FORMAT, which the adapter resamples from. */
-			/* Correct-at-(re)build badge props (task #154): seeded to the "probing/
-			 * none/0x0" baseline and immediately re-stamped from the pacer below.
-			 * Kept live by sink_publish_link_props on the 200 ms log-timer. */
-			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
-			REAC_PROP_BOX_MODEL, "none",
-			REAC_PROP_BOX_WIDTH, "0x0",
-			REAC_PROP_BOX_SOURCE, REAC_BOX_SOURCE_NONE,
-			REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE,
-			REAC_PROP_HEADAMP_BASE, ha_seed_base,
-			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
-			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
-			 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
-			 * box's preamp shape and drives it on ONE node. `channels` seeds "0" and
-			 * is bumped to the model's input width by sink_publish_link_props on
-			 * recognition; `caps` is the constant phantom/pad/sens trio. */
-			REAC_PROP_HEADAMP_CHANNELS, ha_seed_channels,
-			REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
-			/* The head-amp READ side (2026-09-14-headamp-as-node-params.md §3a):
-			 * the travel, what this daemon is asserting, and whether a write can
-			 * reach the wire at all. Kept live by sink_publish_headamp_props. */
-			REAC_PROP_HEADAMP_SENS_MAX, ha_sens_max,
-			REAC_PROP_HEADAMP_ASSERTED, ha_seed_asserted,
-			REAC_PROP_HEADAMP_STATE,
-				ha_seed_cap == REAC_HEADAMP_REFUSE_NONE
-					? REAC_HEADAMP_STATE_APPLIED
-					: REAC_HEADAMP_STATE_UNAVAILABLE,
-			REAC_PROP_HEADAMP_REFUSED, reac_headamp_refuse_code(ha_seed_cap),
-			/* Correct-at-(re)build discovery (task #178): from this node's t=0 we are
-			 * listening on this NIC; seq "0"/"[]" is re-stamped from the pacer's disco
-			 * table below. Kept live by sink_publish_disco_props on the log-timer. */
-			REAC_PROP_DISCO_SCOPE, n->disco_ifname ? n->disco_ifname : "",
-			REAC_PROP_DISCO_STATE, REAC_DISCO_STATE_LISTENING,
-			REAC_PROP_DISCO_SEQ, "0",
-			REAC_PROP_DISCO_DEVICES, "[]",
-			NULL),
-		&stream_events, n);
+	struct pw_properties *props = pw_properties_new(
+		PW_KEY_MEDIA_TYPE, "Audio",
+		PW_KEY_MEDIA_CATEGORY, "Playback", /* a sink consumes audio */
+		PW_KEY_MEDIA_CLASS, "Audio/Sink",  /* shows up as an output device */
+		PW_KEY_NODE_NAME, n->nodename,
+		PW_KEY_NODE_DESCRIPTION, desc,
+		/* THE SEGMENT'S IDENTITY (reac_segment_ident.h). This node is the
+		 * master role's door — it accepts reac.cfg.rate / reac.cfg.role and
+		 * publishes the answer — so it is the node that names the segment.
+		 * A console keys its row on this value instead of parsing the node
+		 * name, which is what makes the same segment addressable when the
+		 * role swaps and the reac-capture node carries the key instead. */
+		REAC_PROP_SEGMENT, reac_segment_name(n->inst),
+		/* NO node.rate: on a filter that was a REQUEST for the graph to run at
+		 * the REAC rate, which an RME-driven graph refuses. The rate that matters
+		 * is the one in our FORMAT, which the adapter resamples from. */
+		/* Correct-at-(re)build badge props (task #154): seeded to the "probing/
+		 * none/0x0" baseline and immediately re-stamped from the pacer below.
+		 * Kept live by sink_publish_link_props on the 200 ms log-timer. */
+		REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
+		REAC_PROP_BOX_MODEL, "none",
+		REAC_PROP_BOX_WIDTH, "0x0",
+		REAC_PROP_BOX_SOURCE, REAC_BOX_SOURCE_NONE,
+		REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE,
+		REAC_PROP_HEADAMP_BASE, ha_seed_base,
+		/* Head-amp CAPABILITIES (task #205), published on THIS node because it
+		 * is the one that consumes the reac.headamp.<ch>.<param> control keys
+		 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
+		 * box's preamp shape and drives it on ONE node. `channels` seeds "0" and
+		 * is bumped to the model's input width by sink_publish_link_props on
+		 * recognition; `caps` is the constant phantom/pad/sens trio. */
+		REAC_PROP_HEADAMP_CHANNELS, ha_seed_channels,
+		REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
+		/* The head-amp READ side (2026-09-14-headamp-as-node-params.md §3a):
+		 * the travel, what this daemon is asserting, and whether a write can
+		 * reach the wire at all. Kept live by sink_publish_headamp_props. */
+		REAC_PROP_HEADAMP_SENS_MAX, ha_sens_max,
+		REAC_PROP_HEADAMP_ASSERTED, ha_seed_asserted,
+		REAC_PROP_HEADAMP_STATE,
+			ha_seed_cap == REAC_HEADAMP_REFUSE_NONE
+				? REAC_HEADAMP_STATE_APPLIED
+				: REAC_HEADAMP_STATE_UNAVAILABLE,
+		REAC_PROP_HEADAMP_REFUSED, reac_headamp_refuse_code(ha_seed_cap),
+		NULL);
+	if (!props)
+		return -1;
+	/* Correct-at-(re)build discovery (task #178): from this node's t=0 we are listening
+	 * on this NIC; seq "0"/"[]" is re-stamped from the pacer's disco table below. Kept
+	 * live by sink_publish_disco_props on the log-timer. Not on the upstream carrier,
+	 * which listens for nothing: the capture node is a slave segment's door (M10). */
+	if (!n->upstream_ring) {
+		pw_properties_set(props, REAC_PROP_DISCO_SCOPE,
+		                  n->disco_ifname ? n->disco_ifname : "");
+		pw_properties_set(props, REAC_PROP_DISCO_STATE, REAC_DISCO_STATE_LISTENING);
+		pw_properties_set(props, REAC_PROP_DISCO_SEQ, "0");
+		pw_properties_set(props, REAC_PROP_DISCO_DEVICES, "[]");
+	}
+	n->stream = pw_stream_new_simple(n->loop, "reac:playback", props, &stream_events, n);
 	if (!n->stream)
 		return -1;
 
