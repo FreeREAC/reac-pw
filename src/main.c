@@ -857,6 +857,23 @@ static uint64_t wake_now_ns(void)
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+/* The up half of a wake edge: the link comes back, and the journal says so either way.
+ * From wake_step's own later turn, and from listener_drop_nodes when the timer that would
+ * have taken that turn is being destroyed (M7). */
+static void wake_finish_edge(struct autodetect_ctx *c)
+{
+	c->up_at_ns = 0;
+	if (reac_link_admin(c->ifname, 1) != 0)
+		fprintf(stderr, "reac-pw: %sCOULD NOT BRING '%s' BACK UP after the wake "
+		        "edge (errno %d). The segment is down until it is: "
+		        "`ip link set %s up`.\n", c->tag, c->ifname, errno, c->ifname);
+	else
+		fprintf(stderr, "reac-pw: %s'%s' is back up — a box that had dropped sees "
+		        "this as PHY LINK-UP and has %.0f s to flood, cold-connect and be "
+		        "granted.\n", c->tag, c->ifname,
+		        (double)REAC_WAKE_SETTLE_NS / 1e9);
+}
+
 /* ONE TURN OF THE WAKE LADDER. Everything it reads is already published by the pacer; the
  * only thing it can DO is one rtnetlink write on the device this master drives. The
  * decision itself is reac_wake and is not re-litigated here — this function is the eyes and
@@ -873,16 +890,7 @@ static void wake_step(struct autodetect_ctx *c)
 	if (c->up_at_ns) {
 		if (now < c->up_at_ns)
 			return;
-		c->up_at_ns = 0;
-		if (reac_link_admin(c->ifname, 1) != 0)
-			fprintf(stderr, "reac-pw: %sCOULD NOT BRING '%s' BACK UP after the wake "
-			        "edge (errno %d). The segment is down until it is: "
-			        "`ip link set %s up`.\n", c->tag, c->ifname, errno, c->ifname);
-		else
-			fprintf(stderr, "reac-pw: %s'%s' is back up — a box that had dropped sees "
-			        "this as PHY LINK-UP and has %.0f s to flood, cold-connect and be "
-			        "granted.\n", c->tag, c->ifname,
-			        (double)REAC_WAKE_SETTLE_NS / 1e9);
+		wake_finish_edge(c);
 		return;
 	}
 
@@ -1923,6 +1931,12 @@ static uint64_t monotonic_ns(void);
  * go away (listener_close has always done it in this order and for this reason). */
 static void listener_drop_nodes(struct listener *L, struct pw_loop *loop)
 {
+	/* A WAKE EDGE IN FLIGHT IS FINISHED HERE, NOT ABANDONED (audit 2026-09-24, M7). The
+	 * wake ladder takes the link down on one turn of the autodetect timer and up on a
+	 * later one; destroying that timer between the two left the device admin-down for
+	 * good -- a stop or a re-open inside the 1.2 s window. */
+	if (L->adc.up_at_ns)
+		wake_finish_edge(&L->adc);
 	if (L->ad_timer) {
 		pw_loop_destroy_source(loop, L->ad_timer);
 		L->ad_timer = NULL;
