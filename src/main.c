@@ -1250,6 +1250,15 @@ struct listener {
 
 	struct autodetect_ctx adc;
 	struct spa_source *ad_timer;
+
+	/* EVERY OTHER ROLE'S LADDER (audit 2026-09-24, H2). The master autodetect pair runs
+	 * reac_node_recover from its own timer (adc.recover); a slave, box, box-master join,
+	 * tap, door or pcap segment has no such timer, so its nodes died with the PipeWire
+	 * server and stayed dead with no line. on_rate_reopen_timer steps this one for
+	 * every opened listener without an ad_timer (listener_recover). `rebuilt` names
+	 * the side(s) the last rebuild took, for the line that says they are back. */
+	struct reac_node_recover recover;
+	const char *rebuilt;
 };
 
 static void listener_cfg_defaults(struct listener_cfg *c)
@@ -1864,9 +1873,51 @@ static int listener_holds_nodes(const struct listener *L)
 
 static void listener_close(struct listener *L, struct pw_loop *loop);
 
+/* THE CAPTURE NODE A SEGMENT WITH NO RECOGNIZER IS BUILT AT: width and label. One
+ * reading for listener_open and for the rebuild after a lost server (listener_recover),
+ * so a rebuilt node is the node the open put up, never a second guess at it.
+ *   door      the wire's declared width, no label (a refusal's door names no box);
+ *   box role  the row's OUTPUT count -- the ports are named from the box's side, and
+ *             the graph's from ours (2026-09-17 spec §5) -- and the row's name;
+ *   join      the box master's broadcast width, and the row that width matched;
+ *   else      0 (the full fabric), no label: nothing may narrow it to a box. */
+static void listener_capture_shape(const struct listener_cfg *c, int *width,
+                                   const char **label)
+{
+	if (c->door_only) {
+		*width = (int)c->wire_channels;
+		*label = NULL;
+		return;
+	}
+	const struct reac_box_model *bm = c->box_model
+		? c->box_model
+		: (c->join_box_master ? reac_box_master_model(c->wire_channels) : NULL);
+	*width = c->box_model ? c->box_model->out_ch
+	                      : (c->join_box_master ? (int)c->wire_channels : 0);
+	*label = bm ? bm->display : NULL;
+}
+
+/* The reac-playback a box role or a box-master join carries: what we send upstream.
+ * Returns the channels -- the box role's row's INPUT count; a join's box master's own
+ * output width (or its broadcast width where no row matches) -- and names the row. */
+static int listener_playback_shape(const struct listener_cfg *c, const char **label)
+{
+	const struct reac_box_model *bm_up = c->join_box_master
+		? reac_box_master_model(c->wire_channels) : NULL;
+	int up_ch = c->join_box_master
+		? (bm_up ? bm_up->out_ch : (int)c->wire_channels)
+		: c->box_channels;
+	const struct reac_box_model *bm = c->box_model ? c->box_model : bm_up;
+	*label = bm ? bm->display : NULL;
+	return c->box_model ? c->box_model->in_ch : up_ch;
+}
+
 static int listener_open(struct listener *L, struct pw_loop *loop)
 {
 	struct listener_cfg *c = &L->cfg;
+	/* A fresh ladder for a fresh open: a re-open is not the old nodes' absence. */
+	reac_node_recover_init(&L->recover);
+	L->rebuilt = NULL;
 
 	/* A LISTENER NEVER FORGETS A PAIR. This used to be `L->src = NULL; L->sink = NULL;`,
 	 * which is how a re-open with no close in front of it minted a second pair beside a
@@ -2334,13 +2385,13 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 				 * the mixer's input channels. The same node the box-master path
 				 * publishes over the same ring — one mechanism, two callers. */
 				if (c->join_box_master || c->box_model) {
-					const struct reac_box_model *bm = c->box_model ? c->box_model
-					                                               : bm_up;
 					/* ONE NUMBER, SPELLED ONCE. The width of what we send was
 					 * written out three times in this block and REPORTED as a
 					 * fourth, different one (`up_ch`) when the sizing failed —
-					 * a message about a size nobody tried. */
-					const int sink_ch = c->box_model ? c->box_model->in_ch : up_ch;
+					 * a message about a size nobody tried. The same reading
+					 * rebuilds it after a lost server (listener_recover). */
+					const char *sink_label;
+					const int sink_ch = listener_playback_shape(c, &sink_label);
 					struct reac_sink_cfg ucfg = {
 						.ifname = c->tx_if,
 						.channels = sink_ch,
@@ -2348,7 +2399,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 						.src_mac = box_mac,
 						.console_field = c->mixer->console_field,
 						.inst = c->inst_name,
-						.label = bm ? bm->display : NULL,
+						.label = sink_label,
 						.rate_match_off = -1,
 						.upstream_ring = &L->tx_ring };
 					L->sink = reac_sink_node_new(loop, &L->tx_ring, &ucfg);
@@ -2363,8 +2414,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 						        "upstream have no reac-playback node — what "
 						        "arrives still arrives, but nothing can be "
 						        "routed out\n", c->tag, sink_ch);
-					else if (reac_sink_node_ensure(L->sink, sink_ch,
-					                               bm ? bm->display : NULL) != 0)
+					else if (reac_sink_node_ensure(L->sink, sink_ch, sink_label) != 0)
 						reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
 						        "%scould not size reac-playback "
 						        "to the %d channels we send upstream\n",
@@ -2476,19 +2526,16 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * (2026-09-17 spec §5). It is known before any mixer appears, which is the
 		 * point: a stagebox that only exists once a desk is powered is not a
 		 * stagebox. */
-		int width = c->box_model ? c->box_model->out_ch
-		                         : (c->join_box_master ? (int)c->wire_channels : 0);
 		/* AND IT NAMES THE BOX, as the master path's capture node does (0.5.6-9). The
 		 * identity keys were published either way, but a console reads the node's
 		 * DESCRIPTION for the operator-facing name, so a joined box read the generic
 		 * "REAC 16ch capture" where a served one reads "S-1608 (16 in / 8 out)". The
 		 * label comes from the row the broadcast width matched, and is absent where no
 		 * row matches — the same rule the identity keys already follow. */
-		const struct reac_box_model *bm_cap = c->box_model
-			? c->box_model
-			: (c->join_box_master ? reac_box_master_model(c->wire_channels) : NULL);
-		if (reac_source_node_ensure(&L->src, &L->src_cfg, width,
-		                            bm_cap ? bm_cap->display : NULL) != 0) {
+		int width;
+		const char *cap_label;
+		listener_capture_shape(c, &width, &cap_label);
+		if (reac_source_node_ensure(&L->src, &L->src_cfg, width, cap_label) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
 			/* The box-master join built a reac-playback above (one mechanism, two
 			 * callers) and it is on the graph right now; the same #108 §a.3 rule. */
@@ -5149,6 +5196,112 @@ static int listener_reopen_role_reclassify(struct listener *L, struct pw_loop *l
  * listener_close from inside a per-listener timer would free that very timer.
  * Runs on the loop thread, never inside a node callback, so the destroy+rebuild
  * is safe. */
+/* THE LADDER FOR EVERY SEGMENT THE AUTODETECT TIMER DOES NOT WATCH (audit 2026-09-24,
+ * H2). The same pair judgement on_autodetect_timer makes for a master (reac_node_recover.h:
+ * judged together, each side torn down alone), over what this role built:
+ *   capture   L->src, or on a tap every node it serves (one gone is the side gone);
+ *   playback  L->sink where the role has one (box role, box-master join); none counts
+ *             as present, so a slave's or a door's verdict is about its capture alone.
+ * A REBUILD destroys the gone side and builds it again at the width it was opened at
+ * (listener_capture_shape / listener_playback_shape, the reading listener_open made),
+ * then puts back what the open wired onto it: a slave's or a door's role door and its
+ * segment answer, a join's box-master identity, a tap's answer. MAIN LOOP. */
+static void listener_recover(struct listener *L)
+{
+	const struct listener_cfg *c = &L->cfg;
+	const char *why = NULL, *sink_why = NULL;
+	int src_on, sink_on = 1;
+
+	/* A master with a pacer sizes its pair from the box it recognizes: that pair is the
+	 * autodetect timer's, whose ladder rebuilds it at the recognized width. */
+	if (L->ad_timer || (c->role == REAC_ROLE_MASTER && L->sink))
+		return;
+	if (c->tap) {
+		if (!L->tap_open)
+			return;              /* a vacant tap built nothing */
+		src_on = 1;
+		for (unsigned i = 0; i < L->tap.n && src_on; i++)
+			src_on = reac_source_node_on_graph(L->tap_src[i], &why);
+	} else {
+		if (!L->src && !L->sink)
+			return;              /* a vacant door built nothing */
+		src_on = reac_source_node_on_graph(L->src, &why);
+	}
+	if (L->sink)
+		sink_on = reac_sink_node_on_graph(L->sink, &sink_why);
+
+	/* Read BEFORE the step, which resets the ladder the moment the nodes are back. */
+	int attempts = L->recover.attempts;
+	struct reac_node_pair_verdict v =
+		reac_node_recover_step_pair(&L->recover, src_on, why, sink_on, sink_why);
+	switch (v.act) {
+	case REAC_RECOVER_WAIT:
+		if (src_on && sink_on && attempts > 0)
+			fprintf(stderr, "reac-pw: %s%s is back on the graph (attempt %d) — this "
+			        "segment's patches can be made again.\n", c->tag,
+			        L->rebuilt ? L->rebuilt : "reac-capture", attempts);
+		return;
+	case REAC_RECOVER_GIVE_UP:
+		fprintf(stderr, "reac-pw: %s%s is STILL not on the graph after %d rebuilds "
+		        "(%s) — giving up on it. %s It is retried the moment the node "
+		        "appears.\n", c->tag, reac_node_pair_name(&v),
+		        REAC_RECOVER_MAX_ATTEMPTS, v.why, pair_cost(&v));
+		return;
+	case REAC_RECOVER_REBUILD:
+		break;
+	}
+
+	L->rebuilt = L->sink ? reac_node_pair_name(&v) : "reac-capture";
+	fprintf(stderr, "reac-pw: %s%s is NOT on the graph %.1f s after it was built (%s) "
+	        "— rebuilding it (attempt %d of %d). %s\n", c->tag, L->rebuilt,
+	        reac_node_recover_spent(&L->recover) * 0.2, v.why, L->recover.attempts,
+	        REAC_RECOVER_MAX_ATTEMPTS, L->sink ? pair_cost(&v)
+	                                           : "A segment without its capture node "
+	                                             "has no input patches at all.");
+	if (v.sink_gone && L->sink) {
+		const char *label;
+		int ch = listener_playback_shape(c, &label);
+		reac_sink_node_unpublish(L->sink);
+		if (reac_sink_node_ensure(L->sink, ch, label) != 0)
+			reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+			    "%scould not rebuild reac-playback at %d ch — the ladder tries "
+			    "again\n", c->tag, ch);
+	}
+	if (!v.src_gone)
+		return;
+	if (c->tap) {
+		for (unsigned i = 0; i < L->tap.n; i++) {
+			if (reac_source_node_on_graph(L->tap_src[i], NULL))
+				continue;
+			reac_source_node_destroy(L->tap_src[i]);
+			L->tap_src[i] = NULL;
+			if (reac_source_node_ensure(&L->tap_src[i], &L->tap_src_cfg[i],
+			                            (int)L->tap.survey.stream[i].channels, NULL) != 0)
+				reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+				    "%sTAP could not rebuild reac-capture.%s — the ladder tries "
+				    "again\n", c->tag, L->tap_inst[i]);
+		}
+		listener_publish_tap(L);
+		return;
+	}
+	int width;
+	const char *label;
+	listener_capture_shape(c, &width, &label);
+	reac_source_node_destroy(L->src);
+	L->src = NULL;
+	if (reac_source_node_ensure(&L->src, &L->src_cfg, width, label) != 0) {
+		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
+		    "%scould not rebuild reac-capture at %d ch — the ladder tries again\n",
+		    c->tag, width);
+		return;
+	}
+	/* What listener_open wired onto the node it built, wired onto this one. */
+	if (c->role == REAC_ROLE_SLAVE || c->door_only) {
+		reac_source_node_set_role_swap(L->src, &L->role_swap);
+		listener_publish_segment(L);
+	}
+}
+
 static void on_rate_reopen_timer(void *data, uint64_t exp)
 {
 	(void)exp;
@@ -5181,6 +5334,9 @@ static void on_rate_reopen_timer(void *data, uint64_t exp)
 			pw_main_loop_quit(g_loop);
 			return;
 		}
+		/* EVERY ROLE'S NODES COME BACK AFTER A LOST SERVER (H2), before the polls
+		 * below publish onto them. */
+		listener_recover(L);
 		/* THE SLAVE HALF, and it is polled here for the same reason the master
 		 * half is: main's loop thread is the only place a listener may be torn
 		 * down and rebuilt. A recorder's door and its answer both live on its
