@@ -6030,6 +6030,16 @@ int main(int argc, char **argv)
 		n_listeners = REAC_PW_MAX_LISTENERS;
 	}
 
+	/* THE --live TABLE IS THE TABLE (audit 2026-09-24, M8). The link-budget admission and
+	 * the wake ladder's sibling guard walk g_hear's listeners, which only hearing_start
+	 * set: under several --live segments they saw an empty table, admitted every master
+	 * onto one port and could bounce a port with live siblings. The table only; hearing
+	 * itself stays off (g_hear.enabled), since these segments are not heard ones. */
+	if (!hearing) {
+		g_hear.listeners = listeners;
+		g_hear.n_slots = n_listeners;
+	}
+
 	int n_opened = 0;
 	for (int i = 0; i < n_listeners && !hearing; i++) {
 		if (listener_open(&listeners[i], loop) != 0) {

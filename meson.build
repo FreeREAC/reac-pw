@@ -863,6 +863,16 @@ test('reac_refused_open_releases_its_engine',
   depends : [refuse_capture_shim],
   timeout : 180)
 
+# --- whole-binary test: --live segments on one port share its link budget (M8) ----------
+# The budget walked a table only hearing_start ever set, so `--live a,a.11,a.12` admitted
+# every master onto one port. Needs a user+net namespace and VLANs, no PipeWire.
+test('reac_live_segments_share_the_budget',
+  find_program('tests/live-segments-share-the-budget.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 60)
+
 # --- whole-binary test: a segment with NO recognised box has NO node ---------
 #
 # Operator, 2026-09-16: "a segment with NO recognised box must not appear in the PipeWire
