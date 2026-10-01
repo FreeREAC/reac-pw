@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
 # WHOLE-BINARY: A `role = box` SEGMENT IS NOT RE-DECIDED WHEN THE MIXER IS QUIET.
-# (docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md §5; main.c hearing_reevaluate.)
+# (2026-09-17-the-daemon-can-be-a-box §5; main.c hearing_reevaluate.)
 #
 # A stagebox that only exists once a desk is powered is not a stagebox. A box's wire is
 # SILENT for as long as nobody has switched the mixer on, and that silence says nothing

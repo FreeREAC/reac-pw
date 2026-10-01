@@ -10,7 +10,7 @@
  * emitted zero scene transfers, and the real S-1608 rebooting beside us never enrolled.
  * With our slave absent the same desk released the slot 7.148 s after its box went quiet.
  * libreac's fix bounds the courtship (4 s) and then goes SILENT for 10 s
- * (libreac docs/design/specs/2026-09-12-bounded-ungranted-courtship.md).
+ * (libreac 2026-09-12-bounded-ungranted-courtship).
  *
  * The libreac unit test drives the pure FSM. This drives the REAL ENGINE — reac_slave_open
  * + reac_slave_start, an AF_PACKET socket on a real interface — and measures the wire from
@@ -105,7 +105,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 	 * PACE CODE, so a probe pacing 4000 fps announced 96 kHz, and [20:22] is the
 	 * enrolled-box count, so a master whose whole purpose is to grant NOTHING
 	 * announced one enrolled box. Both are named defects of our own emitters in
-	 * reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base.md §2.
+	 * reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base §2.
 	 * reac_master_init generates the block from the console config; an idle master
 	 * with no box is exactly what this probe is, so its announce is taken as
 	 * generated and never patched. */

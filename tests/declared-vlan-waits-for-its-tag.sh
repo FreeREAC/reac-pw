@@ -3,13 +3,13 @@
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
 # WHOLE-BINARY: a DECLARED VLAN segment is NOT minted until its tag is heard — and is minted
-# the moment it is. (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md,
+# the moment it is. (2026-09-16-segments-and-roles-are-autodetected,
 # amendment 2026-09-23: "we don't carry any VLANs if we don't detect VLANs".)
 #
 # WHAT THIS REPLACES. Until 2026-09-23 this file was declared-vlan-is-minted.sh and asserted
 # the opposite: a declared `<parent>.<vid>` minted at start with nothing ever heard, the
 # cold-boot fix of 2026-09-15. The desk paid for that rule every boot
-# (docs/design/evidence/reac-pw-boot-2026-09-23.log lines 15-47, 101-131): three VLANs minted
+# (reac-pw-boot-2026-09-23 lines 15-47, 101-131): three VLANs minted
 # on a parent that hears no tag at all, three vacant tap doors, three roster rows, all of it
 # re-created after every drop of the parent. The 2026-09-22 rule hears a VID from ANY tagged
 # frame, so a cold trunk names its VLANs by itself; the declaration is what pins the role.

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_rate_cfg — the `reac.cfg.rate` decision core, and the pacer-level
- * internal re-establish it authorizes (2026-08-26-reac-runtime-config.md).
+ * internal re-establish it authorizes (2026-08-26-reac-runtime-config).
  *
  * Two halves, both pure (no socket, no RT privilege):
  *
@@ -423,7 +423,7 @@ static int test_narrow_mask_refuses_and_defaults_lower(void)
 
 /* ---- part 3: ONE DAEMON, N LISTENERS — segment independence -------------
  *
- * (docs/design/specs/2026-08-20-reac-auto-spine.md §5, the openmixer tree).
+ * (2026-08-20-reac-auto-spine §5, the openmixer tree).
  * main.c now opens one `struct reac_pacer` per configured interface against a
  * SHARED PipeWire loop instead of one per process. Nothing in reac_pacer.c
  * changed to make that safe — every field this test touches was already

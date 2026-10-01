@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_role_cfg — the `reac.cfg.role` DECISION core
- * (2026-08-26-reac-runtime-config.md, the ROLE half). Pure, no socket, no RT
+ * (2026-08-26-reac-runtime-config, the ROLE half). Pure, no socket, no RT
  * privilege — same style as test_reac_rate_cfg.c's part 1 (its own decision
  * core). Unlike rate there is no pacer-level section here, because a role change
  * does not happen inside one engine: master and slave are two of them, and the

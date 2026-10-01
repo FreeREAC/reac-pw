@@ -4,7 +4,7 @@
 /* reac_wake — WHEN A MASTER MAY BREAK ITS OWN LINK TO WAKE A BOX THAT HAS DROPPED.
  *
  * THE DEFECT IT EXISTS AGAINST, measured on the operator's desk 2026-09-16 (the whole
- * window is docs/design/notes/2026-09-16-a-box-that-never-came-back.md): the desk went to
+ * window is 2026-09-16-a-box-that-never-came-back): the desk went to
  * s2idle for 77 minutes with an S-1608 enrolled on `enp131s0`. On resume the daemon
  * re-took the wire as MASTER and drove it correctly for SEVENTY-THREE MINUTES across two
  * processes — about 1620 completed scene transfers, the NIC's own counter showing 8003
@@ -31,7 +31,7 @@
  * PURE: one clock, one observation, one verdict. No sockets, no netlink, no frames. main.c
  * turns ACT_BOUNCE into the two rtnetlink writes and feeds the result back as the next
  * observation. The ladder, the constants and every refusal are
- * docs/design/specs/2026-09-16-a-dropped-box-wakes-on-a-phy-edge.md §3-§5; this header does
+ * 2026-09-16-a-dropped-box-wakes-on-a-phy-edge §3-§5; this header does
  * not restate them, it instantiates them.
  */
 #ifndef REAC_WAKE_H

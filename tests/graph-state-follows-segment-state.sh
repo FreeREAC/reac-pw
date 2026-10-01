@@ -6,7 +6,7 @@
 # EXACTLY TWO nodes carry a segment's `reac.segment` while a box is recognised on it, and
 # EXACTLY NONE while not -- never four, never one, across a box that arrives, LEAVES and
 # ARRIVES AGAIN, and across a link-budget refusal loop on the same physical port.
-# (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+# (2026-09-16-segments-and-roles-are-autodetected, amendment
 # 2026-09-20 sec a; reac-pw#108.)
 #
 # THE FAULT, ON THE DESK 2026-09-20. `pw-dump` read FOUR reac-capture nodes for TWO

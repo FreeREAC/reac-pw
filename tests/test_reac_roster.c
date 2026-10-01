@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* The ROSTER's prop grammar and its DELTA — the two things the graph node is made of.
- * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+ * (2026-09-16-segments-and-roles-are-autodetected, amendment
  * 2026-09-16 third, §B.)
  *
  * WHY THE DELTA IS THE SUBJECT AND NOT THE PROPS. The ruling is "updated on every change,

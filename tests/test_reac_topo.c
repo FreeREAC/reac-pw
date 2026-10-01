@@ -98,7 +98,7 @@ int main(void)
 
 	/* ---- A TAG NAMES A VLAN WHATEVER IT CARRIES; AN UNTAGGED NON-REAC FRAME IS NOTHING.
 	 * Since libreac 1.5.0 and the 2026-09-22 amendment to
-	 * docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md: on a cold rig
+	 * 2026-09-16-segments-and-roles-are-autodetected: on a cold rig
 	 * no REAC frame is ever tagged, so the switch's own STP/LLDP/broadcast traffic is the
 	 * only evidence a VLAN exists at all. It reads as TAGGED_OTHER — a strictly weaker
 	 * fact than TAGGED, and one that never reaches the trunk verdict. A runt is still

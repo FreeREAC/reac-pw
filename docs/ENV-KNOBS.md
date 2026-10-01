@@ -23,9 +23,8 @@ process environment) > **conf** (`~/.config/reac-pw/reac-pw.env`, then
 
 **`REAC_ROLE` and `REAC_ROLE_<segment>` are RETIRED** (2026-09-16). A segment's role is
 autodetected from the wire, and the one thing that overrides it is a hand-written
-`~/.config/reac-pw/reac-pw.conf` — see
-[`../docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md`](design/specs/2026-09-16-segments-and-roles-are-autodetected.md)
-and `packaging/reac-pw.conf.example`. A `REAC_ROLE*` key left on disk is read only so the
+`~/.config/reac-pw/reac-pw.conf` — see the segments design
+(`2026-09-16-segments-and-roles-are-autodetected`) and `packaging/reac-pw.conf.example`. A `REAC_ROLE*` key left on disk is read only so the
 daemon can NAME it as ignored at start; it decides nothing.
 
 ```ini
@@ -133,8 +132,8 @@ means `--set` or a named flag answered; `(env)` means the process environment di
 `(conf)` means `~/.config/reac-pw/reac-pw.env` or `~/.config/openmixer/reac.env` did
 (`reac_conf_lookup`'s own layering, `RATE-AND-CLOCK-CONFIG.md`). Every knob in the
 table is `conf_capable`: **libreac reads no environment of its own**
-(`docs/design/specs/2026-09-17-tunables-api-and-shared-refusal-codes.md`, the libreac
-side of this repo's own `2026-09-17-knobs-codes-and-test-ratchets.md` §6) — the eight
+(`2026-09-17-tunables-api-and-shared-refusal-codes`, the libreac
+side of this repo's own `2026-09-17-knobs-codes-and-test-ratchets` §6) — the eight
 that used to be a bare `getenv` inside `reac_master.c`/`reac_pacer.c`/`reac_ifscan.c`
 are resolved here (`reac_knobs_resolve`, same table, same cli>env>conf precedence)
 and pushed into the library through `reac_*_tunables_set()` before the transport

@@ -4,7 +4,7 @@
 /* reac_headamp_state — the READ side of the head-amp door: what this daemon is
  * asserting, and why a write was refused.
  *
- * docs/design/specs/2026-09-14-headamp-as-node-params.md §3a (RULED by the
+ * 2026-09-14-headamp-as-node-params §3a (RULED by the
  * operator 2026-09-14) closes the two gaps the write door left open:
  *
  *   1. A REFUSED WRITE WAS SILENT. A cell the parse dropped, and a cell written

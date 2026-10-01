@@ -3,7 +3,7 @@
 #
 #   <test-file>:<line>: <reason>
 #
-# This file is a RATCHET (spec 2026-09-17-knobs-codes-and-test-ratchets.md §3): its
+# This file is a RATCHET (spec 2026-09-17-knobs-codes-and-test-ratchets §3): its
 # entry count may only fall. Never add a line to silence a genuinely unmapped
 # assertion -- fix the test, give the daemon a real producer, or ask the operator.
 

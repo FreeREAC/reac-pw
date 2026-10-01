@@ -5,7 +5,7 @@
 # WHOLE-BINARY: an enrolled box's reac-capture / reac-playback pair OUTLIVES A PIPEWIRE
 # RESTART — the daemon notices its nodes died with the server and builds them again.
 #
-# THE FAULT, ON THE DESK 2026-09-23 (docs/design/evidence/reac-pw-boot-2026-09-23.log).
+# THE FAULT, ON THE DESK 2026-09-23 (reac-pw-boot-2026-09-23).
 # The S-1608 on enp131s0 enrolled at 13:44:01 and the journal read "autodetected S-1608
 # (16 in / 8 out) -> reac-capture 16 in / reac-playback 8 out". At 13:44:03 systemd stopped
 # pipewire.service and started it again (openmixer's engine exits on a lost connection and

@@ -17,7 +17,7 @@
 # publish a door, because the console's row — and therefore the role control — came off
 # that node. The REQUIREMENT has not changed and is not withdrawn: a role must be settable
 # before anything enrols. What changed is where it is set. reac-pw.conf answers it with no
-# node at all (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md), so the
+# node at all (2026-09-16-segments-and-roles-are-autodetected), so the
 # zero-port node is cost with no remaining benefit.
 #
 # WHAT IS ASSERTED, in order:

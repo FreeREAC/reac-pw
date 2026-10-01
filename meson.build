@@ -97,7 +97,7 @@ libreac_dep = dependency('libreac', version : '>=1.5.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
-# libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md): the sockets,
+# libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
 # compiled here as src/*.c now live in this library, unchanged. No fallback subproject yet
 # -- a checkout without pkgconfig(libreac-transport) simply fails to configure, same as any
@@ -881,7 +881,7 @@ test('reac_no_box_no_node',
 
 # --- whole-binary test: the pair and the roster OUTLIVE A PIPEWIRE RESTART ---------------
 #
-# Desk 2026-09-23 13:44 (docs/design/evidence/reac-pw-boot-2026-09-23.log): pipewire.service
+# Desk 2026-09-23 13:44 (reac-pw-boot-2026-09-23): pipewire.service
 # was restarted two seconds after an S-1608 enrolled on enp131s0. libpipewire leaves a
 # stream whose server went away UNCONNECTED, with the node id it remembers, and the
 # node-recover ladder read that as "on the graph" — twelve minutes of a box whose LED said
@@ -1004,7 +1004,7 @@ test('reac_pins_need_no_door',
   timeout : 300)
 
 # --- whole-binary test: a REFUSED head-amp write is VISIBLE to a second client -
-# (2026-09-14-headamp-as-node-params.md §3a). A cell written to a segment with no
+# (2026-09-14-headamp-as-node-params §3a). A cell written to a segment with no
 # preamps used to return nothing at all: set-param exited 0, the parse dropped the
 # cell, and the caller had a successful write and no audio. On a private PipeWire,
 # a pinned master with a silent wire: pw-cli writes, pw-dump reads back
@@ -1572,7 +1572,7 @@ headamp_live_test = executable('test_reac_headamp_live',
 test('reac_headamp_live', headamp_live_test)
 
 # --- unit test: reac.cfg.rate — closed list, drivability, decision core, and --
-# the internal re-establish (2026-08-26-reac-runtime-config.md) ---------------
+# the internal re-establish (2026-08-26-reac-runtime-config) ---------------
 # Pure decision core (reac_rate_cfg.c: closed-list membership, the drivable-mask
 # arithmetic, the accept/refuse decision, the SPA_PROP_params parse) plus the
 # pacer-level re-establish (reac_pacer_apply_rate/_request_rate/_rate_drain),
@@ -1591,7 +1591,7 @@ rate_cfg_test = executable('test_reac_rate_cfg',
 test('reac_rate_cfg', rate_cfg_test)
 
 # --- unit test: reac.cfg.role — the ROLE half of runtime config ---------------
-# (2026-08-26-reac-runtime-config.md). The DECISION core only: the parse, the
+# (2026-08-26-reac-runtime-config). The DECISION core only: the parse, the
 # same-role-is-a-no-op detection, and the state a request publishes when nothing
 # behind it is carrying the change out. The swap itself and its lifecycle are
 # reac_role_swap's (next block) — this module keeps the pure decision and knows
@@ -1608,7 +1608,7 @@ role_cfg_test = executable('test_reac_role_cfg',
 test('reac_role_cfg', role_cfg_test)
 
 # --- unit test: reac_role_swap — what the segment ANSWERS across the swap -----
-# (2026-08-20-reac-master-arbitration.md §8). reac_role_cfg decides an
+# (2026-08-20-reac-master-arbitration §8). reac_role_cfg decides an
 # assertion; this covers the window afterwards, where master and slave are two
 # different engines and the segment briefly belongs to neither. Proves the one
 # property that matters: `applied` is unreachable until the NEW engine is doing
@@ -1639,7 +1639,7 @@ role_swap_test = executable('test_reac_role_swap',
 test('reac_role_swap', role_swap_test)
 
 # --- unit test: reac_sink_format — the reac-playback node's Format pod and ---
-# the renegotiate decision (2026-08-26-clock-tabs-and-reac-pace-coupling.md
+# the renegotiate decision (2026-08-26-clock-tabs-and-reac-pace-coupling
 # §4.3 increment 3). Pure: no pw_stream, no socket. Proves the format-build
 # function returns the asserted rate (parsed back with spa_format_audio_raw_
 # parse, not just re-read from the builder call's own argument) at the boot
@@ -1658,7 +1658,7 @@ sink_format_test = executable('test_reac_sink_format',
 test('reac_sink_format', sink_format_test)
 
 # --- unit test: reac_source_node's rate renegotiation (one wire, one rate) ---
-# (2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b: "capture AND playback
+# (2026-08-26-clock-tabs-and-reac-pace-coupling §1b: "capture AND playback
 # follow it together"). reac_source_node.c's source_reconnect_rate/reac_
 # source_node_publish_rate are not pure (they own a live pw_stream, like the
 # sink's own reconnect) and are not exercised here; what IS pure and is
@@ -1676,7 +1676,7 @@ source_format_test = executable('test_reac_source_format',
 test('reac_source_format', source_format_test)
 
 # --- unit test: reac_node_ensure — the shared same-box-or-rebuild decision ---
-# (docs/design/notes/2026-08-26-duplicate-reac-node.md). Pure: no pw_stream, no
+# (2026-08-26-duplicate-reac-node). Pure: no pw_stream, no
 # socket. Proves the identity comparison both reac_sink_node_ensure and
 # reac_source_node_ensure now share: no existing node always rebuilds, an
 # identical width+label is a no-op, a width change rebuilds, and — the bug

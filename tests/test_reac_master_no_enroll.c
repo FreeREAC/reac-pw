@@ -12,8 +12,8 @@
  * the rig can flip in one deliberate, reversible step.
  *
  * This process sets the tunable ONCE before anything reads it (libreac reads no
- * environment of its own — docs/design/specs/
- * 2026-09-17-tunables-api-and-shared-refusal-codes.md — reac_master_tunables_set()
+ * environment of its own — 2026-09-17-tunables-api-and-shared-refusal-codes —
+ * reac_master_tunables_set()
  * is the daemon's own doorway), so it belongs in its own test binary rather than
  * test_reac_master's — a second call in the same process would just replace it.
  *

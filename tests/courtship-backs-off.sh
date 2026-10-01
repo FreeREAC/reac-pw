@@ -10,7 +10,7 @@
 # stream held the slot; the desk emitted zero scene transfers and the real S-1608 rebooting
 # beside us never enrolled. With our slave absent the same desk released the slot 7.148 s
 # after its box went quiet. libreac now bounds the courtship at 4 s and then emits NOTHING
-# for 10 s (libreac docs/design/specs/2026-09-12-bounded-ungranted-courtship.md).
+# for 10 s (libreac 2026-09-12-bounded-ungranted-courtship).
 #
 # libreac's tests/test_link.c drives the PURE FSM. This drives the real engine —
 # reac_slave_open/reac_slave_start on an AF_PACKET socket — against a master that announces

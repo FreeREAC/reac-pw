@@ -3,7 +3,7 @@
 #
 # COPY IT TO ~/.config/reac-pw/reac-pw.conf ONLY IF YOU NEED ONE OF THE TWO THINGS BELOW.
 # With no such file — the normal case, and the shipping default — the daemon works the rig
-# out for itself (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md):
+# out for itself (2026-09-16-segments-and-roles-are-autodetected):
 #
 #   * every UP Ethernet interface that is not loopback and not wireless is sniffed by a
 #     passive 0x8819 socket, and becomes a SEGMENT on the first REAC frame heard on it;

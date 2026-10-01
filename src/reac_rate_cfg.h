@@ -3,7 +3,7 @@
 
 /* reac_rate_cfg — the REAC pace: a CLOSED per-protocol list, DECLARED here;
  * drivability is a separate, OBSERVED fact
- * (docs/design/specs/2026-08-26-reac-runtime-config.md §0, in the openmixer
+ * (2026-08-26-reac-runtime-config §0, in the openmixer
  * tree). REAC has exactly three rates by definition: 44100, 48000, 96000 Hz.
  * This module is the one place that list is spelled out for reac-pw today;
  * the shared cross-repo vocabulary table (a libreac header both sides pin

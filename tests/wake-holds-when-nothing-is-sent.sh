@@ -3,10 +3,10 @@
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
 # WHOLE-BINARY: a master whose frames are NOT LEAVING THE HOST never bounces its port, and
-# says why — once. (docs/design/specs/2026-09-16-a-dropped-box-wakes-on-a-phy-edge.md,
+# says why — once. (2026-09-16-a-dropped-box-wakes-on-a-phy-edge,
 # amendment 2026-09-23.)
 #
-# THE FAULT, ON THE DESK 2026-09-23 13:43 (docs/design/evidence/reac-pw-boot-2026-09-23.log
+# THE FAULT, ON THE DESK 2026-09-23 13:43 (reac-pw-boot-2026-09-23
 # lines 54-99, 176-187). The daemon started before chrony had disciplined the clock, the
 # kernel's TAI offset was 0, and libreac refused the ETF backend on both masters — under
 # the etf root qdisc the daemon had ALREADY installed for it. skip_sock_check drops every
