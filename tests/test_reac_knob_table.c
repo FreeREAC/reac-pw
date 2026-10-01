@@ -24,6 +24,7 @@
 #include <reac/transport/reac_conf.h>
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -221,6 +222,70 @@ int main(void)
 			}
 			free(doc);
 		}
+	}
+
+	/* ---- 4b. code -> table: EVERY KEY A SOURCE FILE LOOKS UP IS IN THE TABLE (audit
+	 * 2026-09-24, M5 and its Low row "the knob-table test never scans src/"). The table
+	 * is what --set accepts and what the start-up announcement lists, so a key read in
+	 * a src/ file and missing here is a knob no command line can set and no journal names.
+	 * Literal first arguments of reac_conf_lookup / reac_conf_flag / reac_knobs_resolve
+	 * / reac_knobs_resolve_port; REAC_ROLE is the one exemption, read only to say that
+	 * it is IGNORED (segconf_announce). The scan must find keys at all, or it is the
+	 * scan that is broken. */
+	{
+		const char *root = getenv("REACPW_SRCDIR");
+		char dir[1024];
+		snprintf(dir, sizeof dir, "%s/src", root ? root : ".");
+		DIR *d = opendir(dir);
+		CHECK(d != NULL, "src/ not readable at %s -- NOT CHECKED", dir);
+		int seen = 0;
+		struct dirent *e;
+		while (d && (e = readdir(d))) {
+			size_t nl = strlen(e->d_name);
+			if (nl < 3 || strcmp(e->d_name + nl - 2, ".c") != 0)
+				continue;
+			char path[2048];
+			snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+			FILE *f = fopen(path, "r");
+			if (!f)
+				continue;
+			char line[4096];
+			while (fgets(line, sizeof line, f)) {
+				static const char *const calls[] = {
+					"reac_conf_lookup(\"", "reac_conf_flag(\"",
+					"reac_knobs_resolve(\"", "reac_knobs_resolve_port(\"",
+				};
+				for (size_t c = 0; c < sizeof calls / sizeof calls[0]; c++) {
+					for (const char *p = strstr(line, calls[c]); p;
+					     p = strstr(p + 1, calls[c])) {
+						const char *k = p + strlen(calls[c]);
+						size_t kl = strcspn(k, "\"");
+						if (kl == 0 || kl >= 64 || k[kl] != '"')
+							continue;
+						char key[64];
+						memcpy(key, k, kl);
+						key[kl] = '\0';
+						seen++;
+						if (strcmp(key, "REAC_ROLE") == 0)
+							continue;
+						int found = 0;
+						for (int i = 0; i < g_reac_knobs_count; i++)
+							if (strcmp(g_reac_knobs[i].key, key) == 0) {
+								found = 1;
+								break;
+							}
+						CHECK(found, "src/%s looks up %s, which g_reac_knobs does "
+						      "not list -- --set refuses it and nothing announces it",
+						      e->d_name, key);
+					}
+				}
+			}
+			fclose(f);
+		}
+		if (d)
+			closedir(d);
+		CHECK(seen >= 20, "the src/ scan found only %d looked-up keys -- the scan is "
+		      "broken, not the table", seen);
 	}
 
 	/* ---- 5. THE COMMAND LINE: highest precedence, over env, VALUE asserted (not
