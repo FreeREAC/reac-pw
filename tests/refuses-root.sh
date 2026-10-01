@@ -26,8 +26,8 @@
 # "0 0 4294967295", because nothing remapped it; `unshare -r` always narrows that to a
 # single line of length 1. PRESENCE BEFORE ABSENCE: this script reads its OWN uid_map
 # first and asserts against what it actually is, rather than assuming "not run as root"
-# — the r1 build container runs meson test as the container's real root by default (no
-# unshare in the way), so on r1 the bare run below IS the refusal case; on an
+# — a remote build container runs meson test as the container's real root by default (no
+# unshare in the way), so there the bare run below IS the refusal case; on an
 # unprivileged desk shell it is the trivial early-return case. Either way the assertion
 # is derived from a measurement, not a guess about the caller.
 set -u

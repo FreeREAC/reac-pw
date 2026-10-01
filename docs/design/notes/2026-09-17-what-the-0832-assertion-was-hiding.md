@@ -64,4 +64,4 @@ reads 8 in / 32 out, headamp base 0.
 **The rule it cost: a probe that cannot say WHICH box it is pretending to be cannot
 testify about any box.** Both arms now require `fake_box`'s own `declaring as <row>` line
 before they read a single word of the daemon's — the same positive control the injected
-tone needed on the console (CLAUDE.md, 2026-08-13). The stale binary now names itself.
+tone needed on the console. The stale binary now names itself.
