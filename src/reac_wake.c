@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 //
 // reac_wake — see reac_wake.h for the live failure, the firmware law behind it and the
-// safety argument. This file is the ladder; docs/design/specs/
-// 2026-09-16-a-dropped-box-wakes-on-a-phy-edge.md §3-§5 is what it instantiates.
+// safety argument. This file is the ladder; 2026-09-16-a-dropped-box-wakes-on-a-phy-edge §3-§5
+// is what it instantiates.
 
 #include "reac_wake.h"
 

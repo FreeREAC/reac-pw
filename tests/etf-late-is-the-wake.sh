@@ -174,7 +174,7 @@ done
 #    negative alone passes for a daemon that published nothing anywhere).
 # THE POSITIVE HALF IS THE HEALTH WINDOW, NOT A NODE. It used to count reac-* nodes on the
 # private graph; a master with no box recognized publishes none since 2026-09-16 (spec
-# 2026-09-16-segments-and-roles-are-autodetected.md, "no recognised box, no node"), so that
+# 2026-09-16-segments-and-roles-are-autodetected, "no recognised box, no node"), so that
 # control now reads 0 on a perfectly healthy daemon. The daemon's own health window —
 # closed by ITS pacer, inside THIS namespace, on the netdev this namespace owns — is the
 # positive that remains, and the arms below are built on it anyway.

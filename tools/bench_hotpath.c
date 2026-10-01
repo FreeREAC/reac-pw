@@ -38,7 +38,7 @@
 #include <reac/reac_braid.h>
 
 /* The unit under test, included whole so the static hot function is reachable.
- * reac_rx.c moved to libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md);
+ * reac_rx.c moved to libreac-transport (2026-09-11-reac-transport-library);
  * only its HEADER ships publicly, so reaching the .c for this trick needs a sibling libreac
  * checkout's transport/src on the include path — meson.build's LIBREAC_TRANSPORT_SRCDIR
  * option, dev-only, which is why this target is not build_by_default any more. */

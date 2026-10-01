@@ -40,8 +40,8 @@ const struct reac_knob g_reac_knobs[] = {
 	{ "REACPW_PACER_LEAD_US", 1, NULL },
 	{ "REACPW_RT_PRIO", 1, NULL },
 	/* libreac-internal (reac_master.c/reac_pacer.c/reac_ifscan.c/reac_rx.c). Read
-	 * through reac_*_tunables_set() (libreac's docs/design/specs/
-	 * 2026-09-17-tunables-api-and-shared-refusal-codes.md) — this daemon resolves
+	 * through reac_*_tunables_set() (libreac's
+	 * 2026-09-17-tunables-api-and-shared-refusal-codes) — this daemon resolves
 	 * the value itself (reac_knobs_resolve, same table, same precedence as every
 	 * other knob here) and pushes it in before the transport starts
 	 * (push_libreac_tunables, main.c). conf_capable like every other row now that

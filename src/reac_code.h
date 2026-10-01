@@ -12,8 +12,8 @@
  * a script or a log scraper.
  *
  * STILL A SEPARATE COPY, NOT YET A THIN ALIAS, though libreac 1.3.0 now ships
- * `include/reac/reac_code.h` with the same shape (docs/design/specs/
- * 2026-09-17-tunables-api-and-shared-refusal-codes.md, the libreac side of this spec's
+ * `include/reac/reac_code.h` with the same shape
+ * (2026-09-17-tunables-api-and-shared-refusal-codes, the libreac side of this spec's
  * §6 "owed"): reac-pw links the SYSTEM `libreac-devel` package (`pkg-config libreac`,
  * currently 1.2.2), not the sibling checkout, and this lane may not bump the floor in
  * `meson.build` or cut a release (`tools/reac-release` is the main session's) — doing

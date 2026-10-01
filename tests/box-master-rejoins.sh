@@ -8,7 +8,7 @@
 # Twice in a row.
 #
 # THE DEFECT THIS EXISTS AGAINST, measured on the rig 2026-09-09 13:36 with an S-0808 on M
-# (a job scratch log): after `segment dropped — link down
+# (the rig capture s0808-rejoin.log): after `segment dropped — link down
 # past the hold` and the re-hear ("segment up ... 3 served so far"), the re-created
 # reac-capture.enp128s20f0u2 published DIGITAL SILENCE on all eight channels while the NIC
 # was receiving 8019 frames a second of real samples, and its properties stayed at their

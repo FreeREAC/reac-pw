@@ -3,7 +3,7 @@
 
 /* reac_sink_format — the reac-playback node's Format pod, and the pure
  * decisions around renegotiating it
- * (docs/design/specs/2026-08-26-clock-tabs-and-reac-pace-coupling.md §4.3,
+ * (2026-08-26-clock-tabs-and-reac-pace-coupling §4.3,
  * increments 3 and 4). Pure: no pw_stream, no socket, no pacer.
  *
  * Proves:

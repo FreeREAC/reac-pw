@@ -139,7 +139,7 @@ To override ONE segment — a switch mirror port, a recorder, a NIC to leave alo
 write `~/.config/reac-pw/reac-pw.conf` by hand (`[segment IFNAME]` with `role =` or
 `ignore = yes`); nothing generates that file. See
 [packaging/reac-pw.conf.example](packaging/reac-pw.conf.example) and
-[the spec](docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md).
+[the spec](2026-09-16-segments-and-roles-are-autodetected).
 
 Everything above the built-in default EXCEPT the role can also be set through a
 layered environment/config lookup — the command line wins, then the process

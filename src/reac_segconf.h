@@ -2,7 +2,7 @@
 /* Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com> */
 
 /* reac_segconf — the operator's ONE override file, and the only thing that can pin a
- * segment. (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md §3.)
+ * segment. (2026-09-16-segments-and-roles-are-autodetected §3.)
  *
  * THE FAULT THIS EXISTS FOR, MEASURED ON THE DESK 2026-09-16. The rig moved from one box
  * on a 100 Mbit USB NIC to three boxes on a 1 Gbit trunk. The console's GENERATED
@@ -182,7 +182,7 @@ int reac_segconf_load(struct reac_segconf *c, const char *home);
  * THIS IS NOT THE LIVE ROLE CHANGE. A segment already running keeps the engine it opened
  * with; what re-reads here is what the NEXT resolution sees. The live path is
  * `reac.cfg.role` on the segment's own door, and the SIGHUP re-election of
- * 2026-09-16-auto-role-per-segment.md §5b, neither of which this replaces. */
+ * 2026-09-16-auto-role-per-segment §5b, neither of which this replaces. */
 int reac_segconf_refresh(struct reac_segconf *c);
 
 /* The entry for `name`, or NULL. Segment names are interface names and are compared

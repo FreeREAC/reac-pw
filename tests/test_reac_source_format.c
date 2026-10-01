@@ -3,7 +3,7 @@
 
 /* reac_source_node's rate renegotiation (task: "make the reac-CAPTURE node
  * follow a runtime rate change, mirroring the sink",
- * 2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b: "a rate is ONE wire
+ * 2026-08-26-clock-tabs-and-reac-pace-coupling §1b: "a rate is ONE wire
  * rate — capture AND playback follow it together"). reac_source_node.c's
  * source_reconnect_rate and reac_source_node_publish_rate are NOT pure (they
  * own a live pw_stream, exactly like reac_sink_node.c's sink_reconnect_rate)

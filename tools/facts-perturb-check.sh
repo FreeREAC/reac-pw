@@ -8,7 +8,7 @@
 #
 # reac-protocol's `gen-facts.py --perturb SEED` writes a consistent but FICTIONAL fact set:
 # every free number moved within its legal range, every derived fact recomputed, every law
-# kept (docs/audits/2026-09-25-contract-copies.md, "Perturbation mode"). A reac-pw that
+# kept (2026-09-25-contract-copies, "Perturbation mode"). A reac-pw that
 # reads every number from reac_facts.h builds and passes its own consistency tests against
 # any seed. A literal left behind disagrees with the header it included, and the test that
 # looks at it goes red. That is the whole point: the red names the copy.

@@ -4,7 +4,7 @@
 #
 # WHOLE-BINARY: a segment with NO recognised box has NO node on the graph — and a box
 # that arrives brings the pair, and a box that goes takes it away again.
-# (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+# (2026-09-16-segments-and-roles-are-autodetected, amendment
 # "a node with no ports is not a segment on the graph".)
 #
 # THE FAULT, ON THE DESK 2026-09-16. The empty untagged trunk segment — probing, box-model

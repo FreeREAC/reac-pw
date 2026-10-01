@@ -3,7 +3,7 @@
 
 /* reac_roster — EVERY segment this daemon runs, as one node's properties, and the DELTA
  * that keeps it there without churning the node.
- * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+ * (2026-09-16-segments-and-roles-are-autodetected, amendment
  * 2026-09-16 third, §B.)
  *
  * THE HOLE THIS FILLS, NAMED IN THE SPEC THAT MADE IT. The second amendment took the

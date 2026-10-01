@@ -10,7 +10,7 @@
  * row — whose stagebox registry is keyed `reac:<box mac>` — looked the patch name
  * up by reac.master.mac, which in the master role is OUR NIC, and read
  * patchName "" on every rig (openmixer
- * docs/design/notes/2026-09-06-rig-headamp-and-clip-findings.md §5). A formatter
+ * 2026-09-06-rig-headamp-and-clip-findings §5). A formatter
  * test cannot see any of that. What has to be proven is that the RIGHT KEY gets
  * the PEER'S ADDRESS, and gets it again as "none" the moment the box leaves.
  *

@@ -4,9 +4,9 @@
 /* reac_sink_format — the reac-playback node's Format pod, and the decision to
  * renegotiate it, factored out of reac_sink_node.c so both are provable
  * without a live pw_stream
- * (docs/design/specs/2026-08-26-clock-tabs-and-reac-pace-coupling.md §4.3
- * increment 3, closing the gap docs/design/notes/2026-08-26-rate-change-node-
- * format-gap.md measured on the rig).
+ * (2026-08-26-clock-tabs-and-reac-pace-coupling §4.3
+ * increment 3, closing the gap 2026-08-26-rate-change-node-format-gap
+ *  measured on the rig).
  *
  * THE BUG THIS FIXES: an accepted `reac.cfg.rate` already re-clocks the wire
  * (reac_pacer_apply_rate) and already re-publishes reac.rate/.state as node
@@ -31,7 +31,7 @@
  * pure and provable is what n->sample_rate should become given the
  * attempt's outcome — see the function's own comment.
  *
- * SCOPE, REVISED (2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b: "a rate
+ * SCOPE, REVISED (2026-08-26-clock-tabs-and-reac-pace-coupling §1b: "a rate
  * is ONE wire rate — capture AND playback follow it together"): this module's
  * pod-builder and both PURE decisions are node-agnostic (channels + rate in,
  * a pod or a verdict out) and are now shared by reac_source_node.c's own

@@ -4,7 +4,7 @@
 #
 # WHOLE-BINARY: A REFUSED HEAD-AMP WRITE IS VISIBLE TO A CLIENT THAT DID NOT WRITE IT.
 #
-# The ruling (docs/design/specs/2026-09-14-headamp-as-node-params.md §3a, RULED by the
+# The ruling (2026-09-14-headamp-as-node-params §3a, RULED by the
 # operator 2026-09-14): the head-amp door publishes `reac.headamp.state`,
 # `reac.headamp.refused`, `reac.headamp.asserted` and `reac.headamp.sens.max` on the same
 # master sink node that accepts the `reac.headamp.<ch>.<param>` control keys.
@@ -118,7 +118,7 @@ ip link set pha0 netns $NSPID || exit 90
 # THE NODES EXIST BECAUSE A BOX IS PINNED, not because the wire has one — and since
 # 2026-09-16 that is the ONLY way this test can have a cold master's door to read. A
 # segment with no recognised box publishes no node at all now (spec
-# 2026-09-16-segments-and-roles-are-autodetected.md, amendment), which is the whole point
+# 2026-09-16-segments-and-roles-are-autodetected, amendment), which is the whole point
 # of that ruling; `--box` is the case it deliberately keeps, because a pin is the operator
 # saying this box belongs on this wire and a patch must survive it being unpowered. So the
 # subject of this test is unchanged: a door, no box on the wire, and a head-amp write that

@@ -4,7 +4,7 @@
 #
 # WHOLE-BINARY: when a segment LEAVES, its indexed keys leave the roster node with it —
 # `reac.roster.n` and the `reac.roster.<i>.*` groups on the graph agree, always.
-# (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+# (2026-09-16-segments-and-roles-are-autodetected, amendment
 # 2026-09-20 §b; reac-pw#106.)
 #
 # THE FAULT, ON THE DESK 2026-09-20. After the trunk lost carrier and every segment

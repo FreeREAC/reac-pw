@@ -566,7 +566,7 @@ int main(int argc, char **argv)
 	 * It used to be hand-written here — the cfea head, then `b[18]=0x08;
 	 * b[19]=0x01; b[20]=0x00; b[21]=0x01` — which is a second copy of the protocol
 	 * in a test, and two of those four bytes were wrong whatever the run:
-	 * reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base.md §2 reads
+	 * reac-captures/analysis/2026-09-13-announce-bytes-and-headamp-base §2 reads
 	 * all 17 040 announces in the corpus and settles [19] as the PACE CODE (so a
 	 * hard 0x01 announces 96 kHz at every rate — a defect it names in our own
 	 * emitters) and [20:22] as the enrolled-box count, u2 big-endian (so a hard 1

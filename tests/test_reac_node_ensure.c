@@ -21,7 +21,7 @@
  * create sequencing (pw_stream_disconnect + pw_stream_destroy, then a fresh
  * pw_stream_new_simple + connect) leaves the PipeWire graph showing exactly
  * one node at any instant — that needs a running graph and is the live
- * pw-dump count docs/design/notes/2026-08-26-duplicate-reac-node.md asks
+ * pw-dump count 2026-08-26-duplicate-reac-node asks
  * for. This proves only the decision that gates whether a rebuild happens at
  * all: given the same struct-level bookkeeping both node types already use
  * (one pointer, nulled before the replacement is built), the two callers now

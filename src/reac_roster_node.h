@@ -3,7 +3,7 @@
 
 /* reac_roster_node — the ONE node the daemon always has, and the only thing on the graph
  * that is not a segment's door.
- * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+ * (2026-09-16-segments-and-roles-are-autodetected, amendment
  * 2026-09-16 third, §B. The table it publishes is reac_roster.h.)
  *
  * WHY A NODE AT ALL, when the ruling one amendment up REMOVED a node. Because the two

@@ -378,7 +378,7 @@ static void t_wireless_excluded_from_scan(void)
 	CHK(reac_ifscan_find(&s, "reac-ghost0")->state == REAC_IFSCAN_LINKED);
 
 	/* Opt-in: the daemon-set tunable (libreac reads no environment of its own —
-	 * docs/design/specs/2026-09-17-tunables-api-and-shared-refusal-codes.md) names
+	 * 2026-09-17-tunables-api-and-shared-refusal-codes) names
 	 * the interface explicitly, and the SAME frame reaches LISTEN. */
 	struct reac_transport_tunables tt = REAC_TRANSPORT_TUNABLES_DEFAULT;
 	tt.allow_wireless = "wlp128s20f3";

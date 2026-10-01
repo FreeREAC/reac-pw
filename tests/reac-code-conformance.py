@@ -47,8 +47,8 @@ def find_libreac(reac_pw_root):
     """The sibling libreac checkout, when present: LIBREAC_SRCDIR if set, else the
     conventional sibling beside this repo (the build-node script's own convention
     for the same lookup). Recognized by shipping include/reac/reac_code.h — the
-    shared vocabulary header (docs/design/specs/
-    2026-09-17-tunables-api-and-shared-refusal-codes.md) — not just by existing:
+    shared vocabulary header (2026-09-17-tunables-api-and-shared-refusal-codes) — not just by
+    existing:
     an older libreac clone with no such header has nothing this scan can join.
     Returns None, silently, when neither is found: this ratchet must not require
     the sibling checkout to build or test reac-pw on its own."""

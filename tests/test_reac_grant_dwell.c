@@ -23,8 +23,8 @@
  * recognition (reac_master_set_box) lands WHILE granting, which is the window-restart
  * path the S-4000S takes and the S-1608 does not.
  *
- * libreac reads no environment of its own (docs/design/specs/
- * 2026-09-17-tunables-api-and-shared-refusal-codes.md) — this test reads its OWN two env
+ * libreac reads no environment of its own (2026-09-17-tunables-api-and-shared-refusal-codes) —
+ * this test reads its OWN two env
  * vars (meson runs this binary twice with different env, one process per configuration)
  * and pushes them through reac_master_tunables_set() before touching the FSM, the same
  * doorway the real daemon uses. Both arms matter: the fast one must be fast, and the
