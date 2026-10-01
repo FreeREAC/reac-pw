@@ -1771,6 +1771,36 @@ static void sink_build_desc(char *desc, size_t sz, const char *label, int channe
  * the create-time seeds here and immediately re-published from the pacer snapshot,
  * so a rebuilt node shows the live link-state/box-model/discovery/latency at once
  * (not only after the next 200 ms poll). Returns 0, or -1 (n->filter left NULL). */
+/* MAIN LOOP: seed every sink_publish_* shadow to an answer no real one equals, so
+ * the next publish always fires. Called at create and on EVERY (re)build: a rebuilt
+ * node is a new pw_stream carrying only its seed props, and a shadow still holding
+ * the old node's answer would skip the publish onto it for good (audit 2026-09-24,
+ * M4: the rate and role pairs were missing here, so a re-enrolled box's playback
+ * node never read back reac.rate* / reac.cfg.role.*).
+ * tests/sink-shadows-reset-on-rebuild.py holds every *_last field to this list. */
+static void sink_seed_publish_shadows(struct reac_sink_node *n)
+{
+	n->link_state_last = REAC_LINK_PROBING;
+	n->box_model_last = NULL;
+	n->box_mac_last = 0;
+	memset(&n->box_identity_last, 0, sizeof n->box_identity_last);
+	n->rate_hz_last = -1;
+	n->rate_asserted_last = -1;
+	n->rate_reestablishing_last = -1;
+	n->rate_refused_last = (enum reac_rate_refuse)-1;
+	n->role_state_last = NULL;
+	n->role_refused_last = (enum reac_role_refuse)-1;
+	n->ha_refused_last = (enum reac_headamp_refuse)-1;
+	n->ha_state_last = NULL;
+	n->ha_asserted_last[0] = '\0';
+	n->disco_seq_last = 0;
+	n->arb_state_last = -1;
+	n->arb_pace_last = -1;
+	n->arb_rival_last = -1;
+	n->arb_conflict_last = -1;
+	n->arb_mac_last = UINT64_MAX;
+}
+
 static int sink_open_filter(struct reac_sink_node *n, const char *label)
 {
 	char rate_str[16];
@@ -1874,20 +1904,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	 * so a (re)built node converges within this call rather than after a 200 ms poll.
 	 * link_drops_seen tracks the CURRENT cumulative drops so the rebuild does not
 	 * flash a spurious "dropped" overlay. */
-	n->link_state_last = REAC_LINK_PROBING;
-	n->box_model_last = NULL;
-	n->box_mac_last = 0;
-	/* Seeded to answers no real one equals, so the first publish always fires
-	 * rather than reading a coincidental match (the role pair's pattern). */
-	n->ha_refused_last = (enum reac_headamp_refuse)-1;
-	n->ha_state_last = NULL;
-	n->ha_asserted_last[0] = '\0';
-	n->disco_seq_last = 0;
-	n->arb_state_last = -1;
-	n->arb_pace_last = -1;
-	n->arb_rival_last = -1;
-	n->arb_conflict_last = -1;
-	n->arb_mac_last = UINT64_MAX;
+	sink_seed_publish_shadows(n);
 	n->link_drops_seen = 0;
 	for (int i = 0; i < 8; i++)
 		n->link_drops_seen += atomic_load_explicit(&n->pacer.drops[i],
@@ -1993,13 +2010,10 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 
 	/* reac.cfg.role's standing answer: nothing has been asserted yet, so the
 	 * fact is simply "applied" (we are already what we are) with no refusal.
-	 * *_last is seeded to values the real answer can never equal (calloc left
-	 * role_state_last NULL, which no REAC_ROLE_STATE_* string pointer is, and
-	 * -1 is not a valid enum reac_role_refuse) so sink_publish_role_props's
-	 * first call always publishes rather than reading a coincidental match. */
+	 * Its shadows are seeded by sink_seed_publish_shadows, below and on every
+	 * rebuild. */
 	n->role_state = REAC_ROLE_STATE_APPLIED;
 	n->role_refused = REAC_ROLE_REFUSE_NONE;
-	n->role_refused_last = (enum reac_role_refuse)-1;
 
 	/* Our master src MAC. The caller (main.c master path) supplies the impersonated
 	 * desk's MAC; absent that, derive the Roland-OUI + this-NIC's-host-part default
@@ -2150,20 +2164,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 
 	/* Badge-prop shadows for the (yet-to-exist) filter. Seeded to the baseline so the
 	 * first sink_open_filter re-stamps to the live pacer state. */
-	n->link_state_last = REAC_LINK_PROBING;
-	n->box_model_last = NULL;
-	n->box_mac_last = 0;
-	/* Seeded to answers no real one equals, so the first publish always fires
-	 * rather than reading a coincidental match (the role pair's pattern). */
-	n->ha_refused_last = (enum reac_headamp_refuse)-1;
-	n->ha_state_last = NULL;
-	n->ha_asserted_last[0] = '\0';
-	n->disco_seq_last = 0;
-	n->arb_state_last = -1;
-	n->arb_pace_last = -1;
-	n->arb_rival_last = -1;
-	n->arb_conflict_last = -1;
-	n->arb_mac_last = UINT64_MAX;
+	sink_seed_publish_shadows(n);
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
 

@@ -24,6 +24,9 @@
 #      AND reac-playback appear, both carrying the segment, with PORTS.
 #   3. THE BOX GOES. Both nodes go with it — a node that outlives its box is the same
 #      `none / 0 in` row arriving by the other door.
+#   4. THE BOX RETURNS. The pair is rebuilt, and the new reac-playback carries reac.rate
+#      and reac.cfg.role.state again (audit 2026-09-24, M4: their shadows were not
+#      re-seeded, so the rebuilt node never got them).
 #
 # ISOLATION, both halves: a user+net+mount+pid namespace with its own veth, its own sysfs
 # (sysfs does not follow a network namespace — box-wakes-on-a-phy-edge.sh paid for that)
@@ -121,6 +124,26 @@ for ((i = 0; i < 120; i++)); do
 done
 echo "gone-count $(seg_nodes $PID nbn0 | wc -l)"
 seg_nodes $PID nbn0 | sed 's/^/  gone-node /'
+
+# ---- 4. THE BOX RETURNS (audit 2026-09-24, M4) -------------------------------------------
+# The pair is rebuilt on the SAME pacer, so every publish shadow still holds the first
+# node's answer; one left un-reseeded skips its publish onto the new node for good.
+$in_peer "$FAKE" nbnb0 60 >"$RT/box2.log" 2>&1 &
+for ((i = 0; i < 120; i++)); do
+	[ "$(seg_nodes $PID nbn0 | wc -l)" -ge 2 ] && break
+	sleep 0.5
+done
+sleep 2
+echo "back-count $(seg_nodes $PID nbn0 | wc -l)"
+pw-dump | python3 -c '
+import json,sys
+for o in json.load(sys.stdin):
+    if o.get("type")!="PipeWire:Interface:Node": continue
+    p=o["info"]["props"]
+    if p.get("node.name")=="reac-playback" and p.get("reac.segment")=="nbn0":
+        for k in ("reac.rate","reac.cfg.role.state"):
+            print("back-prop", k, p.get(k,"(absent)"))
+'
 kill -TERM $PID 2>/dev/null; sleep 0.5; kill -9 $PID 2>/dev/null
 exit 0
 INNER
@@ -163,6 +186,15 @@ echo "$OUT" | grep -qa 'box-log.*autodetected' \
 # 2. THE BOX LEAVES AND SO DO ITS NODES.
 [ "$(val gone-count)" = "0" ] \
 	|| fail "the box left and $(val gone-count) node(s) outlived it: $(echo "$OUT" | grep -a '^  gone-node ')"
+
+# 3. THE BOX RETURNS AND THE REBUILT PLAYBACK READS BACK ITS RATE AND ROLE.
+[ "$(val back-count)" = "2" ] \
+	|| fail "the box came back and the pair did not (got $(val back-count))"
+for k in reac.rate reac.cfg.role.state; do
+	v=$(echo "$OUT" | grep -a "^  back-prop $k " | awk '{print $3}')
+	[ -n "$v" ] && [ "$v" != "(absent)" ] \
+		|| fail "the rebuilt reac-playback carries no $k: the console's control has no readback (audit M4)"
+done
 
 echo "OK"
 exit 0

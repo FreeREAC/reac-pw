@@ -1776,6 +1776,11 @@ test('reac_code_conformance', python3,
           meson.current_source_dir() / 'src',
           meson.current_source_dir() / 'src' / 'reac_code.h'])
 
+# --- text: a rebuilt reac-playback re-seeds every publish shadow (audit M4) ------------
+test('reac_sink_shadows_reset_on_rebuild', python3,
+  args : [meson.current_source_dir() / 'tests' / 'sink-shadows-reset-on-rebuild.py',
+          meson.current_source_dir() / 'src' / 'reac_sink_node.c'])
+
 # --- text: every tests/*.sh grep/wait_for pattern maps to a producer, or is debt ------
 # "Let's be precise, let's organise tests to not depend on greps" (2026-09-17). Matches
 # every quoted grep/wait_for pattern in tests/*.sh against src/*.c's printf-family format
