@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Report the scene transfers in a CLEAN (non-mirrored) capture of one master.
 
 recover-scene.py drops consecutive identical control blocks, which is right for a

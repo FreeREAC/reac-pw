@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Replace the reac-pw master on ONE segment, safely.
 #
 # NEVER TWO MASTERS ON A SEGMENT. pkill -f / pgrep -f match the searching shell's

@@ -1788,3 +1788,11 @@ test('reac_asserted_lines_have_a_producer', python3,
           meson.current_source_dir() / 'tests',
           meson.current_source_dir() / 'src',
           meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt'])
+
+# --- text: the public tree carries no compiled Python and every source has its header -----
+# A tracked __pycache__/*.pyc embeds the build machine's paths, and a *.c *.h *.py *.sh with no
+# SPDX-License-Identifier + Copyright pair states no licence. tools/check-public-hygiene.sh
+# reads the git index and refuses both; it SKIPs (77) where there is no git checkout.
+test('public_hygiene', find_program('bash'),
+  args : [meson.current_source_dir() / 'tools' / 'check-public-hygiene.sh',
+          meson.current_source_dir()])
