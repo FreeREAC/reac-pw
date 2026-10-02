@@ -52,6 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Public hygiene (no tracked .pyc, every source has its SPDX + Copyright header)
+        run: bash -o pipefail tools/check-public-hygiene.sh
+
       - name: libreac ${{ env.LIBREAC_REF }}
         run: git clone --depth 1 --branch "$LIBREAC_REF" https://github.com/FreeREAC/libreac.git ../libreac
 
