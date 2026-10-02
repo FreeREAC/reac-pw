@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* The ONE override file's grammar, and — the half that matters — what it REFUSES.
- * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md §3a.)
+ * (2026-09-16-segments-and-roles-are-autodetected §3a.)
  *
  * The rule is text, so it is pinned as text. Every refusal here is also asserted to NAME
  * its subject: a config reader that drops a line in silence is how an operator ends up

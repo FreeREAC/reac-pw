@@ -5,7 +5,7 @@
 # WHOLE-BINARY: the daemon publishes ONE port-less node that lists EVERY segment it runs —
 # the empty ones included — and a drop-in in reac-pw.conf.d/ overrides the hand-written
 # file on the real binary.
-# (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment
+# (2026-09-16-segments-and-roles-are-autodetected, amendment
 # 2026-09-16 third, §A and §B.)
 #
 # WHAT THIS EXISTS FOR. The amendment before this one took the per-segment zero-port door

@@ -40,8 +40,8 @@
  * raw DSP ports at the GRAPH rate with no audioconvert in the path, so a filter
  * could only ever run at the graph's pace — `node.rate` was a REQUEST for the graph
  * to switch, which an RME-driven 96 kHz graph refuses. The REAC pace and the rig
- * pace are independent (docs/design/specs/2026-08-21-reac-adapter-pace-and-port-
- * contract.md), so this is a pw_stream: it declares the REAC rate in its FORMAT and
+ * pace are independent (2026-08-21-reac-adapter-pace-and-port-contract), so this is a
+ * pw_stream: it declares the REAC rate in its FORMAT and
  * PipeWire's own resampler bridges the two. Conversion happens here, in the adapter,
  * and nowhere else — the console is never asked to change pace for a box.
  *
@@ -66,8 +66,7 @@ struct reac_source_node {
 	 * n->clock_ref[64]): the caller's string is REACPW_CLOCK_REF resolved through
 	 * reac_knobs_resolve, whose storage does not outlive that one call, and this
 	 * node outlives it (2026-09-17 — the copy that removed the last env-only
-	 * knob exception, reac-pw's docs/design/specs/
-	 * 2026-09-17-knobs-codes-and-test-ratchets.md §6). */
+	 * knob exception, reac-pw's 2026-09-17-knobs-codes-and-test-ratchets §6). */
 	struct reac_pacer *pacer;
 	char clock_ref[64];
 	struct spa_io_position *position;   /* SPA_IO_Position area; NULL until configured */

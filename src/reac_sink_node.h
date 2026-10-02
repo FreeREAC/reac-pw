@@ -161,7 +161,7 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
  * and the recognizer running. The counterpart to _ensure, for the one case that needs it:
  * the box that this segment was serving has LEFT (the FSM cleared recognized_box), and a
  * node that outlives its box is a device the console keeps patching into
- * (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amendment). The
+ * (2026-09-16-segments-and-roles-are-autodetected, amendment). The
  * engine keeps driving the wire — that is how the next box is found — and the next
  * _ensure builds a fresh filter at its width. Idempotent; a node that is not there is
  * not an error. */

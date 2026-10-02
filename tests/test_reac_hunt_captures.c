@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* THE AUTO-ROLE DETECTION, AGAINST THE BYTES A REAL WIRE CARRIED
- * (docs/design/specs/2026-09-16-auto-role-per-segment.md §1).
+ * (2026-09-16-auto-role-per-segment §1).
  *
  * tests/test_reac_hunt.c drives the same four outcomes from the libreac BUILDERS, which
  * is the right unit test and proves nothing about a box we have never decoded. This one

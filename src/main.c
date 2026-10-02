@@ -28,7 +28,7 @@
  *   reac-pw --live reac0 [--rate 96000] [--role master] [--tx reac0]
  *   reac-pw --live reac0 --role slave   --tx reac0      # slaved to a desk
  *
- * ONE DAEMON, N LISTENERS (docs/design/specs/2026-08-20-reac-auto-spine.md §5,
+ * ONE DAEMON, N LISTENERS (2026-08-20-reac-auto-spine §5,
  * the openmixer tree). A single master process manages every segment this
  * host faces, spawning one internal LISTENER per interface against ONE shared
  * PipeWire main loop — the daemon-per-NIC shape (a templated unit per
@@ -36,7 +36,7 @@
  * given as a comma list) to run several segments from one command line.
  *
  * THE PACKAGED SERVICE GIVES NO INTERFACE AT ALL, AND NONE IS CONFIGURED
- * (openmixer's 2026-08-23-reac-trunk-vlan-daemon.md §7-§9, amendment
+ * (openmixer's 2026-08-23-reac-trunk-vlan-daemon §7-§9, amendment
  * 2026-09-02): with no --live/--pcap the daemon HEARS its segments. Every
  * Ethernet interface with link is sniffed by a passive 0x8819 socket; the
  * first frame that classifies as REAC gear turns that interface into a
@@ -119,7 +119,7 @@
 #include <linux/if_packet.h>
 #include <net/if.h>           /* IFNAMSIZ */
 
-/* THE ONE OVERRIDE (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md).
+/* THE ONE OVERRIDE (2026-09-16-segments-and-roles-are-autodetected).
  * Read once at start, before any socket, and asked about every segment thereafter. Nothing
  * else may pin a role: `REAC_ROLE` and `REAC_ROLE_<segment>` are retired in every layer,
  * because the file that carried them is GENERATED and a generated file goes stale silently
@@ -135,7 +135,7 @@ static struct reac_roster g_roster;
 static struct reac_roster_node *g_roster_node;
 static int g_roster_said;   /* the "on the graph" line waits for the node's real id */
 
-/* Bounded, per docs/design/specs/2026-08-20-reac-auto-spine.md ("a segment
+/* Bounded, per 2026-08-20-reac-auto-spine ("a segment
  * beyond the bound is reported, never silently ignored") — this rig needs 2;
  * 8 is headroom for a bigger trunk without inviting an unbounded array. */
 #define REAC_PW_MAX_LISTENERS 8
@@ -683,7 +683,7 @@ static void usage(const char *p)
 	  "  REAC frame heard makes that interface a segment named after it, the ROLE is taken\n"
 	  "  from what is heard on it, and link loss drops it after a %d s hold. Nothing names\n"
 	  "  an interface in advance and NO environment variable decides a role.\n"
-	  "auto-spine (ONE daemon, N listeners — 2026-08-20-reac-auto-spine.md §5): only the\n"
+	  "auto-spine (ONE daemon, N listeners — 2026-08-20-reac-auto-spine §5): only the\n"
 	  "  FIRST --live segment honours the per-box flags above. Every OTHER segment, and\n"
 	  "  every heard one, reads its own settings from the layered conf, keyed by its name:\n"
 	  "  REAC_<KEY>_<segment> in ~/.config/reac-pw/reac-pw.env above the bare REAC_<KEY>\n"
@@ -1142,7 +1142,7 @@ struct listener_cfg {
 	int src_mac_set;
 	int box_channels;                   /* SLAVE role: our own input width */
 	/* THE ROW WE PRESENT AS, when this segment is pinned `role = box`
-	 * (docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md). NULL on every other
+	 * (2026-09-17-the-daemon-can-be-a-box). NULL on every other
 	 * role. It is the ONE source for what we declare: the enrolment frames, the
 	 * upstream width, the head-amp strap, the two nodes' port counts and the roster's
 	 * model all read it, and nothing re-derives any of them from a number. */
@@ -2673,7 +2673,7 @@ static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, en
 
 /* ---- HEARING: the segments are discovered, not declared ---------------------
  *
- * openmixer's 2026-08-23-reac-trunk-vlan-daemon.md §7-§9, amendment 2026-09-02.
+ * openmixer's 2026-08-23-reac-trunk-vlan-daemon §7-§9, amendment 2026-09-02.
  * reac_ifscan keeps the interface table and says what to do; this block owns
  * what the verbs refer to — one passive sniffer per linked interface, and the
  * listener slots a heard segment is served from — and runs on the main loop
@@ -3568,7 +3568,7 @@ static int listener_reopen_role_reclassify(struct listener *L, struct pw_loop *l
 
 /* ---- TRUNK TOPOLOGY: the VLANs on a parent, and the netdevs they need ---------
  *
- * DESIGN.md's 0.5.3 contract, from openmixer's 2026-08-23-reac-trunk-vlan-daemon.md
+ * DESIGN.md's 0.5.3 contract, from openmixer's 2026-08-23-reac-trunk-vlan-daemon
  * §3-§5. Nothing here touches the audio path: the tap learns WHICH VLAN ids carry REAC
  * on a parent, the kernel is asked for one `<parent>.<vid>` netdev per id, and from
  * there each is an ordinary interface that the hearing above serves unchanged. */
@@ -3916,7 +3916,7 @@ static void topo_forget_iface(struct hearing *h, const char *name, uint64_t now)
  * cold-boot reasoning of 2026-09-15 (a slave says nothing until a master speaks) — and the
  * desk paid for it every boot: three VLANs minted on a parent that hears no tag, three
  * vacant tap doors, three roster rows, re-created after every drop of the parent
- * (docs/design/evidence/reac-pw-boot-2026-09-23.log lines 15-47, 101-131). The 2026-09-22
+ * (reac-pw-boot-2026-09-23 lines 15-47, 101-131). The 2026-09-22
  * rule hears a VID from ANY tagged frame, so a cold trunk names its VLANs by itself; what
  * is left of "declared" is the report below and the role/ignore the file pins. */
 static void declared_load(struct hearing *h)
@@ -4864,7 +4864,7 @@ static void hearing_stop(struct hearing *h)
 	h->enabled = 0;
 }
 
-/* ---- THE ROSTER TICK (spec 2026-09-16-segments-and-roles-are-autodetected.md, amendment
+/* ---- THE ROSTER TICK (spec 2026-09-16-segments-and-roles-are-autodetected, amendment
  * 2026-09-16 third, §B) ------------------------------------------------------------------
  *
  * READ, NEVER WRITTEN. Every field below is derived, on the tick, from the table that
@@ -5300,7 +5300,7 @@ static const char *resolve_clock_ref(void)
 }
 
 /* THE OTHER SIDE OF DISCOVERY AND PUBLISH: libreac reads no environment of its own
- * (libreac's docs/design/specs/2026-09-17-tunables-api-and-shared-refusal-codes.md)
+ * (libreac's 2026-09-17-tunables-api-and-shared-refusal-codes)
  * — every REACPW_* / REAC_* knob that used to be a bare getenv INSIDE reac_master.c,
  * reac_pacer.c, reac_ifscan.c or reac_rx.c is now a field this daemon resolves
  * through g_reac_knobs (so it is announced above, exactly like every other knob)

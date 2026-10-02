@@ -17,8 +17,8 @@
 # ratchet whose entry count may only fall (FLOOR below).
 #
 # Proportionate, not a rewrite: most patterns here stay prose, tracked as debt rather
-# than migrated to a src/reac_code.h token (spec 2026-09-17-knobs-codes-and-test-
-# ratchets.md §3). This script's job is only to make sure every one of them still
+# than migrated to a src/reac_code.h token (spec
+# 2026-09-17-knobs-codes-and-test-ratchets §3). This script's job is only to make sure every one of them still
 # corresponds to something the daemon can actually say.
 
 import re

@@ -4,7 +4,7 @@
 #
 # WHOLE-BINARY: the daemon's segments and roles come from the HOST and the WIRE, and the
 # only thing that overrides them is reac-pw.conf.
-# (docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md.)
+# (2026-09-16-segments-and-roles-are-autodetected.)
 #
 # THE FAULT, MEASURED ON THE DESK 2026-09-16. The rig moved from one box on a 100 Mbit USB
 # NIC to three boxes on a 1 Gbit trunk. The console's GENERATED ~/.config/reac-pw/reac-pw.env

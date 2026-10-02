@@ -100,8 +100,7 @@ struct reac_sink_node {
 	 * discarded in one measured run, audible as granulated, saturated sound. The REAC
 	 * pace and the rig pace are independent and conversion belongs here, in the
 	 * adapter, so this is a pw_stream declaring the REAC rate in its FORMAT and
-	 * PipeWire resamples. See docs/design/specs/2026-08-21-reac-adapter-pace-and-
-	 * port-contract.md in openmixer. */
+	 * PipeWire resamples. See 2026-08-21-reac-adapter-pace-and-port-contract in openmixer. */
 	struct pw_stream *stream;
 	struct reac_pacer pacer;
 	int pacer_open;
@@ -179,7 +178,7 @@ struct reac_sink_node {
 	uint64_t box_mac_last;
 
 	/* reac.rate / reac.rate.source / reac.cfg.rate.state / reac.cfg.rate.refused
-	 * (2026-08-26-reac-runtime-config.md): same shadow-and-compare pattern as
+	 * (2026-08-26-reac-runtime-config): same shadow-and-compare pattern as
 	 * the link-state trio above, so sink_publish_rate_props only re-stamps the
 	 * filter's properties when the pacer's rate atomics actually moved. */
 	int rate_hz_last;
@@ -187,7 +186,7 @@ struct reac_sink_node {
 	int rate_reestablishing_last;
 	enum reac_rate_refuse rate_refused_last;
 
-	/* THE HEAD-AMP DOOR'S READ SIDE (2026-09-14-headamp-as-node-params.md §3a):
+	/* THE HEAD-AMP DOOR'S READ SIDE (2026-09-14-headamp-as-node-params §3a):
 	 * reac.headamp.asserted / .state / .refused. MAIN-LOOP-only, like the role
 	 * trio and for the same reason — on_param_changed decides the answer and
 	 * sink_publish_headamp_props stamps it, both on the loop thread, so plain
@@ -223,7 +222,7 @@ struct reac_sink_node {
 	_Atomic int rate_reconnecting;
 
 	/* reac.role / reac.cfg.role.state / reac.cfg.role.refused
-	 * (2026-08-26-reac-runtime-config.md, the ROLE half): MAIN-LOOP-only,
+	 * (2026-08-26-reac-runtime-config, the ROLE half): MAIN-LOOP-only,
 	 * unlike the rate trio above this needs no cross-thread atomic — this
 	 * increment's role apply never touches the pacer/RT thread at all (see
 	 * reac_role_cfg.h's HONESTY note), so on_param_changed (which decides the
@@ -567,7 +566,7 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 
 	/* SPA_PROP_params is the one extensible (key,value) bag both the head-amp
 	 * control (task #203) and the runtime rate control
-	 * (2026-08-26-reac-runtime-config.md) ride — one PropInfo per underlying
+	 * (2026-08-26-reac-runtime-config) ride — one PropInfo per underlying
 	 * SPA prop id, so both keys are named in this single entry rather than
 	 * two competing PropInfo objects with the same id. Advertised alongside
 	 * volume/mute; the SET paths are on_param_changed -> reac_headamp_prop_parse
@@ -720,7 +719,7 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 	 * command ring — the RT pacer thread applies them to the head-amp DMX send table,
 	 * so a mixer knob reaches the real box preamp live.
 	 *
-	 * THE ANSWER IS PUBLISHED, NOT SWALLOWED (2026-09-14-headamp-as-node-params.md
+	 * THE ANSWER IS PUBLISHED, NOT SWALLOWED (2026-09-14-headamp-as-node-params
 	 * §3a). Until this ruling a dropped cell and a cell written to a segment with no
 	 * preamps at all both returned nothing and the caller saw a successful set-param.
 	 * Now the CAPABILITY is decided first — a box on M, no box, no announced strap —
@@ -750,7 +749,7 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		 * by a later well-formed write that is refused for the same reason. */
 	}
 
-	/* LIVE rate control (2026-08-26-reac-runtime-config.md): the same Props
+	/* LIVE rate control (2026-08-26-reac-runtime-config): the same Props
 	 * object may carry a `reac.cfg.rate` assertion under SPA_PROP_params. The
 	 * DECISION (reac_rate_cfg_decide) is pure and runs right here on the main
 	 * loop; only an ACCEPTED rate crosses to the RT pacer thread
@@ -782,7 +781,7 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		 * above is the only thing that changes. */
 	}
 
-	/* LIVE role control (2026-08-26-reac-runtime-config.md, the ROLE half):
+	/* LIVE role control (2026-08-26-reac-runtime-config, the ROLE half):
 	 * the same Props object may carry a `reac.cfg.role` assertion under
 	 * SPA_PROP_params. This node exists ONLY in the master role
 	 * (reac_sink_node_new is never called for a slave), so REAC_ROLE_MASTER
@@ -982,8 +981,8 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 }
 
 /* MAIN LOOP: force the live adapter to actually present `hz`, closing the
- * gap increment 3 left (docs/design/notes/2026-08-26-rate-change-node-format-
- * gap.md's correction). `pw_stream_update_params(EnumFormat)` on an already-
+ * gap increment 3 left (2026-08-26-rate-change-node-format-gap's correction).
+ * `pw_stream_update_params(EnumFormat)` on an already-
  * connected, streaming node advertises a new SUPPORTED set; it does not
  * renegotiate the ACTIVE format — measured live: the update call ran, `pw-
  * dump` Format.rate did not move. The robust trigger is the same shape as a
@@ -1085,8 +1084,8 @@ static int sink_reconnect_rate(struct reac_sink_node *n, int hz)
 }
 
 /* MAIN LOOP: stamp reac.rate / reac.rate.source / reac.rate.drivable /
- * reac.cfg.rate.state / reac.cfg.rate.refused (2026-08-26-reac-runtime-
- * config.md §0/§1) — the read side of the `reac.cfg.rate` write door
+ * reac.cfg.rate.state / reac.cfg.rate.refused (2026-08-26-reac-runtime-config §0/§1)
+ * — the read side of the `reac.cfg.rate` write door
  * on_param_changed answers below. Reads only the pacer's cross-thread-safe
  * rate atomics (never on_process/RT); re-stamps only when one of them
  * actually moved, same shadow-and-compare pattern as sink_publish_link_props.
@@ -1112,8 +1111,8 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 	n->rate_refused_last = refused;
 
 	/* Renegotiate the node's presented Format when the pacer's accepted rate has
-	 * moved past what we last built/pushed — the exact gap docs/design/notes/
-	 * 2026-08-26-rate-change-node-format-gap.md measured: `reac_pacer_apply_rate`
+	 * moved past what we last built/pushed — the exact gap
+	 * 2026-08-26-rate-change-node-format-gap measured: `reac_pacer_apply_rate`
 	 * re-clocks the WIRE, but a bare `pw_stream_update_params(EnumFormat)` never
 	 * renegotiated the pw_stream node's ACTIVE format, so pw-top kept reading the
 	 * boot rate (increment 3, measured not-working live). sink_reconnect_rate is
@@ -1133,7 +1132,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 	if (reac_sink_format_needs_update(n->sample_rate, hz))
 		sink_reconnect_rate(n, hz);
 
-	/* ONE WIRE, ONE RATE (2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b):
+	/* ONE WIRE, ONE RATE (2026-08-26-clock-tabs-and-reac-pace-coupling §1b):
 	 * push the same accepted rate onto the peer reac-capture node so it
 	 * presents the same Format the wire is actually running at — the gap that
 	 * left reac-capture's Format stuck at boot rate while reac-playback's
@@ -1167,7 +1166,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 }
 
 /* MAIN LOOP: stamp reac.role / reac.cfg.role.state / reac.cfg.role.refused
- * (2026-08-26-reac-runtime-config.md, the ROLE half) — the read side of the
+ * (2026-08-26-reac-runtime-config, the ROLE half) — the read side of the
  * `reac.cfg.role` write door on_param_changed answers below. Plain-field
  * shadow-and-compare, same pattern as sink_publish_rate_props above; no
  * cross-thread atomic to read because this increment's role apply never
@@ -1219,7 +1218,7 @@ static void sink_publish_role_props(struct reac_sink_node *n)
 }
 
 /* MAIN LOOP: stamp reac.headamp.asserted / .state / .refused
- * (2026-09-14-headamp-as-node-params.md §3a) — the read side of the
+ * (2026-09-14-headamp-as-node-params §3a) — the read side of the
  * `reac.headamp.<ch>.<param>` write door. Shadow-and-compare on the same 200 ms
  * tick as the rate and role pairs, so a knob turn costs one property update and a
  * quiet desk costs a string compare.
@@ -1848,7 +1847,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			 * recognition; `caps` is the constant phantom/pad/sens trio. */
 			REAC_PROP_HEADAMP_CHANNELS, ha_seed_channels,
 			REAC_PROP_HEADAMP_CAPS, REAC_HEADAMP_CAPS_DEFAULT,
-			/* The head-amp READ side (2026-09-14-headamp-as-node-params.md §3a):
+			/* The head-amp READ side (2026-09-14-headamp-as-node-params §3a):
 			 * the travel, what this daemon is asserting, and whether a write can
 			 * reach the wire at all. Kept live by sink_publish_headamp_props. */
 			REAC_PROP_HEADAMP_SENS_MAX, ha_sens_max,
@@ -2266,7 +2265,7 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	 * call, to queue the replacement's connect — the two requests reach the daemon
 	 * over the same connection in the order sent, so the old global's removal is
 	 * always processed ahead of the new one's creation. This closes the ordering gap
-	 * docs/design/notes/2026-08-26-duplicate-reac-node.md flagged as unverified; a
+	 * 2026-08-26-duplicate-reac-node flagged as unverified; a
 	 * live pw-dump count is still what proves the graph itself never shows both. */
 	if (n->stream) {
 		pw_stream_disconnect(n->stream);
