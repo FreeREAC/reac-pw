@@ -1411,8 +1411,7 @@
  * -65 at 0x37 is what the measured span then makes it. Raw data:
  * reac-pw docs/measurements/sens-sweep-2026-08-23-*.csv.
  *
- * REMOVED 2026-09-25 as dead facts
- * (2026-09-25-contract-copies):
+ * REMOVED 2026-09-25 as dead facts (audit 2026-09-25-contract-copies):
  * four rows describing the firmware's analog STAGES, read by no consumer,
  * no grammar and no copy in any of the three repos. What they recorded:
  * the step table selects between 4 coarse analog ranges, driven onto two
