@@ -25,3 +25,7 @@ logs/
 /.claude/
 CLAUDE.md
 AGENTS.md
+
+# compiled Python embeds the build machine paths
+__pycache__/
+*.py[co]
