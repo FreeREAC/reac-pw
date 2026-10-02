@@ -1096,6 +1096,14 @@ down_pair pinm0 mbox1
 # miniature. What has to happen: the daemon hears vid 11 and vid 12 on trunk0, CREATES
 # trunk0.11 and trunk0.12 with nothing typed, serves each as an ordinary segment with a
 # box on it, and refuses to be a segment on the parent itself.
+#
+# THIS ARM WAITS ON WHAT IT ASSERTS, NEVER ON A CLOCK (#99). Every wait below ends on its
+# own condition -- the line in the journal, the node on the graph, the frames decoded --
+# and TRUNK_HANG is the one wall-clock number in the arm: the hang guard, which says the
+# daemon is stuck, not that it is slow. Nothing here measures time, so nothing here fails
+# on it: with the test's whole process group starved to 0.7% of the wall clock, the arm
+# went red at a 25 s wait for "segment up" while that same segment was decoding its box.
+TRUNK_HANG=120
 peer ip link add link tbox0 name tbox0.11 type vlan id 11 || exit 90
 peer ip link add link tbox0 name tbox0.12 type vlan id 12 || exit 90
 # AND THE COLD ONE (ruling 2026-09-22). VLAN 14 carries NO REAC at all, ever: its only
@@ -1145,16 +1153,16 @@ ip link set trunk1.13 up
 
 # THE TAG IS HEARD, AND IT IS HEARD PER VID. This is the assertion that could not have
 # been made at all before this release.
-wait_for "\[trunk0\] tagged REAC heard — vid 11" 20 || {
+wait_for "\[trunk0\] tagged REAC heard — vid 11" $TRUNK_HANG || {
 	echo "FAIL: tagged REAC on vid 11 was never heard on the trunk parent"
 	tail -30 "$LOG"; tail -3 "$RT/tb11.log"; exit 1; }
-wait_for "\[trunk0\] tagged REAC heard — vid 12" 20 || {
+wait_for "\[trunk0\] tagged REAC heard — vid 12" $TRUNK_HANG || {
 	echo "FAIL: vid 11 was heard and vid 12 was not, so the detector is not per-VLAN"
 	tail -30 "$LOG"; tail -3 "$RT/tb12.log"; exit 1; }
 # THE NETDEVS ARE MADE, with nothing typed, and the journal says which is which.
-wait_for "\[trunk0\] vid 11: created trunk0.11 (marked reac-pw:minted)" 20 || {
+wait_for "\[trunk0\] vid 11: created trunk0.11 (marked reac-pw:minted)" $TRUNK_HANG || {
 	echo "FAIL: vid 11 was heard and trunk0.11 was never created"; tail -30 "$LOG"; exit 1; }
-wait_for "\[trunk0\] vid 12: created trunk0.12 (marked reac-pw:minted)" 20 || {
+wait_for "\[trunk0\] vid 12: created trunk0.12 (marked reac-pw:minted)" $TRUNK_HANG || {
 	echo "FAIL: vid 12 was heard and trunk0.12 was never created"; tail -30 "$LOG"; exit 1; }
 # ---- THE COLD VLAN: HEARD FROM A FRAME THAT IS NOT REAC, AND SERVED (ruling 2026-09-22).
 # Nothing has EVER spoken REAC on vid 14 in this run, and nothing will. All the daemon has
@@ -1162,7 +1170,7 @@ wait_for "\[trunk0\] vid 12: created trunk0.12 (marked reac-pw:minted)" 20 || {
 # rig, where every box is a slave waiting for a master that cannot exist until its netdev
 # does. The frame COUNT in the line is the control: a detector that saw nothing cannot
 # print one.
-wait_for "\[trunk0\] tagged VLAN heard — vid 14" 20 || {
+wait_for "\[trunk0\] tagged VLAN heard — vid 14" $TRUNK_HANG || {
 	echo "FAIL: vid 14 carried tagged frames that were not REAC and the VLAN was never"
 	echo "      heard. On a cold trunk that is the only evidence there is, so the segment"
 	echo "      would exist only if someone hand-wrote it into reac-pw.conf."
@@ -1170,7 +1178,7 @@ wait_for "\[trunk0\] tagged VLAN heard — vid 14" 20 || {
 grep -a "\[trunk0\] tagged VLAN heard — vid 14" "$LOG" | grep -qaE '\(([1-9][0-9]*) frame' || {
 	echo "FAIL: vid 14 was named with NO frame count — a detector that saw nothing cannot"
 	echo "      have named it"; grep -a "vid 14" "$LOG" | head -3; exit 1; }
-wait_for "\[trunk0\] vid 14: created trunk0.14 (marked reac-pw:minted)" 20 || {
+wait_for "\[trunk0\] vid 14: created trunk0.14 (marked reac-pw:minted)" $TRUNK_HANG || {
 	echo "FAIL: vid 14 was heard and no sub-interface was made for it, so a box arriving"
 	echo "      on that VLAN has nowhere to be heard"; tail -30 "$LOG"; exit 1; }
 # AND THE JOURNAL DOES NOT INVENT WHAT IT HEARD. "tagged REAC heard" over an LLDP frame
@@ -1180,7 +1188,7 @@ wait_for "\[trunk0\] vid 14: created trunk0.14 (marked reac-pw:minted)" 20 || {
 grep -qa "tagged REAC heard — vid 14" "$LOG" && {
 	echo "FAIL: nothing REAC has ever been on vid 14 and the daemon said it heard some"
 	grep -a "vid 14" "$LOG" | head -5; exit 1; }
-wait_for "\[trunk1\] vid 13: adopted trunk1.13 — the host made it" 20 || {
+wait_for "\[trunk1\] vid 13: adopted trunk1.13 — the host made it" $TRUNK_HANG || {
 	echo "FAIL: a pre-created sub-interface must be ADOPTED, not re-created"
 	# THE FIRST THING TO LOOK AT IS WHETHER THE PARENT WAS WATCHED AT ALL. Both bounds
 	# are 8 (taps and table rows), and until 0.5.4 a dropped segment gave neither back:
@@ -1197,16 +1205,16 @@ grep -q "\[trunk1\] vid 13: created" "$LOG" && {
 # THE PARENT IS NOT A SEGMENT. Fact B in one line: the untagged copies of both boxes'
 # frames arrive on trunk0, and a daemon that served them would put a master over two
 # VLANs' boxes at once.
-wait_for "\[trunk0\] this parent carries tagged REAC, so it is not itself a segment" 20 || {
+wait_for "\[trunk0\] this parent carries tagged REAC, so it is not itself a segment" $TRUNK_HANG || {
 	echo "FAIL: the trunk parent was never named as a trunk"; tail -30 "$LOG"; exit 1; }
 
 # THE JOB: BOTH VLANS ARE SERVED AS ORDINARY SEGMENTS, each following its own box's clock,
 # each with its own node on the graph at its own width. Two boxes, one cable.
-wait_for "\[trunk0.11\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" 25 || {
+wait_for "\[trunk0.11\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" $TRUNK_HANG || {
 	echo "FAIL: trunk0.11 was created and never served as a segment"; tail -30 "$LOG"; exit 1; }
-wait_for "\[trunk0.12\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" 25 || {
+wait_for "\[trunk0.12\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" $TRUNK_HANG || {
 	echo "FAIL: trunk0.12 was created and never served as a segment"; tail -30 "$LOG"; exit 1; }
-wait_for "\[trunk1.13\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" 25 || {
+wait_for "\[trunk1.13\] segment up (slave, enrolling with the box that masters it, chosen by hearing the wire)" $TRUNK_HANG || {
 	echo "FAIL: the adopted trunk1.13 was not served like any other interface"
 	tail -30 "$LOG"; exit 1; }
 # AND NOTHING WAS STACKED ON A STACK. A sub-interface has no VLANs of its own: the frame
@@ -1219,10 +1227,26 @@ if ip -o link | awk '{print $2}' | tr -d ':' | grep -qE '\.[0-9]+\.[0-9]+'; then
 	echo "FAIL: a VLAN was created on a VLAN"; ip -o link | awk '{print $2}' | tr -d ':'
 	grep -E "created|adopted" "$LOG" | tail -10; exit 1
 fi
-sleep 1.5
-T11=$(daemon_node_props $PID reac-capture.trunk0.11)
-T12=$(daemon_node_props $PID reac-capture.trunk0.12)
-T13=$(daemon_node_props $PID reac-capture.trunk1.13)
+# THE NODES ARE READ WHEN THEY SAY WHAT IS ASSERTED BELOW, or at the hang guard: a node
+# reaches the graph before its box's address and width do, and a read a fixed time after
+# "segment up" judged whatever the daemon had got to by then. The assertions below then
+# run once, on the last read, so a node that never got there fails by its own name.
+trunk_nodes_agree() {
+	[ "$(fld "$T11" 5)" = "trunk0.11" ] && [ "$(fld "$T12" 5)" = "trunk0.12" ] &&
+	[ "$(fld "$T11" 7)" = "$TBOX11" ] && [ "$(fld "$T12" 7)" = "$TBOX12" ] &&
+	[ "$(fld "$T13" 7)" = "$TBOX13" ] &&
+	case "$(fld "$T11" 6)" in *"$FACT_BOX_S0808_IN ch"*) : ;; *) false ;; esac &&
+	case "$(fld "$T12" 6)" in *"$FACT_BOX_S1608_IN ch"*) : ;; *) false ;; esac
+}
+T0=$SECONDS
+while :; do
+	T11=$(daemon_node_props $PID reac-capture.trunk0.11)
+	T12=$(daemon_node_props $PID reac-capture.trunk0.12)
+	T13=$(daemon_node_props $PID reac-capture.trunk1.13)
+	trunk_nodes_agree && break
+	[ $((SECONDS - T0)) -ge $TRUNK_HANG ] && break
+	sleep 0.5
+done
 [ -n "$T11" ] && [ -n "$T12" ] && [ -n "$T13" ] || {
 	echo "FAIL: a trunk's VLANs must reach the graph as ordinary segments; got"
 	echo "      11='$T11' 12='$T12' 13='$T13'"; daemon_nodes $PID; tail -30 "$LOG"; exit 1; }
@@ -1255,7 +1279,9 @@ esac
 # nothing. The fake box master and the slave live in nested namespaces on one loaded host,
 # and "the slave went deaf" and "the fake stopped sending" read identically off the daemon's
 # counter alone. So the fake's OWN counter (`tx` in its report) is read across the SAME
-# window. The daemon's claim is untouched: if the fake sent at least as many frames in the
+# wait. The wait ends when the daemon has decoded the frames, or at the hang guard, never
+# at a receive window: a starved host decodes late, and late is not deaf. The daemon's
+# claim is untouched: if the fake sent at least as many frames in the
 # window as the assertion asks the daemon to have decoded, the daemon had them to decode
 # and the miss is a FAIL. Only a fake that did not supply them is a SKIP, and it says so.
 # A report that cannot be read at all is a harness fault, never a licence to skip. The
@@ -1267,9 +1293,11 @@ for SEG in trunk0.11 trunk0.12; do
 	REP="$RT/tb${SEG##*.}.rep"
 	TX0=$(fake_tx "$REP")
 	OK=0
-	for _i in $(seq 30); do
+	T0=$SECONDS
+	while :; do
 		OK=$(sed -n "s/^reac_rx: \[$SEG\] ok=\([0-9]*\) .*/\1/p" "$LOG" | tail -1)
 		[ -n "$OK" ] && [ "$OK" -gt $NEED ] && break
+		[ $((SECONDS - T0)) -ge $TRUNK_HANG ] && break
 		sleep 0.4
 	done
 	TX1=$(fake_tx "$REP")
@@ -1281,7 +1309,7 @@ for SEG in trunk0.11 trunk0.12; do
 			exit 1; }
 		if [ $((TX1 - TX0)) -le $NEED ]; then
 			echo "SKIP: $SEG decoded no audio (ok='$OK'), and the fake box master feeding it"
-			echo "      sent $((TX1 - TX0)) frame(s) in the same 12 s window (tx $TX0 -> $TX1;"
+			echo "      sent $((TX1 - TX0)) frame(s) in the same $((SECONDS - T0)) s wait (tx $TX0 -> $TX1;"
 			echo "      the check needs $NEED). The fake stopped, not the daemon (#99)."
 			kill -0 $TFAKE1 $TFAKE2 2>/dev/null || echo "      (a fake process is gone)"
 			tail -3 "$RT/tb${SEG##*.}.log" | sed 's/^/        /'
