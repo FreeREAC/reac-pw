@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Record every capture port of a REAC node and report per-port RMS in dBFS.
 #
 # pw-record --target= SILENTLY IGNORES its target, so two captures aimed at

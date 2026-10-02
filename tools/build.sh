@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # The documented build path for reac-pw. Use this, not a bare `meson compile`.
 #
 # FILE CAPABILITIES LIVE ON THE INODE, AND EVERY RELINK MAKES A NEW ONE. So each

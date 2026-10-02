@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Every dequeued pw_buffer must be queued back, on EVERY path.
 
 This is a source check, not a unit test, because the defect lives in a PipeWire

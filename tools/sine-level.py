@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Level of a steady sine on one channel: RMS, peak, and the crest factor.
 
 RMS rather than an FFT bin. A single-bin estimate under-reads badly here because
