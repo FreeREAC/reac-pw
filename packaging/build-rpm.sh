@@ -1,5 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Build this package's RPMs.
 #
 # _topdir is forced to the PHYSICAL path of ~/rpmbuild. Where ~/rpmbuild is a

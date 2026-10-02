@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # The PACKAGED SHAPE: `reac-pw` with NO arguments must try to START — hearing its
 # segments on every linked interface — and never answer with the usage text.
 #
