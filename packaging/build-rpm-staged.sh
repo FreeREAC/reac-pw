@@ -1,5 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Build reac-pw's RPM against a libreac/libreac-transport that is NOT installed on the
 # host -- the soname-bump case build-rpm.sh cannot cover.
 #

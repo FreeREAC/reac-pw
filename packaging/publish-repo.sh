@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Assemble a signed dnf repository tree for the FreeREAC/openmixer RPM family
 # (task #320). This is the hand-run publishing layer; the tag-triggered GitHub
 # Actions job (#321) is expected to call exactly this script, not reimplement it.

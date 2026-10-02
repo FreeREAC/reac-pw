@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Emit src/reac_scene_body.c from a recovered scene body.
 
     tools/gen-scene-body.py data/m200i-scene-8904.bin > src/reac_scene_body.c

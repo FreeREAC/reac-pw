@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """How much of a channel's energy sits at one frequency?
 
 An ELECTRICAL loopback of a synthesised tone is nearly pure: almost all the

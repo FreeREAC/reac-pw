@@ -20,3 +20,7 @@
 reac-pw-*.tar.gz
 logs/
 /_build/
+
+# compiled Python embeds the build machine paths
+__pycache__/
+*.py[co]

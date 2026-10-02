@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Per-channel RMS/peak of a float32 WAV, in dBFS.
 
 A REAC node always carries a ~-106.6 dBFS floor, so an EXACT digital zero on
