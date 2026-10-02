@@ -1,4 +1,4 @@
-# The box that never came back — msi, 2026-09-16
+# The box that never came back — the desk, 2026-09-16
 
 Raw evidence for the ruling in
 `docs/design/specs/2026-09-16-a-dropped-box-wakes-on-a-phy-edge.md`. Journal lines are

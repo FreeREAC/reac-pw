@@ -5,7 +5,7 @@
 # WHOLE-BINARY, END TO END: a box that DROPPED while its desk was away is re-acquired by
 # the daemon alone, with nobody touching a cable.
 #
-# THE JOB, AND THE DAY IT WAS NOT DONE. 2026-09-16 on msi: a 77-minute s2idle, and on resume
+# THE JOB, AND THE DAY IT WAS NOT DONE. 2026-09-16 on the desk: a 77-minute s2idle, and on resume
 # the daemon re-took the wire as MASTER and probed correctly for SEVENTY-THREE MINUTES across
 # two processes — about 1620 completed scene pushes, 8003 frames a second leaving the NIC,
 # rx_box_frames=0 — while an enrolled S-1608 sat there silent. Every unit test in this repo

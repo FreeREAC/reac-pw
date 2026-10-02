@@ -440,7 +440,7 @@ parent carrying tagged REAC is never itself driven (trunk spec §3's ruling, §4
 every sub-interface's frames untagged and a master on it would be a second master for a box
 already served on its VLAN. That verdict, `reac_topo_is_trunk()`, goes on keying on **tagged REAC
 only**. The desk measures why: on 2026-09-10 enp131s0's S-4000 was heard UNTAGGED, because VLAN 11
-is that trunk port's NATIVE VLAN (openmixer `docs/design/notes/2026-09-10-continuation-for-tecman.md`).
+is that trunk port's NATIVE VLAN (an openmixer design note, 2026-09-10).
 A trunk verdict drawn from one STP frame would stop that parent being driven and unserve a segment
 that is working today. **Hearing a VID and refusing to drive a parent are two different questions
 about the same frame, and only the second one is about REAC.**
