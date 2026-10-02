@@ -45,7 +45,7 @@ TOKEN_DEF = re.compile(r'X\(\s*(RC_[A-Z_]+)\s*,\s*"([A-Z_]+)"\s*\)')
 
 def find_libreac(reac_pw_root):
     """The sibling libreac checkout, when present: LIBREAC_SRCDIR if set, else the
-    conventional sibling beside this repo (the build-node script's own convention
+    conventional sibling beside this repo (tools/build-with-libreac.sh's own convention
     for the same lookup). Recognized by shipping include/reac/reac_code.h — the
     shared vocabulary header (2026-09-17-tunables-api-and-shared-refusal-codes) — not just by
     existing:

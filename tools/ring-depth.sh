@@ -1,5 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Trace the TX frame ring's depth from OUTSIDE the daemon, with no rebuild and no
 # restart.
 #

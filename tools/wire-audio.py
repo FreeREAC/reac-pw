@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Is the AUDIO region of our downstream frames actually carrying signal?
 
 A REAC downstream frame is 1492 B: header, control block [18:50], then audio.

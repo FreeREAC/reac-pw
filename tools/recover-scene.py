@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Recover a desk's 8904-byte scene body from a REAC establish capture.
 
 The master pushes the scene as one op-0101 header carrying the total, 341 op-0100

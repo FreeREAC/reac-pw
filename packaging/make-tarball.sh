@@ -1,5 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
 # Assemble the reac-pw source tarball for rpmbuild. The RPM builds against the
 # SYSTEM libreac (BuildRequires: pkgconfig(libreac); the spec passes
 # --wrap-mode=nofallback so the subproject fallback can never mask a missing

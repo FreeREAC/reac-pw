@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 """Level of a steady tone on one channel, in a form neither end of the SENS range can fake.
 
 Two estimators are wrong here, each at one end:
