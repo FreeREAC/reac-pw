@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_role_swap — the LIFECYCLE of a `reac.cfg.role` change
- * (2026-08-20-reac-master-arbitration.md §8). reac_role_cfg's own test covers
+ * (2026-08-20-reac-master-arbitration §8). reac_role_cfg's own test covers
  * the decision (parse, same-role no-op, the accepted answer); this one covers
  * what the segment says AFTERWARDS, across the cross-engine swap the decision
  * asks for.

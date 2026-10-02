@@ -6,7 +6,7 @@
  * reac_source_node.c so it is provable without a live pw_stream (same
  * reasoning as reac_sink_format.h: PURE, no socket, no RT privilege).
  *
- * WHY THIS EXISTS: docs/design/notes/2026-08-26-duplicate-reac-node.md
+ * WHY THIS EXISTS: 2026-08-26-duplicate-reac-node
  * measured two reac-playback nodes per segment on a clean boot — a `probing`
  * placeholder (box `none`) beside the `established` box-sized node. Tracing
  * both reac_sink_node_ensure and reac_source_node_ensure end to end shows

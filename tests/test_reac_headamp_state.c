@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* The head-amp door's READ side — docs/design/specs/2026-09-14-headamp-as-node-
- * params.md §3a, RULED by the operator 2026-09-14.
+/* The head-amp door's READ side — 2026-09-14-headamp-as-node-params §3a, RULED by the operator
+ * 2026-09-14.
  *
  * Two halves, both offline (no socket, no graph, no RT privilege).
  *

@@ -5,7 +5,7 @@
 # WHOLE-BINARY: a segment pinned `role = box` PRESENTS ITS DECLARED ROW TO THE WIRE —
 # the geometry, the firmware, the REAC version and the name — and the graph and the roster
 # say the same thing the frames do.
-# (docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md §1, §2, §3, §5.)
+# (2026-09-17-the-daemon-can-be-a-box §1, §2, §3, §5.)
 #
 # MEASURED AT THE FAR END OF THE CABLE, not in a log. The unit suite proves the synthesiser
 # reproduces three real boxes byte for byte (libreac tests/test_box_table.c); what it cannot

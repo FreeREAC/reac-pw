@@ -6,7 +6,7 @@
  * The masterless observation (reac_knock) and the tap-wait (reac_tapwait) are libreac's
  * since 1.4.0: deciding what a wire is belongs to the library, and reac-pw deals with
  * enrolled nodes (operator ruling 2026-09-22, libreac
- * docs/design/specs/2026-09-22-enrolment-decisions-belong-to-the-library.md). Their
+ * 2026-09-22-enrolment-decisions-belong-to-the-library). Their
  * arithmetic is asserted THERE, in libreac's own `make test`, where a libreac change can
  * see it go red — which is exactly what it could not do while those files lived here.
  *
@@ -16,8 +16,8 @@
  * calling the installed surface with no reac-pw source and no local header in the build.
  *
  * THE TWO RULES, and the nine minutes they cost on 2026-09-21 22:17:45 (the journal is in
- * libreac's spec §0 and in reac-pw docs/design/notes/2026-09-21-one-stray-frame-pinned-a-
- * wire.md): a frame belonging to a box on ANOTHER interface was misattributed to
+ * libreac's spec §0 and in reac-pw 2026-09-21-one-stray-frame-pinned-a-wire): a frame
+ * belonging to a box on ANOTHER interface was misattributed to
  * `enp128s20f0u6`'s sniffer in the instant it opened. One frame cancelled the licence for
  * the life of the process and one frame made an EVER-true "heard anything" bind the hunt
  * forever; the wire then carried 0 RX packets for nine minutes with a cold S-0808 on the

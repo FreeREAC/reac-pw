@@ -154,7 +154,7 @@ void reac_source_node_publish_box_master(struct reac_source_node *n,
                                          unsigned width, uint64_t mac48, int enrolled);
 
 /* Live-update the reac-capture node's presented Format rate — the RATE half of
- * #208/2026-08-26-clock-tabs-and-reac-pace-coupling.md §1b ("a rate is ONE
+ * #208/2026-08-26-clock-tabs-and-reac-pace-coupling §1b ("a rate is ONE
  * wire rate — capture AND playback follow it together"). Mirrors reac_sink_
  * node.c's sink_reconnect_rate exactly: a same-object pw_stream_disconnect +
  * pw_stream_connect at a fresh Format pod (reac_sink_format_build, shared with

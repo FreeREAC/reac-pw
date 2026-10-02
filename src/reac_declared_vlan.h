@@ -19,7 +19,7 @@
  * and a box waiting on a PHY edge is woken by the wake ladder — and the desk paid for it
  * every boot: three VLANs minted on a parent that hears no tag, three vacant tap doors,
  * three roster rows, re-created after every drop of the parent
- * (docs/design/evidence/reac-pw-boot-2026-09-23.log).
+ * (reac-pw-boot-2026-09-23).
  *
  * WHAT COUNTS AS A DECLARATION, SINCE 2026-09-16. A `[segment <parent>.<vid>]` section —
  * reac_segconf_declared is the one reader, and this module is the table it fills. Naming

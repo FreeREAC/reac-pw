@@ -12,7 +12,7 @@
 # would reopen the defect and every unit test would stay green.
 #
 # reac_rt.c ITSELF moved to libreac-transport
-# (docs/design/specs/2026-09-11-reac-transport-library.md) — the door is no longer under
+# (2026-09-11-reac-transport-library) — the door is no longer under
 # this repo's src/ at all. The invariant this repo can still enforce on its own is the half
 # that matters most HERE: reac-pw's OWN src/ never spells SCHED_FIFO a second way. The
 # positive control (proving the sweep can see a real door, not just its absence) needs a

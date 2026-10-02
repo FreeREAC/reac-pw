@@ -22,7 +22,7 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # with enrolled nodes). Against an older libreac the build dies at the #include; the floor is
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
 BuildRequires:  pkgconfig(libreac) >= 1.5.0
-# libreac-transport (docs/design/specs/2026-09-11-reac-transport-library.md, 0.5.11): the
+# libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.5.0
@@ -98,7 +98,7 @@ DESTDIR=%{buildroot} meson install -C _build
 # THE RPM OWNS THE UNIT (1.0.8). Earlier releases deliberately shipped no unit here,
 # reasoning that "the canonical integration is openmixer-server's packaged USER unit
 # (reac-pw-master.service, driven by ~/.config/openmixer/reac.env)" -- that unit is
-# RETIRED (openmixer's docs/design/specs/2026-08-20-reac-master-arbitration.md,
+# RETIRED (openmixer's 2026-08-20-reac-master-arbitration,
 # amendment 2026-09-02 (second), rule f: "~/.config/openmixer/reac.env is RETIRED,
 # with reac-pw-master.service. Its only reader goes; a file with no reader is not a
 # store."). The unit openmixer's own adapter drives today is THIS package's
@@ -216,15 +216,14 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
   the pacer lost ETF and dropped every frame under the etf qdisc while the master counted
   pushes as COMPLETED, so the ladder bounced dead wires. New refusal NOTHING_SENT; every
   refusal is said once per change ("the wake ladder on '<if>' holds: ..."); a refused ETF
-  removes its qdisc at once (docs/design/specs/2026-09-16-a-dropped-box-wakes-on-a-phy-edge.md
-  §4, §7).
+  removes its qdisc at once (2026-09-16-a-dropped-box-wakes-on-a-phy-edge §4, §7).
 - DECLARED VLANS WAIT FOR THEIR TAG (operator ruling 2026-09-23: "we don't carry any VLANs
   if we don't detect VLANs"). A declared segment mints nothing until its VID is heard; the
   declaration only pins the role (segments spec, amended 2026-09-23).
 
 * Tue Sep 22 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.24-1
 - A VLAN HEARD FROM ANY TAG IS A SEGMENT, AND THE JOURNAL SAYS WHICH (operator ruling
-  2026-09-22; docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md, amended
+  2026-09-22; 2026-09-16-segments-and-roles-are-autodetected, amended
   that date). libreac 1.5.0's topology tap now reports a VID from any tagged frame, so a
   trunk's cold VLANs are minted from the switch's own STP/LLDP/ARP instead of declared;
   "REAC heard on this vid" is said at the frame, not at the netdev. Floors: libreac and
@@ -233,12 +232,13 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
   "no REAC heard in 500 ms" from a stamp only the sniffer callback advanced, while serving a
   segment blocked the loop ~530 ms: a wire carrying 2000 fps read as silent, the daemon took
   it as MASTER and yielded back. Measured, bisected to the knock re-open of 1.0.22, fixed by
-  draining the sniffer before the licence (docs/design/notes/2026-09-22-a-starved-poll-called-
-  a-busy-wire-silent.md). box-is-not-re-decided green; the loop block itself is still owed.
+  draining the sniffer before the licence
+  (2026-09-22-a-starved-poll-called-a-busy-wire-silent). box-is-not-re-decided green; the
+  loop block itself is still owed.
 
 * Tue Sep 22 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.23-1
 - DECIDING WHAT A WIRE IS IS NOT THIS DAEMON'S JOB (operator ruling 2026-09-22; libreac
-  docs/design/specs/2026-09-22-enrolment-decisions-belong-to-the-library.md). 1.0.22 had
+  2026-09-22-enrolment-decisions-belong-to-the-library). 1.0.22 had
   added two wire state machines here -- src/reac_knock.{h,c} (the masterless observation
   that licences driving a vacant wire) and src/reac_tapwait.{h,c} (how long a sighting the
   topology tap has not placed binds the hunt). Both feed reac_hunt, which is libreac's, and
@@ -375,7 +375,7 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
   built against libreac 1.2.0 would log the same two lines and leave the roster at
   probing, so the floor is raised in the spec AND in meson.build, where it fails
   at configure rather than on a live wire.
-- The spec docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md gains three
+- The spec 2026-09-17-the-daemon-can-be-a-box gains three
   amendments: the captured S-4000H, the ruling that any stagebox enrols on what it
   declares, and the chassis numbering (inputs 1-8, outputs from 9).
 - tests/box-0832-enrols.sh drives the real binary against fake_box wearing that row
@@ -387,7 +387,7 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
   box-model table -- port table, head-amp strap, firmware, REAC version and name -- enrols
   as the slave end of the pairing, publishes a SOURCE of what the mixer sends it and a SINK
   of what we send the mixer, and reports `box` on the roster.
-  (docs/design/specs/2026-09-17-the-daemon-can-be-a-box.md.)
+  (2026-09-17-the-daemon-can-be-a-box.)
 - THE MODEL TABLE IS DATA, so a model nobody has captured is a row and not code: S-0816,
   S-2416, S-4000D/M/H, the S-4000S's 0832 split, and the operator's 40-channel experiment
   rows. A derived row's identity is OURS -- FR-<width>, firmware 1.014, REAC 9.014 -- and no
@@ -535,7 +535,7 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 - This closes a gap the spec used to explain away: the %%install comment through 1.0.7
   said the canonical unit was openmixer-server's packaged reac-pw-master.service,
   driven by ~/.config/openmixer/reac.env. That integration is RETIRED (openmixer's
-  docs/design/specs/2026-08-20-reac-master-arbitration.md, amendment 2026-09-02
+  2026-08-20-reac-master-arbitration, amendment 2026-09-02
   (second), rule f: "~/.config/openmixer/reac.env is RETIRED, with
   reac-pw-master.service. Its only reader goes; a file with no reader is not a
   store."). The unit openmixer's own adapter drives today is THIS package's
@@ -698,7 +698,7 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
   PipeWire-facing part, main.c's node half) and CAP_NET_RAW/CAP_NET_ADMIN, which the
   binding process still holds and the linked library runs inside. No behaviour change:
   same test names, same counts (69 tests, 68 ok, 1 skipped), the --help/env vocabulary
-  byte-identical. See docs/design/specs/2026-09-11-reac-transport-library.md (in libreac).
+  byte-identical. See 2026-09-11-reac-transport-library (in libreac).
 
 * Wed Sep 09 2026 Pau Aliagas <linuxnow@gmail.com> - 0.5.7-1
 - THE DAEMON NO LONGER SPEAKS REAC CONTROL. Operator ruling: sockets and PipeWire only. The

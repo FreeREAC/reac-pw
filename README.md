@@ -81,27 +81,15 @@ systemctl --user enable --now reac-pw
 A package never writes into `$HOME` to fix this for you — removing a hand-written
 file has to be a deliberate, visible step, not a postinst side effect.
 
-**From source.**
-
-```
-sudo dnf install meson ninja-build gcc pipewire-devel libreac-devel libreac-transport-devel
-meson setup build && ninja -C build && meson test -C build
-```
-
-`libreac-transport-devel` is a hard requirement (no fallback). `libreac-devel`
-is resolved the same way, or meson's wrap fetches and builds it as a
-subproject when no system package is new enough.
+**From source.** See [BUILDING.md](BUILDING.md).
 
 ## Run
 
 ```
-meson setup   build
-meson compile -C build
-meson test    -C build                              # unit tests, no PipeWire needed
-./build/reac-pw --pcap capture.pcap --rate 48000     # offline replay
-sudo ./build/reac-pw                                 # the packaged shape: hears its segments
-sudo ./build/reac-pw --live reac0 --tx reac0                       # master, pinned to one NIC
-sudo ./build/reac-pw --live reac0 --role slave --tx reac0          # slave: we slave to a desk
+reac-pw --pcap capture.pcap --rate 48000             # offline replay
+reac-pw                                              # the packaged shape: hears its segments
+reac-pw --live reac0 --tx reac0                      # master, pinned to one NIC
+reac-pw --live reac0 --role slave --tx reac0         # slave: we slave to a desk
 ```
 
 **The packaged shape configures nothing.** With no flags, reac-pw sniffs every
@@ -138,8 +126,7 @@ silent wire is mastered and flooded. Nothing in the environment can change a rol
 To override ONE segment — a switch mirror port, a recorder, a NIC to leave alone —
 write `~/.config/reac-pw/reac-pw.conf` by hand (`[segment IFNAME]` with `role =` or
 `ignore = yes`); nothing generates that file. See
-[packaging/reac-pw.conf.example](packaging/reac-pw.conf.example) and
-[the spec](docs/design/specs/2026-09-16-segments-and-roles-are-autodetected.md).
+[packaging/reac-pw.conf.example](packaging/reac-pw.conf.example).
 
 Everything above the built-in default EXCEPT the role can also be set through a
 layered environment/config lookup — the command line wins, then the process
@@ -202,14 +189,10 @@ why a write was refused — are one table in
 door: [reac-stageboxes](https://github.com/FreeREAC/reac-stageboxes), a
 desktop app for the preamps.
 
-## Tools and tests
+## Tools
 
-`meson test -C build` runs the full unit suite; it needs no PipeWire and no
-live REAC wire. `tools/` carries the on-wire diagnostics used to measure a
-running daemon without a rebuild — among them `clock-drift.py` and
-`ring-depth.sh` (pacer/clock health), `probe-ports.sh` and `wav-rms.py`
-(per-port level), and `tone-purity.py` / `sine-level.py` (signal quality on a
-captured tone).
+`tools/` carries the on-wire diagnostics used to measure a running daemon; see
+[BUILDING.md](BUILDING.md).
 
 ## Known issues
 
@@ -219,33 +202,6 @@ one box session per segment, so it never notices the real box rebooted and
 never reopens the slot. With reac-pw off the segment, the desk drops the
 session in a few seconds and the box enrols. This is the failure the recorder
 rule above exists to avoid.
-
-## Releasing
-
-`.github/workflows/release-rpm.yml` builds the reac-pw RPM in a `fedora:44`
-container from `packaging/reac-pw.spec` and publishes it into the public dnf
-tree at [freereac.github.io/rpm](https://freereac.github.io/rpm) (one repo,
-`freereac.repo`, one GPG key) — the same tree libreac's own release-rpm.yml
-publishes into beside it. It is `workflow_dispatch` only, never on push:
-
-```
-gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=false   # dry run, publishes nothing
-gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=true    # signs and publishes to the public dnf tree
-```
-
-`tag` must already exist and match `v[0-9]*`. `sign` defaults to `false`,
-which stops before the tree is touched — the assembled unsigned tree is still
-attached to the run as an artifact for inspection. Building needs
-`pkgconfig(libreac) >= 1.0.1` and `pkgconfig(libreac-transport) >= 1.0.1`,
-resolved from the same public tree by installing its `freereac.repo` before
-`dnf builddep` runs — so **libreac's own equivalent workflow must have
-published there first**, or the build fails loudly and by name.
-
-**Hand-publish fallback**, if the workflow cannot run (no runner, a secret
-missing): build locally and run `packaging/publish-repo.sh --rpm-dir DIR
---out <checkout of freereac.github.io> --key-id A14B3E1E1F69EBF4`, then
-commit and push `rpm/` from that checkout — the same script the workflow
-calls, run by hand over the same tree.
 
 ## Licence
 

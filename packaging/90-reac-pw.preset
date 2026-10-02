@@ -17,6 +17,6 @@
 # This does not fight the packaged reac-pw-master.service: that unit and this one
 # `Conflicts=` each other in the unit file itself (packaging/reac-pw.service), and
 # openmixer's arbitration spec retired reac-pw-master.service on 2026-09-02 --
-# nothing installs it any more. See README.md and docs/design/specs (openmixer repo)
-# 2026-08-20-reac-master-arbitration.md, amendment 2026-09-02 (second), rule f.
+# nothing installs it any more. See README.md and the openmixer specs
+# 2026-08-20-reac-master-arbitration, amendment 2026-09-02 (second), rule f.
 enable reac-pw.service

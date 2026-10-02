@@ -3,7 +3,7 @@
 
 /* reac_role_cfg — the `reac.cfg.role` live control, the ROLE half of runtime
  * config alongside reac_rate_cfg's pace half
- * (docs/design/specs/2026-08-26-reac-runtime-config.md, in the openmixer tree).
+ * (2026-08-26-reac-runtime-config, in the openmixer tree).
  *
  * THE WRITE-SIDE PROP NAME AND ENCODING ARE ALREADY SHARED VOCABULARY. Unlike
  * rate (where reac-pw's own module came first and libreac's reac_cfg.h caught
