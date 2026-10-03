@@ -29,7 +29,7 @@ ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().paren
 
 # Joined at run time so this file does not match its own patterns.
 DOCS = "docs" + "/"
-INTERNAL_DIRS = (DOCS + "design", DOCS + "audits", ".claude")
+INTERNAL_DIRS = (DOCS + "design", DOCS + "audits")
 INTERNAL_FILES = (DOCS + "RIG-MASTERS.txt",)
 SKIP_DIRS = {".git", "subprojects", "logs", "__pycache__"}
 
@@ -46,6 +46,7 @@ def public_files():
         dirnames[:] = sorted(
             d for d in dirnames
             if d not in SKIP_DIRS and not d.startswith("build") and not d.startswith("_build")
+            and not (d.startswith(".") and d != ".github")
             and (rel_dir + d) not in INTERNAL_DIRS)
         for f in sorted(filenames):
             rel = rel_dir + f
