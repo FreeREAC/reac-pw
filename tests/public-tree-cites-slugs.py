@@ -46,6 +46,7 @@ def public_files():
         dirnames[:] = sorted(
             d for d in dirnames
             if d not in SKIP_DIRS and not d.startswith("build") and not d.startswith("_build")
+            and not (d.startswith(".") and d != ".github")
             and (rel_dir + d) not in INTERNAL_DIRS)
         for f in sorted(filenames):
             rel = rel_dir + f
