@@ -197,6 +197,12 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Tue Oct 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.28-1
+- The source tarball carries facts/ (the protocol's numbers, which meson includes) and
+  NOTICE. 1.0.27's tarball had neither and its RPM build stopped at meson setup
+  ("Include dir facts does not exist"), so 1.0.27 was tagged and never packaged; 1.0.28
+  is 1.0.27's code.
+
 * Tue Oct 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.27-1
 - A BOX NO MODEL ROW MATCHES GETS NODES SIZED FROM ITS DECLARATION. reac-capture takes the
   declared inputs, reac-playback the declared outputs, and the box is named S-4000S-<in><out>
