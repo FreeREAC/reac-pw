@@ -63,6 +63,7 @@
 #include <reac/transport/reac_rx.h>
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
+#include "reac_box_row.h"      /* a box with no declared outputs has no reac-playback */
 #include <reac/transport/reac_slave.h>
 #include <reac/transport/reac_tap.h>       /* the PASSIVE role: serve what is heard, send nothing */
 #include "reac_role_cfg.h"   /* the reac.cfg.role vocabulary + refusal codes */
@@ -1019,7 +1020,10 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 		 * but the verdict names WHICH node(s) are gone, and only those are rebuilt: a
 		 * node that failed alone must never cost the segment its healthy sibling. */
 		const char *sink_why = NULL;
-		int sink_on_graph = reac_sink_node_on_graph(c->sink, &sink_why);
+		/* No playback node is the right answer for a box with no outputs, never a
+		 * node to rebuild. */
+		int sink_on_graph = !reac_box_row_has_playback(bm) ||
+		                    reac_sink_node_on_graph(c->sink, &sink_why);
 		/* Read BEFORE the step, which resets the ladder the moment the pair is back. */
 		int attempts = c->recover.attempts;
 		struct reac_node_pair_verdict v =
@@ -1093,12 +1097,22 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 			        "is the permanent one.\n",
 			        c->tag, (int)strcspn(pin, ":"), pin, bm->display);
 	}
+	/* A BOX NO ROW NAMES IS SIZED FROM ITS DECLARATION (reac_box_row.h). Said once per
+	 * box, beside libreac's own line, with both widths. */
+	if (bm->origin == REAC_BOX_DERIVED && c->announced != bm)
+		fprintf(stderr, "reac-pw: %sbox declared %d inputs / %d outputs (no model row) — "
+		        "%s\n", c->tag, bm->in_ch, bm->out_ch, bm->display);
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
 		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
 		        "%scould not size reac-capture to %d ch (%s)\n",
 		        c->tag, bm->in_ch, bm->display);
-	if (reac_sink_node_ensure(c->sink, bm->out_ch, bm->display) != 0)
+	/* A BOX THAT DECLARES NO OUTPUTS HAS NO reac-playback (reac_box_row.h): a node
+	 * built at zero ports is given a stereo pair by the graph, which is two outputs
+	 * the box does not have. */
+	if (!reac_box_row_has_playback(bm))
+		reac_sink_node_unpublish(c->sink);
+	else if (reac_sink_node_ensure(c->sink, bm->out_ch, bm->display) != 0)
 		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
 		        "%scould not size reac-playback to %d ch (%s)\n",
 		        c->tag, bm->out_ch, bm->display);

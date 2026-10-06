@@ -21,11 +21,12 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # (operator ruling 2026-09-22 — deciding what a wire is belongs to libreac, this daemon deals
 # with enrolled nodes). Against an older libreac the build dies at the #include; the floor is
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
-BuildRequires:  pkgconfig(libreac) >= 1.5.0
+# >=1.5.1 SINCE 1.0.27: the grant takes a box up to 40 channels wide (a 40 in / 0 out box).
+BuildRequires:  pkgconfig(libreac) >= 1.5.1
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.5.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.5.1
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -34,8 +35,8 @@ Requires:       pipewire
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.2.2
-Requires:       libreac-transport >= 1.2.2
+Requires:       libreac >= 1.5.1
+Requires:       libreac-transport >= 1.5.1
 %{?systemd_requires}
 
 %description
@@ -196,6 +197,16 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Tue Oct 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.27-1
+- A BOX NO MODEL ROW MATCHES GETS NODES SIZED FROM ITS DECLARATION. reac-capture takes the
+  declared inputs, reac-playback the declared outputs, and the box is named S-4000S-<in><out>
+  unless a Roland row has the same widths. A box that declares no outputs (40 in / 0 out)
+  gets no reac-playback node.
+- A BOX WITH NO reac-playback CARRIES ITS IDENTITY ON reac-capture. Firmware, REAC version,
+  hw block and reac.box.mac are stamped on both nodes through one composer, and a capture node
+  rebuilt after a configuration change is stamped at once instead of staying blank.
+- Built against libreac 1.5.1, which grants a box up to 40 channels wide.
+
 * Thu Sep 24 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.26-1
 - A SINK THAT FAILS ALONE NO LONGER TEARS DOWN A HEALTHY CAPTURE NODE. Recovery now judges each
   side of the pair: one ladder still runs on the segment's absence, but only the side that is

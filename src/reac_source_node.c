@@ -58,6 +58,7 @@ struct reac_source_node {
 	char label[64];   /* effective box label on node.description, "" = none (mirrors
 	                   * reac_sink_node's own n->label — the ensure() identity check
 	                   * needs it to tell a width-preserving relabel from a no-op) */
+	int badge_stamped;   /* publish_link has reached this node since it was built */
 	int debug;   /* REAC_DEBUG env: emit per-second ring read peak/fill telemetry */
 	char nodename[80];              /* what this node is called, for its own messages */
 	/* The graph-clock reference, published from the RT callback into the segment's
@@ -460,27 +461,27 @@ static void source_prop_set(void *ctx, const char *key, const char *value)
 
 void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
-                                   const char *box_model,
-                                   const char *box_width,
-                                   uint64_t box_mac48)
+                                   const struct reac_box_model *bm,
+                                   uint64_t box_mac48,
+                                   const struct reac_identity *id)
 {
 	if (!n || !n->stream)
 		return;
 	struct pw_properties *props = pw_properties_new(NULL, NULL);
 	if (!props)
 		return;
-	if (link_state)
-		pw_properties_set(props, REAC_PROP_LINK_STATE, link_state);
-	if (box_model)
-		pw_properties_set(props, REAC_PROP_BOX_MODEL, box_model);
-	if (box_width)
-		pw_properties_set(props, REAC_PROP_BOX_WIDTH, box_width);
-	/* Unconditional, unlike the three above: 0 is a MEANING here (no box) and not
-	 * "leave it alone", and a merge that skipped it would keep the departed box's
-	 * address on the capture node while the playback node had already cleared it. */
-	reac_box_mac_publish(box_mac48, source_prop_set, props);
+	/* The whole badge through the composer the sink stamps with, the identity page
+	 * included: a box with no outputs has no reac-playback, and this node is then the
+	 * only place its firmware, hw block and address can be read. */
+	reac_box_row_badge_publish(bm, link_state, box_mac48, id, source_prop_set, props);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
+	n->badge_stamped = 1;
+}
+
+int reac_source_node_badge_stamped(const struct reac_source_node *n)
+{
+	return n && n->badge_stamped;
 }
 
 /* See the header: the receive-only join's identity, composed and stamped by the ONE
