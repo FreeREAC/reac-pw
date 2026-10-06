@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.26',
+  version: '1.0.27',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -93,7 +93,10 @@ m_dep        = cc.find_library('m', required : false)
 # is how a COLD one is found) and reac_topo_heard_vids() are 1.5.0 surface, and this daemon
 # reads both. An older header does not compile; the floor turns that into a configure-time
 # refusal.
-libreac_dep = dependency('libreac', version : '>=1.5.0',
+# >=1.5.1 SINCE 1.0.27: a box is granted at any width it declares, up to 40. A 1.5.0 grant
+# refuses a 40 in / 0 out box, so it is never enrolled and never asked for its identity;
+# every symbol is there, so only the floor turns that into a configure-time refusal.
+libreac_dep = dependency('libreac', version : '>=1.5.1',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -116,7 +119,9 @@ libreac_dep = dependency('libreac', version : '>=1.5.0',
 # >=1.5.0 SINCE 1.0.24: the tap's BPF is what admits a tagged non-REAC frame at all. A
 # 1.2.x transport has every symbol this daemon links and simply never hears a cold VLAN --
 # behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.0', required : true)
+# >=1.5.1 SINCE 1.0.27: struct reac_pacer grew with the 40-wide grant sweep (soname 6), and
+# this build allocates one.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.1', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
