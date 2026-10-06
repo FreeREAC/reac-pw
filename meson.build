@@ -166,6 +166,7 @@ reac_pw_src = [
   'src/reac_node_graph.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_box_row.c',
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
@@ -1322,6 +1323,15 @@ box_identity_test = executable('test_reac_box_identity',
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_identity', box_identity_test)
+
+# --- unit test: a box no row names is sized and named from its declaration -------
+# 2026-10-06: a stock S-4000S re-fitted to 16 in / 24 out declared 02 x4, 01 x6, 03 x2
+# and got no nodes, because they were built only for a matched row.
+box_row_test = executable('test_reac_box_row',
+  ['tests/test_reac_box_row.c', 'src/reac_box_row.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep])
+test('reac_box_row', box_row_test)
 
 # --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
 # Pins reac_link_state_from_master: every reac_master_state -> its badge string
