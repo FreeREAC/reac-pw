@@ -927,7 +927,14 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	/* The enrolled box's OWN address, as the master latched it from the JOIN. */
 	uint64_t box_mac = reac_pacer_box_mac48(&n->pacer);
 
-	if (ls == n->link_state_last && bm == n->box_model_last &&
+	/* A reac-capture rebuilt since the last stamp (a box whose configuration changed
+	 * is re-sized, so its capture node is new) is blank: no address, no identity. The
+	 * guard below sees nothing changed on this side, so the blank node is its own
+	 * reason to stamp. */
+	int peer_blank = n->peer_src && *n->peer_src &&
+	                 !reac_source_node_badge_stamped(*n->peer_src);
+
+	if (!peer_blank && ls == n->link_state_last && bm == n->box_model_last &&
 	    box_mac == n->box_mac_last &&
 	    memcmp(&id, &n->box_identity_last, sizeof id) == 0)
 		return; /* unchanged: do not spam pw_filter_update_properties */
@@ -935,12 +942,6 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	n->box_model_last = bm;
 	n->box_mac_last = box_mac;
 	n->box_identity_last = id;
-
-	char width[16];
-	if (bm)
-		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
-	else
-		snprintf(width, sizeof width, "0x0");
 
 	/* Head-amp preamp count follows the recognized model's INPUT width (each box
 	 * input is a mic preamp); "0" until a model is recognized, mirroring the
@@ -966,41 +967,35 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	else
 		snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
 
-	struct pw_properties *props = pw_properties_new(
-		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
-		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
-		REAC_PROP_BOX_WIDTH,       width,
-		REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
-		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
-		REAC_PROP_HEADAMP_BASE,    ha_base,
-		NULL);
-	if (props && n->stream) {
-		/* reac.box.mac goes on through the shared composer rather than a second
-		 * hand-written snprintf here — the sink and the reac-capture mirror below
-		 * then cannot format the same fact two ways, and the stamp itself is what
-		 * the unit test drives (tests/test_reac_box_badge.c). */
-		reac_box_mac_publish(box_mac, sink_prop_set, props);
-		/* The identity page (DT1 tag 0x0500) through the same kind of composer:
-		 * reac.box-firmware, reac.box.reac_version and reac.box-hw, all three
-		 * STAMPED EVEN WHEN EMPTY so a box drop (which resets the accumulator)
-		 * CLEARS a stale value — update_properties merges, so an unstamped key
-		 * would keep the departed box's version. */
-		reac_box_identity_publish(&id, sink_prop_set, props);
-		pw_stream_update_properties(n->stream, &props->dict);
+	if (n->stream) {
+		struct pw_properties *props = pw_properties_new(
+			REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
+			REAC_PROP_HEADAMP_CHANNELS, ha_channels,
+			REAC_PROP_HEADAMP_BASE,    ha_base,
+			NULL);
+		if (props) {
+			/* Link state, model, width, reac.box.mac and the identity page
+			 * (reac.box-firmware, reac.box.reac_version, reac.box-hw) through the
+			 * one composer reac-capture is stamped with too, so the two nodes cannot
+			 * format the same fact two ways. Every key is STAMPED EVEN WHEN EMPTY so
+			 * a box drop (which resets the accumulator) CLEARS a stale value —
+			 * update_properties merges, so an unstamped key would keep the departed
+			 * box's version. */
+			reac_box_row_badge_publish(bm, reac_link_state_name(ls), box_mac, &id,
+			                           sink_prop_set, props);
+			pw_stream_update_properties(n->stream, &props->dict);
+			pw_properties_free(props);
+		}
 	}
-	if (props)
-		pw_properties_free(props);
 
 	/* #208: keep the reac-capture (source) badge in lock-step with this playback side.
-	 * Reached only when ls/bm CHANGED (the early-return above), which is exactly when
-	 * the box establishes / drops / swaps — and a source rebuilt on a width change is a
-	 * bm change, so it is always re-stamped here. Slot-deref follows the current node;
-	 * same main loop, so this is thread-safe. */
+	 * Reached when ls/bm/MAC/identity CHANGED or the capture node is blank. A box that
+	 * declares no outputs has no reac-playback (no stream above), and this is then the
+	 * only node its identity reaches. Slot-deref follows the current node; same main
+	 * loop, so this is thread-safe. */
 	if (n->peer_src && *n->peer_src)
-		reac_source_node_publish_link(*n->peer_src,
-		                              reac_link_state_name(ls),
-		                              bm ? bm->token : "none",
-		                              width, box_mac);
+		reac_source_node_publish_link(*n->peer_src, reac_link_state_name(ls), bm,
+		                              box_mac, &id);
 }
 
 /* MAIN LOOP: force the live adapter to actually present `hz`, closing the
@@ -2356,15 +2351,9 @@ void reac_sink_node_restamp_peer(struct reac_sink_node *n)
 		return;
 	/* From the SHADOWS, which are what is currently stamped on this sink — so the two
 	 * nodes of the segment agree by construction rather than by a second derivation. */
-	const struct reac_box_model *bm = n->box_model_last;
-	char width[16];
-	if (bm)
-		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
-	else
-		snprintf(width, sizeof width, "0x0");
-	reac_source_node_publish_link(*n->peer_src,
-	                              reac_link_state_name(n->link_state_last),
-	                              bm ? bm->token : "none", width, n->box_mac_last);
+	reac_source_node_publish_link(*n->peer_src, reac_link_state_name(n->link_state_last),
+	                              n->box_model_last, n->box_mac_last,
+	                              &n->box_identity_last);
 }
 
 int reac_sink_node_wake_obs(struct reac_sink_node *n, struct reac_wake_obs *o)

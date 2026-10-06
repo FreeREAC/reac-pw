@@ -1333,6 +1333,17 @@ box_row_test = executable('test_reac_box_row',
   dependencies : [libreac_dep])
 test('reac_box_row', box_row_test)
 
+# --- unit test: a box no row names asks for its identity and publishes it ------
+# 2026-10-06: the S-4000S-4000 (40 in / 0 out) has only a reac-capture, and only
+# reac-playback was stamped with the identity page, so /reac/segment read no firmware,
+# no hw block and no patch name for it. Granted at 40, its sweep carries the identity
+# poll, and its replies reach the badge reac-capture is stamped with.
+box_capture_identity_test = executable('test_reac_box_capture_identity',
+  ['tests/test_reac_box_capture_identity.c', 'src/reac_box_row.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
+test('reac_box_capture_identity', box_capture_identity_test)
+
 # --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
 # Pins reac_link_state_from_master: every reac_master_state -> its badge string
 # (IDLE folded into "probing"), the just_dropped overlay, and the exact wire

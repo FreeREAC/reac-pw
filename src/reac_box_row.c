@@ -72,3 +72,22 @@ int reac_box_row_has_playback(const struct reac_box_model *bm)
 {
 	return bm && bm->out_ch > 0;
 }
+
+void reac_box_row_badge_publish(const struct reac_box_model *bm, const char *link_state,
+                                uint64_t box_mac48, const struct reac_identity *id,
+                                reac_prop_set_fn set, void *ctx)
+{
+	if (!set)
+		return;
+	char width[16];
+	if (bm)
+		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
+	else
+		snprintf(width, sizeof width, "0x0");
+	if (link_state)
+		set(ctx, REAC_PROP_LINK_STATE, link_state);
+	set(ctx, REAC_PROP_BOX_MODEL, bm ? bm->token : "none");
+	set(ctx, REAC_PROP_BOX_WIDTH, width);
+	reac_box_mac_publish(box_mac48, set, ctx);
+	reac_box_identity_publish(id, set, ctx);
+}
