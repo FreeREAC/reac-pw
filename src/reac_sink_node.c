@@ -42,6 +42,7 @@
 #include <reac/reac_link_state.h>
 #include <reac/transport/reac_linkmon.h>   /* the RTM_NEWLINK carrier watch (#95) */
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
+#include "reac_box_row.h"        /* matched row, or one built from the declared widths */
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
@@ -170,6 +171,7 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
+	struct reac_box_rows box_rows;          /* rows built for a box no matrix row names */
 	struct reac_identity box_identity_last; /* last-published identity, for the change guard */
 	/* reac.box.mac, packed. In the guard on its own account: a box can be
 	 * REPLACED by another of the same model between two polls, which moves the
@@ -627,6 +629,26 @@ static void sink_publish(struct reac_sink_node *n)
 	pw_stream_update_params(n->stream, params, np);
 }
 
+/* THE ROW THIS SEGMENT IS SIZED AND NAMED FROM: the pacer's byte-exact match when a
+ * matrix row names the box, else a row built from the widths the box DECLARED in its
+ * config-announce cells, else NULL. libreac keeps those widths in the pacer's
+ * declared_in / declared_out, written on the pacer thread as plain aligned ints; they
+ * are read here with atomic loads and taken only when two reads agree. MAIN LOOP only. */
+static const struct reac_box_model *sink_box_row(struct reac_sink_node *n)
+{
+	int in_ch = 0, out_ch = 0;
+	for (int tries = 0; tries < 8; tries++) {
+		in_ch = __atomic_load_n(&n->pacer.declared_in, __ATOMIC_ACQUIRE);
+		out_ch = __atomic_load_n(&n->pacer.declared_out, __ATOMIC_ACQUIRE);
+		if (__atomic_load_n(&n->pacer.declared_in, __ATOMIC_ACQUIRE) == in_ch &&
+		    __atomic_load_n(&n->pacer.declared_out, __ATOMIC_ACQUIRE) == out_ch)
+			break;
+	}
+	return reac_box_row_resolve(&n->box_rows,
+	        atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire),
+	        in_ch, out_ch);
+}
+
 /* THE SEGMENT'S HEAD-AMP CAPABILITY, as this node can see it right now. One place,
  * read by both the write door (on_param_changed, to decide whether a cell may go to
  * the wire) and the publisher (sink_publish_headamp_props, to compose the standing
@@ -643,15 +665,14 @@ static void sink_publish(struct reac_sink_node *n)
  *     width: a chassis whose strap and width are not collinear has no such function.
  *
  * MAIN LOOP only — it reads the pacer's cross-thread atomics, never the RT path. */
-static enum reac_headamp_refuse sink_headamp_capability(const struct reac_sink_node *n)
+static enum reac_headamp_refuse sink_headamp_capability(struct reac_sink_node *n)
 {
 	if (n->upstream_ring)
 		return REAC_HEADAMP_REFUSE_BOX_MASTER;
 	if (!n->pacer_open)
 		return REAC_HEADAMP_REFUSE_NO_BOX;
 
-	const struct reac_box_model *bm =
-		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const struct reac_box_model *bm = sink_box_row(n);
 	int base = atomic_load_explicit(&n->pacer.recognized_headamp_base,
 	                                memory_order_acquire);
 	return reac_headamp_cfg_decide(0, bm ? bm->in_ch : 0, base);
@@ -880,8 +901,10 @@ static void sink_prop_set(void *ctx, const char *key, const char *value)
  * "dropped" one-shot-overlay rationale. */
 static void sink_publish_link_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
-		return;
+	/* A box that declares NO OUTPUTS has no reac-playback node (main never builds one
+	 * for it), and its reac-capture still needs the badge this function mirrors onto
+	 * it. So without a stream the shadows are still kept and the peer still stamped;
+	 * only this node's own property update is skipped. */
 
 	uint64_t drops_total = 0;
 	for (int i = 0; i < 8; i++)
@@ -893,8 +916,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		atomic_load_explicit(&n->pacer.fsm_state, memory_order_acquire);
 	enum reac_link_state ls = reac_link_state_from_master(st, just_dropped);
 
-	const struct reac_box_model *bm =
-		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const struct reac_box_model *bm = sink_box_row(n);
 
 	/* The box's OWN identity (firmware / hw block) off the identity-page replies,
 	 * lifted across the seqlock. Folded into the change guard so a firmware
@@ -905,7 +927,14 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	/* The enrolled box's OWN address, as the master latched it from the JOIN. */
 	uint64_t box_mac = reac_pacer_box_mac48(&n->pacer);
 
-	if (ls == n->link_state_last && bm == n->box_model_last &&
+	/* A reac-capture rebuilt since the last stamp (a box whose configuration changed
+	 * is re-sized, so its capture node is new) is blank: no address, no identity. The
+	 * guard below sees nothing changed on this side, so the blank node is its own
+	 * reason to stamp. */
+	int peer_blank = n->peer_src && *n->peer_src &&
+	                 !reac_source_node_badge_stamped(*n->peer_src);
+
+	if (!peer_blank && ls == n->link_state_last && bm == n->box_model_last &&
 	    box_mac == n->box_mac_last &&
 	    memcmp(&id, &n->box_identity_last, sizeof id) == 0)
 		return; /* unchanged: do not spam pw_filter_update_properties */
@@ -913,12 +942,6 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	n->box_model_last = bm;
 	n->box_mac_last = box_mac;
 	n->box_identity_last = id;
-
-	char width[16];
-	if (bm)
-		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
-	else
-		snprintf(width, sizeof width, "0x0");
 
 	/* Head-amp preamp count follows the recognized model's INPUT width (each box
 	 * input is a mic preamp); "0" until a model is recognized, mirroring the
@@ -944,40 +967,35 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 	else
 		snprintf(ha_base, sizeof ha_base, "%s", REAC_BOX_SOURCE_NONE);
 
-	struct pw_properties *props = pw_properties_new(
-		REAC_PROP_LINK_STATE,      reac_link_state_name(ls),
-		REAC_PROP_BOX_MODEL,       bm ? bm->token : "none",
-		REAC_PROP_BOX_WIDTH,       width,
-		REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
-		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
-		REAC_PROP_HEADAMP_BASE,    ha_base,
-		NULL);
-	if (props) {
-		/* reac.box.mac goes on through the shared composer rather than a second
-		 * hand-written snprintf here — the sink and the reac-capture mirror below
-		 * then cannot format the same fact two ways, and the stamp itself is what
-		 * the unit test drives (tests/test_reac_box_badge.c). */
-		reac_box_mac_publish(box_mac, sink_prop_set, props);
-		/* The identity page (DT1 tag 0x0500) through the same kind of composer:
-		 * reac.box-firmware, reac.box.reac_version and reac.box-hw, all three
-		 * STAMPED EVEN WHEN EMPTY so a box drop (which resets the accumulator)
-		 * CLEARS a stale value — update_properties merges, so an unstamped key
-		 * would keep the departed box's version. */
-		reac_box_identity_publish(&id, sink_prop_set, props);
-		pw_stream_update_properties(n->stream, &props->dict);
-		pw_properties_free(props);
+	if (n->stream) {
+		struct pw_properties *props = pw_properties_new(
+			REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
+			REAC_PROP_HEADAMP_CHANNELS, ha_channels,
+			REAC_PROP_HEADAMP_BASE,    ha_base,
+			NULL);
+		if (props) {
+			/* Link state, model, width, reac.box.mac and the identity page
+			 * (reac.box-firmware, reac.box.reac_version, reac.box-hw) through the
+			 * one composer reac-capture is stamped with too, so the two nodes cannot
+			 * format the same fact two ways. Every key is STAMPED EVEN WHEN EMPTY so
+			 * a box drop (which resets the accumulator) CLEARS a stale value —
+			 * update_properties merges, so an unstamped key would keep the departed
+			 * box's version. */
+			reac_box_row_badge_publish(bm, reac_link_state_name(ls), box_mac, &id,
+			                           sink_prop_set, props);
+			pw_stream_update_properties(n->stream, &props->dict);
+			pw_properties_free(props);
+		}
 	}
 
 	/* #208: keep the reac-capture (source) badge in lock-step with this playback side.
-	 * Reached only when ls/bm CHANGED (the early-return above), which is exactly when
-	 * the box establishes / drops / swaps — and a source rebuilt on a width change is a
-	 * bm change, so it is always re-stamped here. Slot-deref follows the current node;
-	 * same main loop, so this is thread-safe. */
+	 * Reached when ls/bm/MAC/identity CHANGED or the capture node is blank. A box that
+	 * declares no outputs has no reac-playback (no stream above), and this is then the
+	 * only node its identity reaches. Slot-deref follows the current node; same main
+	 * loop, so this is thread-safe. */
 	if (n->peer_src && *n->peer_src)
-		reac_source_node_publish_link(*n->peer_src,
-		                              reac_link_state_name(ls),
-		                              bm ? bm->token : "none",
-		                              width, box_mac);
+		reac_source_node_publish_link(*n->peer_src, reac_link_state_name(ls), bm,
+		                              box_mac, &id);
 }
 
 /* MAIN LOOP: force the live adapter to actually present `hz`, closing the
@@ -1667,8 +1685,7 @@ static void sink_publish_box_clock(struct reac_sink_node *n)
 		return;
 	}
 	n->box_ppm_seq = seq;
-	const struct reac_box_model *bm =
-		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const struct reac_box_model *bm = sink_box_row(n);
 	const char *label = bm ? bm->display : "box";
 	/* A stagebox is a stagebox: the name heuristic has nothing to say about one
 	 * (it grades UNGRADED, as intended), but the operator CAN designate a box
@@ -2151,6 +2168,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * first sink_open_filter re-stamps to the live pacer state. */
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
+	reac_box_rows_init(&n->box_rows);
 	n->box_mac_last = 0;
 	/* Seeded to answers no real one equals, so the first publish always fires
 	 * rather than reading a coincidental match (the role pair's pattern). */
@@ -2303,11 +2321,11 @@ int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why)
 	return reac_node_on_graph(n ? n->stream : NULL, why);
 }
 
-const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n)
+const struct reac_box_model *reac_sink_node_recognized_box(struct reac_sink_node *n)
 {
 	if (!n)
 		return NULL;
-	return atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	return sink_box_row(n);
 }
 
 void reac_sink_node_set_peer_source(struct reac_sink_node *n,
@@ -2333,15 +2351,9 @@ void reac_sink_node_restamp_peer(struct reac_sink_node *n)
 		return;
 	/* From the SHADOWS, which are what is currently stamped on this sink — so the two
 	 * nodes of the segment agree by construction rather than by a second derivation. */
-	const struct reac_box_model *bm = n->box_model_last;
-	char width[16];
-	if (bm)
-		snprintf(width, sizeof width, "%dx%d", bm->in_ch, bm->out_ch);
-	else
-		snprintf(width, sizeof width, "0x0");
-	reac_source_node_publish_link(*n->peer_src,
-	                              reac_link_state_name(n->link_state_last),
-	                              bm ? bm->token : "none", width, n->box_mac_last);
+	reac_source_node_publish_link(*n->peer_src, reac_link_state_name(n->link_state_last),
+	                              n->box_model_last, n->box_mac_last,
+	                              &n->box_identity_last);
 }
 
 int reac_sink_node_wake_obs(struct reac_sink_node *n, struct reac_wake_obs *o)

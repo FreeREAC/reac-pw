@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.26',
+  version: '1.0.27',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -93,7 +93,10 @@ m_dep        = cc.find_library('m', required : false)
 # is how a COLD one is found) and reac_topo_heard_vids() are 1.5.0 surface, and this daemon
 # reads both. An older header does not compile; the floor turns that into a configure-time
 # refusal.
-libreac_dep = dependency('libreac', version : '>=1.5.0',
+# >=1.5.1 SINCE 1.0.27: a box is granted at any width it declares, up to 40. A 1.5.0 grant
+# refuses a 40 in / 0 out box, so it is never enrolled and never asked for its identity;
+# every symbol is there, so only the floor turns that into a configure-time refusal.
+libreac_dep = dependency('libreac', version : '>=1.5.1',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -116,7 +119,9 @@ libreac_dep = dependency('libreac', version : '>=1.5.0',
 # >=1.5.0 SINCE 1.0.24: the tap's BPF is what admits a tagged non-REAC frame at all. A
 # 1.2.x transport has every symbol this daemon links and simply never hears a cold VLAN --
 # behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.0', required : true)
+# >=1.5.1 SINCE 1.0.27: struct reac_pacer grew with the 40-wide grant sweep (soname 6), and
+# this build allocates one.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.1', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
@@ -166,6 +171,7 @@ reac_pw_src = [
   'src/reac_node_graph.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_box_row.c',
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
@@ -1322,6 +1328,26 @@ box_identity_test = executable('test_reac_box_identity',
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_identity', box_identity_test)
+
+# --- unit test: a box no row names is sized and named from its declaration -------
+# 2026-10-06: a stock S-4000S re-fitted to 16 in / 24 out declared 02 x4, 01 x6, 03 x2
+# and got no nodes, because they were built only for a matched row.
+box_row_test = executable('test_reac_box_row',
+  ['tests/test_reac_box_row.c', 'src/reac_box_row.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep])
+test('reac_box_row', box_row_test)
+
+# --- unit test: a box no row names asks for its identity and publishes it ------
+# 2026-10-06: the S-4000S-4000 (40 in / 0 out) has only a reac-capture, and only
+# reac-playback was stamped with the identity page, so /reac/segment read no firmware,
+# no hw block and no patch name for it. Granted at 40, its sweep carries the identity
+# poll, and its replies reach the badge reac-capture is stamped with.
+box_capture_identity_test = executable('test_reac_box_capture_identity',
+  ['tests/test_reac_box_capture_identity.c', 'src/reac_box_row.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
+test('reac_box_capture_identity', box_capture_identity_test)
 
 # --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
 # Pins reac_link_state_from_master: every reac_master_state -> its badge string

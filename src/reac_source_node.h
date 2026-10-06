@@ -21,6 +21,7 @@
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
 #include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
+#include "reac_box_row.h"    /* the row and the badge composer publish_link stamps through */
 
 struct pw_loop;
 struct reac_source_node;
@@ -118,17 +119,22 @@ void reac_source_node_destroy(struct reac_source_node *n);
  * establishes. The reac-playback sink — which DOES own the pacer + a main-loop timer —
  * pushes the recognized state here from that same (shared, single-loop) timer, so the
  * capture badge stops lying and tracks the box in lock-step with the playback side.
- * Args are the already-formatted strings the sink computes (reac.link-state name, box
- * model token, "INxOUT" width); a NULL string arg leaves that key untouched.
- * `box_mac48` is the PACKED box address (reac_mac48_pack) and is always stamped,
- * because 0 means NO BOX rather than "leave it alone" — the same composer the sink
- * uses turns it into reac.box.mac or REAC_BOX_MAC_NONE. No-op on a NULL node / one
- * with no filter yet. Main-loop thread only (same loop as the caller). */
+ * The badge is composed by reac_box_row_badge_publish from the sink's row, link state,
+ * box address and identity page; a NULL `link_state` leaves that key untouched, and the
+ * rest are always stamped, because "none", 0 and an empty identity are meanings here
+ * (no box) rather than "leave it alone". No-op on a NULL node / one with no filter yet.
+ * Main-loop thread only (same loop as the caller). */
 void reac_source_node_publish_link(struct reac_source_node *n,
                                    const char *link_state,
-                                   const char *box_model,
-                                   const char *box_width,
-                                   uint64_t box_mac48);
+                                   const struct reac_box_model *bm,
+                                   uint64_t box_mac48,
+                                   const struct reac_identity *id);
+
+/* Has publish_link stamped this node since it was built? A node rebuilt on a width
+ * change (a box whose configuration changed) comes back at the create-time seed with
+ * no address and no identity, and the sink's change guard sees nothing to re-stamp;
+ * this is what tells it the new node is still blank. */
+int reac_source_node_badge_stamped(const struct reac_source_node *n);
 
 /* THE JOINED BOX MASTER'S IDENTITY on this node (DESIGN.md 0.5.2). The publish_link door
  * above is the MASTER's: the sink computes those strings from its pacer's recognition and

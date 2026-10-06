@@ -167,11 +167,12 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
  * not an error. */
 void reac_sink_node_unpublish(struct reac_sink_node *n);
 
-/* The box model the pacer last recognized on the wire (its config-announce matched
- * a fixed-matrix row), or NULL if none yet. Cross-thread-safe (an atomic load of
- * the pacer's recognized_box) — the main-loop autodetect watcher polls this to
- * decide the reac-capture / reac-playback widths. */
-const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n);
+/* The row the box on this segment is sized from, or NULL while no box has declared
+ * itself: the fixed-matrix row its config-announce matched, or — for a declaration no
+ * row matches — a row built from its declared widths (reac_box_row.h). The main-loop
+ * autodetect watcher polls this to decide the reac-capture (in_ch) / reac-playback
+ * (out_ch) widths. MAIN LOOP only. */
+const struct reac_box_model *reac_sink_node_recognized_box(struct reac_sink_node *n);
 
 /* Take (read+clear) the pending accepted reac.cfg.rate for a clean segment re-open,
  * 0 if none. Main's poll timer calls this; see reac_sink_node.c param_changed. */
