@@ -67,3 +67,8 @@ const struct reac_box_model *reac_box_row_resolve(struct reac_box_rows *r,
 	r->cur = next;
 	return &s->row;
 }
+
+int reac_box_row_has_playback(const struct reac_box_model *bm)
+{
+	return bm && bm->out_ch > 0;
+}

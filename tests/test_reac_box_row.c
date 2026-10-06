@@ -55,11 +55,30 @@ int main(void)
 	CHK(s1608 && reac_box_row_resolve(&rows, s1608, 16, 8) == s1608);
 	CHK(reac_box_row_resolve(&rows, NULL, 0, 0) == NULL);
 
+	/* A box that declares 40 inputs / 0 outputs (cells 02 x10, 03 x2): capture 40 and
+	 * no playback node at all. */
+	static const uint8_t DECL_4000[32] = {
+		0x01, 0x03, 0x00, 0x10, 0x84, 0x00, 0x00, 0x00,
+		0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03,
+	};
+	CHK(reac_ports_parse(DECL_4000, &ports) == 0);
+	const struct reac_box_model *in_only = reac_box_row_resolve(&rows, NULL, ports.in_ch,
+	                                                            ports.out_ch);
+	CHK(in_only != NULL);
+	if (in_only) {
+		CHK(in_only->in_ch == 40);
+		CHK(in_only->out_ch == 0);
+		CHK(!reac_box_row_has_playback(in_only));
+		CHK(strcmp(in_only->token, "s4000s-4000") == 0);
+	}
+	CHK(bm && reac_box_row_has_playback(bm));   /* the 16 / 24 box keeps its 24 */
+
 	if (fails) {
 		fprintf(stderr, "test_reac_box_row: %d failure(s)\n", fails);
 		return 1;
 	}
 	printf("OK: the re-fitted box's declaration sizes reac-capture 16 / reac-playback 24 "
-	       "and names it S-4000S-1624; a matched row is returned unchanged\n");
+	       "and names it S-4000S-1624; 40 / 0 gives capture 40 and no playback; a matched "
+	       "row is returned unchanged\n");
 	return 0;
 }
