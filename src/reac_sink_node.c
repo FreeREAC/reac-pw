@@ -901,8 +901,10 @@ static void sink_prop_set(void *ctx, const char *key, const char *value)
  * "dropped" one-shot-overlay rationale. */
 static void sink_publish_link_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
-		return;
+	/* A box that declares NO OUTPUTS has no reac-playback node (main never builds one
+	 * for it), and its reac-capture still needs the badge this function mirrors onto
+	 * it. So without a stream the shadows are still kept and the peer still stamped;
+	 * only this node's own property update is skipped. */
 
 	uint64_t drops_total = 0;
 	for (int i = 0; i < 8; i++)
@@ -972,7 +974,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		REAC_PROP_HEADAMP_CHANNELS, ha_channels,
 		REAC_PROP_HEADAMP_BASE,    ha_base,
 		NULL);
-	if (props) {
+	if (props && n->stream) {
 		/* reac.box.mac goes on through the shared composer rather than a second
 		 * hand-written snprintf here — the sink and the reac-capture mirror below
 		 * then cannot format the same fact two ways, and the stamp itself is what
@@ -985,8 +987,9 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		 * would keep the departed box's version. */
 		reac_box_identity_publish(&id, sink_prop_set, props);
 		pw_stream_update_properties(n->stream, &props->dict);
-		pw_properties_free(props);
 	}
+	if (props)
+		pw_properties_free(props);
 
 	/* #208: keep the reac-capture (source) badge in lock-step with this playback side.
 	 * Reached only when ls/bm CHANGED (the early-return above), which is exactly when

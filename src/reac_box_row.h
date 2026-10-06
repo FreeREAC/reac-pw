@@ -36,4 +36,9 @@ const struct reac_box_model *reac_box_row_resolve(struct reac_box_rows *r,
                                                   const struct reac_box_model *matched,
                                                   int declared_in, int declared_out);
 
+/* Does this row get a reac-playback node? Only when it declares outputs: a box that
+ * declares 0 outputs (an S-4000S-4000, 40 in / 0 out) has none, rather than a node
+ * the graph would fill with a stereo pair. */
+int reac_box_row_has_playback(const struct reac_box_model *bm);
+
 #endif /* REACPW_BOX_ROW_H */
