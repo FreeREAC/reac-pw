@@ -1093,6 +1093,11 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 			        "is the permanent one.\n",
 			        c->tag, (int)strcspn(pin, ":"), pin, bm->display);
 	}
+	/* A BOX NO ROW NAMES IS SIZED FROM ITS DECLARATION (reac_box_row.h). Said once per
+	 * box, beside libreac's own line, with both widths. */
+	if (bm->origin == REAC_BOX_DERIVED && c->announced != bm)
+		fprintf(stderr, "reac-pw: %sbox declared %d inputs / %d outputs (no model row) — "
+		        "%s\n", c->tag, bm->in_ch, bm->out_ch, bm->display);
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
 		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,

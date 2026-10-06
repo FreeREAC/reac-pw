@@ -42,6 +42,7 @@
 #include <reac/reac_link_state.h>
 #include <reac/transport/reac_linkmon.h>   /* the RTM_NEWLINK carrier watch (#95) */
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
+#include "reac_box_row.h"        /* matched row, or one built from the declared widths */
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
 #include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
@@ -170,6 +171,7 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
+	struct reac_box_rows box_rows;          /* rows built for a box no matrix row names */
 	struct reac_identity box_identity_last; /* last-published identity, for the change guard */
 	/* reac.box.mac, packed. In the guard on its own account: a box can be
 	 * REPLACED by another of the same model between two polls, which moves the
@@ -627,6 +629,26 @@ static void sink_publish(struct reac_sink_node *n)
 	pw_stream_update_params(n->stream, params, np);
 }
 
+/* THE ROW THIS SEGMENT IS SIZED AND NAMED FROM: the pacer's byte-exact match when a
+ * matrix row names the box, else a row built from the widths the box DECLARED in its
+ * config-announce cells, else NULL. libreac keeps those widths in the pacer's
+ * declared_in / declared_out, written on the pacer thread as plain aligned ints; they
+ * are read here with atomic loads and taken only when two reads agree. MAIN LOOP only. */
+static const struct reac_box_model *sink_box_row(struct reac_sink_node *n)
+{
+	int in_ch = 0, out_ch = 0;
+	for (int tries = 0; tries < 8; tries++) {
+		in_ch = __atomic_load_n(&n->pacer.declared_in, __ATOMIC_ACQUIRE);
+		out_ch = __atomic_load_n(&n->pacer.declared_out, __ATOMIC_ACQUIRE);
+		if (__atomic_load_n(&n->pacer.declared_in, __ATOMIC_ACQUIRE) == in_ch &&
+		    __atomic_load_n(&n->pacer.declared_out, __ATOMIC_ACQUIRE) == out_ch)
+			break;
+	}
+	return reac_box_row_resolve(&n->box_rows,
+	        atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire),
+	        in_ch, out_ch);
+}
+
 /* THE SEGMENT'S HEAD-AMP CAPABILITY, as this node can see it right now. One place,
  * read by both the write door (on_param_changed, to decide whether a cell may go to
  * the wire) and the publisher (sink_publish_headamp_props, to compose the standing
@@ -643,15 +665,14 @@ static void sink_publish(struct reac_sink_node *n)
  *     width: a chassis whose strap and width are not collinear has no such function.
  *
  * MAIN LOOP only — it reads the pacer's cross-thread atomics, never the RT path. */
-static enum reac_headamp_refuse sink_headamp_capability(const struct reac_sink_node *n)
+static enum reac_headamp_refuse sink_headamp_capability(struct reac_sink_node *n)
 {
 	if (n->upstream_ring)
 		return REAC_HEADAMP_REFUSE_BOX_MASTER;
 	if (!n->pacer_open)
 		return REAC_HEADAMP_REFUSE_NO_BOX;
 
-	const struct reac_box_model *bm =
-		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const struct reac_box_model *bm = sink_box_row(n);
 	int base = atomic_load_explicit(&n->pacer.recognized_headamp_base,
 	                                memory_order_acquire);
 	return reac_headamp_cfg_decide(0, bm ? bm->in_ch : 0, base);
@@ -893,8 +914,7 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 		atomic_load_explicit(&n->pacer.fsm_state, memory_order_acquire);
 	enum reac_link_state ls = reac_link_state_from_master(st, just_dropped);
 
-	const struct reac_box_model *bm =
-		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const struct reac_box_model *bm = sink_box_row(n);
 
 	/* The box's OWN identity (firmware / hw block) off the identity-page replies,
 	 * lifted across the seqlock. Folded into the change guard so a firmware
@@ -1667,8 +1687,7 @@ static void sink_publish_box_clock(struct reac_sink_node *n)
 		return;
 	}
 	n->box_ppm_seq = seq;
-	const struct reac_box_model *bm =
-		atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	const struct reac_box_model *bm = sink_box_row(n);
 	const char *label = bm ? bm->display : "box";
 	/* A stagebox is a stagebox: the name heuristic has nothing to say about one
 	 * (it grades UNGRADED, as intended), but the operator CAN designate a box
@@ -2151,6 +2170,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * first sink_open_filter re-stamps to the live pacer state. */
 	n->link_state_last = REAC_LINK_PROBING;
 	n->box_model_last = NULL;
+	reac_box_rows_init(&n->box_rows);
 	n->box_mac_last = 0;
 	/* Seeded to answers no real one equals, so the first publish always fires
 	 * rather than reading a coincidental match (the role pair's pattern). */
@@ -2303,11 +2323,11 @@ int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why)
 	return reac_node_on_graph(n ? n->stream : NULL, why);
 }
 
-const struct reac_box_model *reac_sink_node_recognized_box(const struct reac_sink_node *n)
+const struct reac_box_model *reac_sink_node_recognized_box(struct reac_sink_node *n)
 {
 	if (!n)
 		return NULL;
-	return atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire);
+	return sink_box_row(n);
 }
 
 void reac_sink_node_set_peer_source(struct reac_sink_node *n,
