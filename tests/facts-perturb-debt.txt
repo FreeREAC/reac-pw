@@ -12,11 +12,13 @@
 #
 # ceiling: 33
 reac_arbitration              libreac: reac_frame_is_master_downstream sizes frames from libreac's copies
+reac_box_capture_identity     libreac: ports parse, grant sweep and identity page at libreac's geometry
 reac_box_badge                libreac: the pacer/master state machine frames at libreac's geometry
 reac_box_identity             libreac: identity-page parse at libreac's DT1 offsets
 reac_box_master_audio         libreac: the box-master emitter builds libreac-sized frames
 reac_box_master_identity      libreac: reac_box_model_table lookups by libreac's widths
 reac_box_pin                  libreac: reac_box_model_table carries libreac's per-model widths
+reac_box_row                  libreac: reac_ports_parse reads declarations at libreac's cell width
 reac_boxreg                   libreac: reac_boxreg fabric width is libreac's MAX_CHANNELS
 reac_conformance              libreac: master frames vs the console profile, built by libreac
 reac_courtship                libreac: slave/master courtship run on libreac's FSMs
@@ -24,8 +26,6 @@ reac_ctrl                     libreac: reac_ctrl builders and parser
 reac_disco                    libreac: discovery frames built by reac_ctrl
 reac_encode_golden            fixture: digest of a captured downstream/upstream corpus
 reac_grant                    libreac: reac_grant allocator and sweep builder
-reac_grant_dwell_default_on_declare libreac: master enrolment via libreac's classifier
-reac_grant_dwell_opt_out_holds_cap  libreac: master enrolment via libreac's classifier
 reac_headamp                  libreac: reac_ctrl head-amp builder, sens table
 reac_headamp_state            libreac: reac_downstream_build frame size; fixture FX_L4_HEADAMP
 reac_headamp_tx               libreac: reac_headamp_tx channel ceiling

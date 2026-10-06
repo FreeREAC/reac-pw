@@ -242,7 +242,9 @@ arm() {   # arm <tag> <model-token> <iface> [REAC_BOX_CHANNELS to be ignored]
 	# fact the 40-channel experiment turns on.
 	echo "$tag master-sees-model $mmodel"
 	echo "$tag master-sees-state ${mstate:-not-established}"
-	echo "$tag master-joins $(grep -ao "rx_joins=[0-9]*" "$RT/$tag.master.log" | tail -1 | cut -d= -f2)"
+	# Counted off the master's own "box JOIN seen" lines, which it logs whether or not the
+	# grant then holds; its rx_joins counter is only printed by the still-PROBING watchdog.
+	echo "$tag master-joins $(grep -ac "box JOIN seen" "$RT/$tag.master.log")"
 	echo "$tag env-width-ignored $(grep -ac "REAC_BOX_CHANNELS.*IGNORED" "$RT/$tag.log")"
 	echo "$tag mac-standin $(grep -ac "slave box source MAC = .*Roland OUI" "$RT/$tag.log")"
 	grep -a "role = box —" "$RT/$tag.log" | head -1 | sed "s/^/  $tag saidbox /"
@@ -313,15 +315,16 @@ NM=$(get A name) && say "arm A sent a NAME record ('$NM'); the 0x82 family is na
 # node at all (the no-box-no-node ruling) — an absence that would read like a wrong model.
 [ "$(get A master-sees-model)" = "s1608" ] || say "the mixer read our model as '$(get A master-sees-model)', not s1608"
 [ "$(get A master-sees-state)" = "established" ] || say "the mixer never established with us (state '$(get A master-sees-state)')"
-# ---- THE 40-CHANNEL EXPERIMENT GETS AS FAR AS IT GETS, AND THAT IS THE MEASUREMENT ----
-# The operator asked whether we can emulate a 40-channel box. What is asserted here is what
-# was measured: the row reaches the wire whole (above) and our own master COUNTS ITS JOINS
-# and grants them. It does NOT sustain presence at this width — the master's own journal
-# says `no sustained presence` — so that is stated in the spec's §9 as an open question
-# with a rig step, and is deliberately NOT asserted as a pass here. A test that claimed an
-# enrolment nobody has seen would be the defect this whole file exists to catch.
+# ---- THE 40-CHANNEL ROW IS ENROLLED LIKE ANY OTHER ------------------------------------
+# A REAC frame carries 40 channels and a box declares its inputs and outputs in multiples of
+# four, in any combination (operator ruling 2026-10-06). Since libreac 1.5.1 the grant takes
+# a box up to 40 wide, so our own master counts this row's JOINs, grants it and ESTABLISHES,
+# and reads it as the row it declared. Under 1.5.0 it refused the width and looped back to
+# PROBING; that is what this arm used to record as the end of the experiment.
 JOINS=$(get B master-joins); JOINS=${JOINS:-0}
 [ "$JOINS" -ge 1 ] 2>/dev/null || say "the mixer counted $JOINS joins from the 40-channel row — its cold-connect never reached a master at all"
+[ "$(get B master-sees-model)" = "fr4000" ] || say "the mixer read the 40-channel row as '$(get B master-sees-model)', not fr4000"
+[ "$(get B master-sees-state)" = "established" ] || say "the mixer never established with the 40-channel row (state '$(get B master-sees-state)')"
 [ "$(get A roster-role)" = "box" ] || say "arm A's roster reads role '$(get A roster-role)', not box"
 [ "$(get B roster-role)" = "box" ] || say "arm B's roster reads role '$(get B roster-role)', not box"
 [ "$(get A roster-width)" = "$FACT_BOX_S1608_IN/$FACT_BOX_S1608_OUT" ] || say "arm A's roster width is '$(get A roster-width)', not $FACT_BOX_S1608_IN/$FACT_BOX_S1608_OUT"
