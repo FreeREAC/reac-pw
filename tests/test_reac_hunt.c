@@ -16,9 +16,12 @@
  * decision now rests on. The four outcomes are driven by real geometry.
  */
 #include <reac/reac_hunt.h>
+#include <reac/reac_arbitration.h>
 
 #include <reac/reac.h>
 #include <reac/reac_ctrlblk.h>
+#include <reac/reac_master.h>
+#include <reac/reac_encode.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -75,7 +78,7 @@ static int box_bye(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 
 /* A DESK: only a console emits head-amp records, and it emits them at the 40-channel
  * downstream width. Role master AND desk geometry, in one frame. */
-static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+static int desk_headamp_only(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 {
 	uint8_t f[2048];
 	size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1);
@@ -84,16 +87,40 @@ static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
+/* A DESK SPEAKING: a head-amp record, and the cfea every desk broadcasts once a second
+ * with 0x28 in its total_slots (libreac's own generator, from this MAC, on the 1492 B
+ * downstream). A desk is a desk because it says 40 slots in a 40-wide broadcast (ruling
+ * 2026-10-07), not because it sent a master-only record. */
+static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+{
+	int r = desk_headamp_only(h, src, now);
+	if (r < 0)
+		return r;
+	static struct reac_master m;
+	reac_master_init(&m, src, NULL, REAC_PKT_RATE_96K);
+	uint8_t f[2048];
+	float *none[1] = { NULL };
+	size_t n = (size_t)reac_downstream_build(f, none, 0, REAC_SAMPLES_PER_PKT, 7, src);
+	if (n == 0 || reac_master_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0) != 0)
+		return -2;
+	int c = reac_hunt_observe(h, f, n, now, NULL);
+	return c < 0 ? c : (r || c);
+}
+
 /* A STAGEBOX STRAPPED TO MASTER: the same master-only record, emitted at the box's OWN
  * width — measured 2026-08-30 as 1204 B on a wire where a desk had emitted 1492 B. The
  * frame claims master; the geometry says box; the geometry wins. */
 static int box_on_m(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
+	/* What the captured S-1608 on M broadcasts beside its audio: a channel map, at its
+	 * own width (box-to-box-2026-09-13). Master-only, in a box-width broadcast: a box
+	 * master (libreac reac_rival_kind_of, ruling 2026-10-07). */
+	static struct reac_master m;
+	reac_master_init(&m, BOXM, NULL, REAC_PKT_RATE_96K);
 	size_t n = reac_ctrl_build_flood_filler(f, BCAST, BOXM, 0x40, REAC_BOX_S4000S_3208_IN, NULL, REAC_SAMPLES_PER_PKT);
-	if (n == 0 || reac_ctrl_stamp_headamp(f, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1) != 0)
+	if (n == 0 || reac_master_stamp(&m, f, REAC_M_EMIT_CHANMAP, 0) != 0)
 		return -2;
-	reac_ctrl_checksum_apply(f);
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
@@ -175,6 +202,21 @@ int main(void)
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(h.arb.rival == REAC_RIVAL_DESK);
+
+	/* ---- D0. A 40-WIDE MASTER THAT HAS NOT ANNOUNCED ITSELF is a desk or a 40-input box
+	 * on M, and nothing heard yet says which: the hunt waits (pending), and the desk's
+	 * cfea then joins it (ruling 2026-10-07: never "desk" by default). */
+	{
+		struct reac_hunt hp;
+		reac_hunt_init(&hp, OURS, t0);
+		CHK(desk_headamp_only(&hp, DESK, t0) == 1);
+		reac_hunt_step(&hp, t0 + SEC / 10);
+		CHK(hp.arb.rival == REAC_RIVAL_PENDING);
+		CHK(hp.verdict == REAC_HUNT_HUNTING);
+		CHK(desk_headamp(&hp, DESK, t0 + SEC / 5) >= 0);
+		reac_hunt_step(&hp, t0 + SEC / 4);
+		CHK(hp.arb.rival == REAC_RIVAL_DESK && hp.verdict == REAC_HUNT_SLAVE);
+	}
 	CHK(memcmp(h.arb.mac, DESK, 6) == 0);
 
 	/* ---- E. A STAGEBOX MASTERS AN UNPINNED WIRE: WE JOIN IT (operator, 2026-09-09).
@@ -213,13 +255,16 @@ int main(void)
 	 * A desk's downstream audio classifies UNKNOWN exactly as a box's flood does; only
 	 * the width separates them, and 40 is the master downstream and nothing else.
 	 * Taking that wire is the two-masters fault, so the window does NOT expire into it. */
+	/* libreac 1.6 (ruling 2026-09-25) HOLDS such a stream for one master-only cadence:
+	 * a desk sends a master-only op inside it, so inside it the wire is not vacant. */
 	reac_hunt_init(&h, OURS, t0);
+	const uint64_t hold = reac_master_only_cadence_ns(0);
 	CHK(box_flood(&h, DESK, REAC_MAX_CHANNELS, t0) == 1);
-	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) == 0);
+	CHK(reac_hunt_step(&h, t0 + hold / 2) == 0);
 	CHK(h.verdict == REAC_HUNT_HUNTING);
-	/* Its announce arrives one cadence later and settles it: slave. */
-	CHK(desk_headamp(&h, DESK, t0 + REAC_HUNT_WINDOW_NS + SEC) >= 0);
-	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) == 1);
+	/* Its announce arrives inside the hold and settles it: slave. */
+	CHK(desk_headamp(&h, DESK, t0 + hold / 2) >= 0);
+	CHK(reac_hunt_step(&h, t0 + hold / 2) == 1);
 	CHK(h.verdict == REAC_HUNT_SLAVE);
 
 	/* ---- G. NOTHING LATCHES. The desk is unplugged and the box is still there: the
