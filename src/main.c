@@ -143,6 +143,9 @@ static int box_master_outputs(int width, const char *tag)
 			        "wire\n", tag ? tag : "", t[i].out_ch, width);
 			return t[i].out_ch;
 		}
+	fprintf(stderr, "reac-pw: %sbox master on M declares no outputs and the catalogue has "
+	        "no %d-input entry; sending %d slots, its broadcast width — not read from the "
+	        "wire\n", tag ? tag : "", width, width);
 	return width;
 }
 
