@@ -21,7 +21,7 @@ T=$(mktemp -d); D="$T/reac-pw-$V"
 mkdir -p "$D"
 rsync -a --exclude '.git' --exclude 'build' "$ROOT/src" "$ROOT/tests" "$ROOT/tools" \
       "$ROOT/facts" "$ROOT/meson.build" "$ROOT/meson_options.txt" "$ROOT/LICENSE" \
-      "$ROOT/NOTICE" "$ROOT/README.md" \
+      "$ROOT/NOTICE" "$ROOT/README.md" "$ROOT/BUILDING.md" \
       "$ROOT/packaging" "$ROOT/docs" "$D/"
 tar -czf "$ROOT/reac-pw-$V.tar.gz" -C "$T" "reac-pw-$V"
 rm -rf "$T"
