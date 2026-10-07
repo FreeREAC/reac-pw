@@ -3069,13 +3069,18 @@ static void sniffer_drain(struct sniffer *sn)
 		}
 		if (seen != 1)
 			continue;
+		/* What it declared, as it declared it: a passive sighting has no identity
+		 * page, so it is not named (1.0.30). */
+		char declared[40] = "";
+		if (sight.has_decl)
+			snprintf(declared, sizeof declared, " that declared %u in / %u out",
+			         (unsigned)sight.decl_in, (unsigned)sight.decl_out);
 		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_HEARD,
 		        "[%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
 		        "%s (%u ch): this interface is a segment\n",
 		        sn->name, reac_disco_role_name(sight.role),
 		        sight.mac[0], sight.mac[1], sight.mac[2],
-		        sight.mac[3], sight.mac[4], sight.mac[5],
-		        sight.has_decl ? " that declared itself" : "", sight.channels);
+		        sight.mac[3], sight.mac[4], sight.mac[5], declared, sight.channels);
 	}
 }
 

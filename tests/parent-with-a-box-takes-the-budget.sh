@@ -118,8 +118,10 @@ wait_for "S_BUDGET_YIELDED.*\[lb0\.11\]" 30 \
 	&& echo "yielded yes" || echo "yielded no"
 wait_for "S_SEGMENT_UP.*\[lb0\]" 30 \
 	&& echo "taker-up yes" || echo "taker-up no"
-# THE JOB, NOT A PART OF IT: the box is enrolled on the parent, by model.
-wait_for "S_SEGMENT_HEARD.*\[lb0\].*S-1608" 40 \
+# THE JOB, NOT A PART OF IT: the box is heard on the parent by what it DECLARED — 16 in /
+# 8 out — the only facts a passive sighting carries (1.0.30: a box is never named from the
+# model catalogue).
+wait_for "S_SEGMENT_HEARD.*\[lb0\].*declared 16 in / 8 out" 40 \
 	&& echo "box-enrolled yes" || echo "box-enrolled no"
 
 # ---- 3. AND IT STAYS THAT WAY: the yielded VLAN does not take the port back on silence.
