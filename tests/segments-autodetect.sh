@@ -164,7 +164,10 @@ sleep 2
 echo "e-marker ---- the interface appears from here on ----"
 ip link add hot0 type veth peer name hot1 || exit 90
 ip link set hot0 up; ip link set hot1 up
-sleep 3
+# 6 s, not 3: the segments this daemon is still settling when hot0 appears are desks
+# heard on the trunks, and a 40-wide master is only a desk once its cfea (once a second)
+# has said 0x28 (ruling 2026-10-07) — the hot-plug is applied after those decisions.
+sleep 6
 kill -0 $EPID 2>/dev/null || echo "e-daemon-died"
 kill -TERM $EPID 2>/dev/null
 for i in $(seq 40); do kill -0 $EPID 2>/dev/null || break; sleep 0.2; done

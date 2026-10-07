@@ -67,24 +67,26 @@ int main(void)
 	 * stamped for it, whatever its width: the catalogue never names a connected box. */
 	for (unsigned w = 0; w <= 64; w += 4) {
 		struct rec r = { 0 };
-		reac_box_master_identity_publish(0x0040abc4dc9cull, 1, rec_set, &r);
+		reac_box_master_identity_publish(w, 0x0040abc4dc9cull, 1, rec_set, &r);
 		CHK(rec_get(&r, REAC_PROP_BOX_MODEL) == NULL);
-		CHK(rec_get(&r, REAC_PROP_BOX_WIDTH) == NULL);
-		(void)w;
+		char want[12]; snprintf(want, sizeof want, "%u", w);
+		CHK(w == 0 ? rec_get(&r, REAC_PROP_BOX_WIDTH) == NULL
+		           : (rec_get(&r, REAC_PROP_BOX_WIDTH) && strcmp(rec_get(&r, REAC_PROP_BOX_WIDTH), want) == 0));
 	}
 
 	/* ---- 2. the rig's own case, stamped ----------------------------------------- */
 	{
 		struct rec r = { 0 };
 		uint8_t mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0xdc, 0x9c };  /* the rig's S-0808 */
-		reac_box_master_identity_publish(reac_mac48_pack(mac), 1, rec_set, &r);
+		reac_box_master_identity_publish(8, reac_mac48_pack(mac), 1, rec_set, &r);
 
 		const char *ls = rec_get(&r, REAC_PROP_LINK_STATE);
 		const char *md = rec_get(&r, REAC_PROP_BOX_MODEL);
 		const char *w  = rec_get(&r, REAC_PROP_BOX_WIDTH);
 		const char *mc = rec_get(&r, REAC_PROP_BOX_MAC);
 		CHK(ls && strcmp(ls, "established") == 0);
-		CHK(md == NULL && w == NULL);   /* not on the wire: not stamped */
+		CHK(md == NULL);                  /* no model on the wire: not stamped */
+		CHK(w && strcmp(w, "8") == 0);  /* its inputs, as it broadcasts them */
 		CHK(mc && strcmp(mc, "00:40:ab:c4:dc:9c") == 0);
 	}
 
@@ -92,7 +94,7 @@ int main(void)
 	{
 		struct rec r = { 0 };
 		uint8_t mac[6] = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };
-		reac_box_master_identity_publish(reac_mac48_pack(mac), 0, rec_set, &r);
+		reac_box_master_identity_publish(8, reac_mac48_pack(mac), 0, rec_set, &r);
 		const char *ls = rec_get(&r, REAC_PROP_LINK_STATE);
 		CHK(ls && strcmp(ls, "probing") == 0);
 		CHK(rec_get(&r, REAC_PROP_BOX_MAC) != NULL);
@@ -101,13 +103,13 @@ int main(void)
 	/* ---- 5. no box, no address: the sentinel, never a zero MAC ------------------ */
 	{
 		struct rec r = { 0 };
-		reac_box_master_identity_publish(0, 0, rec_set, &r);
+		reac_box_master_identity_publish(8, 0, 0, rec_set, &r);
 		const char *mc = rec_get(&r, REAC_PROP_BOX_MAC);
 		CHK(mc && strcmp(mc, REAC_BOX_MAC_NONE) == 0);
 	}
 
 	/* ---- 6. a NULL sink is a no-op, not a crash --------------------------------- */
-	reac_box_master_identity_publish(1, 1, NULL, NULL);
+	reac_box_master_identity_publish(8, 1, 1, NULL, NULL);
 
 	if (fails) {
 		fprintf(stderr, "%d check(s) failed\n", fails);

@@ -1610,12 +1610,14 @@ static void listener_publish_segment(struct listener *L)
 	 * the identity set is unchanged: the width, the address and the model are facts
 	 * about the wire and stay true while we are only listening to it. */
 	if (L->cfg.join_box_master) {
-		reac_source_node_publish_box_master(L->src, master_mac48, established);
+		reac_source_node_publish_box_master(L->src, L->cfg.wire_channels,
+		                                    master_mac48, established);
 		/* AND THE SEGMENT'S OTHER DOOR SAYS THE SAME. A console folds the two nodes
 		 * into one row, so a capture reading `established` beside a playback still at
 		 * `probing` reads as a resync in progress — measured on the rig the moment the
 		 * engine enrolled. Same composer, same values, same instant. */
-		reac_sink_node_publish_box_master(L->sink, master_mac48, established);
+		reac_sink_node_publish_box_master(L->sink, L->cfg.wire_channels,
+		                                  master_mac48, established);
 	}
 }
 

@@ -2255,14 +2255,14 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 }
 
 void reac_sink_node_publish_box_master(struct reac_sink_node *n,
-                                       uint64_t mac48, int enrolled)
+                                       unsigned width, uint64_t mac48, int enrolled)
 {
 	if (!n || !n->stream || !n->upstream_ring)
 		return;      /* the master role's badge timer owns these keys there */
 	struct pw_properties *props = pw_properties_new(NULL, NULL);
 	if (!props)
 		return;
-	reac_box_master_identity_publish(mac48, enrolled, sink_prop_set, props);
+	reac_box_master_identity_publish(width, mac48, enrolled, sink_prop_set, props);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
 }
