@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* The row a segment's nodes are sized from. See reac_box_row.h. */
+/* The box a segment's nodes are sized and named from. See reac_box_row.h. */
 #include "reac_box_row.h"
 
-#include "reac_facts_pw.h"   /* REAC_BOX_MIN/MAX_CHANNELS, REAC_BRAID_PAIR_CHANNELS */
 #include <stdio.h>
 #include <string.h>
 
@@ -16,55 +15,65 @@ void reac_box_rows_init(struct reac_box_rows *r)
 	r->cur = -1;
 }
 
-static int width_ok(int n)
-{
-	return n == 0 || (n >= REAC_BOX_MIN_CHANNELS && n <= REAC_BOX_MAX_CHANNELS &&
-	                  n % REAC_BRAID_PAIR_CHANNELS == 0);
-}
-
 const struct reac_box_model *reac_box_row_resolve(struct reac_box_rows *r,
-                                                  const struct reac_box_model *matched,
-                                                  int declared_in, int declared_out)
+                                                  const struct reac_box_model *catalogue,
+                                                  int declared_in, int declared_out,
+                                                  const struct reac_identity *id,
+                                                  int wait_over)
 {
-	if (matched)
-		return matched;
-	if (!r || (declared_in == 0 && declared_out == 0) ||
-	    !width_ok(declared_in) || !width_ok(declared_out))
+	if (!r || (declared_in == 0 && declared_out == 0))
 		return NULL;
+	const int have_hw = id && id->has_reac_version;
+	if (!have_hw && !wait_over)
+		return NULL;   /* the name waits for the identity page */
+
+	const enum reac_box_family fam = reac_box_family_of(id);
+	const char *said = (id && id->has_model_name) ? id->model_name : NULL;
+	char name[REAC_BOX_NAME_MAX], token[REAC_BOX_NAME_TOKEN_MAX],
+	     display[REAC_BOX_NAME_DISPLAY_MAX];
+	if (reac_box_name(fam, said, declared_in, declared_out, name, sizeof name,
+	                  token, sizeof token, display, sizeof display) != 0)
+		return NULL;   /* not a box width */
 
 	if (r->cur >= 0) {
-		const struct reac_box_model *last = &r->slot[r->cur].row;
-		if (last->in_ch == declared_in && last->out_ch == declared_out)
-			return last;
+		const struct reac_box_row_slot *last = &r->slot[r->cur];
+		if (last->row.in_ch == declared_in && last->row.out_ch == declared_out &&
+		    strcmp(last->display, display) == 0)
+			return &last->row;
 	}
 
 	int next = r->cur == 0 ? 1 : 0;
 	struct reac_box_row_slot *s = &r->slot[next];
 	memset(s, 0, sizeof *s);
-
-	/* A Roland row with exactly these widths names it; FreeREAC rows never name a
-	 * box somebody else built. */
-	size_t n;
-	const struct reac_box_model *t = reac_box_model_table(&n);
-	const struct reac_box_model *same = NULL;
-	for (size_t i = 0; i < n && !same; i++)
-		if (t[i].identity_shape == REAC_BOX_IDENTITY_ROLAND &&
-		    t[i].in_ch == declared_in && t[i].out_ch == declared_out)
-			same = &t[i];
-	if (same) {
-		snprintf(s->token, sizeof s->token, "%s", same->token);
-		snprintf(s->display, sizeof s->display, "%s", same->display);
-	} else {
-		snprintf(s->token, sizeof s->token, "s4000s-%02d%02d", declared_in, declared_out);
-		snprintf(s->display, sizeof s->display, "S-4000S-%02d%02d (%d in / %d out)",
-		         declared_in, declared_out, declared_in, declared_out);
-	}
+	memcpy(s->name, name, sizeof name);
+	memcpy(s->token, token, sizeof token);
+	memcpy(s->display, display, sizeof display);
 	s->row.token = s->token;
 	s->row.display = s->display;
+	s->row.name = s->name;
 	s->row.in_ch = declared_in;
 	s->row.out_ch = declared_out;
 	s->row.origin = REAC_BOX_DERIVED;
 	r->cur = next;
+
+	r->defect = reac_box_catalogue_defect(catalogue, declared_in, declared_out, display);
+	if (r->defect)
+		fprintf(stderr, "reac-pw: catalogue defect: the box declares %s, the catalogue "
+		        "entry its declaration matches says %s (%d in / %d out) — the box wins\n",
+		        display, catalogue->display, catalogue->in_ch, catalogue->out_ch);
+	r->unknown_family = fam == REAC_BOX_FAMILY_UNKNOWN && !said;
+	if (r->unknown_family) {
+		if (have_hw)
+			fprintf(stderr, "reac-pw: unknown hw family %02x%02x%02x%02x %02x%02x%02x%02x"
+			        ": capture it — the box is named by its widths, %s\n",
+			        id->reac_version_raw[0], id->reac_version_raw[1],
+			        id->reac_version_raw[2], id->reac_version_raw[3],
+			        id->reac_version_raw[4], id->reac_version_raw[5],
+			        id->reac_version_raw[6], id->reac_version_raw[7], display);
+		else
+			fprintf(stderr, "reac-pw: unknown hw family: the box has not answered its "
+			        "identity page — capture it; named by its widths, %s\n", display);
+	}
 	return &s->row;
 }
 
@@ -87,6 +96,7 @@ void reac_box_row_badge_publish(const struct reac_box_model *bm, const char *lin
 	if (link_state)
 		set(ctx, REAC_PROP_LINK_STATE, link_state);
 	set(ctx, REAC_PROP_BOX_MODEL, bm ? bm->token : "none");
+	set(ctx, REAC_PROP_BOX_NAME, bm && bm->name ? bm->name : "");
 	set(ctx, REAC_PROP_BOX_WIDTH, width);
 	reac_box_mac_publish(box_mac48, set, ctx);
 	reac_box_identity_publish(id, set, ctx);

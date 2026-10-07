@@ -234,10 +234,10 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			for (const char *q = val; *q && li + 1 < sizeof low; q++, li++)
 				low[li] = (*q >= 'A' && *q <= 'Z') ? (char)(*q - 'A' + 'a') : *q;
 			low[li] = '\0';
-			if (!reac_box_model_by_token(low)) {
+			if (!reac_box_catalogue_by_token(low)) {
 				char known[240];
 				size_t kn = 0, ntok = 0;
-				const struct reac_box_model *tab = reac_box_model_table(&ntok);
+				const struct reac_box_model *tab = reac_box_catalogue(&ntok);
 				for (size_t ti = 0; ti < ntok && kn + 2 < sizeof known; ti++)
 					kn += (size_t)snprintf(known + kn, sizeof known - kn, "%s%s",
 					                       ti ? "|" : "", tab[ti].token);
