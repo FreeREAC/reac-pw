@@ -202,6 +202,11 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Wed Oct 07 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.31-1
+- 1.0.30 was tagged but never published: its source tarball lacked BUILDING.md, so
+  the package's own checks failed while it was being built. 1.0.31 is the same
+  code with the tarball fixed, and it carries everything listed under 1.0.30.
+
 * Wed Oct 07 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.30-1
 - Every stagebox is now described by what it says on the wire. Its capture and
   playback channels follow the inputs and outputs it declares, its name comes from
