@@ -10,15 +10,13 @@
 #   fixture  the assertion compares against captured bytes or a real-world claim,
 #            which hold for the real protocol only
 #
-# ceiling: 33
+# ceiling: 31
 reac_arbitration              libreac: reac_frame_is_master_downstream sizes frames from libreac's copies
 reac_box_capture_identity     libreac: ports parse, grant sweep and identity page at libreac's geometry
 reac_box_badge                libreac: the pacer/master state machine frames at libreac's geometry
 reac_box_identity             libreac: identity-page parse at libreac's DT1 offsets
 reac_box_master_audio         libreac: the box-master emitter builds libreac-sized frames
-reac_box_master_identity      libreac: reac_box_catalogue lookups by libreac's widths
 reac_box_pin                  libreac: reac_box_catalogue carries libreac's per-model widths
-reac_box_row                  libreac: reac_ports_parse reads declarations at libreac's cell width
 reac_boxreg                   libreac: reac_boxreg fabric width is libreac's MAX_CHANNELS
 reac_conformance              libreac: master frames vs the console profile, built by libreac
 reac_courtship                libreac: slave/master courtship run on libreac's FSMs
