@@ -204,7 +204,7 @@ int main(void)
 		 * The cold-connect above carries no width, so at this instant the master
 		 * knows a box is courting it and nothing else — no allocation, no sweep, and
 		 * no fabricated fallback to grant instead. What fills that in is the box's
-		 * own config-announce, recognized here by reac_ctrl_identify_box against the
+		 * own config-announce, recognized here by reac_box_catalogue_match against the
 		 * fixed matrix, exactly as it happens on the wire. Nothing configured this;
 		 * nothing could have. */
 		CHK(reac_master_has_box(&p3.master) == 0);
@@ -384,12 +384,12 @@ int main(void)
 		uint8_t bf[2048];
 		/* the matrix S-4000S announce (32 in), then a tail byte no row carries —
 		 * the port table at block[8..19] is untouched, so the DECLARATION still
-		 * reads 32x8 while reac_ctrl_identify_box has no byte-exact match. */
+		 * reads 32x8 while reac_box_catalogue_match has no byte-exact match. */
 		size_t bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 7, REAC_BOX_S4000S_3208_IN);
 		CHK(bn > 0);
 		bf[REAC_CTRL_BLOCK_OFF + 26] ^= 0x5a;     /* block[26]: model tail data */
 		reac_ctrl_checksum_apply(bf);             /* keep the frame VALID */
-		CHK(reac_ctrl_identify_box(bf, bn) == NULL);   /* no row names it */
+		CHK(reac_box_catalogue_match(bf, bn) == NULL);   /* no row names it */
 
 		reac_pacer_rx_ingest(&p5, bf, bn);
 		CHK(atomic_load(&p5.recognized_box) == NULL);  /* honestly unnamed... */

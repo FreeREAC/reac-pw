@@ -126,6 +126,9 @@ int main(void)
 	struct reac_ring ring;
 	struct reac_rx rx;
 	CHK(reac_rx_open(&rx, &cfg, &ring) == 0);
+	/* main.c points the gate at the box the sighting named: a box on M broadcasts, and
+	 * the gate locks on its own only on a unicast return (libreac 1.6.0). */
+	reac_rx_peer_reset(&rx, BOX, 1);
 	CHK(run_rx(&rx, 40) == 0);
 
 	/* PRESENCE BEFORE VALUE: a decoder that rejected every frame and a silent box read

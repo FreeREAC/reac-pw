@@ -192,6 +192,9 @@ int main(void)
 	reac_disco_table_init(&t);
 	put(&t, BOX, REAC_DISCO_ROLE_MASTER, now);
 	t.e[0].channels = REAC_BOX_S0808_IN;                            /* an S-0808 on M: 340 B frames */
+	/* WIDTH NEVER SAYS DESK (libreac 1.6.0, ruling 2026-09-25): what makes it a box is
+	 * that it said so — its declaration — not that 8 is less than 40. */
+	t.e[0].has_decl = 1; t.e[0].decl_in = 8; t.e[0].decl_out = 8;
 	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
 	CHK(a.state == REAC_SEGMENT_FOREIGN);
 	CHK(a.rival == REAC_RIVAL_BOX);
@@ -200,6 +203,10 @@ int main(void)
 	reac_disco_table_init(&t);
 	put(&t, DESK, REAC_DISCO_ROLE_MASTER, now);
 	t.e[0].channels = REAC_MAX_CHANNELS;
+	/* until it announces itself a 40-wide master is pending, never a desk by default */
+	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
+	CHK(a.rival == REAC_RIVAL_PENDING);
+	t.e[0].announced_slots = 0x28;                                 /* its cfea: 40 slots */
 	reac_arbitrate(&t, OURS, REAC_M_IDLE, REAC_PACE_FREE_RUN, now, &a);
 	CHK(a.rival == REAC_RIVAL_DESK);
 	CHK(a.rival_channels == REAC_MAX_CHANNELS);

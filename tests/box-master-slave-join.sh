@@ -550,10 +550,13 @@ print(n)' "$PLAY16")
 	echo "FAIL: the 16-input box's playback door has $NP16 channels; an S-1608 has EIGHT"
 	echo "      outputs, and what we send feeds its outputs"; exit 1; }
 CAPD=$(node_prop reac-capture.bmx1 node.description)
+# A box on M sends no identity page, so it is not named (ruling 2026-10-07: the model
+# catalogue never names a connected box); the label carries the width it broadcasts.
 case "$CAPD" in
-  *S-1608*) : ;;
-  *) echo "FAIL: the capture door is described '$CAPD' — it should name the box the way the"
-     echo "      master path's does, because that is the operator-facing label"; exit 1 ;;
+  *S-1608*) echo "FAIL: the capture door names '$CAPD' from the model catalogue; a box on M"
+     echo "      has no identity page, so only its width is on the wire"; exit 1 ;;
+  *"${FACT_BOX_S1608_IN}ch "*) : ;;
+  *) echo "FAIL: the capture door is described '$CAPD' — it should carry the box's width"; exit 1 ;;
 esac
 echo "MEASURED: 16-in box master — playback door $NP16 ch (its outputs), capture door '$CAPD'"
 kill -TERM $FAKE16 2>/dev/null; wait $FAKE16 2>/dev/null

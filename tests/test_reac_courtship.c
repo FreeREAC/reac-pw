@@ -95,6 +95,7 @@ static int step(struct court *c)
 	case REAC_M_EMIT_CHANMAP:  c->m_chanmaps++;  break;
 	case REAC_M_EMIT_ENROLL:   c->m_enrolls++;   break;
 	case REAC_M_EMIT_FILLER:   break;
+	case REAC_M_EMIT_IDENTITY_POLL: break;   /* the post-join identity re-poll (libreac 1.7.0) */
 	}
 
 	if (!c->slave_on)
@@ -171,7 +172,7 @@ static int step(struct court *c)
 		 * way the master ever learns the box's width, and without it there is
 		 * nothing to enroll and no grant to emit. Modelling the courtship without
 		 * it would be testing a master that cannot court anything. */
-		const struct reac_box_model *bm = reac_ctrl_identify_box(sf, n);
+		const struct reac_box_model *bm = reac_box_catalogue_match(sf, n);
 		struct reac_box_ports cports;
 		if (bm && reac_ports_parse(sf + REAC_CTRL_BLOCK_OFF, &cports) == 0) {
 			c->s_configs_fed++;

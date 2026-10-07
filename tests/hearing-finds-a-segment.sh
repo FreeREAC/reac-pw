@@ -145,7 +145,8 @@ for o in d:
     p=o["info"]["props"]
     if int(p.get("client.id",-1)) not in mine: continue
     if p.get("node.name")!=want: continue
-    print("|".join([p.get("reac.master.state","(none)"),
+    # str(): pw-dump renders a numeric-looking value ("8") as a JSON number.
+    print("|".join(str(v) for v in [p.get("reac.master.state","(none)"),
                     p.get("reac.master.rival.kind","(none)"),
                     p.get("reac.master.refusal","(none)"),
                     p.get("reac.master.mac","(none)"),
@@ -860,8 +861,8 @@ BP=$(daemon_node_props $PID reac-capture.boxm0)
 # but the DESCRIPTION is what a console shows the operator, and a joined box read the generic
 # "REAC 8ch capture" where a served one names the model.
 case "$(fld "$BP" 6)" in
-  "S-0808 ($FACT_BOX_S0808_IN in / $FACT_BOX_S0808_OUT out)"*"$FACT_BOX_S0808_IN ch"*) : ;;
-  *) echo "FAIL: the joined segment should name the box and its own geometry: $BP"; exit 1 ;;
+  *"${FACT_BOX_S0808_IN}ch "*) : ;;
+  *) echo "FAIL: the joined segment should carry the box's own geometry: $BP"; exit 1 ;;
 esac
 [ "$(fld "$BP" 1)" = "foreign" ] || { echo "FAIL: master.state is not foreign: $BP"; exit 1; }
 [ "$(fld "$BP" 2)" = "box" ] || { echo "FAIL: master.rival.kind is not box: $BP"; exit 1; }
@@ -873,17 +874,17 @@ esac
 # AND IT IS THE SAME BOX IT IS WHEN WE MASTER IT (0.5.2). A console keys a stagebox off
 # reac.box.mac / reac.box-model / reac.box-width / reac.link-state; a join that published
 # none of them left the rig showing a segment and no device at all, with the box's eight
-# inputs unpatchable (2026-09-09 05:45). The model is IMPLIED BY THE WIDTH here -- a box on
-# M broadcasts upstream geometry and no config-announce, so there is nothing to identify it
-# from -- and 8 in is the S-0808 row of the fixed matrix, exactly.
+# inputs unpatchable (2026-09-09 05:45). A box on M broadcasts its upstream geometry and no
+# config-announce or identity page, so its MODEL is not on the wire and is not stamped (ruling
+# 2026-10-07: the model catalogue never names a connected box); its width is its inputs.
 [ "$(fld "$BP" 7)" = "$BOXMAC" ] || {
 	echo "FAIL: the joined box has no address of its own (reac.box.mac), so a console"
 	echo "      cannot fold it into the box it knows by MAC: $BP"; exit 1; }
-[ "$(fld "$BP" 8)" = "s0808" ] || {
-	echo "FAIL: an 8-ch box master is the S-0808 row of the matrix and must say so"
-	echo "      (reac.box-model): $BP"; exit 1; }
-[ "$(fld "$BP" 9)" = "${FACT_BOX_S0808_IN}x$FACT_BOX_S0808_OUT" ] || {
-	echo "FAIL: reac.box-width must be the recognised model's own geometry: $BP"; exit 1; }
+[ "$(fld "$BP" 8)" = "(none)" ] || {
+	echo "FAIL: a box master's model is not on the wire and must not be named from the"
+	echo "      catalogue (reac.box-model): $BP"; exit 1; }
+[ "$(fld "$BP" 9)" = "$FACT_BOX_S0808_IN" ] || {
+	echo "FAIL: reac.box-width must be the inputs the box broadcasts: $BP"; exit 1; }
 # THE LAMP IS THE PAIRING (0.5.6, operator ruling): established means ENROLLED — granted,
 # unicasting and heartbeating — not merely heard. The rig published `established` off the
 # RX's own evidence while the box's front lamp sat unlocked ("S-0808 is not enrolled but omx
@@ -990,12 +991,16 @@ RP=$(daemon_node_props $PID reac-capture.pinm0)
 [ "$(fld "$RP" 4)" = "$BOXMAC" ] || {
 	echo "FAIL: the joined node names a master other than the rival $BOXMAC: $RP"; exit 1; }
 [ "$(fld "$RP" 5)" = "pinm0" ] || { echo "FAIL: the joined node names another segment: $RP"; exit 1; }
-# AND IT IS THE SAME BOX A CONSOLE ALREADY KNOWS, by its own address and model -- the 0.5.2
-# rule, which a pin must not change.
+# AND IT IS THE SAME BOX A CONSOLE ALREADY KNOWS, by its own address -- the 0.5.2 rule,
+# which a pin must not change. Its model is not on the wire (no identity page from a box on
+# M), so none is stamped, and its width is the inputs it broadcasts (ruling 2026-10-07).
 [ "$(fld "$RP" 7)" = "$BOXMAC" ] || {
 	echo "FAIL: the joined box has no address of its own (reac.box.mac): $RP"; exit 1; }
-[ "$(fld "$RP" 8)" = "s0808" ] || {
-	echo "FAIL: an 8-ch box master is the S-0808 row of the matrix and must say so: $RP"; exit 1; }
+[ "$(fld "$RP" 8)" = "(none)" ] || {
+	echo "FAIL: a box master's model is not on the wire and must not be named from the"
+	echo "      catalogue: $RP"; exit 1; }
+[ "$(fld "$RP" 9)" = "$FACT_BOX_S0808_IN" ] || {
+	echo "FAIL: reac.box-width must be the inputs the box broadcasts: $RP"; exit 1; }
 # AND IT IS AN ENGINE, NOT A DOOR: a refusal published a capture node with nothing behind
 # it, while a joined slave carries the box BOTH ways -- its inputs in, our returns out -- so
 # the playback side is present and sized to the box. That presence is the difference between
@@ -1258,14 +1263,14 @@ done
 [ "$(fld "$T12" 5)" = "trunk0.12" ] || { echo "FAIL: vid 12's node names segment '$(fld "$T12" 5)'"; exit 1; }
 [ "$(fld "$T11" 7)" = "$TBOX11" ] || { echo "FAIL: vid 11's node carries box.mac '$(fld "$T11" 7)', not $TBOX11"; exit 1; }
 [ "$(fld "$T12" 7)" = "$TBOX12" ] || { echo "FAIL: vid 12's node carries box.mac '$(fld "$T12" 7)', not $TBOX12"; exit 1; }
-# Each VLAN's door is sized to ITS OWN box and named after it (0.5.6-9), which is also how
-# two segments on one cable are told apart at a glance.
+# Each VLAN's door is sized to ITS OWN box (0.5.6-9), which is also how two segments on one
+# cable are told apart at a glance. A box on M is not named: no identity page (2026-10-07).
 case "$(fld "$T11" 6)" in
-  "S-0808 ($FACT_BOX_S0808_IN in / $FACT_BOX_S0808_OUT out)"*"$FACT_BOX_S0808_IN ch"*) : ;;
+  *"${FACT_BOX_S0808_IN}ch "*) : ;;
   *) echo "FAIL: vid 11's box is 8 ch and its node reads '$(fld "$T11" 6)'"; exit 1 ;;
 esac
 case "$(fld "$T12" 6)" in
-  "S-1608 ($FACT_BOX_S1608_IN in / $FACT_BOX_S1608_OUT out)"*"$FACT_BOX_S1608_IN ch"*) : ;;
+  *"${FACT_BOX_S1608_IN}ch "*) : ;;
   *) echo "FAIL: vid 12's box is 16 ch and its node reads '$(fld "$T12" 6)' -- two VLANs"
      echo "      served through one listener would read the same width twice"; exit 1 ;;
 esac

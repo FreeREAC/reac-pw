@@ -35,34 +35,23 @@
 #include <string.h>
 
 #include <reac/reac_role.h>
+#include <reac/reac_cfg.h>   /* the vocabulary: every key and code below */
 
 struct spa_pod;
 
-/* The cfg namespace key this increment adds. The spec's §1 names the general
- * "reac.cfg.*" namespace, handled where "reac.headamp.*" already is. */
-#define REAC_CFG_PROP_RATE "reac.cfg.rate"
-
-/* Published, read-side props (spec §0/§1): the standing rate, whether it came
- * from an operator assertion or the no-assertion default, the drivable
- * subset, whether a re-establish triggered by a rate change is still in
- * flight, and a refusal code for the last `reac.cfg.rate` write. "none" is
- * this codebase's established sentinel for "no value applies" (see
- * reac.master.mac in reac_link_state.h). */
-#define REAC_PROP_RATE           "reac.rate"
-#define REAC_PROP_RATE_SOURCE    "reac.rate.source"      /* "asserted" | "convention" */
-#define REAC_PROP_RATE_DRIVABLE  "reac.rate.drivable"     /* csv, ascending         */
-#define REAC_PROP_RATE_STATE     "reac.cfg.rate.state"    /* "applied" | "pending"  */
-#define REAC_PROP_RATE_REFUSED   "reac.cfg.rate.refused"  /* code, or "none"        */
-
-
-#define REAC_RATE_SOURCE_ASSERTED "asserted"
-/* Operator, 2026-08-26: "default is not a valid value — we make the best the default,
- * it is a convention." A rate the operator gave (--rate, a conf file, a console
- * assertion over the graph) is ASSERTED; with no assertion standing the daemon runs
- * the best drivable rate BY CONVENTION, and that is what this value says. */
-#define REAC_RATE_SOURCE_CONVENTION "convention"
-#define REAC_RATE_STATE_APPLIED   "applied"
-#define REAC_RATE_STATE_PENDING   "pending"
+/* THE VOCABULARY IS libreac's <reac/reac_cfg.h>, the one declaration (libreac review
+ * 2026-09-25, M7). These names are kept for reac-pw's existing callers and are
+ * aliases, never a second spelling of a string. */
+#define REAC_CFG_PROP_RATE          REAC_CFG_RATE_PROP
+#define REAC_PROP_RATE              REAC_RATE_PROP
+#define REAC_PROP_RATE_SOURCE       REAC_RATE_SOURCE_PROP     /* ASSERTED | CONVENTION */
+#define REAC_PROP_RATE_DRIVABLE     REAC_RATE_DRIVABLE_PROP   /* csv, ascending        */
+#define REAC_PROP_RATE_STATE        REAC_CFG_RATE_STATE_PROP  /* APPLIED | PENDING     */
+#define REAC_PROP_RATE_REFUSED      REAC_CFG_RATE_REFUSED_PROP
+/* REAC_RATE_SOURCE_ASSERTED and REAC_RATE_SOURCE_CONVENTION, the two values of
+ * REAC_PROP_RATE_SOURCE, come from <reac/reac_cfg.h> under those very names. */
+#define REAC_RATE_STATE_APPLIED     REAC_CFG_RATE_STATE_APPLIED
+#define REAC_RATE_STATE_PENDING     REAC_CFG_RATE_STATE_PENDING
 
 /* One bit per closed-list rate. */
 #define REAC_RATE_BIT_44100  (1u << 0)
@@ -80,7 +69,17 @@ enum reac_rate_refuse {
 	REAC_RATE_REFUSE_MALFORMED,     /* the prop value was not a usable number     */
 };
 
-/* Short code for REAC_PROP_RATE_REFUSED; "none" when nothing is refused. */
+/* The published code for each refusal, indexed by enum reac_rate_refuse — the table
+ * reac_rate_refuse_code() returns from, so no code is typed in reac-pw. */
+#define REAC_RATE_REFUSE_CODES_INIT { \
+	[REAC_RATE_REFUSE_NONE]         = REAC_CFG_REFUSED_NONE,         \
+	[REAC_RATE_REFUSE_NOT_CLOSED]   = REAC_CFG_REFUSED_NOT_CLOSED,   \
+	[REAC_RATE_REFUSE_NOT_DRIVABLE] = REAC_CFG_REFUSED_NOT_DRIVABLE, \
+	[REAC_RATE_REFUSE_ROLE_SLAVE]   = REAC_CFG_REFUSED_ROLE_SLAVE,   \
+	[REAC_RATE_REFUSE_MALFORMED]    = REAC_CFG_REFUSED_MALFORMED,    \
+}
+
+/* Short code for REAC_PROP_RATE_REFUSED; REAC_CFG_REFUSED_NONE when nothing is refused. */
 const char *reac_rate_refuse_code(enum reac_rate_refuse r);
 
 /* Is hz one of the three REAC rates? */

@@ -24,7 +24,7 @@ int reac_box_pin_parse(const char *spec,
 	 * explicit early return here looked like a guard but no test could tell it from its
 	 * absence — the house rule is that such a guard is decoration, so it is not here. */
 	size_t n;
-	const struct reac_box_model *table = reac_box_model_table(&n);
+	const struct reac_box_model *table = reac_box_catalogue(&n);
 	const struct reac_box_model *found = NULL;
 	for (size_t i = 0; i < n; i++) {
 		/* WHOLE-token match: comparing only `toklen` bytes would accept "s16" as

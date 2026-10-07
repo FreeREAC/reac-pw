@@ -74,7 +74,7 @@
 #include "reac_rate_cfg.h"
 #include <reac/transport/reac_mac.h>
 #include <reac/reac_ctrl.h>        /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
-#include <reac/reac_link_state.h>  /* reac_box_master_model — the width-to-model row, 0.5.2 */
+#include <reac/reac_link_state.h>
 #include <reac/reac_headamp_tx.h>  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
 #include <reac/transport/reac_conf.h>     /* the LAYERED config lookup + which layer answered */
@@ -127,6 +127,28 @@
  * — on 2026-09-16 it pinned three VLAN segments `tap` a rig ago and the desk moved no
  * audio with every node up. A LIVE role change is `reac.cfg.role` on the segment's door,
  * not a re-read of this. */
+/* THE OUTPUT COUNT OF A BOX ON M, which the wire does not carry: a box master declares
+ * nothing. The captured catalogue entry of exactly this input width answers, as this path
+ * always has, and the line below says each time it does — this is the one place the model
+ * catalogue still sizes something for a connected box, pending a capture that shows where
+ * a box master's outputs can be read. No entry: the broadcast width. */
+static int box_master_outputs(int width, const char *tag)
+{
+	size_t n = 0;
+	const struct reac_box_model *t = reac_box_catalogue(&n);
+	for (size_t i = 0; t && i < n; i++)
+		if (t[i].origin == REAC_BOX_CAPTURED && t[i].in_ch == width) {
+			fprintf(stderr, "reac-pw: %sbox master on M declares no outputs; sending %d "
+			        "slots, the catalogue's figure for a %d-input box — not read from the "
+			        "wire\n", tag ? tag : "", t[i].out_ch, width);
+			return t[i].out_ch;
+		}
+	fprintf(stderr, "reac-pw: %sbox master on M declares no outputs and the catalogue has "
+	        "no %d-input entry; sending %d slots, its broadcast width — not read from the "
+	        "wire\n", tag ? tag : "", width, width);
+	return width;
+}
+
 static struct reac_segconf g_segconf;
 
 /* THE DAEMON'S OWN ROW ON THE GRAPH (spec amendment 2026-09-16 third, §B). One node, no
@@ -1097,11 +1119,11 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 			        "is the permanent one.\n",
 			        c->tag, (int)strcspn(pin, ":"), pin, bm->display);
 	}
-	/* A BOX NO ROW NAMES IS SIZED FROM ITS DECLARATION (reac_box_row.h). Said once per
-	 * box, beside libreac's own line, with both widths. */
-	if (bm->origin == REAC_BOX_DERIVED && c->announced != bm)
-		fprintf(stderr, "reac-pw: %sbox declared %d inputs / %d outputs (no model row) — "
-		        "%s\n", c->tag, bm->in_ch, bm->out_ch, bm->display);
+	/* EVERY BOX IS SIZED AND NAMED FROM ITS FRAMES (reac_box_row.h). Said once per box,
+	 * beside libreac's own line, with both widths and the name its frames give it. */
+	if (c->announced != bm)
+		fprintf(stderr, "reac-pw: %sbox declared %d inputs / %d outputs — %s\n",
+		        c->tag, bm->in_ch, bm->out_ch, bm->display);
 	/* Everything derived from the recognized in_ch/out_ch — no per-model branches. */
 	if (reac_source_node_ensure(c->src, &c->scfg, bm->in_ch, bm->display) != 0)
 		reac_code_emit(stderr, "reac-pw", RC_E_SIZING,
@@ -1338,7 +1360,7 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 		 * number: an output-only row still speaks at the minimum pair. */
 		if (c->role_intent == REAC_ROLE_INTENT_BOX) {
 			const char *tok = reac_segconf_model(&g_segconf, iface);
-			c->box_model = tok ? reac_box_model_by_token(tok) : NULL;
+			c->box_model = tok ? reac_box_catalogue_by_token(tok) : NULL;
 			if (c->box_model) {
 				c->box_channels = reac_box_model_upstream_width(c->box_model);
 				/* ONE WORD FOR ONE SEGMENT (2026-09-17). The roster, the
@@ -1955,6 +1977,12 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		fprintf(stderr, "reac-pw: %scannot open source '%s'\n", c->tag, c->rxcfg.source);
 		return -1;
 	}
+	/* A BOX ON M BROADCASTS ITS STREAM, and libreac (1.6.0 on) locks the upstream gate
+	 * only on a UNICAST return, because a broadcast may be a desk's downstream. The
+	 * sighting already named the box, so the gate is pointed at it, the way the master
+	 * points it at the box it granted. Without this a box master's audio never locks. */
+	if (c->join_box_master && c->rival_mac_set)
+		reac_rx_peer_reset(&L->rx, c->rival_mac, 1);
 	fprintf(stderr, "reac-pw: %srecovered REAC rate = %d Hz (%d pps), rx stream = %s\n",
 	        c->tag, L->rx.sample_rate, L->rx.sample_rate / REAC_SAMPLES_PER_PKT,
 	        c->join_box_master ? "a box master's own broadcast (box-width)"
@@ -2277,10 +2305,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * by any capture; the master's is what the frames feed and is what is used.)
 		 * `wire_channels` is the width the box BROADCASTS, which is its INPUT count —
 		 * using it sized an S-1608's playback door to 16 where the box has 8. */
-		const struct reac_box_model *bm_up = c->join_box_master
-			? reac_box_master_model(c->wire_channels) : NULL;
+		/* A BOX ON M DECLARES NOTHING, so its OUTPUT count is not on the wire (operator
+		 * ruling 2026-10-07: every box fact from the protocol). Until a capture shows
+		 * where a box master's outputs can be read, the slot count keeps what this path
+		 * has always sent — the captured catalogue entry of that input width — and says
+		 * so once; the box is never NAMED from it. */
+		const struct reac_box_model *bm_up = NULL;
 		int up_ch = c->join_box_master
-			? (bm_up ? bm_up->out_ch : (int)c->wire_channels)
+			? box_master_outputs((int)c->wire_channels, c->tag)
 			: c->box_channels;
 		/* The rig experiment, no rebuild between runs: REACPW_BOX_MASTER_FRAME=box
 		 * imitates the S-1608 exactly (340 B at the master's width, unicast);
@@ -2498,9 +2530,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * "REAC 16ch capture" where a served one reads "S-1608 (16 in / 8 out)". The
 		 * label comes from the row the broadcast width matched, and is absent where no
 		 * row matches — the same rule the identity keys already follow. */
-		const struct reac_box_model *bm_cap = c->box_model
-			? c->box_model
-			: (c->join_box_master ? reac_box_master_model(c->wire_channels) : NULL);
+		const struct reac_box_model *bm_cap = c->box_model;   /* a box on M is unnamed */
 		if (reac_source_node_ensure(&L->src, &L->src_cfg, width,
 		                            bm_cap ? bm_cap->display : NULL) != 0) {
 			fprintf(stderr, "reac-pw: %sfailed to create reac:capture node\n", c->tag);
@@ -3041,14 +3071,18 @@ static void sniffer_drain(struct sniffer *sn)
 		}
 		if (seen != 1)
 			continue;
+		/* What it declared, as it declared it: a passive sighting has no identity
+		 * page, so it is not named (1.0.30). */
+		char declared[40] = "";
+		if (sight.has_decl)
+			snprintf(declared, sizeof declared, " that declared %u in / %u out",
+			         (unsigned)sight.decl_in, (unsigned)sight.decl_out);
 		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_HEARD,
 		        "[%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
-		        "%s%s (%u ch): this interface is a segment\n",
+		        "%s (%u ch): this interface is a segment\n",
 		        sn->name, reac_disco_role_name(sight.role),
 		        sight.mac[0], sight.mac[1], sight.mac[2],
-		        sight.mac[3], sight.mac[4], sight.mac[5],
-		        sight.model ? " " : "", sight.model ? sight.model->display : "",
-		        sight.channels);
+		        sight.mac[3], sight.mac[4], sight.mac[5], declared, sight.channels);
 	}
 }
 
@@ -5579,9 +5613,9 @@ int main(int argc, char **argv)
 			/* Slave role: pick a FIXED-matrix box model (the matrix is law when we
 			 * are a stagebox). Selects the config-announce block, the ASCII name
 			 * frame, and the width in one choice. */
-			const struct reac_box_model *m = reac_box_model_by_token(argv[++i]);
+			const struct reac_box_model *m = reac_box_catalogue_by_token(argv[++i]);
 			if (!m) {
-				size_t n; const struct reac_box_model *t = reac_box_model_table(&n);
+				size_t n; const struct reac_box_model *t = reac_box_catalogue(&n);
 				fprintf(stderr, "reac-pw: unknown --box-model '%s'; known:", argv[i]);
 				for (size_t k = 0; k < n; k++)
 					fprintf(stderr, " %s (%s)", t[k].token, t[k].display);
@@ -5617,7 +5651,7 @@ int main(int argc, char **argv)
 			 * WINS and says so once (reac_box_pin_notice, autodetect watcher above). */
 			const char *spec = argv[++i];
 			if (reac_box_pin_parse(spec, &pin_model, &pin_label) != 0) {
-				size_t nm; const struct reac_box_model *t = reac_box_model_table(&nm);
+				size_t nm; const struct reac_box_model *t = reac_box_catalogue(&nm);
 				fprintf(stderr, "reac-pw: unknown --box model '%s'; known:", spec);
 				for (size_t k = 0; k < nm; k++)
 					fprintf(stderr, " %s", t[k].token);
