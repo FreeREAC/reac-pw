@@ -488,14 +488,14 @@ int reac_source_node_badge_stamped(const struct reac_source_node *n)
  * composer (reac_link_state.c) through this node's own pw_properties adapter. Same MERGE
  * semantics as publish_link above. */
 void reac_source_node_publish_box_master(struct reac_source_node *n,
-                                         unsigned width, uint64_t mac48, int locked)
+                                         uint64_t mac48, int locked)
 {
 	if (!n || !n->stream)
 		return;
 	struct pw_properties *props = pw_properties_new(NULL, NULL);
 	if (!props)
 		return;
-	reac_box_master_identity_publish(width, mac48, locked, source_prop_set, props);
+	reac_box_master_identity_publish(mac48, locked, source_prop_set, props);
 	pw_stream_update_properties(n->stream, &props->dict);
 	pw_properties_free(props);
 }

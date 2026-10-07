@@ -14,10 +14,11 @@
  *   (b) role comes from the full byte signature, not the frame KIND (cdea 04 03 is
  *       BOTH the box JOIN and the master grant; cdea 01 03 0010 is a BOX frame that
  *       parses as kind PROBE) — and stays UNKNOWN when the bytes are ambiguous;
- *   (c) a model is only ever the byte-exact config-block match, never inferred;
+ *   (c) a declaration is only ever what the box declared, never a catalogue entry;
  *   (d) the table ages a vanished box out and bumps seq on real change only;
  *   (e) the JSON is a complete snapshot or nothing — never truncated. */
 #include <reac/reac_disco.h>
+#include <reac/reac_box_facts.h>
 #include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 #include <stdio.h>
@@ -138,9 +139,9 @@ int main(void)
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);
 	CHK(memcmp(s.mac, BOX, 6) == 0);
-	/* Seen via a heartbeat, the model is NOT known. It must not be conjured from the
-	 * 16-channel width (reac_box_model_by_channels would happily answer "s1608"). */
-	CHK(s.model == NULL);
+	/* Seen via a heartbeat, nothing is declared, and nothing is conjured from the
+	 * 16-channel width (reac_box_catalogue_by_width would happily answer "s1608"). */
+	CHK(!s.has_decl);
 
 	/* The box config-announce (link 1, opcode 0x82/0x84) is its OWN kind now. It used
 	 * to land in the parser's link-1 catch-all, a MASTER kind, and the role had to be
@@ -154,19 +155,17 @@ int main(void)
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);                  /* not master */
 
-	/* ---- (c) the model is the byte-exact config-block match, and only that. */
-	CHK(s.model != NULL);
-	CHK(strcmp(s.model->token, "s0808") == 0);
-	CHK(s.model->in_ch == 8 && s.model->out_ch == 8);
+	/* ---- (c) the declaration is what the box said, read off its cells. */
+	CHK(s.has_decl && s.decl_in == 8 && s.decl_out == 8);
 
-	/* A config-announce whose block matches no row stays unidentified rather than
-	 * defaulting to S-1608. */
+	/* A config-announce no catalogue entry matches is still read as declared: a cell
+	 * code nobody captured is not placed, and the box is not defaulted to S-1608. */
 	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, REAC_BOX_S0808_IN);
 	f[30] ^= 0xff;                                       /* perturb inside the block */
 	reac_ctrl_checksum_apply(f);                         /* keep it a VALID frame */
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_BOX);
-	CHK(s.model == NULL);                                /* unknown stays unknown */
+	CHK(s.has_decl && s.decl_in == 8 && s.decl_out == 8);
 
 	/* A broadcast FILLER is AMBIGUOUS: a box's presence-flood and a master's downstream
 	 * audio are both type 0000 broadcast. Neither guess is honest. */
@@ -181,7 +180,7 @@ int main(void)
 	reac_disco_table_init(&t);
 	CHK(t.n == 0 && t.seq == 0);
 
-	struct reac_disco_sighting box = { .role = REAC_DISCO_ROLE_BOX, .model = NULL };
+	struct reac_disco_sighting box = { .role = REAC_DISCO_ROLE_BOX };
 	memcpy(box.mac, BOX, 6);
 
 	CHK(reac_disco_table_observe(&t, &box, 1, S_(1)) == 1);   /* new MAC = a change */
@@ -195,15 +194,14 @@ int main(void)
 	CHK(t.e[0].last_seen_ns == S_(2));         /* but liveness DID advance */
 	CHK(t.e[0].first_seen_ns == S_(1));        /* first_seen never moves */
 
-	/* Learning the model later IS a change. */
-	box.model = reac_box_model_by_token("s0808");
-	CHK(box.model != NULL);
+	/* Learning the declaration later IS a change. */
+	box.has_decl = 1; box.decl_in = 8; box.decl_out = 8;
 	CHK(reac_disco_table_observe(&t, &box, 1, S_(3)) == 1);
 	CHK(t.seq == 2);
-	CHK(t.e[0].model == box.model);
+	CHK(t.e[0].has_decl && t.e[0].decl_in == 8 && t.e[0].decl_out == 8);
 
 	/* A second, unowned device coexists. */
-	struct reac_disco_sighting rival = { .role = REAC_DISCO_ROLE_MASTER, .model = NULL };
+	struct reac_disco_sighting rival = { .role = REAC_DISCO_ROLE_MASTER };
 	memcpy(rival.mac, MASTER, 6);
 	CHK(reac_disco_table_observe(&t, &rival, 0, S_(3)) == 1);
 	CHK(t.n == 2 && t.seq == 3);
@@ -222,7 +220,7 @@ int main(void)
 
 	/* Overflow saturates and SAYS so — a full table is never a complete picture. */
 	reac_disco_table_init(&t);
-	struct reac_disco_sighting many = { .role = REAC_DISCO_ROLE_BOX, .model = NULL };
+	struct reac_disco_sighting many = { .role = REAC_DISCO_ROLE_BOX };
 	memcpy(many.mac, BOX, 6);
 	for (int i = 0; i < REAC_DISCO_MAX + 3; i++) {
 		many.mac[5] = (uint8_t)i;
@@ -238,7 +236,7 @@ int main(void)
 	 * exactly the peer whose width decides the segment's topology. Found 2026-09-09 reading
 	 * this merge for the box-master join: the widening branch sat inside the model branch. */
 	reac_disco_table_init(&t);
-	struct reac_disco_sighting narrow = { .role = REAC_DISCO_ROLE_UNKNOWN, .model = NULL,
+	struct reac_disco_sighting narrow = { .role = REAC_DISCO_ROLE_UNKNOWN,
 	                                      .channels = REAC_BOX_S0808_IN };
 	memcpy(narrow.mac, MASTER, 6);
 	CHK(reac_disco_table_observe(&t, &narrow, 0, S_(1)) == 1);   /* a new MAC */
@@ -257,7 +255,7 @@ int main(void)
 	struct reac_disco_gate g;
 	reac_disco_gate_init(&g);
 
-	struct reac_disco_sighting live = { .role = REAC_DISCO_ROLE_BOX, .model = NULL };
+	struct reac_disco_sighting live = { .role = REAC_DISCO_ROLE_BOX };
 	memcpy(live.mac, BOX, 6);
 
 	CHK(reac_disco_gate_should_push(&g, &live, S_(1)) == 1);        /* first sight */
@@ -274,26 +272,22 @@ int main(void)
 
 	/* A sharpened fact is an EDGE and jumps the window immediately — the operator sees
 	 * the box identify itself now, not up to a second later. */
-	live.model = reac_box_model_by_token("s0808");
+	live.has_decl = 1; live.decl_in = 8; live.decl_out = 8;
 	CHK(reac_disco_gate_should_push(&g, &live, S_(1) + 1000000ULL) == 1);
 	/* …but the same fact repeated is not an edge. */
 	CHK(reac_disco_gate_should_push(&g, &live, S_(1) + 2000000ULL) == 0);
 
 	/* An ambiguous frame after a definite one never un-learns the role. */
-	struct reac_disco_sighting vague = { .role = REAC_DISCO_ROLE_UNKNOWN, .model = NULL };
+	struct reac_disco_sighting vague = { .role = REAC_DISCO_ROLE_UNKNOWN };
 	memcpy(vague.mac, BOX, 6);
 	CHK(reac_disco_gate_should_push(&g, &vague, S_(1) + 3000000ULL) == 0);
 	CHK(g.e[0].role == REAC_DISCO_ROLE_BOX);
 
-	/* A model index survives the round-trip through the ring's byte-sized slot. */
-	CHK(reac_disco_model_index(NULL) == -1);
-	CHK(reac_disco_model_by_index(-1) == NULL);
-	const struct reac_box_model *m0808 = reac_box_model_by_token("s0808");
-	CHK(reac_disco_model_by_index(reac_disco_model_index(m0808)) == m0808);
 
 	/* ---- (e) JSON: a complete snapshot, or nothing at all. */
 	reac_disco_table_init(&t);
-	box.model = reac_box_model_by_token("s0808");
+	box.has_decl = 1; box.decl_in = 8; box.decl_out = 8;
+	box.family = REAC_BOX_FAMILY_S0808;   /* our own peer: its identity page said so */
 	CHK(reac_disco_table_observe(&t, &box, 1, S_(10)) == 1);
 
 	char buf[1024];
@@ -307,9 +301,9 @@ int main(void)
 	CHK(strstr(buf, "\"owned\":true") != NULL);
 	CHK(strstr(buf, "\"age_ms\":120") != NULL);
 
-	/* An unidentified device serializes honestly — "unknown"/"0x0", not a made-up model. */
+	/* A device that declared nothing serializes honestly — "unknown"/"0x0". */
 	reac_disco_table_init(&t);
-	box.model = NULL;
+	box.has_decl = 0; box.family = 0;
 	CHK(reac_disco_table_observe(&t, &box, 0, S_(10)) == 1);
 	len = reac_disco_table_json(&t, S_(10), buf, sizeof buf);
 	CHK(len > 0);
@@ -326,7 +320,7 @@ int main(void)
 	/* Too small a buffer yields -1, never a half-written list that parses as a shorter
 	 * (and wrong) device set. */
 	reac_disco_table_init(&t);
-	box.model = reac_box_model_by_token("s0808");
+	box.has_decl = 1; box.decl_in = 8; box.decl_out = 8;
 	reac_disco_table_observe(&t, &box, 1, S_(10));
 	CHK(reac_disco_table_json(&t, S_(10), buf, 20) == -1);
 
@@ -351,11 +345,10 @@ int main(void)
 			        reac_disco_role_name((enum reac_disco_role)e->role));
 			return 1;
 		}
-		if (e->model == NULL ? s.model != NULL
-		                     : (s.model == NULL || strcmp(s.model->token, e->model) != 0)) {
-			fprintf(stderr, "FAIL: golden %zu model %s, expected %s\n", i,
-			        s.model ? s.model->token : "(none)",
-			        e->model ? e->model : "(none)");
+		/* A frame the golden names a model for is a declaration, and only those. */
+		if ((e->model != NULL) != (s.has_decl != 0)) {
+			fprintf(stderr, "FAIL: golden %zu declared=%d, expected %s\n", i,
+			        s.has_decl, e->model ? e->model : "(none)");
 			return 1;
 		}
 	}
@@ -382,7 +375,7 @@ int main(void)
 	CHK(reac_disco_classify(f, 64, OURS, &s) == 0);
 	CHK(s.role == REAC_DISCO_ROLE_UNKNOWN);
 	CHK(memcmp(s.mac, SPLIT, 6) == 0);
-	CHK(s.model == NULL);
+	CHK(!s.has_decl);
 
 	/* ---- (e) THE GEOMETRY RIDES THE SIGHTING (arbitration §2b).
 	 *
@@ -397,7 +390,7 @@ int main(void)
 
 	printf("OK: disco — presence from a real 0x8819 frame with NO MAC-vendor gate, a locked "
 	       "segment refusing an impostor's FILLER, role from the full signature (never the "
-	       "kind), model never inferred, stale devices withdrawn, JSON all-or-nothing, "
+	       "kind), nothing taken from the catalogue, stale devices withdrawn, JSON all-or-nothing, "
 	       "S-4000 goldens replay byte-verbatim\n");
 	return 0;
 }

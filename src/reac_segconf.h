@@ -214,7 +214,7 @@ const char *reac_segconf_ignore_file(const struct reac_segconf *c, const char *n
 
 /* THE MODEL ROW THIS SEGMENT DECLARES, or NULL when it declares none — which is every
  * segment that is not a box, and a box whose model was refused. The string is a token of
- * libreac's own box-model table (reac_box_model_by_token), folded to lower case, so the
+ * libreac's own box-model table (reac_box_catalogue_by_token), folded to lower case, so the
  * caller looks the row up rather than re-deriving a width from a name. */
 const char *reac_segconf_model(const struct reac_segconf *c, const char *name);
 

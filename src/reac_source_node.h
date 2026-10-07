@@ -139,12 +139,13 @@ int reac_source_node_badge_stamped(const struct reac_source_node *n);
 /* THE JOINED BOX MASTER'S IDENTITY on this node (DESIGN.md 0.5.2). The publish_link door
  * above is the MASTER's: the sink computes those strings from its pacer's recognition and
  * pushes them here. A receive-only join has no sink and no pacer — nothing recognises
- * anything, because the peer never declares itself — so its identity is composed from the
- * two facts the wire did give: the width it broadcasts and the address it broadcasts from.
+ * anything, because the peer never declares itself — so its identity is the one fact the
+ * wire gives about it: the address it broadcasts from. A box on M sends no declaration
+ * and no identity page, so no model and no width are stamped for it (1.0.30).
  *
  * ONE COMPOSER, not a second spelling: this hands reac_box_master_identity_publish the same
- * pw_properties adapter publish_link uses, so reac.link-state / reac.box-model /
- * reac.box-width / reac.box.mac are written by exactly one function in this daemon.
+ * pw_properties adapter publish_link uses, so reac.link-state / reac.box.mac are written
+ * by exactly one function in this daemon.
  * Main-loop thread only. */
 /* `enrolled` IS THE PAIRING, NOT THE HEARING (0.5.6, operator ruling). It used to be the
  * RX's own evidence — frames arriving and decoding — on 0.5.2's reasoning that a
@@ -157,7 +158,7 @@ int reac_source_node_badge_stamped(const struct reac_source_node *n);
  * `probing` while listening, flooding and waiting for the grant echo; `established` only
  * once the grant is accepted and the unicast stream and heartbeat are running. */
 void reac_source_node_publish_box_master(struct reac_source_node *n,
-                                         unsigned width, uint64_t mac48, int enrolled);
+                                         uint64_t mac48, int enrolled);
 
 /* Live-update the reac-capture node's presented Format rate — the RATE half of
  * #208/2026-08-26-clock-tabs-and-reac-pace-coupling §1b ("a rate is ONE

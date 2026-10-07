@@ -138,7 +138,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
  * MASTER-ROLE NODES NEVER REACH THIS. There the badge timer owns those keys off the pacer's
  * own FSM, and two writers on one fact is the thing being fixed. */
 void reac_sink_node_publish_box_master(struct reac_sink_node *n,
-                                       unsigned width, uint64_t mac48, int enrolled);
+                                       uint64_t mac48, int enrolled);
 
 /* Bring the reac-playback GRAPH NODE to `channels` INPUT ports labelled `label`,
  * WITHOUT disturbing the running pacer/master (the sink owns the recognizer, so it
