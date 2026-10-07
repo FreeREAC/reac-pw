@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LIBREAC_REF: lane/box-facts-from-wire   # v1.7.0 once libreac tags it
+  LIBREAC_REF: v1.7.0
   # reac-protocol's facts, pinned to the commit facts/ was vendored from (tools/facts.py
   # drift checks the copy against it; tools/facts-perturb-check.sh perturbs it).
   REAC_PROTOCOL_REF: 26b16db9fc844820fed8adc26a342f6b86f3a1ba
