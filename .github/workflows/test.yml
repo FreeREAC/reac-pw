@@ -89,9 +89,22 @@ jobs:
                 gcc make git meson ninja-build pkgconf-pkg-config python3 python3-pyyaml \
                 pipewire pipewire-devel pipewire-utils wireplumber \
                 iproute iproute-tc tcpdump libcap procps-ng util-linux which findutils \
-                diffutils gawk sed grep coreutils
+                diffutils gawk sed grep coreutils rsync
               git config --global --add safe.directory "*"
               tools/ci-suite.sh ../libreac build-ci ../reac-protocol
+              # THE TARBALL THE RPM IS BUILT FROM, CHECKED THE WAY THE RPM CHECKS IT.
+              # Everything above runs in the git checkout, which holds every file, so
+              # a file make-tarball.sh forgets (BUILDING.md: v1.0.28 and v1.0.30 were
+              # tagged and never published) only failed in the release run, after
+              # the tag. This builds the tarball, extracts it and runs the first half
+              # of the spec %check (the namespace half already ran above, in-tree).
+              REPO=$PWD
+              packaging/make-tarball.sh
+              T=$(mktemp -d)
+              tar -xzf reac-pw-*.tar.gz -C "$T"
+              (cd "$T"/reac-pw-* &&
+               PKG_CONFIG_PATH="$REPO/build-ci/_libreac-prefix/lib/pkgconfig" meson setup _build >/dev/null &&
+               meson test -C _build --no-suite netns --no-suite load --print-errorlogs)
             '
 
       - name: Keep the test logs
