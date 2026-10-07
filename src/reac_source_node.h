@@ -158,7 +158,7 @@ int reac_source_node_badge_stamped(const struct reac_source_node *n);
  * `probing` while listening, flooding and waiting for the grant echo; `established` only
  * once the grant is accepted and the unicast stream and heartbeat are running. */
 void reac_source_node_publish_box_master(struct reac_source_node *n,
-                                         uint64_t mac48, int enrolled);
+                                         unsigned width, uint64_t mac48, int enrolled);
 
 /* Live-update the reac-capture node's presented Format rate — the RATE half of
  * #208/2026-08-26-clock-tabs-and-reac-pace-coupling §1b ("a rate is ONE
