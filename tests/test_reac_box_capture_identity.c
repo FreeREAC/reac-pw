@@ -99,7 +99,7 @@ int main(void)
 	struct reac_box_rows rows;
 	reac_box_rows_init(&rows);
 	const struct reac_box_model *bm = reac_box_row_resolve(&rows, NULL, ports.in_ch,
-	                                                       ports.out_ch);
+	                                                       ports.out_ch, NULL, 1);
 	CHK(bm != NULL);
 	CHK(bm && !reac_box_row_has_playback(bm));
 
@@ -138,6 +138,9 @@ int main(void)
 
 	struct reac_identity id;
 	reac_pacer_read_identity(&p, &id);
+	/* The name comes from the page that just arrived: the S-4000S hw block and 40 / 0. */
+	bm = reac_box_row_resolve(&rows, NULL, ports.in_ch, ports.out_ch, &id, 0);
+	CHK(bm != NULL);
 	struct fake_props f;
 	memset(&f, 0, sizeof f);
 	reac_box_row_badge_publish(bm, "established", reac_mac48_pack(BOX), &id, fake_set, &f);
@@ -147,6 +150,7 @@ int main(void)
 	CHK(strcmp(fake_get(&f, "reac.box-hw"), "00000002 00010002") == 0);
 	CHK(strcmp(fake_get(&f, "reac.box.mac"), "00:40:ab:c4:06:80") == 0);
 	CHK(strcmp(fake_get(&f, "reac.box-model"), "s4000s-4000") == 0);
+	CHK(strcmp(fake_get(&f, "reac.box-name"), "S-4000S-4000") == 0);
 	CHK(strcmp(fake_get(&f, "reac.box-width"), "40x0") == 0);
 	CHK(strcmp(fake_get(&f, "reac.link-state"), "established") == 0);
 

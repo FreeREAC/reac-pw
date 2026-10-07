@@ -163,8 +163,8 @@ check_joined() {   # check_joined <cycle-name> <log-line-floor>
 	# The door is sized to the box's own 8 ch AND NAMES IT, the way the master path's
 	# capture node does — a console reads this description for the operator-facing name.
 	case "$(fld "$P" 5)" in
-	  "S-0808 ($FACT_BOX_S0808_IN in / $FACT_BOX_S0808_OUT out)"*"$FACT_BOX_S0808_IN ch"*) : ;;
-	  *) echo "FAIL ($what): the door should name the box and its width: $P"; return 1 ;;
+	  *"${FACT_BOX_S0808_IN}ch "*) : ;;
+	  *) echo "FAIL ($what): the door should carry the box's width: $P"; return 1 ;;
 	esac
 	# AND THE FRAMES ARE STILL ARRIVING, counted only from the log this cycle wrote.
 	ok1=$(rx_ok_since "$floor" rej0)

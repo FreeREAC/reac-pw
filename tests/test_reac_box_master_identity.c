@@ -12,8 +12,8 @@
  * The two rules under test, and why they are rules rather than a formatter:
  *
  *   1. THE MODEL COMES FROM THE WIDTH, EXACTLY OR NOT AT ALL. A box on M sends no
- *      config-announce — reac_ctrl_identify_box has nothing to match — so the only thing
- *      that can name it is the geometry it broadcasts. libreac's reac_box_model_by_channels
+ *      config-announce — reac_box_catalogue_match has nothing to match — so the only thing
+ *      that can name it is the geometry it broadcasts. libreac's reac_box_catalogue_by_width
  *      DEFAULTS to the S-1608 row for a width no model has, which would put a model name on
  *      a chassis nobody identified; reac_box_master_model refuses that outright.
  *   2. THE COMPOSITION AND THE STAMP ARE ONE ACT, tested through a recording fake, for the
@@ -62,24 +62,17 @@ static const char *rec_get(const struct rec *r, const char *key)
 
 int main(void)
 {
-	/* ---- 1. the width names the model, exactly ---------------------------------- */
-	const struct reac_box_model *m8 = reac_box_master_model(REAC_BOX_S0808_IN);
-	CHK(m8 != NULL);
-	CHK(m8 && strcmp(m8->token, "s0808") == 0);
-	CHK(m8 && m8->in_ch == REAC_BOX_S0808_IN && m8->out_ch == REAC_BOX_S0808_OUT);
-
-	const struct reac_box_model *m16 = reac_box_master_model(REAC_BOX_S1608_IN);
-	CHK(m16 && strcmp(m16->token, "s1608") == 0);
-	const struct reac_box_model *m32 = reac_box_master_model(REAC_BOX_S4000S_3208_IN);
-	CHK(m32 && strcmp(m32->token, "s4000s") == 0);
-
-	/* THE DEFAULT THAT MUST NOT HAPPEN. reac_box_model_by_channels answers the S-1608
-	 * row for every one of these; this function answers nothing at all. */
-	CHK(reac_box_master_model(0) == NULL);
-	CHK(reac_box_master_model(7) == NULL);
-	CHK(reac_box_master_model(9) == NULL);
-	CHK(reac_box_master_model(REAC_MAX_CHANNELS) == NULL);
-	CHK(reac_box_master_model(64) == NULL);
+	/* ---- 1. A BOX ON M IS NEVER NAMED FROM ITS WIDTH (1.0.30, ruling 2026-10-07).
+	 * It declares nothing and sends no identity page, so no model and no width are
+	 * stamped for it, whatever its width: the catalogue never names a connected box. */
+	for (unsigned w = 0; w <= 64; w += 4) {
+		struct rec r = { 0 };
+		reac_box_master_identity_publish(w, 0x0040abc4dc9cull, 1, rec_set, &r);
+		CHK(rec_get(&r, REAC_PROP_BOX_MODEL) == NULL);
+		char want[12]; snprintf(want, sizeof want, "%u", w);
+		CHK(w == 0 ? rec_get(&r, REAC_PROP_BOX_WIDTH) == NULL
+		           : (rec_get(&r, REAC_PROP_BOX_WIDTH) && strcmp(rec_get(&r, REAC_PROP_BOX_WIDTH), want) == 0));
+	}
 
 	/* ---- 2. the rig's own case, stamped ----------------------------------------- */
 	{
@@ -92,10 +85,8 @@ int main(void)
 		const char *w  = rec_get(&r, REAC_PROP_BOX_WIDTH);
 		const char *mc = rec_get(&r, REAC_PROP_BOX_MAC);
 		CHK(ls && strcmp(ls, "established") == 0);
-		CHK(md && strcmp(md, "s0808") == 0);
-		/* The recognised model's OWN geometry, the same string the master side
-		 * publishes for the same chassis — a console must fold the two into one box. */
-		CHK(w && strcmp(w, "8x8") == 0);
+		CHK(md == NULL);                  /* no model on the wire: not stamped */
+		CHK(w && strcmp(w, "8") == 0);  /* its inputs, as it broadcasts them */
 		CHK(mc && strcmp(mc, "00:40:ab:c4:dc:9c") == 0);
 	}
 
@@ -106,23 +97,7 @@ int main(void)
 		reac_box_master_identity_publish(8, reac_mac48_pack(mac), 0, rec_set, &r);
 		const char *ls = rec_get(&r, REAC_PROP_LINK_STATE);
 		CHK(ls && strcmp(ls, "probing") == 0);
-		/* The identity is known from the sighting before the stream locks — the width
-		 * and the address are what the verdict was made from — so it is published
-		 * with the honest link state beside it, not withheld. */
-		CHK(rec_get(&r, REAC_PROP_BOX_MODEL) != NULL);
 		CHK(rec_get(&r, REAC_PROP_BOX_MAC) != NULL);
-	}
-
-	/* ---- 4. a width no model has publishes NO model and NO width ---------------- */
-	{
-		struct rec r = { 0 };
-		uint8_t mac[6] = { 0x00, 0x40, 0xab, 0x11, 0x22, 0x33 };
-		reac_box_master_identity_publish(12, reac_mac48_pack(mac), 1, rec_set, &r);
-		CHK(rec_get(&r, REAC_PROP_BOX_MODEL) == NULL);
-		CHK(rec_get(&r, REAC_PROP_BOX_WIDTH) == NULL);
-		/* What IS known is still said: whose clock, and that it is locked. */
-		CHK(rec_get(&r, REAC_PROP_BOX_MAC) != NULL);
-		CHK(rec_get(&r, REAC_PROP_LINK_STATE) != NULL);
 	}
 
 	/* ---- 5. no box, no address: the sentinel, never a zero MAC ------------------ */
@@ -140,8 +115,7 @@ int main(void)
 		fprintf(stderr, "%d check(s) failed\n", fails);
 		return 1;
 	}
-	printf("OK: a joined box master publishes the box it is — model and width implied by "
-	       "the broadcast geometry (exactly, or not at all), its own address, and a link "
-	       "state that says whether the stream is locked\n");
+	printf("OK: a joined box master publishes its own address and a link state that says "
+	       "whether the stream is locked, and no model or width the wire does not carry\n");
 	return 0;
 }

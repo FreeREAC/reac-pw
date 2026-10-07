@@ -171,7 +171,9 @@ struct reac_sink_node {
 	enum reac_link_state link_state_last;
 	uint64_t link_drops_seen;               /* sum of pacer.drops[] last poll */
 	const struct reac_box_model *box_model_last;
-	struct reac_box_rows box_rows;          /* rows built for a box no matrix row names */
+	struct reac_box_rows box_rows;          /* the box as its frames say (reac_box_row.h) */
+	int      decl_in_seen, decl_out_seen;   /* the declaration box_decl_since times */
+	uint64_t box_decl_since_ns;             /* when it was first seen; 0 = none */
 	struct reac_identity box_identity_last; /* last-published identity, for the change guard */
 	/* reac.box.mac, packed. In the guard on its own account: a box can be
 	 * REPLACED by another of the same model between two polls, which moves the
@@ -629,11 +631,23 @@ static void sink_publish(struct reac_sink_node *n)
 	pw_stream_update_params(n->stream, params, np);
 }
 
-/* THE ROW THIS SEGMENT IS SIZED AND NAMED FROM: the pacer's byte-exact match when a
- * matrix row names the box, else a row built from the widths the box DECLARED in its
- * config-announce cells, else NULL. libreac keeps those widths in the pacer's
- * declared_in / declared_out, written on the pacer thread as plain aligned ints; they
- * are read here with atomic loads and taken only when two reads agree. MAIN LOOP only. */
+/* THE BOX THIS SEGMENT IS SIZED AND NAMED FROM, as its frames say (reac_box_row.h): the
+ * widths the box DECLARED in its config-announce cells, and the name libreac derives from
+ * them and the identity page. libreac keeps the widths in the pacer's declared_in /
+ * declared_out, written on the pacer thread as plain aligned ints; they are read here
+ * with atomic loads and taken only when two reads agree. The identity page crosses its
+ * seqlock (reac_pacer_read_identity). The name waits for the page at most
+ * REACPW_BOX_NAME_WAIT_NS after the declaration, because a relabel rebuilds the nodes.
+ * MAIN LOOP only. */
+#define REACPW_BOX_NAME_WAIT_NS (3ull * 1000000000ull)
+
+static uint64_t sink_mono_ns(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 static const struct reac_box_model *sink_box_row(struct reac_sink_node *n)
 {
 	int in_ch = 0, out_ch = 0;
@@ -644,9 +658,19 @@ static const struct reac_box_model *sink_box_row(struct reac_sink_node *n)
 		    __atomic_load_n(&n->pacer.declared_out, __ATOMIC_ACQUIRE) == out_ch)
 			break;
 	}
+	uint64_t now = sink_mono_ns();
+	if (in_ch != n->decl_in_seen || out_ch != n->decl_out_seen) {
+		n->decl_in_seen = in_ch;
+		n->decl_out_seen = out_ch;
+		n->box_decl_since_ns = (in_ch || out_ch) ? now : 0;
+	}
+	int wait_over = n->box_decl_since_ns &&
+	                now - n->box_decl_since_ns >= REACPW_BOX_NAME_WAIT_NS;
+	struct reac_identity id;
+	reac_pacer_read_identity(&n->pacer, &id);
 	return reac_box_row_resolve(&n->box_rows,
 	        atomic_load_explicit(&n->pacer.recognized_box, memory_order_acquire),
-	        in_ch, out_ch);
+	        in_ch, out_ch, &id, wait_over);
 }
 
 /* THE SEGMENT'S HEAD-AMP CAPABILITY, as this node can see it right now. One place,

@@ -134,8 +134,18 @@ static inline void reacpw_dt1_record(uint8_t *blk, unsigned tag, unsigned addr_l
 	blk[a + 1] = (uint8_t)addr_lo;
 	for (size_t i = 0; i < n; i++)
 		blk[d + i] = pl[i];
-	blk[d + n] = 0x7f;                       /* stand-in; the parser reads structure */
+	/* BOTH CHECKSUMS, because libreac (1.6.0 on) refuses a reply that fails either:
+	 * the Roland inner one over TAG..data, then the block's own, so the 32 bytes sum
+	 * to 0 mod 256. */
+	unsigned sum = 0;
+	for (unsigned i = REAC_DT1_TAG_OFF; i < d + n; i++)
+		sum += blk[i];
+	blk[d + n] = (uint8_t)((128 - sum % 128) % 128);
 	blk[d + n + 1] = REAC_SYSEX_END;
+	unsigned bsum = 0;
+	for (int i = 0; i < 31; i++)
+		bsum += blk[i];
+	blk[31] = (uint8_t)(256 - bsum % 256);
 }
 
 #endif /* REACPW_FACTS_PW_H */

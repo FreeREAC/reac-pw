@@ -266,18 +266,18 @@ int main(void)
 	};
 	for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
 		n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, cases[i].in_ch);
-		const struct reac_box_model *m = reac_ctrl_identify_box(f, n);
+		const struct reac_box_model *m = reac_box_catalogue_match(f, n);
 		CHK(m != NULL);
 		CHK(strcmp(m->token, cases[i].tok) == 0);
 		CHK(m->in_ch == cases[i].in_ch);
 	}
 	/* a NON-config-announce frame (heartbeat) is not identifiable -> NULL */
 	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x55, REAC_BOX_S1608_IN);
-	CHK(reac_ctrl_identify_box(f, n) == NULL);
+	CHK(reac_box_catalogue_match(f, n) == NULL);
 	/* an unknown 0x84 descriptor (mutate one descriptor byte) -> NULL (falls back) */
 	n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, REAC_BOX_S0808_IN);
 	f[REAC_CTRL_BLOCK_OFF + REAC_PORTS_TABLE_OFF] ^= 0xff;   /* corrupt a descriptor byte */
-	CHK(reac_ctrl_identify_box(f, n) == NULL);
+	CHK(reac_box_catalogue_match(f, n) == NULL);
 
 	/* 8. the record/block checksum ORDER the builder scaffold makes structural */
 	if (check_record_cksum_order())

@@ -13,12 +13,12 @@
  * putting a fake-master mode into the shipped binary to get it would be a mode nothing
  * else ever uses.
  *
- * THE BYTES ARE THE UNIT FIXTURE'S BYTES. Frames come from the same libreac builders
- * test_reac_hunt.c's `box_on_m` uses — a broadcast flood FILLER at the box's width, and
- * once a second the same frame with a MASTER-ONLY head-amp record stamped over its control
- * block and the block checksum re-applied. That second frame is what makes the peer a
- * MASTER to the classifier (only a console emits preamp records) while its LENGTH keeps
- * saying box. Nothing here hand-rolls a frame, so a change to the wire format cannot leave
+ * THE BYTES ARE THE CAPTURED BOX MASTER'S. Frames come from libreac's builders: a
+ * broadcast flood FILLER at the box's width and, once a second, the channel map a real
+ * S-1608 on M broadcasts (box-to-box-2026-09-13), stamped over the filler's control block.
+ * With `announcing` it also sends the cfea that S-1608 sends, total_slots = its own width,
+ * and the scene push. What makes the peer a BOX master is that announce and the width it
+ * broadcasts (libreac reac_rival_kind_of, ruling 2026-10-07), never an invented record. Nothing here hand-rolls a frame, so a change to the wire format cannot leave
  * this test asserting bytes the daemon no longer speaks.
  *
  * IT ALSO LISTENS, WHEN ASKED (0.5.5). A box on M used to be a peer nothing was ever
@@ -593,7 +593,7 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "fake-box-master: %s, %d ch (%zu B frames) at ~%d fps from "
 	        "%02x:%02x:%02x:%02x:%02x:%02x — broadcast box geometry carrying a distinct "
-	        "constant per channel, one master-only record per second, no handshake of "
+	        "constant per channel, a channel map once a second, no handshake of "
 	        "any kind\n",
 	        iface, n_ch, reac_ctrl_box_frame_len(n_ch), fps,
 	        src[0], src[1], src[2], src[3], src[4], src[5]);
@@ -631,7 +631,7 @@ int main(int argc, char **argv)
 		/* THE ANNOUNCING MASTER'S OWN CONTROL PLANE (0.5.6-9): a bounded scene
 		 * transfer over the first second, then a `cfea` announce about once a
 		 * second. Both are stamped over the filler's control block and
-		 * re-checksummed, exactly as the head-amp record below is. */
+		 * re-checksummed, exactly as the channel map below is. */
 		if (announcing) {
 			/* THE TRANSFER REPEATS UNTIL IT IS ANSWERED (spec/reac.ksy: four
 			 * complete bodies in one capture, ten in another, all at the same
@@ -673,7 +673,7 @@ int main(int argc, char **argv)
 		 * inside its BROADCAST, byte for byte, 4 ms after the burst — that echo IS
 		 * the grant, and without it nothing on this wire can ever establish. One
 		 * queued record per frame, stamped over the filler's control block and
-		 * re-checksummed, exactly as the head-amp record below is. */
+		 * re-checksummed, exactly as the channel map below is. */
 		if (ear.grant_n > 0) {
 			memcpy(f + REAC_TYPED_BLOCK_OFF, ear.grant_q[0], REAC_TYPED_BLOCK_LEN);
 			memmove(ear.grant_q[0], ear.grant_q[1], sizeof ear.grant_q[0] * 3);
@@ -682,14 +682,16 @@ int main(int argc, char **argv)
 			granted++;
 			goto send;
 		}
-		/* ONE FRAME A SECOND CARRIES THE MASTER SIGNATURE. A head-amp record is
-		 * console-only (reac_disco.c's role_of), so this is what files the peer as a
-		 * MASTER — at a length that is unambiguously a box's. The block checksum is
-		 * re-applied after the stamp, or the sighting is discarded as corrupt. */
+		/* ONE FRAME A SECOND CARRIES THE CHANNEL MAP, as the captured S-1608 on M
+		 * broadcasts it (box-to-box-2026-09-13: cdea 01 03 0019 beside its cfea and
+		 * scene pushes; s1608-master-96k-vs-m200-slave the same). It is master-only,
+		 * so it files the peer as a MASTER, and the box width it rides in is what makes
+		 * that master a box. No head-amp record: no box on M was ever seen sending one. */
 		if (sent % fps == 0) {
-			if (reac_ctrl_stamp_headamp(f, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1) != 0)
+			static int cm_idx;
+			if (reac_master_stamp(&ann, f, REAC_M_EMIT_CHANMAP, cm_idx) != 0)
 				break;
-			reac_ctrl_checksum_apply(f);
+			cm_idx = (cm_idx + 1) % ann.chanmap_nframes;
 			announces++;
 		}
 		/* ENETDOWN IS NOT AN ERROR HERE, IT IS "NOT YET". The proof starts this box
