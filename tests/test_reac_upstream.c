@@ -47,7 +47,9 @@ int main(void)
 	/* 1. shape: nch from frame length (len = 52 + nch*36) */
 	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN)) == REAC_BOX_S1608_IN);  /* S-1608 */
 	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S0808_IN)) == REAC_BOX_S0808_IN);   /* S-0808 */
-	CHK(reac_upstream_channels(REAC_FRAME_BYTES) == -1); /* the desk's DOWNSTREAM shape is not upstream */
+	/* 1492 B is ALSO a 40-wide box's return (libreac 1.6.0, ruling 2026-09-25): the
+	 * length no longer tells the desk from a box; direction does (reac_rx's gate). */
+	CHK(reac_upstream_channels(REAC_FRAME_BYTES) == REAC_MAX_CHANNELS);
 	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN) - 1) == -1);
 	CHK(reac_upstream_channels(REACPW_FRAME_LEN(REAC_BOX_S1608_IN) + 1) == -1);
 	CHK(reac_upstream_channels(REAC_FRAME_OVERHEAD) == -1);   /* nch 0 */
