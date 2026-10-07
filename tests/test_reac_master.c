@@ -579,7 +579,7 @@ int main(void)
 	 * box SOLID) — ONLY cfea + chanmap, each metronomic at exactly 1/s, and NOTHING
 	 * else (0 probe, 0 sub01/sub02). The chanmap at 1/s (not the 1/cycle hunt rate)
 	 * is the box's sync keep-alive; under-sending it left the box BLINKING (#130). */
-	long e_cm = 0, e_ann = 0, e_s1 = 0, e_s2 = 0, e_pr = 0;
+	long e_cm = 0, e_ann = 0, e_s1 = 0, e_s2 = 0, e_pr = 0, e_id = 0;
 	long cm_slot = -1, ann_slot = -1;
 	for (long i = 0; i < 12L * FPS; i++) {
 		reac_master_rx(&m, REAC_M_RX_BOX_UNICAST, BOX, NULL);   /* upstream flood */
@@ -602,10 +602,15 @@ int main(void)
 		case REAC_M_EMIT_SCENE_TAIL:  e_s2++; break;
 		case REAC_M_EMIT_SCENE_CHUNK: e_pr++; break;
 		case REAC_M_EMIT_FILLER:   break;
+		/* The one other frame: the identity re-poll, sent only while the box has not
+		 * answered its identity page (this test's box never does), once a second, at
+		 * most REAC_M_IDENTITY_POLLS times (libreac 1.7.0). */
+		case REAC_M_EMIT_IDENTITY_POLL: e_id++; break;
 		default: CHK(0);                            /* no grant while established */
 		}
 	}
 	CHK(m.state == REAC_M_ESTABLISHED);
+	CHK(e_id == REAC_M_IDENTITY_POLLS * REAC_GRANT_GROUPB_LEN);   /* capped, then silent */
 	/* 12 s: chanmap ~12x + cfea ~12x, and ZERO probe/sub01/sub02 (the locked desk
 	 * emits only the two 1/s keep-alives). */
 	CHK(e_cm >= 11 && e_cm <= 13 && e_ann >= 11 && e_ann <= 13);
