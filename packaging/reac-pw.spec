@@ -22,11 +22,11 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # with enrolled nodes). Against an older libreac the build dies at the #include; the floor is
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
 # >=1.5.1 SINCE 1.0.27: the grant takes a box up to 40 channels wide (a 40 in / 0 out box).
-BuildRequires:  pkgconfig(libreac) >= 1.5.1
+BuildRequires:  pkgconfig(libreac) >= 1.7.0
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.5.1
+BuildRequires:  pkgconfig(libreac-transport) >= 1.7.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -35,11 +35,16 @@ Requires:       pipewire
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.5.1
-Requires:       libreac-transport >= 1.5.1
+Requires:       libreac >= 1.7.0
+Requires:       libreac-transport >= 1.7.0
 %{?systemd_requires}
 
 %description
+reac-pw puts Roland REAC stageboxes on your Linux audio graph. Plug a box into a
+network port and its inputs appear as PipeWire capture channels and its outputs as
+playback channels, sized and named from what the box itself says on the wire, with
+its firmware alongside — no configuration, no model list to keep up to date.
+
 reac-pw exposes a Roland REAC stream as PipeWire graph nodes: reac:capture
 decodes the master's 40-channel downstream broadcast into mono DSP sources, and
 reac:playback encodes graph audio back onto the wire (EtherType 0x8819). It also
@@ -197,6 +202,22 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Wed Oct 07 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.30-1
+- Every stagebox is now described by what it says on the wire. Its capture and
+  playback channels follow the inputs and outputs it declares, its name comes from
+  its own identity (S-1608, S-0808, S-4000S-3208, S-4000S-1624 ...), and its firmware
+  and hardware block are shown beside it. A box that declares no outputs, like a
+  40 in / 0 out S-4000S, gets no playback node.
+- The box's name is published as reac.box-name, next to reac.box-model.
+- A box whose family has never been seen is named by its channel counts
+  (REAC-0816) and the log asks for a capture of it.
+- The built-in model list is no longer used for a connected box. If it disagrees
+  with the box, the box wins and the log says "catalogue defect".
+- An S-0808 now shows its firmware and hardware block: its identity is asked for
+  again after it joins, and its name, sent in two pieces, is read.
+- A stagebox in master mode is listened to again on libreac 1.6 and later.
+- Needs libreac 1.7.0.
+
 * Tue Oct 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.28-1
 - The source tarball carries facts/ (the protocol's numbers, which meson includes) and
   NOTICE. 1.0.27's tarball had neither and its RPM build stopped at meson setup

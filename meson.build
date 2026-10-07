@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.28',
+  version: '1.0.30',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -96,7 +96,11 @@ m_dep        = cc.find_library('m', required : false)
 # >=1.5.1 SINCE 1.0.27: a box is granted at any width it declares, up to 40. A 1.5.0 grant
 # refuses a 40 in / 0 out box, so it is never enrolled and never asked for its identity;
 # every symbol is there, so only the floor turns that into a configure-time refusal.
-libreac_dep = dependency('libreac', version : '>=1.5.1',
+# >=1.7.0 SINCE 1.0.30: every box fact comes from its frames (FreeREAC/reac-pw#5):
+# reac_box_facts.h (the family off the hw block, the derived name), the model catalogue
+# rename, the declared widths in discovery, the identity re-poll and the S-0808 name
+# reassembly. An older header does not compile.
+libreac_dep = dependency('libreac', version : '>=1.7.0',
   fallback : ['libreac', 'libreac_dep'],
   required : true)
 
@@ -121,7 +125,7 @@ libreac_dep = dependency('libreac', version : '>=1.5.1',
 # behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
 # >=1.5.1 SINCE 1.0.27: struct reac_pacer grew with the 40-wide grant sweep (soname 6), and
 # this build allocates one.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.5.1', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.7.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
