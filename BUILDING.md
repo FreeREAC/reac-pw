@@ -9,7 +9,11 @@ Target: Fedora + PipeWire 1.4.
 
 ```
 sudo dnf install meson ninja-build gcc pipewire-devel libreac-devel libreac-transport-devel
+sudo apt install meson pkgconf gcc libpipewire-0.3-dev libspa-0.2-dev libreac-dev libreac-transport-dev
 ```
+
+The first line is for Fedora, the second for Debian and Raspberry Pi OS; both read the FreeMixer
+channel described in the [README](README.md).
 
 `libreac-transport-devel` is a hard requirement (no fallback). `libreac-devel` is resolved
 the same way, or meson's wrap fetches and builds it as a subproject when no system package
@@ -70,32 +74,34 @@ rebuild — among them `clock-drift.py` and `ring-depth.sh` (pacer/clock health)
 `probe-ports.sh` and `wav-rms.py` (per-port level), and `tone-purity.py` / `sine-level.py`
 (signal quality on a captured tone).
 
-## RPMs
+## Packages
 
-`packaging/build-rpm.sh` builds the RPMs locally from `packaging/reac-pw.spec` (the spec's
-`%check` runs the unit suite).
+`packaging/reac-pw.spec` builds the RPM and `debian/` the DEB; both run the unit suite, then the
+`netns` suite one test at a time, and install the same user unit, preset, manual page and
+`reac-pw-safe-enable.sh`. The release workflow builds the RPM from `git archive` of the tagged
+commit, so only committed files reach the package build. The version is the spec's `Version:`,
+`meson.build`'s `version:` and the newest entry of `CHANGELOG.md`; a release bumps all three together,
+by its last digit.
+
+### Changelog
+
+`CHANGELOG.md` is the one changelog. The spec's `%changelog` and `debian/changelog` are generated
+from it with `changelog.sh` of [FreeMixer/.github](https://github.com/FreeMixer/.github)
+(`.github/actions/changelog/changelog.sh`), and CI refuses a copy that was edited by hand:
+
+```
+changelog.sh sync                # rewrite the spec's %changelog and debian/changelog
+changelog.sh check -t vX.Y.Z     # what CI runs; the tag must be the newest entry
+```
 
 ## Releasing
 
-`.github/workflows/release-rpm.yml` builds the reac-pw RPM in a `fedora:44` container from
-`packaging/reac-pw.spec` and publishes it into the public dnf tree at
-[freereac.github.io/rpm](https://freereac.github.io/rpm) (one repo, `freereac.repo`, one GPG
-key) — the same tree libreac's own release-rpm.yml publishes into beside it. It is
-`workflow_dispatch` only, never on push:
+Add the version's entry to `CHANGELOG.md`, run `changelog.sh sync`, set `Version:` in the spec and
+`version:` in `meson.build`, then tag `vX.Y.Z`. The tag runs `.github/workflows/release.yml`, which
+calls the shared `build-rpm.yml` and `build-deb.yml` workflows of FreeMixer/.github: signed RPMs for
+Fedora 44 (x86_64, aarch64) and DEBs for Debian bookworm and trixie (amd64, arm64) are published to the
+FreeMixer channel and attached to the GitHub release, whose notes are the changelog entry. A pull request
+or a branch runs the same workflows as a dry run that builds, lints and publishes nothing.
 
-```
-gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=false   # dry run, publishes nothing
-gh workflow run release-rpm.yml -f tag=v1.0.1 -f sign=true    # signs and publishes to the public dnf tree
-```
-
-`tag` must already exist and match `v[0-9]*`. `sign` defaults to `false`, which stops
-before the tree is touched — the assembled unsigned tree is still attached to the run as an
-artifact for inspection. Building needs `pkgconfig(libreac)` and
-`pkgconfig(libreac-transport)` at the spec's floors, resolved from the same public tree by
-installing its `freereac.repo` before `dnf builddep` runs — so **libreac's own equivalent
-workflow must have published there first**, or the build fails loudly and by name.
-
-**Hand-publish fallback**, if the workflow cannot run (no runner, a secret missing): build
-locally and run `packaging/publish-repo.sh --rpm-dir DIR --out <checkout of
-freereac.github.io> --key-id A14B3E1E1F69EBF4`, then commit and push `rpm/` from that
-checkout — the same script the workflow calls, run by hand over the same tree.
+`libreac` and `libreac-transport` are build dependencies taken from the channel, so the libreac
+release that `meson.build` asks for is published first.
