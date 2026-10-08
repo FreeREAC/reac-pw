@@ -104,6 +104,11 @@ struct reac_source_node {
 	struct reac_role_swap *role_swap;
 	_Atomic int reopen_role;   /* accepted reac.cfg.role awaiting main's clean
 	                            * segment re-open, as role+1 (0 = none) */
+
+	/* A MASTER'S DOOR, when its box has no outputs (reac_source_node_set_door). NULL
+	 * on every other node; while set, a Props write is the sink's to decide. */
+	reac_source_door_fn door_fn;
+	void *door_ctx;
 };
 
 /* REALTIME. Pull one quantum per channel from the ring into the port buffers,
@@ -269,7 +274,13 @@ static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
 	struct reac_source_node *n = data;
-	if (id != SPA_PARAM_Props || !param || !n->role_swap)
+	if (id != SPA_PARAM_Props || !param)
+		return;
+	if (n->door_fn) {
+		n->door_fn(n->door_ctx, param);
+		return;
+	}
+	if (!n->role_swap)
 		return;
 
 	enum reac_role req_role;
@@ -552,6 +563,25 @@ void reac_source_node_set_role_swap(struct reac_source_node *n, struct reac_role
 {
 	if (n)
 		n->role_swap = swap;
+}
+
+void reac_source_node_set_door(struct reac_source_node *n, reac_source_door_fn fn, void *ctx)
+{
+	if (!n)
+		return;
+	n->door_fn = fn;
+	n->door_ctx = fn ? ctx : NULL;
+}
+
+int reac_source_node_door_bound(const struct reac_source_node *n)
+{
+	return n && n->door_fn != NULL;
+}
+
+void reac_source_node_update_props(struct reac_source_node *n, const struct spa_dict *dict)
+{
+	if (n && n->stream && dict)
+		pw_stream_update_properties(n->stream, dict);
 }
 
 /* Take (read+clear) the pending accepted reac.cfg.role for a clean listener

@@ -232,6 +232,28 @@ void reac_source_node_publish_segment(struct reac_source_node *n,
  * other engine, or -1 if none. Main's poll timer calls this. */
 int reac_source_node_take_reopen_role(struct reac_source_node *n);
 
+/* --- a MASTER's door when its box has no outputs ------------------------------
+ * A master's segment door is reac-playback: it carries the segment's props
+ * (reac.master.*, reac.rate*, reac.cfg.role.*, reac.headamp.*, reac.discovery.*,
+ * reac.health.*) and takes the reac.cfg.* / reac.headamp.* writes. A box that
+ * declares no outputs has no reac-playback (reac_box_row_has_playback), so that
+ * door lives on this node instead, the same way a slave's does: the sink keeps
+ * deciding every answer and stamps it here, and a Props write that reaches this
+ * node is handed to the sink through `fn`. Only SPA_PARAM_Props objects are
+ * handed over; this node's own volume is never the sink's.
+ *
+ * reac_source_node_set_door binds (`fn` non-NULL) or unbinds; a node is built
+ * unbound, so a rebuilt reac-capture reads unbound until the sink binds it again,
+ * which is how the sink knows it has a blank door to stamp.
+ * reac_source_node_update_props MERGES `dict` into this node's properties.
+ * Main-loop thread only, all three. */
+struct spa_pod;
+struct spa_dict;
+typedef void (*reac_source_door_fn)(void *ctx, const struct spa_pod *props);
+void reac_source_node_set_door(struct reac_source_node *n, reac_source_door_fn fn, void *ctx);
+int reac_source_node_door_bound(const struct reac_source_node *n);
+void reac_source_node_update_props(struct reac_source_node *n, const struct spa_dict *dict);
+
 
 /* Bring *slot to a reac-capture node of `channels` output ports labelled `label`.
  * ONE entry point the library owns, callable from startup AND the recognition
