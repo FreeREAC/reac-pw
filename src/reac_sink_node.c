@@ -2047,6 +2047,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 		return -1;
 	}
 
+	/* reac-playback IS THE DOOR AGAIN. A reac-capture that carried it while this node
+	 * was missing (a box with no outputs never gets here; a playback node that failed
+	 * to build or was rebuilt by the recovery ladder does) is unbound, and its door
+	 * keys go with it. */
+	if (n->peer_src && *n->peer_src && reac_source_node_door_bound(*n->peer_src))
+		reac_source_node_set_door(*n->peer_src, NULL, NULL);
+
 	/* Stamp the live badges + graph->wire latency onto the fresh node now (the
 	 * shadows above were reset to the seeds, so these publish the current pacer
 	 * state immediately). */
