@@ -3,7 +3,7 @@
 #
 # THE SUITE, ON EVERY PUSH TO main AND EVERY PULL REQUEST (audit 2026-09-24, H3).
 #
-# Until this file, the only workflow was release-rpm.yml (workflow_dispatch), and the tests
+# Until this file, the only workflow was the manual RPM release, and the tests
 # ran only in the spec's %check, inside a builder that has no user namespaces. So every
 # whole-binary test SKIPPED there: the 1.0.26 release job read `Ok: 0 Fail: 0 Skipped: 30`
 # for the netns suite, and a startup crash would have passed every automated check.
@@ -45,6 +45,15 @@ env:
   REAC_PROTOCOL_REF: 26b16db9fc844820fed8adc26a342f6b86f3a1ba
 
 jobs:
+  # CHANGELOG.md is the one changelog: the spec's %changelog and debian/changelog are generated from it,
+  # and a hand edit or a stale copy fails here
+  changelog:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: FreeMixer/.github/.github/actions/changelog@main
+
   suite:
     name: meson test (unit + netns), fedora 44
     runs-on: ubuntu-24.04
@@ -93,16 +102,15 @@ jobs:
               git config --global --add safe.directory "*"
               tools/ci-suite.sh ../libreac build-ci ../reac-protocol
               # THE TARBALL THE RPM IS BUILT FROM, CHECKED THE WAY THE RPM CHECKS IT.
-              # Everything above runs in the git checkout, which holds every file, so
-              # a file make-tarball.sh forgets (BUILDING.md: v1.0.28 and v1.0.30 were
-              # tagged and never published) only failed in the release run, after
-              # the tag. This builds the tarball, extracts it and runs the first half
-              # of the spec %check (the namespace half already ran above, in-tree).
+              # The release builds its source tarball with `git archive`, so only committed
+              # files reach the spec %check. Everything above runs in the checkout, which
+              # also holds untracked files; this extracts the archive of HEAD and runs the
+              # first half of the spec %check on it (the namespace half already ran above,
+              # in-tree).
               REPO=$PWD
-              packaging/make-tarball.sh
               T=$(mktemp -d)
-              tar -xzf reac-pw-*.tar.gz -C "$T"
-              (cd "$T"/reac-pw-* &&
+              git archive --prefix=reac-pw-test/ HEAD | tar -x -C "$T"
+              (cd "$T"/reac-pw-test &&
                PKG_CONFIG_PATH="$REPO/build-ci/_libreac-prefix/lib/pkgconfig" meson setup _build >/dev/null &&
                meson test -C _build --no-suite netns --no-suite load --print-errorlogs)
             '

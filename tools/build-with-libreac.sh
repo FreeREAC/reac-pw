@@ -12,8 +12,8 @@
 # pkgconfig(libreac-transport) at a hand-raised version floor, and libreac ships a hand
 # Makefile whose .pc files are written by its RPM spec — so a checkout pair alone cannot be
 # configured, and every lane re-derived the same twenty lines by hand. The two templates
-# below are copied from libreac's own packaging/*.spec and the VERSION is read from those
-# specs, so a floor that moves in libreac moves here with it instead of being re-typed.
+# below are copied from libreac's own packaging/*.pc.in and the VERSION is read from its
+# spec, so a floor that moves in libreac moves here with it instead of being re-typed.
 #
 # STATIC, ON PURPOSE. The prefix holds the .a files, so the binary it produces needs no
 # LD_LIBRARY_PATH and cannot silently pick up an installed libreac of a different version —
@@ -32,8 +32,10 @@ LIBREAC=$(cd "$LIBREAC" && pwd)
 PREFIX="$HERE/$BUILD/_libreac-prefix"
 
 ver() { sed -n 's/^Version: *//p' "$LIBREAC/packaging/$1.spec" | head -1; }
-V=$(ver libreac); VT=$(ver libreac-transport)
-[ -n "$V" ] && [ -n "$VT" ] || { echo "$0: no Version in libreac's specs" >&2; exit 2; }
+V=$(ver libreac)
+# One spec holds both libraries at one version; a libreac before 1.7.1 kept libreac-transport's apart.
+VT=$(ver libreac-transport 2>/dev/null); VT=${VT:-$V}
+[ -n "$V" ] && [ -n "$VT" ] || { echo "$0: no Version in libreac's spec" >&2; exit 2; }
 
 # REACPW_INCLUDE IS REQUIRED, NOT OPTIONAL, FOR THE TRANSPORT HALF. Two transport headers
 # still #include reac-pw's own reac_rate_cfg.h / reac_role_cfg.h for their pure

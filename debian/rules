@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+# --wrap-mode=nofallback: libreac must come from the installed libreac-dev, never from the
+# bundled subproject wrap.
+override_dh_auto_configure:
+	dh_auto_configure -- --buildtype=plain --wrap-mode=nofallback
+
+# The namespace tests run one at a time. Each mints a veth pair, a nested network namespace and
+# its own PipeWire; meson's default of one process per core makes them race for the builder's
+# namespace and PipeWire startup budget, so the losers time out.
+override_dh_auto_test:
+	dh_auto_test -- --no-suite netns --no-suite load
+	dh_auto_test -- --no-suite load --suite netns --num-processes 1

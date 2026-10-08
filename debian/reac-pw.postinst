@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+    # The file capabilities the daemon runs with instead of root. A package upgrade replaces the
+    # binary, so they are set again each time.
+    setcap cap_net_raw,cap_net_admin,cap_sys_nice=ep /usr/bin/reac-pw ||
+        echo "reac-pw: could not set the file capabilities; run: setcap cap_net_raw,cap_net_admin,cap_sys_nice=ep /usr/bin/reac-pw" >&2
+
+    # No scriptlet enables the unit for every user of the machine: a second daemon under root's
+    # user manager would win the segment lock and lock the console user's own daemon out. Remove
+    # a global enablement an older install left behind, then enable the unit for the one real
+    # login session when there is exactly one.
+    systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
+    /usr/lib/reac-pw/reac-pw-safe-enable.sh || :
+fi
+
+exit 0

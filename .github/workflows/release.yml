@@ -1,0 +1,37 @@
+name: release
+
+# Packages through the shared release workflows of FreeMixer/.github. A tag v<version> that is the newest
+# entry of CHANGELOG.md, and the Version of packaging/reac-pw.spec, builds signed RPMs (Fedora 44, x86_64 and
+# aarch64) and DEBs (Debian bookworm and trixie, amd64 and arm64), publishes them to the FreeMixer channel and
+# attaches them to the GitHub release, whose notes are the entry. Any other run, a pull request or a branch,
+# is a dry run: it builds and lints everything and publishes nothing.
+#
+# libreac and libreac-transport are build dependencies and come from the channel, so a release of the libreac
+# version meson.build asks for comes first; until it is published the builds below stop at installing them.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rpm:
+    uses: FreeMixer/.github/.github/workflows/build-rpm.yml@main
+    with:
+      package-name: reac-pw
+      publish: ${{ github.ref_type == 'tag' }}
+      needs-mod-host: false
+    secrets: inherit
+
+  deb:
+    uses: FreeMixer/.github/.github/workflows/build-deb.yml@main
+    with:
+      package-name: reac-pw
+      publish: ${{ github.ref_type == 'tag' }}
+      dependencies: ''
+      requires: libreac6 libreac-transport7
+    secrets: inherit
