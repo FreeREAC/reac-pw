@@ -22,28 +22,39 @@ role properties, and `main()`. The REAC byte layout, the cdea/cfea control
 plane, the master and slave establishment FSMs, and the transport underneath
 them (sockets, the lock-free ring, the cadence pacer, interface/VLAN scanning)
 all live in [libreac](https://github.com/FreeREAC/libreac) and
-libreac-transport, both at `>= 1.0.1`; reac-pw links against them rather than
+libreac-transport, both at `>= 1.7.0`; reac-pw links against them rather than
 reimplementing any of it.
 
 Target: Fedora + PipeWire 1.4.
 
 ## Install
 
-**From a release.** Every tagged release attaches the built RPMs and the source
-tarball:
+reac-pw is published, signed, in the FreeMixer package channel, for Fedora 44 (x86_64, aarch64) and for
+Debian bookworm and trixie, including Raspberry Pi OS (amd64, arm64). `libreac` and `libreac-transport`
+come from the same channel and are installed with it.
+
+Fedora:
 
 ```
-gh release download v1.0.1 -R FreeREAC/reac-pw -p 'reac-pw-*.rpm' -p 'libreac-*.rpm' -p 'libreac-transport-*.rpm'
-sudo dnf install ./libreac-*.rpm ./libreac-transport-*.rpm ./reac-pw-*.rpm
+sudo dnf config-manager addrepo --from-repofile=https://freemixer.github.io/rpm/freemixer.repo
+sudo dnf install reac-pw
 ```
 
-`reac-pw` needs `libreac >= 1.0.1` (the REAC control plane) and
-`libreac-transport >= 1.0.1` (the sockets/pacer/RT-thread/VLAN transport) —
-install all three from the same release. The RPM sets the file capabilities
-the daemon needs (`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without
-root.
+Debian and Raspberry Pi OS:
 
-**Enabling the service — automatic for one logged-in user, otherwise a manual, per-user step.** The RPM installs
+```
+sudo install -d /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/freemixer.asc https://freemixer.github.io/deb/freemixer.asc
+echo "deb [signed-by=/etc/apt/keyrings/freemixer.asc] https://freemixer.github.io/deb/debian/$(. /etc/os-release && echo $VERSION_CODENAME) ./" | sudo tee /etc/apt/sources.list.d/freemixer.list
+sudo apt update
+sudo apt install reac-pw
+```
+
+`reac-pw` needs `libreac >= 1.7.0` (the REAC control plane) and `libreac-transport >= 1.7.0` (the
+sockets, pacer, real-time threads and VLAN transport). The package sets the file capabilities
+the daemon needs (`cap_net_raw,cap_net_admin,cap_sys_nice`), so it runs without root.
+
+**Enabling the service — automatic for one logged-in user, otherwise a manual, per-user step.** The package installs
 `reac-pw.service` as a systemd **user** unit (`/usr/lib/systemd/user/reac-pw.service`
 — a bare system unit has no `HOME` and cannot find `~/.config/reac-pw/` or the
 operator's PipeWire socket). No package scriptlet enables it GLOBALLY, on
