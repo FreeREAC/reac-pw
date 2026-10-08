@@ -669,6 +669,18 @@ test('reac_box_0832_enrols',
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
 
+# --- whole-binary: a box with no outputs has no sink, and its door is reac-capture -----
+# msi 2026-10-08: an S-4000S-4000 (40 in / 0 out) stood beside a stereo Audio/Sink named
+# reac-playback, "REAC segment door (no box recognized yet)". Arm 1 (fake_box fr4000) reads
+# the graph's own port counts and the door's props and write answer on reac-capture; arm 2
+# (s1608) is the control that shows the probe does see a sink when one exists.
+test('door-without-outputs',
+  find_program('tests/door-without-outputs.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 240)
+
 # --- whole-binary: the link budget yields to the segment that heard a box (#107) ------
 #
 # 2026-09-20, the home rig: a 100 Mbit trunk, every segment `auto`, and an EMPTY VLAN won
