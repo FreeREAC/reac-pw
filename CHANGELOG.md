@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.0.33)
+## 1.0.33 - 2026-10-08
 
 - A stagebox with no outputs, like a 40 in / 0 out S-4000S, no longer leaves a stereo output on the
   graph. A build that asked for its playback node at zero channels got a two-channel sink named
@@ -8,7 +8,8 @@
   playback node at all, for a box found on the wire and for one pinned with --box alike.
 - For such a box, reac-capture carries everything reac-playback carries for a box with outputs: the
   segment's master state, rate, role, discovery, health and head-amp properties, and it takes the
-  reac.cfg.rate, reac.cfg.role and reac.headamp writes.
+  reac.cfg.rate, reac.cfg.role and reac.headamp writes. When a box with outputs gets its playback
+  node back after a failed start, reac-capture stops being the door.
 
 ## 1.0.32 - 2026-10-08
 
