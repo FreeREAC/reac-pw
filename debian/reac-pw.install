@@ -1,0 +1,3 @@
+packaging/reac-pw.service usr/lib/systemd/user
+packaging/90-reac-pw.preset usr/lib/systemd/user-preset
+packaging/reac-pw-safe-enable.sh usr/lib/reac-pw

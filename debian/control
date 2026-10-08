@@ -1,0 +1,33 @@
+Source: reac-pw
+Section: sound
+Priority: optional
+Maintainer: Pau Aliagas <linuxnow@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+ meson (>= 0.60),
+ pkgconf,
+ python3,
+ libpipewire-0.3-dev (>= 0.3.65),
+ libspa-0.2-dev,
+ libreac-dev (>= 1.7.0),
+ libreac-transport-dev (>= 1.7.0)
+Standards-Version: 4.6.2
+Homepage: https://github.com/FreeREAC/reac-pw
+Rules-Requires-Root: no
+
+Package: reac-pw
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, pipewire, libcap2-bin
+Description: PipeWire-native Roland REAC endpoint
+ reac-pw puts Roland REAC stageboxes on your Linux audio graph. Plug a box into
+ a network port and its inputs appear as PipeWire capture channels and its
+ outputs as playback channels, sized and named from what the box itself says
+ on the wire, with its firmware alongside. No configuration and no model list
+ to keep up to date.
+ .
+ It can also be the master of a REAC segment, driving the clock so that a
+ stagebox slaves to this machine, or a slave that locks to a desk's cadence
+ and returns its inputs upstream.
+ .
+ The package runs reac-pw as a user service, without root: it gives the
+ daemon the file capabilities it needs for raw network frames, VLAN
+ sub-interfaces and real-time scheduling.
