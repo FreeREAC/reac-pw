@@ -23,6 +23,9 @@
 #          answered there (a malformed value reads back reac.cfg.rate.refused=malformed).
 #   ARM 3  the same row pinned (--box fr4000) on a silent wire: the pin builds the nodes
 #          at boot, and must not build a sink either.
+#   ARM 4  a 16 / 8 box whose first reac-playback is refused (tests/refuse_playback_shim.c):
+#          reac-capture carries the door until reac-playback is rebuilt, then carries
+#          none of it.
 #   ARM 2  the control, fake_box s1608 (16 in / 8 out), on the same harness: a
 #          reac-playback with 8 input ports does exist and carries those answers. A probe
 #          that never finds a sink proves nothing about a sink's absence.
@@ -32,13 +35,16 @@
 # network namespace. Nothing here touches the live graph.
 set -u
 . "$(dirname "$0")/facts.sh"   # FACT_<NAME>: the protocol's numbers, from their one declaration
-BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box}"
+BIN="${1:?usage: $0 /path/to/reac-pw /path/to/fake_box /path/to/refuse-playback-shim.so}"
 FAKE="${2:-}"
+SHIM="${3:-}"
 # ABSOLUTE: the far end runs under nsenter in its own mount namespace, which starts at /.
 BIN=$(readlink -f "$BIN"); [ -n "$FAKE" ] && FAKE=$(readlink -f "$FAKE")
+[ -n "$SHIM" ] && SHIM=$(readlink -f "$SHIM")
 SKIP=77
 
 [ -n "$FAKE" ] && [ -x "$FAKE" ] || { echo "SKIP: no fake_box at '$FAKE' (libreac: make fake_box)"; exit $SKIP; }
+[ -n "$SHIM" ] && [ -f "$SHIM" ] || { echo "SKIP: no refuse-playback shim at '$SHIM'"; exit $SKIP; }
 for t in unshare nsenter ip pipewire pw-cli pw-dump python3; do
 	command -v $t >/dev/null 2>&1 || { echo "SKIP: no $t"; exit $SKIP; }
 done
@@ -49,10 +55,10 @@ SECS="${REACPW_DOOR_SECS:-30}"
 
 run_arm() {   # run_arm <model-token>
 	unshare -r -n -m -p -f --mount-proc --map-root-user \
-		bash -s -- "$BIN" "$FAKE" "$SECS" "$1" <<'INNER'
+		bash -s -- "$BIN" "$FAKE" "$SECS" "$1" "$SHIM" <<'INNER'
 set -u
 mount -t sysfs sysfs /sys 2>/dev/null || { echo "SKIP: cannot mount a private sysfs"; exit 77; }
-BIN="$1"; FAKE="$2"; SECS="$3"; MODEL="$4"
+BIN="$1"; FAKE="$2"; SECS="$3"; MODEL="$4"; SHIM="$5"
 LOG=$(mktemp); CONF=$(mktemp -d); RT=$(mktemp -d)
 export XDG_RUNTIME_DIR="$RT" PIPEWIRE_RUNTIME_DIR="$RT"
 cleanup() { kill -TERM $(jobs -p) 2>/dev/null; sleep 0.3; kill -9 $(jobs -p) 2>/dev/null;
@@ -76,14 +82,18 @@ ip link set dorb0 netns $NSPID || exit 90
 ip link set dor0 up; $in_peer ip link set dorb0 up
 
 # `pin:<token>` is a silent wire with that box PINNED (--box): no far end at all, the
-# nodes built at boot from the pin. Any other word is the far end's model token.
-PIN=()
+# nodes built at boot from the pin. `shim:<token>` is that far end with the daemon under
+# the refuse-playback shim (its first reac-playback is refused). Any other word is the far
+# end's model token.
+PIN=(); PRELOAD=
 case "$MODEL" in
-pin:*) PIN=(--box "${MODEL#pin:}"); : >"$RT/box.log"; sleep 900 & FAKEPID=$! ;;
-*)     $in_peer "$FAKE" dorb0 "$SECS" "$MODEL" >"$RT/box.log" 2>&1 & FAKEPID=$! ;;
+pin:*)  PIN=(--box "${MODEL#pin:}"); : >"$RT/box.log"; sleep 900 & FAKEPID=$! ;;
+shim:*) PRELOAD="$SHIM"
+        $in_peer "$FAKE" dorb0 "$SECS" "${MODEL#shim:}" >"$RT/box.log" 2>&1 & FAKEPID=$! ;;
+*)      $in_peer "$FAKE" dorb0 "$SECS" "$MODEL" >"$RT/box.log" 2>&1 & FAKEPID=$! ;;
 esac
 
-HOME="$CONF" "$BIN" --live dor0 --tx dor0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" \
+HOME="$CONF" LD_PRELOAD="$PRELOAD" "$BIN" --live dor0 --tx dor0 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" \
 	--name dor0 "${PIN[@]}" >"$LOG" 2>&1 &
 PID=$!
 sleep 3
@@ -94,6 +104,13 @@ for ((i = 0; i < SECS * 2; i++)); do
 	grep -q "ESTABLISHED" "$LOG" && break
 	sleep 0.5
 done
+# Under the shim, the recovery ladder has to rebuild the refused reac-playback first.
+case "$MODEL" in shim:*)
+	for ((i = 0; i < SECS * 2; i++)); do
+		grep -q "is back on the graph" "$LOG" && break
+		sleep 0.5
+	done;;
+esac
 sleep 3
 
 # ONE LINE PER NODE THIS DAEMON OWNS: NODE <id> <node.name> <media.class> <in> <out>,
@@ -122,10 +139,15 @@ nodes_of $PID >"$RT/before.txt"
 
 # THE WRITE SIDE OF THE DOOR. A malformed reac.cfg.rate is refused and moves nothing,
 # so it is safe to send, and its answer can only appear on the node that took it.
+# Under the shim the probe goes to reac-capture, which must NOT answer it any more.
 DOOR=$(awk '$1=="NODE" && $3 ~ /^reac-capture/ {print $2}' "$RT/before.txt" | head -1)
 [ "$MODEL" = s1608 ] && DOOR=$(awk '$1=="NODE" && $3 ~ /^reac-playback/ {print $2}' "$RT/before.txt" | head -1)
 if [ -n "$DOOR" ]; then
 	pw-cli set-param "$DOOR" Props '{ params = [ "reac.cfg.rate" "bogus" ] }' >/dev/null 2>&1
+	# AND A HEAD-AMP WRITE on the 40 / 0 box's door: a sens on its first preamp, on a
+	# fake box in this namespace. Read back as reac.headamp.asserted on that node.
+	[ "$MODEL" = fr4000 ] &&
+		pw-cli set-param "$DOOR" Props '{ params = [ "reac.headamp.0.sens" 20 ] }' >/dev/null 2>&1
 	sleep 1.5
 fi
 nodes_of $PID >"$RT/after.txt"
@@ -135,8 +157,8 @@ case "$MODEL" in pin:*) kill $FAKEPID; BOXRC=0;; *) wait $FAKEPID; BOXRC=$?;; es
 echo "--- box ---"; cat "$RT/box.log"
 echo "--- nodes ---"; grep '^NODE' "$RT/before.txt"
 echo "--- door props ---"; grep '^PROP' "$RT/before.txt"
-echo "--- after the write ---"; grep 'reac.cfg.rate.refused' "$RT/after.txt"
-echo "--- daemon ---"; grep -E "autodetected|box declared|ESTABLISHED|COULD NOT|REFUSED|pinned" "$LOG" | tail -10
+echo "--- after the write ---"; grep -E 'reac.cfg.rate.refused|reac.headamp.asserted' "$RT/after.txt"
+echo "--- daemon ---"; grep -aE "autodetected|box declared|ESTABLISHED|COULD NOT|REFUSED|pinned|refuse-playback-shim|back on the graph|NOT on the graph" "$LOG" | tail -12
 echo "BOXRC=$BOXRC"
 INNER
 }
@@ -179,6 +201,8 @@ has_prop "$A1" reac-capture reac.headamp.channels "$FACT_MAX_CHANNELS" || {
 	say "FAIL: the door does not publish the box's $FACT_MAX_CHANNELS preamps"; FAIL=1; }
 echo "$A1" | sed -n '/^--- after the write ---/,/^---/p' | grep -q "reac.cfg.rate.refused=malformed" || {
 	say "FAIL: a reac.cfg.rate write sent to reac-capture was not answered there"; FAIL=1; }
+echo "$A1" | sed -n '/^--- after the write ---/,/^---/p' | awk '$3 ~ /^reac.headamp.asserted=./ && $2 ~ /^reac-capture/ { f = 1 } END { exit !f }' || {
+	say "FAIL: a reac.headamp write sent to reac-capture was not asserted there"; FAIL=1; }
 echo "$A1" | grep -q "BOXRC=0" || { say "FAIL: the 40 / 0 box never enrolled (fake_box exit != 0)"; FAIL=1; }
 
 # ---- ARM 2: the control, a box with outputs.
@@ -207,5 +231,30 @@ node_line "$A3" reac-playback | grep -q . && {
 echo "$A3" | awk '$1=="NODE" && $4=="Audio/Sink"' | grep -q . && {
 	say "FAIL (pin): a pinned box with no outputs left an Audio/Sink on the graph"; FAIL=1; }
 
-[ "$FAIL" = 0 ] && say "PASS: a 40 / 0 box, wired or pinned, has reac-capture and no sink, and its door on reac-capture; a 16 / 8 box keeps its reac-playback door"
+# ---- ARM 4: a box WITH outputs whose first reac-playback is refused (the shim). For that
+# window reac-capture is the door; once the recovery ladder rebuilds reac-playback, the
+# door must be reac-playback alone: no master state, role, rate or head-amp answer left on
+# reac-capture, and a write to reac-capture taken by nobody.
+A4=$(run_arm shim:s1608 2>&1) || true
+case "$A4" in *"SKIP: "*) say "SKIP: the shim arm could not run"; exit $SKIP;; esac
+say "$A4"
+# The shim's own line (tests/refuse_playback_shim.c prints it, not the daemon), read with awk.
+echo "$A4" | awk 'index($0, "refuse-playback-shim: refused") { f = 1 } END { exit !f }' || {
+	say "FAIL (shim): the first reac-playback was never refused, so this arm tested nothing"; FAIL=1; }
+echo "$A4" | grep -q "is back on the graph" || {
+	say "FAIL (shim): reac-playback was never rebuilt after the refusal"; FAIL=1; }
+node_line "$A4" reac-playback | awk '{ exit ($4=="Audio/Sink") ? 0 : 1 }' || {
+	say "FAIL (shim): no reac-playback after the rebuild"; FAIL=1; }
+has_prop "$A4" reac-playback reac.master.state us || {
+	say "FAIL (shim): the rebuilt reac-playback is not the door"; FAIL=1; }
+# EMPTIED, not removed: a stream's property update merges on the server, so a key can be
+# emptied and not taken away. An empty value is no answer, which is what is checked.
+for k in reac.master.state reac.cfg.role.state reac.rate reac.headamp.caps reac.headamp.state reac.discovery.scope; do
+	echo "$A4" | awk -v k="$k" '$1=="PROP" && $2 ~ /^reac-capture/ && index($3, k "=") == 1 && length($3) > length(k) + 1 { f = 1 } END { exit !f }' &&
+		{ say "FAIL (shim): reac-capture still carries $k beside the rebuilt reac-playback — a second door"; FAIL=1; }
+done
+echo "$A4" | sed -n '/^--- after the write ---/,/^---/p' | grep -qE "reac-(capture|playback).* reac.cfg.rate.refused=malformed" && {
+	say "FAIL (shim): a reac.cfg.rate write to reac-capture was still taken as the door's"; FAIL=1; }
+
+[ "$FAIL" = 0 ] && say "PASS: a 40 / 0 box, wired or pinned, has reac-capture and no sink, and its door on reac-capture; a 16 / 8 box keeps its reac-playback door, also after a refused first build"
 exit $FAIL

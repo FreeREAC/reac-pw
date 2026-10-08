@@ -863,8 +863,13 @@ static void autodetect_announce(struct autodetect_ctx *c, const struct reac_box_
 	if (c->announced == bm || !reac_source_node_on_graph(*c->src, NULL))
 		return;
 	c->announced = bm;
-	fprintf(stderr, "reac-pw: %sautodetected %s -> reac-capture %d in / reac-playback "
-	        "%d out\n", c->tag, bm->display, bm->in_ch, bm->out_ch);
+	if (reac_box_row_has_playback(bm))
+		fprintf(stderr, "reac-pw: %sautodetected %s -> reac-capture %d in / reac-playback "
+		        "%d out\n", c->tag, bm->display, bm->in_ch, bm->out_ch);
+	else
+		fprintf(stderr, "reac-pw: %sautodetected %s -> reac-capture %d in, and no "
+		        "reac-playback: the box declares no outputs, so reac-capture is the "
+		        "segment's door\n", c->tag, bm->display, bm->in_ch);
 }
 
 /* The ladder's clock. CLOCK_MONOTONIC, like every other deadline in this daemon; declared
@@ -2482,11 +2487,17 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 				 * the graph with no pointer to it anywhere in the process. */
 				goto fail_with_nodes;
 			}
+			char pin_play[64];
+			if (reac_box_row_has_playback(c->pin_model))
+				snprintf(pin_play, sizeof pin_play, "reac-playback %d ch",
+				         c->pin_model->out_ch);
+			else
+				snprintf(pin_play, sizeof pin_play, "no reac-playback (no outputs)");
 			fprintf(stderr, "reac-pw: %sMASTER pinned --box %s — reac-capture %d ch / "
-			        "reac-playback %d ch labelled '%s', present from boot. The pin names "
+			        "%s, labelled '%s', present from boot. The pin names "
 			        "and sizes the ports; the WIRE still decides what is enrolled, and "
 			        "outranks the pin if a different box declares itself.\n",
-			        c->tag, c->pin_model->token, c->pin_model->in_ch, c->pin_model->out_ch,
+			        c->tag, c->pin_model->token, c->pin_model->in_ch, pin_play,
 			        c->pin_label);
 		} else {
 			/* NO RECOGNISED BOX, NO NODE (operator, 2026-09-16; the autodetect spec's

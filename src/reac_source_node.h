@@ -245,6 +245,8 @@ int reac_source_node_take_reopen_role(struct reac_source_node *n);
  * reac_source_node_set_door binds (`fn` non-NULL) or unbinds; a node is built
  * unbound, so a rebuilt reac-capture reads unbound until the sink binds it again,
  * which is how the sink knows it has a blank door to stamp.
+ * Unbinding also empties every key reac_source_node_update_props stamped, so a
+ * reac-capture is never a second door once reac-playback is back.
  * reac_source_node_update_props MERGES `dict` into this node's properties.
  * Main-loop thread only, all three. */
 struct spa_pod;
