@@ -144,6 +144,9 @@ void reac_sink_node_publish_box_master(struct reac_sink_node *n,
  * WITHOUT disturbing the running pacer/master (the sink owns the recognizer, so it
  * must never be torn down to resize). ONE entry point, callable from the
  * recognition path:
+ *   - `channels` == 0                  -> no node: take it down if it is up
+ *       (reac_sink_node_unpublish). A zero-width stream is not portless; the graph
+ *       gives it a stereo pair, so a box with no outputs has no reac-playback.
  *   - no filter yet                    -> create it at `channels`/`label`.
  *   - exists, same width AND label      -> no-op (identical box).
  *   - exists, width OR label changed    -> destroy + rebuild the pw_filter (the
