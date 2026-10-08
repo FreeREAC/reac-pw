@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (1.0.33)
+
+- A stagebox with no outputs, like a 40 in / 0 out S-4000S, no longer leaves a stereo output on the
+  graph. A build that asked for its playback node at zero channels got a two-channel sink named
+  reac-playback and described as "REAC segment door (no box recognized yet)"; a zero width now means no
+  playback node at all, for a box found on the wire and for one pinned with --box alike.
+- For such a box, reac-capture carries everything reac-playback carries for a box with outputs: the
+  segment's master state, rate, role, discovery, health and head-amp properties, and it takes the
+  reac.cfg.rate, reac.cfg.role and reac.headamp writes.
+
 ## 1.0.32 - 2026-10-08
 
 - reac-pw is now installed from the FreeMixer package channel: signed RPMs for Fedora 44 (x86_64,
