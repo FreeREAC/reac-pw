@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.32
+Version:        1.0.33
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -202,6 +202,19 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 %systemd_user_postun reac-pw.service
 
 %changelog
+* Thu Oct 08 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.33-1
+- A stagebox with no outputs, like a 40 in / 0 out S-4000S, no longer leaves a
+  stereo output on the graph. A build that asked for its playback node at zero
+  channels got a two-channel sink named reac-playback and described as "REAC
+  segment door (no box recognized yet)"; a zero width now means no playback
+  node at all, for a box found on the wire and for one pinned with --box
+  alike.
+- For such a box, reac-capture carries everything reac-playback carries for a
+  box with outputs: the segment's master state, rate, role, discovery, health
+  and head-amp properties, and it takes the reac.cfg.rate, reac.cfg.role and
+  reac.headamp writes. When a box with outputs gets its playback node back
+  after a failed start, reac-capture stops being the door.
+
 * Thu Oct 08 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.32-1
 - reac-pw is now installed from the FreeMixer package channel: signed RPMs for
   Fedora 44 (x86_64, aarch64) and DEBs for Debian bookworm and trixie,

@@ -707,6 +707,8 @@ static enum reac_headamp_refuse sink_headamp_capability(struct reac_sink_node *n
  * channelVolumes is authoritative per-channel; a bare `volume` scalar sets all
  * channels (so both a mono and a per-channel controller work, with no double
  * count). Values are linear (reac_gain.h); negatives clamp to silence. */
+static void sink_door_assert(struct reac_sink_node *n, const struct spa_pod *param);
+
 static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
 	struct reac_sink_node *n = data;
@@ -757,6 +759,19 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 			n->chan_vol[c] = chanvols[c] < 0.0f ? 0.0f : chanvols[c];
 		changed = true;
 	}
+
+	sink_door_assert(n, param);
+
+	if (changed)
+		sink_publish(n);
+}
+
+/* THE SEGMENT'S WRITE DOOR: the reac.headamp.* / reac.cfg.rate / reac.cfg.role
+ * assertions a Props object carries under SPA_PROP_params. Reached from this node's
+ * own Props, and from reac-capture's when the box has no outputs and the door lives
+ * there (sink_door_follow). MAIN LOOP only. */
+static void sink_door_assert(struct reac_sink_node *n, const struct spa_pod *param)
+{
 
 	/* LIVE head-amp control (task #203): the SAME Props object may carry per-channel
 	 * phantom/pad/sens changes under SPA_PROP_params ("reac.headamp.<ch>.<param>").
@@ -870,9 +885,6 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 		 * changed nothing about the running role, so its answer should not
 		 * look like it did either. */
 	}
-
-	if (changed)
-		sink_publish(n);
 }
 
 /* The stream hands us its SPA_IO areas as it is configured. The sink needs
@@ -912,6 +924,81 @@ static const struct pw_stream_events stream_events = {
 static void sink_prop_set(void *ctx, const char *key, const char *value)
 {
 	pw_properties_set(ctx, key, value);
+}
+
+/* WHERE THE SEGMENT'S DOOR IS. reac-playback while it exists; without it (a box
+ * that declares no outputs gets no reac-playback, reac_box_row_has_playback) the
+ * door is reac-capture, as it is for a slave, and every answer below is stamped
+ * there. NULL when neither node exists (no box), and then nothing is published:
+ * a segment with no box has no node (2026-09-16). */
+static struct reac_source_node *sink_door_capture(struct reac_sink_node *n)
+{
+	if (n->stream || !n->peer_src || !*n->peer_src)
+		return NULL;
+	return *n->peer_src;
+}
+
+static int sink_has_door(struct reac_sink_node *n)
+{
+	return n->stream != NULL || sink_door_capture(n) != NULL;
+}
+
+static void sink_door_update(struct reac_sink_node *n, const struct spa_dict *dict)
+{
+	if (n->stream)
+		pw_stream_update_properties(n->stream, dict);
+	else
+		reac_source_node_update_props(sink_door_capture(n), dict);
+}
+
+/* Every publisher's shadow back to a value no live answer equals, so the next tick
+ * stamps the whole door afresh. A new node starts blank: a rebuilt reac-playback,
+ * or a reac-capture that has just become the door. */
+static void sink_door_shadows_reset(struct reac_sink_node *n)
+{
+	n->link_state_last = REAC_LINK_PROBING;
+	n->box_model_last = NULL;
+	n->box_mac_last = 0;
+	n->rate_hz_last = 0;
+	n->role_state_last = NULL;
+	n->role_refused_last = (enum reac_role_refuse)-1;
+	n->ha_refused_last = (enum reac_headamp_refuse)-1;
+	n->ha_state_last = NULL;
+	n->ha_asserted_last[0] = '\0';
+	n->disco_seq_last = 0;
+	n->arb_state_last = -1;
+	n->arb_pace_last = -1;
+	n->arb_rival_last = -1;
+	n->arb_conflict_last = -1;
+	n->arb_mac_last = UINT64_MAX;
+}
+
+static void sink_door_from_capture(void *ctx, const struct spa_pod *param)
+{
+	sink_door_assert(ctx, param);
+}
+
+/* A reac-capture that has become the door and is not yet bound: bind its Props to
+ * sink_door_assert, stamp the constants reac-playback carries from its creation
+ * (the head-amp travel and capability set), and reset the shadows so this tick's
+ * publishers stamp everything else. MAIN LOOP, before the publishers. */
+static void sink_door_follow(struct reac_sink_node *n)
+{
+	struct reac_source_node *cap = sink_door_capture(n);
+	if (!cap || reac_source_node_door_bound(cap))
+		return;
+	reac_source_node_set_door(cap, sink_door_from_capture, n);
+	sink_door_shadows_reset(n);
+	char ha_sens_max[8];
+	snprintf(ha_sens_max, sizeof ha_sens_max, "%d", REAC_HEADAMP_SENS_MAX);
+	struct pw_properties *props = pw_properties_new(
+		REAC_PROP_HEADAMP_CAPS,     REAC_HEADAMP_CAPS_DEFAULT,
+		REAC_PROP_HEADAMP_SENS_MAX, ha_sens_max,
+		NULL);
+	if (props) {
+		reac_source_node_update_props(cap, &props->dict);
+		pw_properties_free(props);
+	}
 }
 
 /* MAIN LOOP: stamp reac.link-state / reac.box-model / reac.box-width (task
@@ -1008,6 +1095,18 @@ static void sink_publish_link_props(struct reac_sink_node *n)
 			reac_box_row_badge_publish(bm, reac_link_state_name(ls), box_mac, &id,
 			                           sink_prop_set, props);
 			pw_stream_update_properties(n->stream, &props->dict);
+			pw_properties_free(props);
+		}
+	} else if (sink_door_capture(n)) {
+		/* The door is reac-capture: the badge reaches it below, and what
+		 * reac-playback would have carried beside the badge goes there too. */
+		struct pw_properties *props = pw_properties_new(
+			REAC_PROP_BOX_SOURCE,      bm ? REAC_BOX_SOURCE_WIRE : REAC_BOX_SOURCE_NONE,
+			REAC_PROP_HEADAMP_CHANNELS, ha_channels,
+			REAC_PROP_HEADAMP_BASE,    ha_base,
+			NULL);
+		if (props) {
+			sink_door_update(n, &props->dict);
 			pw_properties_free(props);
 		}
 	}
@@ -1135,7 +1234,7 @@ static int sink_reconnect_rate(struct reac_sink_node *n, int hz)
  * it can only ever agree with itself. */
 static void sink_publish_rate_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	if (!sink_has_door(n))
 		return;
 
 	int hz = atomic_load_explicit(&n->pacer.rate_hz, memory_order_acquire);
@@ -1171,7 +1270,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 	 * moved. n->sample_rate is updated INSIDE sink_reconnect_rate, honestly
 	 * (reac_sink_format_rate_after_attempt), only once the attempt's outcome is
 	 * known — never optimistically ahead of what pw_stream_connect actually did. */
-	if (reac_sink_format_needs_update(n->sample_rate, hz))
+	if (n->stream && reac_sink_format_needs_update(n->sample_rate, hz))
 		sink_reconnect_rate(n, hz);
 
 	/* ONE WIRE, ONE RATE (2026-08-26-clock-tabs-and-reac-pace-coupling §1b):
@@ -1202,7 +1301,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
 		REAC_PROP_RATE_REFUSED,  reac_rate_refuse_code(refused),
 		NULL);
 	if (props) {
-		pw_stream_update_properties(n->stream, &props->dict);
+		sink_door_update(n, &props->dict);
 		pw_properties_free(props);
 	}
 }
@@ -1229,7 +1328,7 @@ static void sink_publish_rate_props(struct reac_sink_node *n)
  * (or none) owns the segment, read honestly instead. */
 static void sink_publish_role_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	if (!sink_has_door(n))
 		return;
 
 	const char *state = n->role_state;
@@ -1254,7 +1353,7 @@ static void sink_publish_role_props(struct reac_sink_node *n)
 		REAC_PROP_ROLE_REFUSED, reac_role_refuse_code(n->role_refused),
 		NULL);
 	if (props) {
-		pw_stream_update_properties(n->stream, &props->dict);
+		sink_door_update(n, &props->dict);
 		pw_properties_free(props);
 	}
 }
@@ -1280,7 +1379,7 @@ static void sink_publish_role_props(struct reac_sink_node *n)
  * reaching anything. */
 static void sink_publish_headamp_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	if (!sink_has_door(n))
 		return;
 
 	enum reac_headamp_refuse cap = sink_headamp_capability(n);
@@ -1306,7 +1405,7 @@ static void sink_publish_headamp_props(struct reac_sink_node *n)
 		REAC_PROP_HEADAMP_REFUSED,  reac_headamp_refuse_code(refused),
 		NULL);
 	if (props) {
-		pw_stream_update_properties(n->stream, &props->dict);
+		sink_door_update(n, &props->dict);
 		pw_properties_free(props);
 	}
 }
@@ -1334,7 +1433,7 @@ static void sink_publish_headamp_props(struct reac_sink_node *n)
  * this same timer just above) — no atomics needed and none used. */
 static void sink_publish_disco_props(struct reac_sink_node *n)
 {
-	if (!n->stream)
+	if (!sink_has_door(n))
 		return;
 	/* THE AGGREGATE IS DECIDED FIRST, because it is half of what this publish is for and
 	 * the guard has to be able to see it move. */
@@ -1402,7 +1501,7 @@ static void sink_publish_disco_props(struct reac_sink_node *n)
 		                                                  memory_order_relaxed)),
 		NULL);
 	if (props) {
-		pw_stream_update_properties(n->stream, &props->dict);
+		sink_door_update(n, &props->dict);
 		pw_properties_free(props);
 		n->disco_seq_last = n->pacer.disco.seq;
 		n->arb_state_last = (int)arb.state;
@@ -1602,8 +1701,8 @@ static void sink_publish_health(struct reac_sink_node *n)
 	if (props) {
 		/* No node on a segment with no box, and the properties have nowhere to go —
 		 * but the window still closed and the line below still prints. */
-		if (n->stream)
-			pw_stream_update_properties(n->stream, &props->dict);
+		if (sink_has_door(n))
+			sink_door_update(n, &props->dict);
 		pw_properties_free(props);
 	}
 
@@ -1778,6 +1877,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 		                   n->pacer.master.session_seq);
 	sink_publish_box_clock(n);     /* before the drain, so a change prints now */
 	reac_pacer_log_drain(&n->pacer, stderr);
+	sink_door_follow(n);           /* before the publishers: a new door starts blank */
 	sink_publish_link_props(n);
 	sink_publish_rate_props(n);
 	sink_publish_role_props(n);
@@ -1791,12 +1891,6 @@ static void on_log_timer(void *data, uint64_t expirations)
  * the role-default text). Single formatter used at (re)build AND relabel. */
 static void sink_build_desc(char *desc, size_t sz, const char *label, int channels)
 {
-	if (channels == 0) {
-		/* THE DOOR BEFORE THE BOX. Not "REAC 0ch playback": a width of zero is not a
-		 * narrow node, it is the absence of a recognized box said out loud. */
-		snprintf(desc, sz, "REAC segment door (no box recognized yet)");
-		return;
-	}
 	if (label && *label)
 		snprintf(desc, sz, "%s — %d ch (REAC box outputs)", label, channels);
 	else
@@ -1914,20 +2008,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 	 * so a (re)built node converges within this call rather than after a 200 ms poll.
 	 * link_drops_seen tracks the CURRENT cumulative drops so the rebuild does not
 	 * flash a spurious "dropped" overlay. */
-	n->link_state_last = REAC_LINK_PROBING;
-	n->box_model_last = NULL;
-	n->box_mac_last = 0;
-	/* Seeded to answers no real one equals, so the first publish always fires
-	 * rather than reading a coincidental match (the role pair's pattern). */
-	n->ha_refused_last = (enum reac_headamp_refuse)-1;
-	n->ha_state_last = NULL;
-	n->ha_asserted_last[0] = '\0';
-	n->disco_seq_last = 0;
-	n->arb_state_last = -1;
-	n->arb_pace_last = -1;
-	n->arb_rival_last = -1;
-	n->arb_conflict_last = -1;
-	n->arb_mac_last = UINT64_MAX;
+	sink_door_shadows_reset(n);
 	n->link_drops_seen = 0;
 	for (int i = 0; i < 8; i++)
 		n->link_drops_seen += atomic_load_explicit(&n->pacer.drops[i],
@@ -1965,6 +2046,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 		n->stream = NULL;
 		return -1;
 	}
+
+	/* reac-playback IS THE DOOR AGAIN. A reac-capture that carried it while this node
+	 * was missing (a box with no outputs never gets here; a playback node that failed
+	 * to build or was rebuilt by the recovery ladder does) is unbound, and its door
+	 * keys go with it. */
+	if (n->peer_src && *n->peer_src && reac_source_node_door_bound(*n->peer_src))
+		reac_source_node_set_door(*n->peer_src, NULL, NULL);
 
 	/* Stamp the live badges + graph->wire latency onto the fresh node now (the
 	 * shadows above were reset to the seeds, so these publish the current pacer
@@ -2272,19 +2360,20 @@ int reac_sink_node_ensure(struct reac_sink_node *n, int channels, const char *la
 	if (!n)
 		return -1;
 	int want = channels > REAC_MAX_CHANNELS ? REAC_MAX_CHANNELS : channels;
-	/* ZERO IS STILL A WIDTH THIS FUNCTION ACCEPTS, and main no longer asks for it on a
-	 * segment with no box. The zero-port door was Q5 option C (2026-09-14): a master
-	 * with no box recognized published reac-playback at 0 ports so the segment had an
-	 * identity and a role door. The desk's verdict on it, 2026-09-16: a device reading
-	 * `none / 0 in` for an empty trunk VLAN — "a segment with NO recognised box must
-	 * not appear in the PipeWire graph at all" (operator). main's autodetect path
-	 * creates nothing until a box declares itself and calls reac_sink_node_unpublish
-	 * when one leaves; a role stays settable before anything enrols through
-	 * reac-pw.conf, which needs no node.
+	/* ZERO OUTPUTS IS NO reac-playback. A stream built at zero channels is not a
+	 * node without ports: the graph's adapter gives it a stereo pair, an Audio/Sink
+	 * with two outputs the box does not have (msi, 2026-10-08: an S-4000S-4000,
+	 * 40 in / 0 out, under a build that still asked for one). So a zero width takes
+	 * the node down, and the segment's door is reac-capture (sink_door_follow).
+	 * Every caller gets this, the pinned --box path included.
 	 *
 	 * Negative is a refusal — a caller's arithmetic error, never a width. */
 	if (want < 0)
 		return -1;
+	if (want == 0) {
+		reac_sink_node_unpublish(n);
+		return 0;
+	}
 	char want_label[64];
 	snprintf(want_label, sizeof want_label, "%s", label ? label : "");
 	if (!reac_node_ensure_needs_rebuild(n->stream != NULL, n->channels, n->label,

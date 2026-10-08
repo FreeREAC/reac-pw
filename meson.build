@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.32',
+  version: '1.0.33',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -668,6 +668,26 @@ test('reac_box_0832_enrols',
   is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
   timeout : 240)
+
+# --- whole-binary: a box with no outputs has no sink, and its door is reac-capture -----
+# msi 2026-10-08: an S-4000S-4000 (40 in / 0 out) stood beside a stereo Audio/Sink named
+# reac-playback, "REAC segment door (no box recognized yet)". Arm 1 (fake_box fr4000) reads
+# the graph's own port counts and the door's props and write answer on reac-capture; arm 2
+# (s1608) is the control that shows the probe does see a sink when one exists.
+# Arm 4 (tests/refuse_playback_shim.c, LD_PRELOAD) refuses an S-1608's first reac-playback,
+# so reac-capture carries the door until the recovery ladder rebuilds it, and then must not.
+refuse_playback_shim = shared_module('refuse-playback-shim',
+  ['tests/refuse_playback_shim.c'],
+  dependencies : [pipewire_dep, cc.find_library('dl', required : false)],
+  name_prefix : '',
+  build_by_default : true)
+test('door-without-outputs',
+  find_program('tests/door-without-outputs.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path, refuse_playback_shim],
+  depends : [refuse_playback_shim],
+  timeout : 360)
 
 # --- whole-binary: the link budget yields to the segment that heard a box (#107) ------
 #

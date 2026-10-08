@@ -104,6 +104,14 @@ struct reac_source_node {
 	struct reac_role_swap *role_swap;
 	_Atomic int reopen_role;   /* accepted reac.cfg.role awaiting main's clean
 	                            * segment re-open, as role+1 (0 = none) */
+
+	/* A MASTER'S DOOR, when its box has no outputs (reac_source_node_set_door). NULL
+	 * on every other node; while set, a Props write is the sink's to decide. */
+	reac_source_door_fn door_fn;
+	void *door_ctx;
+	/* Every key the door stamped here (reac_source_node_update_props), so unbinding
+	 * can take them off again. NULL until the first stamp. */
+	struct pw_properties *door_keys;
 };
 
 /* REALTIME. Pull one quantum per channel from the ring into the port buffers,
@@ -269,7 +277,13 @@ static void on_io_changed(void *data, uint32_t id, void *area, uint32_t size)
 static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
 	struct reac_source_node *n = data;
-	if (id != SPA_PARAM_Props || !param || !n->role_swap)
+	if (id != SPA_PARAM_Props || !param)
+		return;
+	if (n->door_fn) {
+		n->door_fn(n->door_ctx, param);
+		return;
+	}
+	if (!n->role_swap)
 		return;
 
 	enum reac_role req_role;
@@ -446,6 +460,7 @@ void reac_source_node_destroy(struct reac_source_node *n)
 		pw_stream_disconnect(n->stream);
 		pw_stream_destroy(n->stream);
 	}
+	pw_properties_free(n->door_keys);
 	free(n);
 }
 
@@ -552,6 +567,55 @@ void reac_source_node_set_role_swap(struct reac_source_node *n, struct reac_role
 {
 	if (n)
 		n->role_swap = swap;
+}
+
+void reac_source_node_set_door(struct reac_source_node *n, reac_source_door_fn fn, void *ctx)
+{
+	if (!n)
+		return;
+	n->door_fn = fn;
+	n->door_ctx = fn ? ctx : NULL;
+	if (fn || !n->door_keys)
+		return;
+	/* UNBOUND, THE DOOR'S KEYS GO TOO. reac-playback has come (back) and is the door
+	 * again; a reac-capture still carrying reac.master.state, reac.cfg.* and the
+	 * head-amp shape would be a second door, frozen at the moment it stopped being
+	 * stamped, that a console ranks beside the live one. Each key is EMPTIED, not
+	 * removed: a stream's property update merges on the server, so a key sent with no
+	 * value stays at its old one there (measured, 2026-10-08). An empty value is no
+	 * answer, and no reader takes it for one. */
+	uint32_t nk = n->door_keys->dict.n_items, i = 0;
+	struct spa_dict_item *items = calloc(nk ? nk : 1, sizeof *items);
+	if (items) {
+		const struct spa_dict_item *it;
+		spa_dict_for_each(it, &n->door_keys->dict)
+			items[i++] = SPA_DICT_ITEM_INIT(it->key, "");
+		struct spa_dict d = SPA_DICT_INIT(items, i);
+		if (n->stream && i)
+			pw_stream_update_properties(n->stream, &d);
+		free(items);
+	}
+	pw_properties_free(n->door_keys);
+	n->door_keys = NULL;
+}
+
+int reac_source_node_door_bound(const struct reac_source_node *n)
+{
+	return n && n->door_fn != NULL;
+}
+
+void reac_source_node_update_props(struct reac_source_node *n, const struct spa_dict *dict)
+{
+	if (!n || !n->stream || !dict)
+		return;
+	if (!n->door_keys)
+		n->door_keys = pw_properties_new(NULL, NULL);
+	if (n->door_keys) {
+		const struct spa_dict_item *it;
+		spa_dict_for_each(it, dict)
+			pw_properties_set(n->door_keys, it->key, "");
+	}
+	pw_stream_update_properties(n->stream, dict);
 }
 
 /* Take (read+clear) the pending accepted reac.cfg.role for a clean listener
