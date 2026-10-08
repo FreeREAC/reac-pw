@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = remove ]; then
+    systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
+fi
+
+exit 0

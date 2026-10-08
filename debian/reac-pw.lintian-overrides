@@ -1,0 +1,5 @@
+# reac-pw.service is a systemd user unit, which no debhelper helper manages. The scripts remove a
+# global enablement left by an older install, and never create one: enabling it globally started a
+# second daemon under root's user manager that took the segment lock from the console user's own.
+reac-pw: maintainer-script-calls-systemctl [postinst:*]
+reac-pw: maintainer-script-calls-systemctl [prerm:*]

@@ -1,0 +1,70 @@
+.TH REAC-PW 1 "October 2026" "reac-pw" "User Commands"
+.SH NAME
+reac-pw \- PipeWire-native Roland REAC endpoint
+.SH SYNOPSIS
+.B reac-pw
+[\fB\-\-live\fR \fIIFNAME\fR | \fB\-\-pcap\fR \fIFILE\fR]
+[\fB\-\-role\fR \fImaster\fR|\fIslave\fR|\fItap\fR]
+[\fB\-\-rate\fR \fIRATE\fR]
+[\fB\-\-tx\fR \fIIFNAME\fR]
+[\fB\-\-set\fR \fIKEY\fR=\fIVALUE\fR]
+.SH DESCRIPTION
+.B reac-pw
+puts Roland REAC stageboxes on the PipeWire graph. A box plugged into a network port appears as
+capture channels for its inputs and playback channels for its outputs, sized and named from what the
+box says on the wire.
+.PP
+Run as the packaged user service, with no arguments, it listens on every Ethernet interface that has
+a link, takes each interface that carries REAC frames as a segment, and decides from the wire whether
+to be the master or a slave on it. Enable the service once, as the console user:
+.PP
+.RS
+systemctl \-\-user enable \-\-now reac-pw
+.RE
+.PP
+The daemon refuses to run as root. The package gives it the file capabilities it needs instead:
+cap_net_raw, cap_net_admin and cap_sys_nice.
+.SH OPTIONS
+.TP
+.BI \-\-live " IFNAME"
+Capture live from an interface. May be repeated, or given as a comma list, to serve several segments
+from one daemon.
+.TP
+.BI \-\-pcap " FILE"
+Replay a REAC capture, for offline testing.
+.TP
+.BI \-\-role " ROLE"
+\fBmaster\fR: drive the handshake and own the clock, and a
+stagebox slaves to this machine. \fBslave\fR: an external master drives, and this machine locks to its
+cadence and returns its inputs upstream. \fBtap\fR: passive; serve what is heard and transmit nothing.
+.TP
+.BI \-\-rate " RATE"
+The REAC sample rate: 44100, 48000 or 96000. A master defaults to 96000; a slave detects the rate from
+the wire.
+.TP
+.BI \-\-tx " IFNAME"
+The interface frames are sent on. The default is the interface being served.
+.TP
+.BI \-\-name " NAME"
+A suffix for the PipeWire node names, so that one master per segment can coexist.
+.TP
+.BI \-\-set " KEY" = VALUE
+Set any tunable by name, at the highest precedence. May be repeated. An unknown key is refused.
+.TP
+.B \-\-help
+List every option and tunable.
+.SH FILES
+.TP
+.I ~/.config/reac-pw/reac-pw.conf
+The one hand-written override file: a \fB[segment IFNAME]\fR section per interface, with \fBrole =
+auto|master|slave|tap\fR and \fBignore = yes\fR. Without it every segment is decided from the wire.
+.TP
+.I ~/.config/reac-pw/reac-pw.env
+Per-user settings, host-wide or per segment.
+.PP
+Worked examples of both are installed with the package documentation.
+.SH SEE ALSO
+.BR pipewire (1),
+.BR pw-link (1)
+.PP
+https://github.com/FreeREAC/reac-pw
