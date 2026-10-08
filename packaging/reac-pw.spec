@@ -115,6 +115,7 @@ DESTDIR=%{buildroot} meson install -C _build
 install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.service
 install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
 install -D -m0755 packaging/reac-pw-safe-enable.sh %{buildroot}%{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
+install -D -m0644 packaging/reac-pw.1 %{buildroot}%{_mandir}/man1/reac-pw.1
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -156,6 +157,7 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 %{_userunitdir}/reac-pw.service
 %{_userpresetdir}/90-reac-pw.preset
+%{_mandir}/man1/reac-pw.1*
 %dir %{_libexecdir}/reac-pw
 %{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
 
