@@ -80,27 +80,19 @@ rebuild — among them `clock-drift.py` and `ring-depth.sh` (pacer/clock health)
 `netns` suite one test at a time, and install the same user unit, preset, manual page and
 `reac-pw-safe-enable.sh`. The release workflow builds the RPM from `git archive` of the tagged
 commit, so only committed files reach the package build. The version is the spec's `Version:`,
-`meson.build`'s `version:` and the newest entry of `CHANGELOG.md`; a release bumps all three together,
+`meson.build`'s `version:` and the newest entry of `debian/changelog`; a release bumps all three together,
 by its last digit.
 
-### Changelog
-
-`CHANGELOG.md` is the one changelog. The spec's `%changelog` and `debian/changelog` are generated
-from it with `changelog.sh` of [FreeMixer/.github](https://github.com/FreeMixer/.github)
-(`.github/actions/changelog/changelog.sh`), and CI refuses a copy that was edited by hand:
-
-```
-changelog.sh sync                # rewrite the spec's %changelog and debian/changelog
-changelog.sh check -t vX.Y.Z     # what CI runs; the tag must be the newest entry
-```
+There is no changelog file: git history is the changelog. The spec's `%changelog` and `debian/changelog`
+are packaging metadata and are edited by hand with the version bump.
 
 ## Releasing
 
-Add the version's entry to `CHANGELOG.md`, run `changelog.sh sync`, set `Version:` in the spec and
+Add the version's entry to the spec's `%changelog` and `debian/changelog`, set `Version:` in the spec and
 `version:` in `meson.build`, then tag `vX.Y.Z`. The tag runs `.github/workflows/release.yml`, which
 calls the shared `build-rpm.yml` and `build-deb.yml` workflows of FreeMixer/.github: signed RPMs for
 Fedora 44 (x86_64, aarch64) and DEBs for Debian bookworm and trixie (amd64, arm64) are published to the
-FreeMixer channel and attached to the GitHub release, whose notes are the changelog entry. A pull request
+FreeMixer channel and attached to the GitHub release, whose notes are the git log since the previous tag. A pull request
 or a branch runs the same workflows as a dry run that builds, lints and publishes nothing.
 
 `libreac` and `libreac-transport` are build dependencies taken from the channel, so the libreac
