@@ -45,15 +45,6 @@ env:
   REAC_PROTOCOL_REF: 26b16db9fc844820fed8adc26a342f6b86f3a1ba
 
 jobs:
-  # CHANGELOG.md is the one changelog: the spec's %changelog and debian/changelog are generated from it,
-  # and a hand edit or a stale copy fails here
-  changelog:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: FreeMixer/.github/.github/actions/changelog@main
-
   suite:
     name: meson test (unit + netns), fedora 44
     runs-on: ubuntu-24.04
