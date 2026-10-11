@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 struct fake_if {
@@ -38,6 +39,17 @@ static struct fake_if *find(const char *name)
 		if (strcmp(ifs[i].name, name) == 0)
 			return &ifs[i];
 	return NULL;
+}
+
+/* For the assertions: an interface the test itself added, never NULL. */
+static struct fake_if *get(const char *name)
+{
+	struct fake_if *f = find(name);
+	if (!f) {
+		printf("FAIL: the test asked for '%s', which it never added\n", name);
+		exit(1);
+	}
+	return f;
 }
 
 static void add(const char *name, const char *kind, const char *alias)
@@ -101,9 +113,9 @@ int main(void)
 
 	struct reac_served_marks m = { 0 };
 	CHECK(reac_served_mark(&m, "enp1s0") == REAC_SERVED_MARK, "enp1s0 verdict");
-	CHECK(strcmp(find("enp1s0")->alias, REAC_SERVED_ALIAS) == 0, "enp1s0 marked");
+	CHECK(strcmp(get("enp1s0")->alias, REAC_SERVED_ALIAS) == 0, "enp1s0 marked");
 	CHECK(reac_served_mark(&m, "enp1s0") == REAC_SERVED_OURS, "re-serve is ours");
-	CHECK(find("enp1s0")->writes == 1, "a re-serve writes nothing");
+	CHECK(get("enp1s0")->writes == 1, "a re-serve writes nothing");
 	CHECK(reac_served_mark(&m, "lab0") == REAC_SERVED_LEAVE_HOST, "lab0 verdict");
 	CHECK(reac_served_mark(&m, "enp1s0.11") == REAC_SERVED_LEAVE_VLAN, "host vlan verdict");
 	CHECK(reac_served_mark(&m, "enp1s0.12") == REAC_SERVED_OURS, "minted verdict");
@@ -112,17 +124,17 @@ int main(void)
 	CHECK(reac_served_mark(&m, "gone0") == -ENODEV, "no such interface is -ENODEV");
 	CHECK(m.n == 3, "remembered enp1s0, stale0, moved0 (got %d)", m.n);
 
-	snprintf(find("moved0")->alias, sizeof find("moved0")->alias, "%s", "renamed-by-host");
+	snprintf(get("moved0")->alias, sizeof get("moved0")->alias, "%s", "renamed-by-host");
 	reac_served_unmark_all(&m);
-	CHECK(strcmp(find("enp1s0")->alias, "") == 0, "enp1s0 unmarked at exit");
-	CHECK(strcmp(find("stale0")->alias, "") == 0, "left-behind mark removed at exit");
-	CHECK(strcmp(find("moved0")->alias, "renamed-by-host") == 0, "a replaced mark is kept");
-	CHECK(strcmp(find("lab0")->alias, "lab-port") == 0, "host alias untouched");
-	CHECK(find("lab0")->writes == 0, "host alias never written");
-	CHECK(find("enp1s0.11")->writes == 0 && find("enp1s0.11")->alias[0] == '\0',
+	CHECK(get("enp1s0")->alias[0] == '\0', "enp1s0 unmarked at exit");
+	CHECK(get("stale0")->alias[0] == '\0', "left-behind mark removed at exit");
+	CHECK(strcmp(get("moved0")->alias, "renamed-by-host") == 0, "a replaced mark is kept");
+	CHECK(strcmp(get("lab0")->alias, "lab-port") == 0, "host alias untouched");
+	CHECK(get("lab0")->writes == 0, "host alias never written");
+	CHECK(get("enp1s0.11")->writes == 0 && get("enp1s0.11")->alias[0] == '\0',
 	      "host vlan untouched");
-	CHECK(strcmp(find("enp1s0.12")->alias, "reac-pw:minted") == 0 &&
-	      find("enp1s0.12")->writes == 0, "minted alias untouched");
+	CHECK(strcmp(get("enp1s0.12")->alias, "reac-pw:minted") == 0 &&
+	      get("enp1s0.12")->writes == 0, "minted alias untouched");
 	CHECK(m.n == 0, "marks cleared");
 
 	/* 7: a refused write. */
@@ -130,7 +142,7 @@ int main(void)
 	write_rc = -EPERM;
 	CHECK(reac_served_mark(&m, "nocap0") == -EPERM, "refused write is -EPERM");
 	CHECK(m.n == 0, "a refused mark is not remembered");
-	CHECK(find("nocap0")->alias[0] == '\0', "nothing written");
+	CHECK(get("nocap0")->alias[0] == '\0', "nothing written");
 
 	if (fails)
 		return 1;
