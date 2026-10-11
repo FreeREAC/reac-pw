@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
+# The root half of "a REAC NIC is not NetworkManager's" (reac-pw-nm-unmanaged(8) is the
+# script's own header). reac-pw, a user service, marks every interface it serves with a
+# `reac-pw:` alias; this SYSTEM service turns those marks into
+# /etc/NetworkManager/conf.d/90-reac-pw.conf and keeps those links up with no IPv6.
+# It runs before NetworkManager so a REAC NIC is never configured at boot at all.
+[Unit]
+Description=Keep NetworkManager off the interfaces reac-pw serves
+Documentation=https://github.com/FreeREAC/reac-pw
+Before=NetworkManager.service
+ConditionPathIsDirectory=/etc/NetworkManager
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/reac-pw/reac-pw-nm-unmanaged --watch
+Restart=always
+RestartSec=2
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

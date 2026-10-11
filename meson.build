@@ -1128,6 +1128,13 @@ test('reac_safe_enable_selects_one_user',
   args : [meson.current_source_dir() / 'packaging' / 'reac-pw-safe-enable.sh'],
   timeout : 30)
 
+# The NetworkManager drop-in is the union of reac-pw's `reac-pw:` interface aliases and of
+# nothing else. sysfs, /proc/sys, nmcli and ip are mocked: no NetworkManager, no root.
+test('reac_nm_unmanaged_follows_the_marks',
+  find_program('tests/nm-unmanaged-follows-the-marks.sh'),
+  args : [meson.current_source_dir() / 'packaging' / 'reac-pw-nm-unmanaged.sh'],
+  timeout : 30)
+
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------
 ctrl_test = executable('test_reac_ctrl',
   ['tests/test_reac_ctrl.c',],

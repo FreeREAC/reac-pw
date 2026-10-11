@@ -29,6 +29,8 @@ BuildRequires:  pkgconfig(libreac-transport) >= 1.7.0
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
+# `ip` for reac-pw-nm-unmanaged (link up, link monitor).
+Requires:       iproute
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
@@ -116,6 +118,13 @@ install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.
 install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
 install -D -m0755 packaging/reac-pw-safe-enable.sh %{buildroot}%{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
 install -D -m0644 packaging/reac-pw.1 %{buildroot}%{_mandir}/man1/reac-pw.1
+# THE REAC NIC IS NOT NETWORKMANAGER'S (2026-10-11). The daemon marks every interface it
+# serves with a `reac-pw:` alias; this root service turns the marks into
+# /etc/NetworkManager/conf.d/90-reac-pw.conf. Under %%{_prefix}/lib, not %%{_libexecdir},
+# because the system unit names one path on every distribution this package builds for.
+install -D -m0755 packaging/reac-pw-nm-unmanaged.sh %{buildroot}%{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
+install -D -m0644 packaging/reac-pw-nm-unmanaged.service %{buildroot}%{_unitdir}/reac-pw-nm-unmanaged.service
+install -D -m0644 packaging/90-reac-pw-nm-unmanaged.preset %{buildroot}%{_presetdir}/90-reac-pw-nm-unmanaged.preset
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -160,8 +169,17 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %{_mandir}/man1/reac-pw.1*
 %dir %{_libexecdir}/reac-pw
 %{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
+%dir %{_prefix}/lib/reac-pw
+%{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
+%{_unitdir}/reac-pw-nm-unmanaged.service
+%{_presetdir}/90-reac-pw-nm-unmanaged.preset
+# Generated at run time by reac-pw-nm-unmanaged; owned here so removing the package
+# removes it.
+%ghost %config(missingok,noreplace) %{_sysconfdir}/NetworkManager/conf.d/90-reac-pw.conf
 
 %post
+# The root service is a SYSTEM unit: its preset enables it on a fresh install.
+%systemd_post reac-pw-nm-unmanaged.service
 # NO %%systemd_user_post, SINCE 1.0.19. That macro expands to
 # `systemd-update-helper install-user-units reac-pw.service`, which runs
 # `systemctl --no-reload preset --global reac-pw.service` -- `--global`, not scoped to
@@ -194,12 +212,23 @@ systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 # The decision lives in the helper so it is tested without an rpm transaction
 # (tests/safe-enable-selects-one-user.sh); `|| :` because a helper never fails an install.
 %{_libexecdir}/reac-pw/reac-pw-safe-enable.sh || :
+# Start the NetworkManager guard once it is enabled (a fresh install); an upgrade
+# restarts it from %%postun.
+if systemctl is-enabled --quiet reac-pw-nm-unmanaged.service 2>/dev/null; then
+    systemctl start reac-pw-nm-unmanaged.service >/dev/null 2>&1 || :
+fi
 
 %preun
 %systemd_user_preun reac-pw.service
+%systemd_preun reac-pw-nm-unmanaged.service
+# On removal, hand every REAC interface back to NetworkManager before the script goes.
+if [ $1 -eq 0 ]; then
+    %{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged --remove || :
+fi
 
 %postun
 %systemd_user_postun reac-pw.service
+%systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
 * Thu Oct 08 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.33-1

@@ -16,3 +16,12 @@ override_dh_auto_configure:
 override_dh_auto_test:
 	dh_auto_test -- --no-suite netns --no-suite load
 	dh_auto_test -- --no-suite load --suite netns --num-processes 1
+
+# The NetworkManager guard is a SYSTEM unit (debian/reac-pw.reac-pw-nm-unmanaged.service is
+# packaging/'s file): enabled and started on install, stopped on removal. The script is
+# installed without its .sh, the name the unit runs.
+override_dh_installsystemd:
+	dh_installsystemd --name=reac-pw-nm-unmanaged
+
+execute_after_dh_install:
+	mv debian/reac-pw/usr/lib/reac-pw/reac-pw-nm-unmanaged.sh debian/reac-pw/usr/lib/reac-pw/reac-pw-nm-unmanaged
