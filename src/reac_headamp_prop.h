@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_headamp_prop — parse LIVE head-amp control changes out of a PipeWire
- * SPA_PARAM_Props object (task #203).
+ * SPA_PARAM_Props object.
  *
- * A controller (openmixer) drives the master node's box preamps at runtime the
+ * A controller drives the master node's box preamps at runtime the
  * same way it drives volume/mute: by SETTING SPA_PARAM_Props on the node. There
  * is no standard SPA_PROP_* id for per-channel phantom/pad/sens, so the changes
  * ride SPA_PROP_params — SPA's extensible "simple control params" carrier, a
@@ -34,7 +34,7 @@ struct spa_pod;
 /* Head-amp CAPABILITY keys — the READ side of the same contract, published as
  * NODE PROPERTIES (pw_properties, not SPA_PROP_params) on the SAME node that
  * consumes the control keys above, so a consumer discovers the box's preamp
- * shape and drives it on one node (task #205). Both are self-describing and
+ * shape and drives it on one node. Both are self-describing and
  * driven by the recognized box model:
  *
  *   reac.headamp.channels — decimal count of preamp-capable box INPUTS. "0" until

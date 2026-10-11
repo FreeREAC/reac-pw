@@ -1094,7 +1094,7 @@ down_pair pinm0 mbox1
 # ---- A TRUNK: TWO VLANS ON ONE WIRE, TWO SEGMENTS, AND THE NETDEVS ARE OURS (0.5.3).
 # Nothing in src/ read a VLAN tag before this release, and the reason a trunk is hard is
 # measured rather than argued: the parent's own 0x8819 socket receives every tagged frame
-# with the tag GONE (openmixer's tools/probe-vlan-8819.py, fact B), so a daemon that
+# with the tag GONE (measured with a probe in a private netns), so a daemon that
 # enumerated interfaces naively would run one listener on the parent for two boxes and
 # answer untagged onto the native VLAN. Only an ETH_P_ALL tap reading PACKET_AUXDATA can
 # tell which VLAN a frame came from.
@@ -1283,7 +1283,7 @@ esac
 # would be a topology detector with no product behind it.
 #
 # AND A MISS IS ATTRIBUTED BEFORE IT IS A VERDICT (#99). This arm went red at 128 s under a
-# full openmixer gate (load ~2.8) and green alone minutes later: `ok=1`, one frame and then
+# full test gate (load ~2.8) and green alone minutes later: `ok=1`, one frame and then
 # nothing. The fake box master and the slave live in nested namespaces on one loaded host,
 # and "the slave went deaf" and "the fake stopped sending" read identically off the daemon's
 # counter alone. So the fake's OWN counter (`tx` in its report) is read across the SAME

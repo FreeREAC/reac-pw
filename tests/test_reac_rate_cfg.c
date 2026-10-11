@@ -423,7 +423,6 @@ static int test_narrow_mask_refuses_and_defaults_lower(void)
 
 /* ---- part 3: ONE DAEMON, N LISTENERS — segment independence -------------
  *
- * (2026-08-20-reac-auto-spine §5, the openmixer tree).
  * main.c now opens one `struct reac_pacer` per configured interface against a
  * SHARED PipeWire loop instead of one per process. Nothing in reac_pacer.c
  * changed to make that safe — every field this test touches was already

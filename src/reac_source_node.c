@@ -6,7 +6,7 @@
 #include "reac_node_ensure.h"  /* the shared same-box-or-rebuild decision */
 #include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
-                                 * (task #4.3 extension: "one wire, one rate" — see
+                                 * ("one wire, one rate" — see
                                  * reac_sink_format.h's revised SCOPE note) */
 #include "reac_role_cfg.h"    /* the `reac.cfg.role` parse + refusal codes */
 #include "reac_rate_cfg.h"    /* REAC_PROP_RATE — the wire pace this segment locked to */
@@ -95,7 +95,7 @@ struct reac_source_node {
 	 * listener's (reac_role_swap.h); NULL when none is wired, and then this door
 	 * is inert and reads nothing.
 	 *
-	 * WHAT THE CONSOLE CAN AND CANNOT REACH THROUGH IT: openmixer addresses a
+	 * WHAT THE CONSOLE CAN AND CANNOT REACH THROUGH IT: a console addresses a
 	 * segment by its `reac-playback[.<inst>]` node, so it can drive a swap TO
 	 * the recorder end but cannot yet drive one back — the return door needs the
 	 * slave-side playback node that docs/SLAVE-EMULATION-SCOPE.md's W1 owns.
@@ -393,7 +393,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		 * REAC rate, which an RME-driven graph refuses; the rate that matters is the
 		 * one in our FORMAT below, which the adapter resamples from. */
 		NULL);
-	/* CREATE-TIME-ONLY badge props (task #154), master role only — see the
+	/* CREATE-TIME-ONLY badge props, master role only — see the
 	 * header doc for why: no live update here (this node has no pacer handle),
 	 * and the slave-role link state is a different FSM entirely. */
 	if (props && master_role) {
@@ -426,8 +426,8 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 	 * F32 PLANAR keeps the ring's layout, and AUX0..AUXN marks each REAC input as a
 	 * DISCRETE mono mic so no graph tool guesses FL/FR and pairs them as stereo.
 	 * PipeWire names the resulting ports capture_AUX0.. — which is why the physical
-	 * input a port carries is DECLARED in openmixer's contract rather than parsed
-	 * out of the name (same spec). Built by reac_sink_format_build (shared with
+	 * input a port carries is DECLARED by the consumer's contract rather than parsed
+	 * out of the name. Built by reac_sink_format_build (shared with
 	 * reac:playback) so a later renegotiation (source_reconnect_rate) produces
 	 * the exact same pod shape as this initial connect, rather than a second
 	 * hand-copied one — the same reasoning reac_sink_node.c's sink_open_filter

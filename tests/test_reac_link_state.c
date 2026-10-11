@@ -2,13 +2,13 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* Unit test for reac_link_state_from_master / reac_link_state_name — the pure
- * mapping the reac.link-state PipeWire property (task #154's stagebox-badge
+ * mapping the reac.link-state PipeWire property (stagebox-badge
  * need) is stamped from. Pins:
  *   (a) every reac_master_state maps to its badge string, with IDLE folded
  *       into "probing" alongside PROBING itself (#130: a real master never
  *       observably idles);
  *   (b) the just_dropped overlay always wins, regardless of `st`;
- *   (c) the exact wire strings a consumer (openmixer's stagebox card) matches
+ *   (c) the exact wire strings a consumer (a stagebox card) matches
  *       on are stable ("probing" / "granting" / "established" / "dropped").
  */
 #include <reac/reac_link_state.h>

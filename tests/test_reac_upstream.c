@@ -10,7 +10,7 @@
  * 2026-07-24; 1206 = 52 + 32*36 + the +2 CRC trailer after the end marker,
  * with a 1204 B trailerless variant on the same wire).
  * The expected planar PCM tables were produced by the capture-side analysis
- * that resolved the layout (2026-07-10, task #108): the upstream audio region
+ * that resolved the layout (2026-07-10): the upstream audio region
  * uses the obs-h8819 even/odd channel-pair byte BRAID (even ch = group bytes
  * 3,0,1; odd ch = 4,5,2 as LE lo/mid/hi), NOT the M-5000 downstream's plain
  * LE sample-major layout. Verified against the loud wired capture: the music

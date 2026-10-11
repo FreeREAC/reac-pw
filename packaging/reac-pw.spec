@@ -101,19 +101,11 @@ meson compile -C _build
 
 %install
 DESTDIR=%{buildroot} meson install -C _build
-# THE RPM OWNS THE UNIT (1.0.8). Earlier releases deliberately shipped no unit here,
-# reasoning that "the canonical integration is openmixer-server's packaged USER unit
-# (reac-pw-master.service, driven by ~/.config/openmixer/reac.env)" -- that unit is
-# RETIRED (openmixer's 2026-08-20-reac-master-arbitration,
-# amendment 2026-09-02 (second), rule f: "~/.config/openmixer/reac.env is RETIRED,
-# with reac-pw-master.service. Its only reader goes; a file with no reader is not a
-# store."). The unit openmixer's own adapter drives today is THIS package's
-# reac-pw.service (REAC_UNIT = 'reac-pw' in packages/server/src/reac-adapter.ts),
-# reading the layered ~/.config/reac-pw/ conf -- and openmixer's own
-# docs/install/services.md already documents it as "owned by the reac-pw package,
-# not by openmixer". A package that drives a unit it does not ship was the gap; this
-# closes it. No /etc/reac-pw: nothing here is host-wide system config, every fact
-# reac_conf.h reads is per-user (%%h/.config/reac-pw/), by design (see reac-pw.env.example, and reac-pw.conf.example for the ONE override file).
+# THE RPM OWNS THE UNIT. It ships reac-pw.service, a USER unit that reads the layered
+# ~/.config/reac-pw/ conf; a console that drives reac-pw drives this unit. No /etc/reac-pw:
+# nothing here is host-wide system config, every fact reac_conf.h reads is per-user
+# (%%h/.config/reac-pw/), by design (see reac-pw.env.example, and reac-pw.conf.example for
+# the ONE override file).
 install -D -m0644 packaging/reac-pw.service %{buildroot}%{_userunitdir}/reac-pw.service
 install -D -m0644 packaging/90-reac-pw.preset %{buildroot}%{_userpresetdir}/90-reac-pw.preset
 install -D -m0755 packaging/reac-pw-safe-enable.sh %{buildroot}%{_libexecdir}/reac-pw/reac-pw-safe-enable.sh
@@ -160,8 +152,8 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 #                  carries audio, with a ~10x looser egress cadence.
 #
 # The unit's own comments getcap-guard on nothing (systemd cannot read file caps
-# before exec), so it is the daemon's own preflight, and openmixer's
-# scripts/deploy-live.sh, that refuse a start/restart without them. This stays a
+# before exec), so it is the daemon's own preflight, and a console's
+# deploy script, that refuse a start/restart without them. This stays a
 # USER unit: a file capability is what the daemon needs, not root.
 %caps(cap_net_raw,cap_net_admin,cap_sys_nice=ep) %{_bindir}/reac-pw
 %{_userunitdir}/reac-pw.service

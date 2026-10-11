@@ -117,7 +117,7 @@ say "$A1"
 # token and declares the capture's S-4000S-3208 instead. That is what arm 1 was really
 # reading on 2026-09-17 when it reported "the split chassis resolves as 32/8" against two
 # different reac-pw binaries: the wire never carried a split chassis at all
-# (~/Devel/audio/libreac/fake_box, built before the token, holds no "declaring as" string;
+# (libreac's fake_box, built before the token, holds no "declaring as" string;
 # with a fake_box from this libreac both arms pass). fake_box announces the row it is
 # wearing — require that line, naming THIS row, before any verdict about the daemon. A far
 # end that cannot say what it is testifies about nothing.

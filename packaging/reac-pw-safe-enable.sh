@@ -17,8 +17,8 @@
 # WHY "class user" AND NOT ANY SESSION WITH A MATCHING UID. Measured on a real desk
 # (2026-09-20): `loginctl list-sessions` routinely carries several uid-0 rows of class
 # `manager-early`/`user-early` that are systemd-internal placeholders, not a human
-# logged in as root -- and a real user who has `loginctl enable-linger` set (openmixer's
-# own firstboot.sh does this) ALSO shows a class-`manager` row with no seat/tty that
+# logged in as root -- and a real user who has `loginctl enable-linger` set (a console's
+# first-boot script may do this) ALSO shows a class-`manager` row with no seat/tty that
 # exists whether or not anyone is actually sitting at the console. Only class `user`
 # is systemd-logind's own marker for an actual interactive login. Filtering on uid alone,
 # or counting any session row, both miscount against this real data.

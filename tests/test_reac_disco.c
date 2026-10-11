@@ -187,7 +187,7 @@ int main(void)
 	CHK(t.n == 1 && t.seq == 1);
 	CHK(t.e[0].owned == 1 && t.e[0].first_seen_ns == S_(1));
 
-	/* A re-sighting is not a change — it must not churn seq (openmixer would read every
+	/* A re-sighting is not a change — it must not churn seq (a consumer would read every
 	 * bump as new discovery data). */
 	CHK(reac_disco_table_observe(&t, &box, 1, S_(2)) == 0);
 	CHK(t.seq == 1 && t.n == 1);

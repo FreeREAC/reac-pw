@@ -6,11 +6,10 @@
  *
  * Why this is one test and not two. The defect it exists for was not a bad
  * formatter: it was that the badge set named the box five ways (model, width,
- * firmware, hw block, source) and never by its ADDRESS, so openmixer's segment
+ * firmware, hw block, source) and never by its ADDRESS, so a consumer's segment
  * row — whose stagebox registry is keyed `reac:<box mac>` — looked the patch name
  * up by reac.master.mac, which in the master role is OUR NIC, and read
- * patchName "" on every rig (openmixer
- * 2026-09-06-rig-headamp-and-clip-findings §5). A formatter
+ * patchName "" on every rig. A formatter
  * test cannot see any of that. What has to be proven is that the RIGHT KEY gets
  * the PEER'S ADDRESS, and gets it again as "none" the moment the box leaves.
  *
@@ -105,7 +104,7 @@ int main(void)
 		CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "none") == 0 /* the literal: a rename of the sentinel breaks a test, not a rig */);
 		/* The key is spelled out here, not taken from the macro: a consumer
 		 * matches this literal, so a rename has to break a test rather than a
-		 * rig. openmixer reads exactly "reac.box.mac". */
+		 * rig. a consumer reads exactly "reac.box.mac". */
 		CHK(strcmp(f.key[0], "reac.box.mac") == 0);
 
 		/* A real address, lowercase and colon-separated — the form the master's

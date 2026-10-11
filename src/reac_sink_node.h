@@ -66,7 +66,7 @@ struct reac_sink_cfg {
 	const char *inst;         /* per-instance node suffix -> "reac-playback.<inst>"
 	                           * so one master per REAC VLAN coexists. NULL = bare. */
 	const char *label;        /* operator box name for the node description        */
-	/* Optional MASTER head-amp send table (task #155), forwarded to the pacer. */
+	/* Optional MASTER head-amp send table, forwarded to the pacer. */
 	const struct reac_headamp_setting *headamps;
 	int n_headamps;
 	/* Clock discipline (#75), forwarded to the pacer. 0 = the pacer free-runs on

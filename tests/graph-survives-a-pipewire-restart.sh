@@ -8,8 +8,8 @@
 # THE FAULT, ON THE DESK 2026-09-23 (reac-pw-boot-2026-09-23).
 # The S-1608 on enp131s0 enrolled at 13:44:01 and the journal read "autodetected S-1608
 # (16 in / 8 out) -> reac-capture 16 in / reac-playback 8 out". At 13:44:03 systemd stopped
-# pipewire.service and started it again (openmixer's engine exits on a lost connection and
-# the user session restarts the stack). Twelve minutes later the box's REAC LED still said
+# pipewire.service and started it again (a console's engine may exit on a lost connection and
+# the user session restart the stack). Twelve minutes later the box's REAC LED still said
 # enrolled, the master was still pacing its wire, the roster row still read `established
 # 16/8` — and the graph held NO node for that segment, so the console had no device and
 # the desk was 48 links short. Not one line said so: the node-recover ladder judged "on the

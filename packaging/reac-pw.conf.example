@@ -1,5 +1,5 @@
 # reac-pw.conf — commented WORKED EXAMPLE of the ONE OVERRIDE FILE, not a file the RPM
-# installs and not a file reac-pw or openmixer ever writes.
+# installs and not a file reac-pw or a console ever writes.
 #
 # COPY IT TO ~/.config/reac-pw/reac-pw.conf ONLY IF YOU NEED ONE OF THE TWO THINGS BELOW.
 # With no such file — the normal case, and the shipping default — the daemon works the rig
@@ -70,7 +70,7 @@
 # same key of the same segment — exactly like systemd units, sysctl.d and udev. A key a
 # later file does not mention keeps whatever the earlier one said.
 #
-# That is the door another program writes through, and openmixer writes exactly one file:
+# That is the door another program writes through, and a console writes exactly one file:
 #
 #     ~/.config/reac-pw/reac-pw.conf.d/50-openmixer.conf
 #

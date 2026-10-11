@@ -10,7 +10,7 @@
  * adapter resamples REAC -> graph (Tier-A clock bridge).
  *
  * REAC has no fixed master: any box can be the master and the rest slave to it.
- * openmixer must fit either role, selected with --role:
+ * a console must fit either role, selected with --role:
  *
  *   --role master (default) — WE drive the cdea/cfea establishment + own the
  *     clock (the SCHED_FIFO pacer at a fixed pps); a stagebox slaves to us. The
@@ -28,16 +28,13 @@
  *   reac-pw --live reac0 [--rate 96000] [--role master] [--tx reac0]
  *   reac-pw --live reac0 --role slave   --tx reac0      # slaved to a desk
  *
- * ONE DAEMON, N LISTENERS (2026-08-20-reac-auto-spine §5,
- * the openmixer tree). A single master process manages every segment this
+ * ONE DAEMON, N LISTENERS A single master process manages every segment this
  * host faces, spawning one internal LISTENER per interface against ONE shared
  * PipeWire main loop — the daemon-per-NIC shape (a templated unit per
  * interface) was considered and REJECTED there. `--live` may be repeated (or
  * given as a comma list) to run several segments from one command line.
  *
- * THE PACKAGED SERVICE GIVES NO INTERFACE AT ALL, AND NONE IS CONFIGURED
- * (openmixer's 2026-08-23-reac-trunk-vlan-daemon §7-§9, amendment
- * 2026-09-02): with no --live/--pcap the daemon HEARS its segments. Every
+ * THE PACKAGED SERVICE GIVES NO INTERFACE AT ALL, AND NONE IS CONFIGURED: with no --live/--pcap the daemon HEARS its segments. Every
  * Ethernet interface with link is sniffed by a passive 0x8819 socket; the
  * first frame that classifies as REAC gear turns that interface into a
  * segment and a listener opens on it; link loss drops it after a hold long
@@ -674,7 +671,7 @@ static void usage(const char *p)
 	  "                there is nothing to detect on a segment nobody is driving).\n"
 	  "                As a SLAVE, auto-detected from the wire cadence. Given on the\n"
 	  "                command line, it is a WHOLE-INVOCATION override and applies to\n"
-	  "                every segment (auto-spine: this is the layer openmixer uses).\n"
+	  "                every segment (auto-spine: this is the layer a console uses).\n"
 	  "  --tx IFNAME   the REAC TX NIC: master role -> the reac:playback downstream sink;\n"
 	  "                slave role -> the upstream return + handshake socket\n"
 	  "  --box-channels N  SLAVE role: OUR OWN input width — what we declare as a box,\n"
@@ -1216,7 +1213,7 @@ struct listener_cfg {
 	 * with something on it from one taken on the masterless licence, and only the first
 	 * may take a neighbour's budget. 0 for a `--live` segment: nothing heard it. */
 	int wire_heard;
-	/* THE PASSIVE ROLE (openmixer master-arbitration, eighth amendment, 2026-09-13).
+	/* THE PASSIVE ROLE (2026-09-13).
 	 * `REAC_ROLE_<segment>=tap` or `--role tap`: serve what is heard and TRANSMIT
 	 * NOTHING — no announce, no join, no grant, no seglock, no TX socket. It is not a
 	 * value of `role` above because `enum reac_role` is the WIRE's two ends and a tap
@@ -1637,7 +1634,7 @@ static void listener_publish_segment(struct listener *L)
  * main()'s single-vs-multi distinction at the call site. */
 /* --- THE TAP ROLE: serve what is heard, transmit nothing ---------------------
  *
- * openmixer master-arbitration, eighth amendment (2026-09-13). Everything the other
+ * 2026-09-13. Everything the other
  * roles do to the wire is ABSENT here and absent by construction, not by a flag that
  * could be read the wrong way: no reac_tx, no reac_pacer, no reac_slave, no
  * reac_seglock, no reac-playback sink. The whole receive path is reac_tap
@@ -1872,7 +1869,7 @@ static uint64_t monotonic_ns(void);
  * NULLING A POINTER IS NOT A TEARDOWN, which is the whole defect: a dropped handle leaves
  * the pw_stream CONNECTED, so the pair stays on the graph for the life of the process,
  * carrying `reac.box-model=none` / `reac.box-width=0x0` on the SAME `reac.segment` as the
- * real pair — the ghost openmixer's segment scan read instead of the established S-1608.
+ * real pair — the ghost a segment scan read instead of the established S-1608.
  *
  * `loop` is needed for the autodetect timer, which must stop BEFORE the nodes it rebuilds
  * go away (listener_close has always done it in this order and for this reason). */
@@ -2509,8 +2506,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 			 * requirement that ruling served is not withdrawn: a role is settable
 			 * before anything enrols through reac-pw.conf, which needs no node at all.
 			 *
-			 * THE COST IS REAL AND IS NAMED RATHER THAN HIDDEN: openmixer's
-			 * /reac/segment roster is a GRAPH SCAN of reac.segment props, so until the
+			 * THE COST IS REAL AND IS NAMED RATHER THAN HIDDEN: a console's
+			 * segment roster can be a GRAPH SCAN of reac.segment props, so until the
 			 * console reads the daemon's roster from somewhere that is not a node, an
 			 * empty segment is visible HERE and nowhere else. Which is what this line
 			 * is for. */
@@ -2729,7 +2726,7 @@ static void listener_reopen_at_role(struct listener *L, struct pw_loop *loop, en
 
 /* ---- HEARING: the segments are discovered, not declared ---------------------
  *
- * openmixer's 2026-08-23-reac-trunk-vlan-daemon §7-§9, amendment 2026-09-02.
+ * Every linked wired interface is listened on.
  * reac_ifscan keeps the interface table and says what to do; this block owns
  * what the verbs refer to — one passive sniffer per linked interface, and the
  * listener slots a heard segment is served from — and runs on the main loop
@@ -3637,8 +3634,7 @@ static int listener_reopen_role_reclassify(struct listener *L, struct pw_loop *l
 
 /* ---- TRUNK TOPOLOGY: the VLANs on a parent, and the netdevs they need ---------
  *
- * DESIGN.md's 0.5.3 contract, from openmixer's 2026-08-23-reac-trunk-vlan-daemon
- * §3-§5. Nothing here touches the audio path: the tap learns WHICH VLAN ids carry REAC
+ * DESIGN.md's 0.5.3 contract. Nothing here touches the audio path: the tap learns WHICH VLAN ids carry REAC
  * on a parent, the kernel is asked for one `<parent>.<vid>` netdev per id, and from
  * there each is an ordinary interface that the hearing above serves unchanged. */
 
@@ -5526,7 +5522,7 @@ int main(int argc, char **argv)
 	                                       * that the wire disagreed with it (once) */
 	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
 	/* --headamp CH:PARAM:VALUE (master role, repeatable): the per-channel head-amp
-	 * DMX table the master re-asserts to the box (task #155). At most one cell per
+	 * DMX table the master re-asserts to the box. At most one cell per
 	 * (channel,param); the table set() overwrites a repeat. */
 	struct reac_headamp_setting headamps[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
 	int n_headamps = 0;
@@ -5660,7 +5656,7 @@ int main(int argc, char **argv)
 			/* MASTER role: the operator's PIN for a FIXED INSTALLATION — the nodes
 			 * exist, named and sized, from boot rather than appearing when the box
 			 * powers up (operator, 2026-08-22: reac-pw is a daemon in its own right
-			 * and a permanent rig pins its patch; openmixer is the autodetect case,
+			 * and a permanent rig pins its patch; a console is the autodetect case,
 			 * and the two are complementary, not alternatives).
 			 *
 			 * IT PINS NODE GEOMETRY AND LABEL, AND NOTHING ELSE. This flag was retired
@@ -5800,7 +5796,7 @@ int main(int argc, char **argv)
 				listener_cfg_from_conf(c, ifaces[i], i == 0);
 				/* A whole-invocation --rate (the ARGV layer) outranks every
 				 * per-segment conf file, on EVERY listener — it is the layer
-				 * "openmixer uses" (reac_conf.h precedence #1). */
+				 * "a console uses" (reac_conf.h precedence #1). */
 				if (rxcfg.forced_rate != 0) {
 					c->rxcfg.forced_rate = rxcfg.forced_rate;
 					c->rate_layer = REAC_CONF_ARGV;
