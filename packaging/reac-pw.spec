@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.33
+Version:        1.0.34
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -231,6 +231,16 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Sun Oct 11 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.34-1
+- NetworkManager no longer touches the network interfaces reac-pw serves. A new
+  system service, reac-pw-nm-unmanaged, enabled on install, lists them in
+  /etc/NetworkManager/conf.d/90-reac-pw.conf and keeps them up with IPv6 off.
+  Before, every time reac-pw bounced the link to wake a box, NetworkManager
+  re-added its addresses and a browser on the same machine dropped all its
+  connections, the console's included.
+- reac-pw marks each interface it serves with the alias reac-pw:served and
+  removes the mark when it exits cleanly.
+
 * Thu Oct 08 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.33-1
 - A stagebox with no outputs, like a 40 in / 0 out S-4000S, no longer leaves a
   stereo output on the graph. A build that asked for its playback node at zero
