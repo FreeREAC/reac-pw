@@ -96,6 +96,7 @@
 #include <reac/reac_knock.h>      /* waking a cold box on a wire nobody pinned */
 #include <reac/reac_tapwait.h>    /* how long an unplaced sighting holds the hunt off a wire */
 #include "reac_wake.h"       /* waking a box that DROPPED, which no frame can do */
+#include "reac_served_mark.h" /* the alias that tells the host a NIC is a REAC wire */
 #include <reac/transport/reac_carrier.h>    /* is there a cable in this interface */
 #include "reac_node_recover.h" /* what to do about a node we built that is not there */
 
@@ -2866,6 +2867,9 @@ struct hearing {
 	 * released when it is silent — since 2026-09-23. */
 	struct declared_seg decl[REAC_DECLARED_VLAN_MAX];
 	int n_decl;
+	/* THE INTERFACES MARKED `reac-pw:served` (reac_served_mark.h), so a clean exit
+	 * takes away exactly those marks. */
+	struct reac_served_marks marks;
 };
 
 static struct hearing g_hear;
@@ -3475,6 +3479,12 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	L->opened = 1;
 	L->rx_started = !L->cfg.door_only && !L->cfg.tap;
 	h->served++;
+	/* A SEGMENT IS A REAC WIRE, AND THE HOST IS TOLD SO ON THE INTERFACE ITSELF: the
+	 * packaged root service turns the mark into NetworkManager's unmanaged-devices, so
+	 * nothing re-addresses this link every time the wake ladder bounces it. A vacant
+	 * door has heard nothing and runs nothing, so it says nothing about the wire. */
+	if (!L->cfg.door_vacant)
+		reac_served_mark(&h->marks, name);
 	if (L->cfg.door_vacant)
 		/* NOT "segment up" either: nothing is running here and nothing was refused.
 		 * The wire has told us nothing yet, and that is what the door says. */
@@ -4906,6 +4916,7 @@ static void hearing_stop(struct hearing *h)
 	 * adopted is left exactly as we found it. An unclean exit leaves ours behind, and
 	 * the mint alias is what lets the next start re-own them instead of inheriting
 	 * them as somebody else's for ever. */
+	reac_served_unmark_all(&h->marks);
 	reac_topo_release_all(&h->topo);
 	struct reac_topo_event ev;
 	while (reac_topo_next(&h->topo, &ev))

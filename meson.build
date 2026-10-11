@@ -179,6 +179,8 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_link_alias.c',
+  'src/reac_served_mark.c',
   'src/reac_link_budget.c',
   'src/reac_declared_vlan.c',
   'src/reac_segconf.c',
@@ -577,6 +579,16 @@ qdisc_test = executable('test_reac_qdisc',
                '-Wl,--wrap=reac_etf_qdisc_remove'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
+
+# --- unit test: the served-interface mark (the alias the NetworkManager drop-in is made from)
+# The real reac_served_mark.c policy over a SCRIPTED kernel: the two rtnetlink doors are
+# wrapped at link time, so no device is touched.
+served_mark_test = executable('test_reac_served_mark',
+  ['tests/test_reac_served_mark.c', 'src/reac_served_mark.c'],
+  include_directories : src_inc,
+  link_args : ['-Wl,--wrap=reac_link_alias_read',
+               '-Wl,--wrap=reac_link_alias_write'])
+test('reac_served_mark', served_mark_test)
 
 # --- whole-binary test: under ETF, `late` is the THREAD'S WAKE, not the wire --
 #
