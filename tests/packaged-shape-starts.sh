@@ -7,7 +7,7 @@
 #
 # This is the shape the unit gives the daemon (ExecStart=/usr/bin/reac-pw, no
 # flags), and nothing is configured for it: REAC_IFACES retired with the
-# per-interface files (openmixer's trunk-VLAN spec, amendment 2026-09-02). An
+# per-interface files (2026-09-02). An
 # `argc < 2` guard once answered usage before anything else and made the
 # packaged service unstartable; measured 2026-08-31 on the rig.
 #

@@ -68,7 +68,7 @@ int main(void)
 	CHK(r.underruns == 1);
 	reac_frame_ring_free(&r);
 
-	/* 2b. depth-guard band derivation + trim math (task #152). The band comes from
+	/* 2b. depth-guard band derivation + trim math. The band comes from
 	 * the ACTUAL producer burst (quantum/12 frames), not a guessed steady state:
 	 * HIGH = max(FLOOR=512, MULT=4 * quantum_frames), TARGET = HIGH/2. */
 	CHK(reac_pacer_guard_high(0) == REAC_PACER_GUARD_FLOOR_FRAMES);   /* no quantum yet -> floor */
@@ -103,7 +103,7 @@ int main(void)
 	CHK(reac_frame_ring_readable(&g) == TG);
 	reac_frame_ring_free(&g);
 
-	/* 2c. depth-telemetry gating (task #152, live-data fix): the depth SAWTOOTHS,
+	/* 2c. depth-telemetry gating: the depth SAWTOOTHS,
 	 * so the line must fire ONLY on the heartbeat or a guard trim — NEVER on a
 	 * depth change, or it spams every drain. First drain = baseline (heartbeat,
 	 * log_last_ns==0); a second drain, even after a LARGE depth swing but no trim,

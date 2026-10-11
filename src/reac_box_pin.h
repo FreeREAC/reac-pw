@@ -5,7 +5,7 @@
  *
  * reac-pw is a daemon in its own right. A permanent rig wants its patch to exist before
  * the box is powered — nodes named and sized from boot, not appearing halfway through a
- * soundcheck — and the operator, not the wire, decides what that box is called. openmixer
+ * soundcheck — and the operator, not the wire, decides what that box is called. a console
  * is the opposite case and autodetects everything; the two are complementary rather than
  * alternatives (operator ruling, 2026-08-22).
  *
@@ -28,7 +28,7 @@
  * THE DISAGREEMENT IS THE POINT, and it is what earns this flag its keep (operator,
  * 2026-08-22). Pinning
  * a box that is NOT the one on the segment reproduces, on demand and without unplugging
- * anything, the case openmixer's REBIND has to survive: a patch was built expecting one box
+ * anything, the case a console's rebind has to survive: a patch was built expecting one box
  * and a different one turned up. `--box s0808` on a segment carrying an S-1608 starts the
  * nodes at 8 channels, then re-sizes them to 16 when the box declares itself -- which is the
  * same transition a rebind drives, available on a bench with one flag.

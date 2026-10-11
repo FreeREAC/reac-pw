@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
  *
  * reac_ifscan — the table's transitions, pinned. Every case is the operator's own sentence
- * from the ruling (openmixer trunk-VLAN spec, amendment 2026-09-02): a NIC with link is
+ * from the ruling (2026-09-02): a NIC with link is
  * SNIFFED and nothing more; the first REAC frame makes it a SEGMENT; a flap shorter than the
  * hold changes nothing; a loss longer than it drops the segment; a netdev that leaves drops at
  * once; a NIC that links and never hears REAC is never a segment. Then the netlink parser is

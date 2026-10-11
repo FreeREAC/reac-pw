@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 /* reac_headamp_prop — parse LIVE per-channel head-amp changes out of a PipeWire
- * SPA_PARAM_Props object (task #203). Pure: builds Props pods with the SPA pod
+ * SPA_PARAM_Props object. Pure: builds Props pods with the SPA pod
  * builder and asserts the parse, so no live graph is needed. Proves the control
  * carrier (SPA_PROP_params, keyed "reac.headamp.<ch>.<param>") is decoded, that
  * junk/out-of-range entries are skipped without desyncing the (key,value)

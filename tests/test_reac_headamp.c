@@ -110,7 +110,7 @@ int main(void)
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_HEADAMP);
 	CHK(p.ch == REACPW_HEADAMP_TOP_CH && p.param == REAC_HEADAMP_PAD && p.value == 0x01);
 
-	/* 3c. STAMP overlay (the MASTER emit path, task #155/C.7): stamping a head-amp
+	/* 3c. STAMP overlay (the MASTER emit path/C.7): stamping a head-amp
 	 * record over an already-built FILLER frame reproduces the SAME control block
 	 * [18:50] as the captured M-200 record AND the fresh builder, while preserving
 	 * the counter, tail and audio the frame already carried. This is the offline
@@ -209,7 +209,7 @@ int main(void)
 	 * box's. Raw data: docs/measurements/sens-sweep-2026-08-23-*.csv.
 	 *
 	 * Changing the scale is a contract change — the conversion runs both ways,
-	 * reac_slave.c derives virtual preamp gain from it, and openmixer publishes
+	 * reac_slave.c derives virtual preamp gain from it, and a console publishes
 	 * sensDbu — so these assertions exist to make the next change deliberate. */
 	CHK(reac_headamp_sens_cdb(0x00, 0) == REAC_HEADAMP_SENS_REF_CDB);
 	CHK(reac_headamp_sens_cdb(REAC_HEADAMP_SENS_MAX, 0) == REACPW_SENS_CDB(REAC_HEADAMP_SENS_MAX, 0));

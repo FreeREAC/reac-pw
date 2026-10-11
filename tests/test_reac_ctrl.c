@@ -120,7 +120,7 @@ int main(void)
 
 	/* 2. upstream FILLER: 628 B, type 0000, 00 7a descriptor, audio round-trips
 	 * through the capture-verified upstream decoder — i.e. we emit the same
-	 * BRAIDED layout a real box does (task #108), not plain LE. */
+	 * BRAIDED layout a real box does, not plain LE. */
 	float chbuf[REAC_BOX_S1608_IN][REAC_SAMPLES_PER_PKT]; float *pl[REAC_BOX_S1608_IN];
 	for (int c = 0; c < REAC_BOX_S1608_IN; c++) {
 		pl[c] = chbuf[c];

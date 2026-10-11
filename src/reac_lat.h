@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_lat — ProcessLatency smoothing for the reac:playback sink (task #152).
+/* reac_lat — ProcessLatency smoothing for the reac:playback sink.
  *
  * The graph->wire delay a sample sees is the 12-sample staging accumulator plus
  * the pacer frame-ring depth. That depth SAWTOOTHS with each producer burst
