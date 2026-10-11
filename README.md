@@ -92,6 +92,25 @@ systemctl --user enable --now reac-pw
 A package never writes into `$HOME` to fix this for you — removing a hand-written
 file has to be a deliberate, visible step, not a postinst side effect.
 
+**NetworkManager stays off the REAC interfaces.** A REAC wire carries raw
+Ethernet frames and needs no address. When NetworkManager manages it, every time
+reac-pw takes the link down and up to wake a box that has dropped, NetworkManager
+removes and re-adds the link-local addresses it put there, and a web browser
+treats each of those changes as a network change and drops all its connections,
+the console's included.
+
+So the package ships a small system service, `reac-pw-nm-unmanaged`, enabled on
+install. reac-pw marks each interface it serves with the alias `reac-pw:served`
+(and each VLAN it creates carries `reac-pw:minted`); the service writes those
+interfaces into `/etc/NetworkManager/conf.d/90-reac-pw.conf` as
+`unmanaged-devices`, asks NetworkManager to re-read it, and keeps those links up
+with IPv6 off, which NetworkManager did for them before. Nothing names an
+interface by hand. An interface stays listed across reboots; to give one back to
+NetworkManager, run `/usr/lib/reac-pw/reac-pw-nm-unmanaged --forget IFNAME` as
+root (reac-pw marks it again if it serves it again). An interface whose alias the
+host already set, and a VLAN sub-interface the host made, are never marked.
+Removing the package removes the file.
+
 **From source.** See [BUILDING.md](BUILDING.md).
 
 ## Run
