@@ -15,8 +15,7 @@
  * wire (`rival-master-box`) and published a door with no audio; the operator saw "not
  * detected". The two `box-master-*` arms are that wire and its fix, from the same
  * capture: PINNED master refuses, UNPINNED (`auto`) slave-joins the box at its own 16
- * channels. The refusal is correct and the pin was the defect — see the spec's §4 and
- * openmixer's arbitration §8, ninth amendment, for the console half.
+ * channels. The refusal is correct and the pin was the defect — see the spec's §4.
  *
  * THE SNAPLEN TRAP, AND WHY THIS PADS. Three of these captures ran at snaplen 512, and
  * the GEOMETRY — which is the whole classification — is read from the frame LENGTH. A

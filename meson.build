@@ -388,7 +388,7 @@ test('reac_link_edge_observed',
   timeout : 30)
 
 # --- unit test: WHICH interfaces are listened on, and which are segments -----
-# The autodetect table (openmixer trunk-VLAN spec, amendment 2026-09-02): a NIC
+# The autodetect table: a NIC
 # with link is sniffed, the first REAC frame makes it a segment, a flap shorter
 # than the hold changes nothing, a longer loss drops it, DELLINK drops at once.
 # The netlink half is fed kernel-shaped datagrams; the live arm dumps the real
@@ -942,7 +942,7 @@ test('reac_graph_survives_a_pipewire_restart',
 # The sibling above asks whether a pair is PRESENT; this one asks how many. A ghost is not
 # an absence, it is a surplus -- `>= 2` is true of a real pair and true of a real pair
 # beside a `box-model=none` twin on the same reac.segment, which is what the desk read on
-# 2026-09-20 and what made openmixer's segment scan drop an established S-1608. So this
+# 2026-09-20 and what made a consumer's segment scan drop an established S-1608. So this
 # asserts EXACTLY 2 while a box is recognised and EXACTLY 0 while not, across a box that
 # arrives, leaves and arrives again, and across #107's capped-port refusal loop -- the two
 # orderings the ghost was seen in. Needs libreac's fake_box; without it it SKIPS rather
@@ -1293,7 +1293,7 @@ slave_test = executable('test_reac_slave',
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_slave', slave_test)
 
-# --- unit test: virtual-stagebox head-amp -> input gain (task #202) ------------
+# --- unit test: virtual-stagebox head-amp -> input gain ------------
 # The slave APPLIES received SENS/PAD as per-input digital gain on the upstream
 # audio (a virtual box has no preamp). Pins the gain model, the wire-CH -> input
 # mapping, and the RT multiply-only apply. Same link set as slave_test.
@@ -1395,7 +1395,7 @@ test('reac_box_capture_identity', box_capture_identity_test)
 # --- unit test: the reac.link-state property mapping (pure, no PipeWire) ------
 # Pins reac_link_state_from_master: every reac_master_state -> its badge string
 # (IDLE folded into "probing"), the just_dropped overlay, and the exact wire
-# strings a consumer (openmixer's stagebox card) matches on.
+# strings a consumer (a stagebox card) matches on.
 link_state_test = executable('test_reac_link_state',
   ['tests/test_reac_link_state.c', ],
   include_directories : src_inc,
@@ -1418,7 +1418,7 @@ test('reac_box_master_identity', box_master_identity_test)
 
 # --- unit test: passive discovery — the sighting classifier + table ------------
 # Pins the bars that make a device list trustworthy: presence ONLY from a real
-# 0x8819 Roland-OUI frame (never a packet count — openmixer #161), role from the
+# 0x8819 Roland-OUI frame (never a packet count), role from the
 # full byte signature rather than the frame kind (cdea 04 03 is both the box JOIN
 # and the master grant; cdea 01 03 0010 is a box frame parsing as kind PROBE), a
 # model only ever from the byte-exact config-block match, stale devices withdrawn,
@@ -1546,7 +1546,7 @@ role_test = executable('test_reac_role',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_role', role_test)
 
-# --- unit test: the stand-in source-MAC helper (task #35, D.10) ---------------
+# --- unit test: the stand-in source-MAC helper ---------------
 # Pure reac_mac_compose (Roland OUI + NIC host part; box/desk-safe fallback) — no
 # NIC touched. Proves the derived default can never equal a real box's MAC.
 mac_test = executable('test_reac_mac',
@@ -1567,7 +1567,7 @@ test('reac_arbitration', arbitration_test)
 
 # --- unit test: --box MODEL[:LABEL], the fixed-installation pin ---------------
 # Restored 2026-08-22 (operator: reac-pw is a daemon, a permanent rig pins its patch;
-# openmixer autodetects — complementary, not alternatives). The pin declares NODE
+# a console autodetects — complementary, not alternatives). The pin declares NODE
 # GEOMETRY AND LABEL only: --box was retired in 902bf39 because it pre-fabricated a
 # head-amp enrollment from a guess, and a box granted slots it does not own links,
 # streams audio and silently ignores every head-amp record.
@@ -1591,7 +1591,7 @@ pace_watch_test = executable('test_reac_pace_watch',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_pace_watch', pace_watch_test)
 
-# --- unit test: the MASTER head-amp DMX send scheduler (task #155, C.7) --------
+# --- unit test: the MASTER head-amp DMX send scheduler --------
 # Pure state table + edge/periodic-re-assert scheduler — no socket, no FSM. Pins
 # the edge-on-change emission, the full-table re-assert sweep, and OFF-unless-set.
 headamp_tx_test = executable('test_reac_headamp_tx',

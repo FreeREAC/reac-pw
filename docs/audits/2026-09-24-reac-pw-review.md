@@ -379,7 +379,7 @@ comments.
 - In `reac_segconf_refresh` (`:472`), `moved(REAC_SEGCONF_FILE, &stamp[0])` compares an
   absent file with a present stamp and always answers "moved".
 
-**Scenario.** This is exactly the layout openmixer writes: drop-ins only. Every
+**Scenario.** This is exactly the layout a console writes: drop-ins only. Every
 `reac_segconf_refresh` re-reads and re-parses the whole directory on the main loop. It is
 called from `main.c:1305`, `2933`, `3044` and `3071`, including per unserved sniffer on
 every roster tick.

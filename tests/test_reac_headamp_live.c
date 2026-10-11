@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* Live head-amp control handoff (task #203): the lock-free SPSC command ring that
+/* Live head-amp control handoff: the lock-free SPSC command ring that
  * carries a controller's per-channel phantom/pad/sens change from the PipeWire
  * main-loop thread (reac_pacer_headamp_set) to the RT pacer thread
  * (reac_pacer_headamp_drain -> reac_headamp_tx_set). No socket, no PipeWire, no RT

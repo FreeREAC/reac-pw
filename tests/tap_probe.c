@@ -5,8 +5,7 @@
  * AF_PACKET on a real interface) for a few seconds and report what it SERVED.
  *
  * It exists to be measured from the OTHER end of a veth pair. The claim under test is
- * an ABSENCE — "a segment in tap role sends zero frames" (openmixer master-arbitration,
- * eighth amendment, 2026-09-13) — and an absence is only a finding once the instrument
+ * an ABSENCE — "a segment in tap role sends zero frames" (2026-09-13) — and an absence is only a finding once the instrument
  * has been shown to detect the corresponding presence, which is what
  * tests/tap-sends-nothing.sh's control arm is for: the SAME ear, the SAME filter, with
  * the real slave engine on this end instead of this one.

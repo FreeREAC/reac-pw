@@ -1092,7 +1092,7 @@
  * THE MEASUREMENT. Taken on the live rig 2026-08-23 as phantom-test.pcap
  * and filed as
  * reacpw-s1608-48k-clean__phantom-ch24-on-off-2026-08-23.pcap in
- * ~/Devel/audio/reac-captures-raw/ (it still needs a MANIFEST row and a
+ * the raw capture archive (it still needs a MANIFEST row and a
  * distillation pass before it joins the committed corpus):
  * interface enp131s0 (the S-1608 segment), ethertype 0x8819 only,
  * snaplen 200, twelve seconds — idle, then phantom set TRUE on head-amp

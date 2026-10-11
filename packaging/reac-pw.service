@@ -11,9 +11,7 @@ Conflicts=reac-pw-master.service
 
 [Service]
 Type=simple
-# ONE daemon, N listeners (2026-08-20-reac-auto-spine §5,
-# the openmixer tree), and nothing names an interface (the trunk-VLAN spec
-# there, amendment 2026-09-02): this unit passes NO interface, NO --rate and
+# ONE daemon, N listeners and nothing names an interface: this unit passes NO interface, NO --rate and
 # NO --headamp — the daemon hears its segments on every linked Ethernet
 # interface, and every setting comes from the one conf reac_conf.h reads,
 # %h/.config/reac-pw/reac-pw.env (host-wide REAC_MIXER/REAC_RATE/REAC_ROLE,

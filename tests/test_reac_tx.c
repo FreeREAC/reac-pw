@@ -252,7 +252,7 @@ int main(void)
 	printf("braid: 40-ch distinct-DC round-trip max err = %.2e (tol 1e-6)\n", dc_err);
 	CHK(dc_err < 1e-6f);
 
-	/* ---- task #156: the "OHRCA 2-byte trailer" RE ----------------------------
+	/* ---- the "OHRCA 2-byte trailer" RE ----------------------------
 	 * Some M-5000 downstream captures show 1494 B instead of REAC_FRAME_BYTES
 	 * (1492): a 2-byte "trailer" after the C2 EA end marker. Prior art
 	 * (docs/SLAVE-EMULATION-SCOPE.md W4(a), 2026-07-12) already falsified this
@@ -376,7 +376,7 @@ int main(void)
 	       "Ethernet CRC-32 FCS over frame[0:1492], a mirror/SPAN capture "
 	       "artifact — NOT a REAC field, nothing for the encoder to emit\n");
 
-	/* ---- task #156: frame size is rate/profile-INVARIANT --------------------
+	/* ---- frame size is rate/profile-INVARIANT --------------------
 	 * Because the trailer above is not a real field, the downstream frame stays
 	 * REAC_FRAME_BYTES for every mixer profile and every rate: only the pacer's
 	 * fps and the pace-code bytes (cfea[19]/ENROLL[8], already wired through

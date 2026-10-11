@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_headamp_tx — the MASTER head-amp send scheduler (task #155, item C.7).
+/* reac_headamp_tx — the MASTER head-amp send scheduler.
  * Pure state + per-frame next(): pins OFF-unless-set, the edge emission on
  * change, the complete-scene REPLAY armed at every establishment — the mechanism
- * that restores a power-cycled box's pins (task #179; measured:
+ * that restores a power-cycled box's pins (measured:
  * m200-s1608-BIDIR-reboot, the M-200 replays the full width x 3 scene 10 ms
  * behind every grant) — and the PERIODIC RE-ASSERT of the SET cells that follows
  * it (docs/HEADAMP-REASSERT-POLICY.md). The cadence is off until a caller states
@@ -91,7 +91,7 @@ int main(void)
 	CHK(reac_headamp_tx_next(&hi, &ch, &p, &v) == 1);
 	CHK(ch == REACPW_HEADAMP_TOP_CH && p == REAC_HEADAMP_PHANTOM && v == 1);
 
-	/* 8. THE POWER-CYCLE RESTORE (task #179): arming the scene on an ALL-UNSET
+	/* 8. THE POWER-CYCLE RESTORE: arming the scene on an ALL-UNSET
 	 * table emits the complete width x 3 scene — enrolling defaults everywhere
 	 * (phantom OFF, pad OFF, SENS non-zero), per-channel param triples in order,
 	 * one record per REAC_HEADAMP_SWEEP_STRIDE frames. An S-0808 at base 0. */

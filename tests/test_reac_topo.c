@@ -8,7 +8,7 @@
  * kernel can hand it, because which one arrives is a driver's business:
  *   (a) the ACCELERATED tag — the buffer holds no 802.1Q header and the VID is in
  *       PACKET_AUXDATA, which is what this kernel does (measured 2026-09-09,
- *       7.2.4-200.fc44, openmixer's tools/probe-vlan-8819.py: `802.1Q header ABSENT from
+ *       7.2.4-200.fc44, a probe in a private netns: `802.1Q header ABSENT from
  *       the buffer`, `PACKET_AUXDATA vlan_tci = 111`);
  *   (b) the IN-BUFFER tag — 0x8100 at offset 12 and the real ethertype behind it;
  *   (c) QinQ, where the kernel strips the outer tag and leaves the inner one in the bytes:

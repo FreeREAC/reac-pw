@@ -705,7 +705,7 @@ int main(void)
 	       "ESTABLISHED; backward-only fallbacks; continuous 5-message cadence both "
 	       "states; free-running counter)\n");
 
-	/* ---- task #156: 96 kHz emit is PARAMETERIZED off the 48k path -----------
+	/* ---- 96 kHz emit is PARAMETERIZED off the 48k path -----------
 	 * "96k is not anything different, same state diagram, doubled frequency" —
 	 * verify the master rate follows --rate, NOT a compile-time 48k assumption,
 	 * and that the frame SHAPE (REAC_FRAME_BYTES) is unaffected by either the
