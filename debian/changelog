@@ -1,3 +1,16 @@
+reac-pw (1.0.34) unstable; urgency=medium
+
+  * NetworkManager no longer touches the network interfaces reac-pw serves. A
+    new system service, reac-pw-nm-unmanaged, enabled on install, lists them in
+    /etc/NetworkManager/conf.d/90-reac-pw.conf and keeps them up with IPv6 off.
+    Before, every time reac-pw bounced the link to wake a box, NetworkManager
+    re-added its addresses and a browser on the same machine dropped all its
+    connections, the console's included.
+  * reac-pw marks each interface it serves with the alias reac-pw:served and
+    removes the mark when it exits cleanly.
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Sun, 11 Oct 2026 09:00:00 +0000
+
 reac-pw (1.0.33) unstable; urgency=medium
 
   * A stagebox with no outputs, like a 40 in / 0 out S-4000S, no longer leaves

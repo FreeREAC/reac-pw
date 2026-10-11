@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.33',
+  version: '1.0.34',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -179,6 +179,8 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_link_alias.c',
+  'src/reac_served_mark.c',
   'src/reac_link_budget.c',
   'src/reac_declared_vlan.c',
   'src/reac_segconf.c',
@@ -577,6 +579,16 @@ qdisc_test = executable('test_reac_qdisc',
                '-Wl,--wrap=reac_etf_qdisc_remove'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
+
+# --- unit test: the served-interface mark (the alias the NetworkManager drop-in is made from)
+# The real reac_served_mark.c policy over a SCRIPTED kernel: the two rtnetlink doors are
+# wrapped at link time, so no device is touched.
+served_mark_test = executable('test_reac_served_mark',
+  ['tests/test_reac_served_mark.c', 'src/reac_served_mark.c'],
+  include_directories : src_inc,
+  link_args : ['-Wl,--wrap=reac_link_alias_read',
+               '-Wl,--wrap=reac_link_alias_write'])
+test('reac_served_mark', served_mark_test)
 
 # --- whole-binary test: under ETF, `late` is the THREAD'S WAKE, not the wire --
 #
@@ -1114,6 +1126,13 @@ test('reac_refuses_root',
 test('reac_safe_enable_selects_one_user',
   find_program('tests/safe-enable-selects-one-user.sh'),
   args : [meson.current_source_dir() / 'packaging' / 'reac-pw-safe-enable.sh'],
+  timeout : 30)
+
+# The NetworkManager drop-in is the union of reac-pw's `reac-pw:` interface aliases and of
+# nothing else. sysfs, /proc/sys, nmcli and ip are mocked: no NetworkManager, no root.
+test('reac_nm_unmanaged_follows_the_marks',
+  find_program('tests/nm-unmanaged-follows-the-marks.sh'),
+  args : [meson.current_source_dir() / 'packaging' / 'reac-pw-nm-unmanaged.sh'],
   timeout : 30)
 
 # --- unit test: control-plane builders/parser/checksum (ground-truthed) -------

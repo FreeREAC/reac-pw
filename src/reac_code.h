@@ -57,6 +57,10 @@
 	 * but a console that reads the roster is reading nothing, and must be able to tell
 	 * that from a daemon with no segments. */ \
 	X(RC_E_ROSTER_NODE,     "E_ROSTER_NODE") \
+	/* A served interface could not be marked `reac-pw:served` (reac_served_mark.h): its
+	 * alias could not be read or written. The segment is served anyway; what is missing
+	 * is the host being told to keep its network manager off the link. */ \
+	X(RC_E_NOT_MARKED,      "E_NOT_MARKED") \
 	/* status */ \
 	X(RC_S_SEGMENT_HEARD,   "S_SEGMENT_HEARD") \
 	X(RC_S_BUDGET_YIELDED,  "S_BUDGET_YIELDED") \

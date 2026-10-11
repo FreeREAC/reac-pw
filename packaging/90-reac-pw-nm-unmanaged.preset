@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
+# Installed as /usr/lib/systemd/system-preset/90-reac-pw-nm-unmanaged.preset. A SYSTEM unit
+# that runs as root and writes only NetworkManager's drop-in for the interfaces reac-pw
+# marks; enabled on install so a REAC NIC is left alone from the first boot after it.
+enable reac-pw-nm-unmanaged.service

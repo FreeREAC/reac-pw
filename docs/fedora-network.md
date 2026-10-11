@@ -55,6 +55,13 @@ If the desk is on an **untagged** segment, skip the VLAN entirely and set
 
 ## B. NetworkManager (nmcli — the Fedora default)
 
+**An untagged REAC NIC needs nothing here.** Once reac-pw serves it, the packaged
+`reac-pw-nm-unmanaged` service lists it in NetworkManager's `unmanaged-devices`
+(`/etc/NetworkManager/conf.d/90-reac-pw.conf`), keeps the link up and turns IPv6 off
+on it, so NetworkManager no longer re-addresses it each time reac-pw bounces the link.
+VLANs reac-pw creates itself are listed the same way. A VLAN you create with
+NetworkManager, as below, is yours and is left alone: give it no addresses.
+
 ```
 nmcli con add type vlan con-name reac0 dev enp1s0 id 11 ipv4.method disabled ipv6.method disabled connection.autoconnect yes
 nmcli con up reac0

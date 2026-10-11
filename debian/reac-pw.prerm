@@ -5,6 +5,8 @@ set -e
 
 if [ "$1" = remove ]; then
     systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
+    # Hand every REAC interface back to NetworkManager before the script goes.
+    /usr/lib/reac-pw/reac-pw-nm-unmanaged --remove || :
 fi
 
 exit 0
