@@ -199,6 +199,9 @@ up_pair()   { ip link set "$1" up;   peer ip link set "$2" up; }
 down_pair() { ip link set "$1" down; peer ip link set "$2" down; }
 
 mkpair pin0  pbox0  || exit 90
+# pin0 CARRIES THE HOST'S OWN ALIAS, so the served-interface mark (reac_served_mark.h) has
+# a NIC it must leave alone; asserted beside the marks at the end of the run.
+ip link set pin0 alias lab-port || exit 90
 mkpair boxm0 mbox0  || exit 90
 mkpair pinm0 mbox1  || exit 90
 mkpair cold0 kbox0  || exit 90
@@ -1355,8 +1358,31 @@ grep -qE "\[trunk0\] segment up|\[trunk1\] segment up" "$LOG" && {
 	echo "FAIL: the licence line never appeared for ANY wire, so every absence of it"
 	echo "      asserted above was meaningless"; tail -30 "$LOG"; exit 1; }
 
+# ---- EVERY SERVED NIC SAYS SO ON THE INTERFACE (reac_served_mark.h). The packaged root
+# service builds NetworkManager's unmanaged-devices from these aliases, so they are read
+# off the kernel, not off the journal. hear0 is the mark; pin0 (the host's own alias) and
+# trunk1.13 (a VLAN the host made) are the two it must not write; trunk0.11 keeps the
+# mint alias libreac gave it.
+alias_of() { ip link show dev "$1" 2>/dev/null | awk '$1 == "alias" {print $2}'; }
+[ "$(alias_of hear0)" = "reac-pw:served" ] || {
+	echo "FAIL: hear0 was served and does not carry the reac-pw:served mark ('$(alias_of hear0)')"
+	exit 1; }
+[ "$(alias_of pin0)" = "lab-port" ] || {
+	echo "FAIL: pin0's own alias 'lab-port' was overwritten with '$(alias_of pin0)'"; exit 1; }
+[ -z "$(alias_of trunk1.13)" ] || {
+	echo "FAIL: the adopted trunk1.13 was marked '$(alias_of trunk1.13)' -- the host made it"
+	exit 1; }
+[ "$(alias_of trunk0.11)" = "reac-pw:minted" ] || {
+	echo "FAIL: trunk0.11's mint alias became '$(alias_of trunk0.11)'"; exit 1; }
+
 kill -TERM $PID; wait $PID; rc=$?
 [ "$rc" -eq 0 ] || { echo "FAIL: clean SIGTERM exited $rc"; tail -5 "$LOG"; exit 1; }
+
+# AND A CLEAN EXIT TAKES ITS MARKS AWAY, and only its own: pin0 is the positive control.
+[ -z "$(alias_of hear0)" ] || {
+	echo "FAIL: hear0 still carries '$(alias_of hear0)' after a clean exit"; exit 1; }
+[ "$(alias_of pin0)" = "lab-port" ] || {
+	echo "FAIL: the exit took pin0's own alias away ('$(alias_of pin0)')"; exit 1; }
 
 # ---- WHAT WE MINTED, WE TOOK AWAY; WHAT WE ADOPTED IS STILL THERE. The netdev lifecycle
 # of the trunk spec's 4d, read off the kernel after the daemon is gone rather than off its
