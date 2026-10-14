@@ -55,14 +55,16 @@ first on `PKG_CONFIG_PATH`, so an installed libreac of another version is never 
 ## The CI suite
 
 `.github/workflows/test.yml` runs `tools/ci-suite.sh` in a privileged `fedora:44`
-container, against libreac at the tag the workflow pins (`LIBREAC_REF`). The same script
-runs on a desk:
+container, against the libreac packages of the FreeMixer channel, which `dnf builddep
+packaging/reac-pw.spec` installs at the floor and ceiling the spec declares (`libreac-devel`,
+`libreac-transport-devel` and `libreac-tests`, which carries `fake_box`, the far end several tests
+drive). The same script runs on a desk with those packages installed:
 
 ```
-tools/ci-suite.sh ../libreac build-ci [../reac-protocol]
+tools/ci-suite.sh [builddir] [../reac-protocol]
 ```
 
-It builds libreac's `fake_box` (the far end several tests drive), runs the unit suite,
+It builds against the installed libreac, runs the unit suite,
 then the `netns` suite, and fails if any namespace test did not report OK. With a
 reac-protocol checkout it also builds against perturbed protocol facts
 (`tools/facts-perturb-check.sh`).
