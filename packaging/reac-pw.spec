@@ -21,10 +21,16 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
 # >=1.5.1 SINCE 1.0.27: the grant takes a box up to 40 channels wide (a 40 in / 0 out box).
 BuildRequires:  pkgconfig(libreac) >= 1.7.0
+BuildRequires:  pkgconfig(libreac) < 1.8
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.7.0
+BuildRequires:  pkgconfig(libreac-transport) < 1.8
+# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
+# ships libreac-tests, and the minor after it
+BuildRequires:  libreac-tests >= 1.7.2
+BuildRequires:  libreac-tests < 1.8
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -36,7 +42,9 @@ Requires:       iproute
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
 Requires:       libreac >= 1.7.0
+Requires:       libreac < 1.8
 Requires:       libreac-transport >= 1.7.0
+Requires:       libreac-transport < 1.8
 %{?systemd_requires}
 
 %description
