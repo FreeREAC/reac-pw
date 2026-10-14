@@ -100,8 +100,8 @@ Keep this in step with meson.build's dependency() floor.
 # Explicit meson (the host uses a pip-installed meson, not the dnf macros).
 # %%set_build_flags exports the Fedora CFLAGS/LDFLAGS (incl. -g and the linker
 # build-id) so the plain buildtype still yields a real debuginfo package.
-# --wrap-mode=nofallback: the libreac dependency MUST resolve to the system
-# libreac-devel (pkg-config), never the bundled subproject wrap -- the RPM links
+# --wrap-mode=nofallback: no dependency is ever fetched; libreac resolves to the system
+# libreac-devel (pkg-config) -- the RPM links
 # libreac dynamically (runtime dep auto-generated from the libreac.so.1 soname).
 %set_build_flags
 meson setup _build --prefix=%{_prefix} --buildtype=plain --wrap-mode=nofallback
