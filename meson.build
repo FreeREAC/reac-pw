@@ -267,6 +267,12 @@ test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
   args : rt_single_door_args)
 
+# --- source sweep: NO PINS (reac-pw#23) --------------------------------------
+# libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
+test('libreac_is_a_bounded_package_dependency',
+  find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
+  args : [meson.current_source_dir()])
+
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',
   ['tests/test_reac_ring.c', ],
