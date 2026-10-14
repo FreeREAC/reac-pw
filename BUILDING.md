@@ -15,9 +15,9 @@ sudo apt install meson pkgconf gcc libpipewire-0.3-dev libspa-0.2-dev libreac-de
 The first line is for Fedora, the second for Debian and Raspberry Pi OS; both read the FreeMixer
 channel described in the [README](README.md).
 
-`libreac-transport-devel` is a hard requirement (no fallback). `libreac-devel` is resolved
-the same way, or meson's wrap fetches and builds it as a subproject when no system package
-is new enough. The version floors are the ones `meson.build` declares.
+`libreac-devel` and `libreac-transport-devel` are hard requirements, found by pkg-config; nothing of
+libreac is fetched or bundled. The version floors are the ones `meson.build` declares, and the spec
+and `debian/control` add the ceiling (the next minor).
 
 ## Build and test
 
@@ -39,18 +39,6 @@ meson test -C build --suite netns --no-suite load --num-processes 1
 the inode and every relink drops them, so a freshly compiled `reac-pw` cannot open its raw
 socket. `tools/build.sh [builddir]` compiles, sets
 `cap_net_raw,cap_net_admin,cap_sys_nice=ep` and refuses if `getcap` does not show them.
-
-## Against a libreac checkout
-
-When the libreac you need is not released yet, build against a sibling checkout with
-nothing installed:
-
-```
-tools/build-with-libreac.sh ../libreac [builddir] [-- meson-test-args...]
-```
-
-It builds libreac into a static prefix inside the build directory and puts that prefix
-first on `PKG_CONFIG_PATH`, so an installed libreac of another version is never picked up.
 
 ## The CI suite
 
