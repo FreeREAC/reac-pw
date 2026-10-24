@@ -5,8 +5,7 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 %:
 	dh $@
 
-# --wrap-mode=nofallback: libreac must come from the installed libreac-dev, never from the
-# bundled subproject wrap.
+# --wrap-mode=nofallback: no dependency is ever fetched; libreac comes from the installed libreac-dev.
 override_dh_auto_configure:
 	dh_auto_configure -- --buildtype=plain --wrap-mode=nofallback
 

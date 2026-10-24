@@ -17,9 +17,9 @@
 # namespaces through AppArmor, and a user namespace may not autoload a kernel module, so
 # veth, dummy, 8021q and sch_etf are loaded here, by name, before any test asks for them.
 #
-# libreac IS BUILT FROM ITS TAG, pinned at the floor meson.build requires, through
-# tools/build-with-libreac.sh (the documented checkout path). Its fake_box is the far end
-# several tests drive, and it only exists as source.
+# libreac IS THE PUBLISHED PACKAGE. `dnf builddep packaging/reac-pw.spec` installs libreac-devel,
+# libreac-transport-devel and libreac-tests (the far end several tests drive, fake_box) from the
+# FreeMixer channel at the floor and ceiling the spec declares; nothing of libreac is cloned or built here.
 #
 # THE VERDICT is tools/ci-suite.sh's: any FAIL, AND any netns test that did not report OK.
 # This runner can run all of them, so a SKIP here is a test that did not run.
@@ -39,7 +39,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LIBREAC_REF: v1.7.0
   # reac-protocol's facts, pinned to the commit facts/ was vendored from (tools/facts.py
   # drift checks the copy against it; tools/facts-perturb-check.sh perturbs it).
   REAC_PROTOCOL_REF: 26b16db9fc844820fed8adc26a342f6b86f3a1ba
@@ -54,9 +53,6 @@ jobs:
 
       - name: Public hygiene (no tracked .pyc, every source has its SPDX + Copyright header)
         run: bash -o pipefail tools/check-public-hygiene.sh
-
-      - name: libreac ${{ env.LIBREAC_REF }}
-        run: git clone --depth 1 --branch "$LIBREAC_REF" https://github.com/FreeREAC/libreac.git ../libreac
 
       - name: reac-protocol ${{ env.REAC_PROTOCOL_REF }}
         run: |
@@ -86,12 +82,15 @@ jobs:
             -v "$GITHUB_WORKSPACE/..:/w" -w /w/"$(basename "$GITHUB_WORKSPACE")" \
             fedora:44 bash -euxo pipefail -c '
               dnf install -y -q --setopt=install_weak_deps=False \
-                gcc make git meson ninja-build pkgconf-pkg-config python3 python3-pyyaml \
+                gcc make git meson ninja-build pkgconf-pkg-config python3 python3-pyyaml dnf5-plugins \
                 pipewire pipewire-devel pipewire-utils wireplumber \
                 iproute iproute-tc tcpdump libcap procps-ng util-linux which findutils \
                 diffutils gawk sed grep coreutils rsync
               git config --global --add safe.directory "*"
-              tools/ci-suite.sh ../libreac build-ci ../reac-protocol
+              # the channel, then everything the spec BuildRequires: libreac, libreac-transport, libreac-tests
+              dnf config-manager addrepo --setopt=retries=10 --from-repofile=https://freemixer.github.io/rpm/freemixer.repo
+              dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
+              tools/ci-suite.sh build-ci ../reac-protocol
               # THE TARBALL THE RPM IS BUILT FROM, CHECKED THE WAY THE RPM CHECKS IT.
               # The release builds its source tarball with `git archive`, so only committed
               # files reach the spec %check. Everything above runs in the checkout, which
@@ -102,7 +101,7 @@ jobs:
               T=$(mktemp -d)
               git archive --prefix=reac-pw-test/ HEAD | tar -x -C "$T"
               (cd "$T"/reac-pw-test &&
-               PKG_CONFIG_PATH="$REPO/build-ci/_libreac-prefix/lib/pkgconfig" meson setup _build >/dev/null &&
+               meson setup _build >/dev/null &&
                meson test -C _build --no-suite netns --no-suite load --print-errorlogs)
             '
 
