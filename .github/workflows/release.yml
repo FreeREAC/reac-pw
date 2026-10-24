@@ -27,7 +27,13 @@ jobs:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}
       needs-mod-host: false
-    secrets: inherit
+    secrets:
+      OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.OPENMIXER_PACKAGES_SIGNING_KEY }}
+      PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
+      # The shared workflows still read SITE_GPG_KEY for the publish commits; this organisation holds the
+      # commit key under its adopted name (platform docs/operations/SIGNING_KEYS_TRANSITION.md, step 2).
+      SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
+      DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
   deb:
     uses: FreeMixer/.github/.github/workflows/build-deb.yml@main
@@ -36,4 +42,12 @@ jobs:
       publish: ${{ github.ref_type == 'tag' }}
       dependencies: ''
       requires: libreac6 libreac-transport7
-    secrets: inherit
+    secrets:
+      OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.OPENMIXER_PACKAGES_SIGNING_KEY }}
+      RPM_GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
+      RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
+      PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
+      # The shared workflows still read SITE_GPG_KEY for the publish commits; this organisation holds the
+      # commit key under its adopted name (platform docs/operations/SIGNING_KEYS_TRANSITION.md, step 2).
+      SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
+      DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
