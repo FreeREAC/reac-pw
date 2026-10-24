@@ -30,7 +30,9 @@ jobs:
     secrets:
       OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.OPENMIXER_PACKAGES_SIGNING_KEY }}
       PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
-      SITE_GPG_KEY: ${{ secrets.SITE_GPG_KEY }}
+      # The shared workflows still read SITE_GPG_KEY for the publish commits; this organisation holds the
+      # commit key under its adopted name (platform docs/operations/SIGNING_KEYS_TRANSITION.md, step 2).
+      SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
   deb:
@@ -45,5 +47,7 @@ jobs:
       RPM_GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
       RPM_GPG_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
       PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
-      SITE_GPG_KEY: ${{ secrets.SITE_GPG_KEY }}
+      # The shared workflows still read SITE_GPG_KEY for the publish commits; this organisation holds the
+      # commit key under its adopted name (platform docs/operations/SIGNING_KEYS_TRANSITION.md, step 2).
+      SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
