@@ -5,7 +5,7 @@
  *
  * reac-pw is a daemon in its own right, and a permanent rig wants its patch to exist
  * before the box is powered: the nodes named and sized from boot, not appearing halfway
- * through a soundcheck. openmixer is the opposite case and autodetects; the two are
+ * through a soundcheck. a console is the opposite case and autodetects; the two are
  * complementary, not alternatives (operator, 2026-08-22).
  *
  * WHAT THE PIN MAY NOT DO. `--box` was retired on 2026-08-05 for a real defect: it

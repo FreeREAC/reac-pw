@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* ProcessLatency smoother (task #152): the reac:playback graph->wire delay must
+/* ProcessLatency smoother: the reac:playback graph->wire delay must
  * be advertised as a STABLE contract, not the raw ring depth — which sawtooths
  * ~38..113 frames (measured live) with every producer burst and so re-advertised
  * pw_filter_update_params on essentially every 200 ms poll. This asserts:

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* Virtual-stagebox head-amp -> INPUT GAIN (task #202). A real box applies the
+/* Virtual-stagebox head-amp -> INPUT GAIN. A real box applies the
  * console's per-channel SENS/PAD to its mic preamp before the A/D; a virtual box
  * has no preamp, so it must apply the equivalent DIGITAL gain to the audio it
  * returns upstream, or the master's head-amp is inert and the box can't be used to

@@ -31,7 +31,7 @@
 #include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
-#include "reac_headamp_prop.h"   /* live head-amp control parse (task #203) */
+#include "reac_headamp_prop.h"   /* live head-amp control parse */
 #include "reac_headamp_state.h"  /* the head-amp door's READ side: asserted + refusal */
 #include "reac_rate_cfg.h"       /* live reac.cfg.rate parse + decision core */
 #include "reac_facts_pw.h"       /* the protocol's numbers, from their one declaration */
@@ -44,7 +44,7 @@
 #include "reac_node_ensure.h"    /* the shared same-box-or-rebuild decision (§ below) */
 #include "reac_box_row.h"        /* matched row, or one built from the declared widths */
 #include <reac/reac_arbitration.h>
-#include "reac_lat.h"        /* ProcessLatency smoothing (task #152) */
+#include "reac_lat.h"        /* ProcessLatency smoothing */
 #include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
 #include <reac/transport/reac_etf_qdisc.h> /* REAC_ETF_QDISC_DELTA_NS — the lead's other term */
 #include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
@@ -80,7 +80,7 @@
  * gain saturates cleanly rather than wrapping. */
 #define REAC_GAIN_VOL_MAX   10.0f
 
-/* Graph->wire delay (task #152). reac:playback is the audio endpoint (the wire),
+/* Graph->wire delay. reac:playback is the audio endpoint (the wire),
  * so the delay a sample sees is the 12-sample staging accumulator plus the pacer
  * frame-ring depth — each queued frame is REAC_SAMPLES_PER_PKT samples clocked
  * out one per slot. We advertise it as SPA_PARAM_ProcessLatency so PipeWire's
@@ -101,7 +101,7 @@ struct reac_sink_node {
 	 * discarded in one measured run, audible as granulated, saturated sound. The REAC
 	 * pace and the rig pace are independent and conversion belongs here, in the
 	 * adapter, so this is a pw_stream declaring the REAC rate in its FORMAT and
-	 * PipeWire resamples. See 2026-08-21-reac-adapter-pace-and-port-contract in openmixer. */
+	 * PipeWire resamples. */
 	struct pw_stream *stream;
 	struct reac_pacer pacer;
 	int pacer_open;
@@ -162,7 +162,7 @@ struct reac_sink_node {
 	float chan_cur[REAC_MAX_CHANNELS];
 	float ramp_step;
 
-	/* reac.link-state / reac.box-model / reac.box-width (task #154's stagebox-
+	/* reac.link-state / reac.box-model / reac.box-width (stagebox-
 	 * badge need): MAIN-LOOP-only shadow of what was last stamped into the
 	 * filter's node properties, so on_log_timer only calls
 	 * pw_filter_update_properties when something actually changed. Sourced from
@@ -262,7 +262,7 @@ struct reac_sink_node {
 	struct reac_rx *rate_src;
 	uint32_t box_ppm_seq;
 
-	/* reac.discovery.* (task #178): MAIN-LOOP-only shadow of the seq last stamped into
+	/* reac.discovery.*: MAIN-LOOP-only shadow of the seq last stamped into
 	 * the filter's node properties, so on_log_timer re-publishes only when the discovery
 	 * table actually changed — the reac.link-state pattern above, keyed on seq.
 	 * Initialised to 0 to match the "0"/"[]" seeded at node creation: seq 0 is a REAL,
@@ -292,7 +292,7 @@ struct reac_sink_node {
 	uint64_t arb_mac_last;
 	const char *disco_ifname;               /* the segment we can honestly speak for */
 
-	/* ProcessLatency smoother (task #152): EMA of the drain-observed ring depth +
+	/* ProcessLatency smoother: EMA of the drain-observed ring depth +
 	 * re-advertise hysteresis, driven from the 200 ms log timer. See reac_lat.h. */
 	struct reac_lat lat;
 
@@ -569,7 +569,7 @@ static uint32_t sink_build_params(struct reac_sink_node *n, struct spa_pod_build
 		SPA_PROP_INFO_container,   SPA_POD_Id(SPA_TYPE_Array));
 
 	/* SPA_PROP_params is the one extensible (key,value) bag both the head-amp
-	 * control (task #203) and the runtime rate control
+	 * control and the runtime rate control
 	 * (2026-08-26-reac-runtime-config) ride — one PropInfo per underlying
 	 * SPA prop id, so both keys are named in this single entry rather than
 	 * two competing PropInfo objects with the same id. Advertised alongside
@@ -773,7 +773,7 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
 static void sink_door_assert(struct reac_sink_node *n, const struct spa_pod *param)
 {
 
-	/* LIVE head-amp control (task #203): the SAME Props object may carry per-channel
+	/* LIVE head-amp control: the SAME Props object may carry per-channel
 	 * phantom/pad/sens changes under SPA_PROP_params ("reac.headamp.<ch>.<param>").
 	 * Parse them (pure, no state touched here) and hand each to the pacer's lock-free
 	 * command ring — the RT pacer thread applies them to the head-amp DMX send table,
@@ -1411,7 +1411,7 @@ static void sink_publish_headamp_props(struct reac_sink_node *n)
 }
 
 /* MAIN LOOP: stamp reac.discovery.* — WHAT IS ON THIS SEGMENT, as opposed to what this
- * master joined (task #178). The engine cannot do this itself: openmixer runs as a
+ * master joined. The engine cannot do this itself: a console may run as a
  * `systemctl --user` unit whose node has no CAP_NET_RAW (measured: CapEff 0), a user
  * manager cannot grant a capability it does not hold, and setcap on the shared `node`
  * binary would arm every Node process on the box. reac-pw already holds the capability
@@ -1543,8 +1543,7 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
  *
  * Published only when a health window closes (10 s), and every value is a rate
  * over that window, so a consumer that skips updates loses resolution and nothing
- * else. That is what openmixer's telemetry contract asks for: its own SSE,
- * latest-wins, skip when late, never accumulate. */
+ * else. That is what a console's telemetry contract asks for: latest-wins, skip when late, never accumulate. */
 /* reac-pw's own health keys, beside libreac's REAC_PROP_HEALTH_* (reac_link_state.h).
  * The library owns the figures every backend has; these four exist because the ETF
  * backend split `late` into a wire fault and a thread figure, and a consumer reading
@@ -1965,7 +1964,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			/* NO node.rate: on a filter that was a REQUEST for the graph to run at
 			 * the REAC rate, which an RME-driven graph refuses. The rate that matters
 			 * is the one in our FORMAT, which the adapter resamples from. */
-			/* Correct-at-(re)build badge props (task #154): seeded to the "probing/
+			/* Correct-at-(re)build badge props: seeded to the "probing/
 			 * none/0x0" baseline and immediately re-stamped from the pacer below.
 			 * Kept live by sink_publish_link_props on the 200 ms log-timer. */
 			REAC_PROP_LINK_STATE, reac_link_state_name(REAC_LINK_PROBING),
@@ -1974,7 +1973,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 			REAC_PROP_BOX_SOURCE, REAC_BOX_SOURCE_NONE,
 			REAC_PROP_BOX_MAC, REAC_BOX_MAC_NONE,
 			REAC_PROP_HEADAMP_BASE, ha_seed_base,
-			/* Head-amp CAPABILITIES (task #205), published on THIS node because it
+			/* Head-amp CAPABILITIES, published on THIS node because it
 			 * is the one that consumes the reac.headamp.<ch>.<param> control keys
 			 * (on_param_changed -> reac_headamp_prop_parse), so a consumer sees the
 			 * box's preamp shape and drives it on ONE node. `channels` seeds "0" and
@@ -1992,7 +1991,7 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 					? REAC_HEADAMP_STATE_APPLIED
 					: REAC_HEADAMP_STATE_UNAVAILABLE,
 			REAC_PROP_HEADAMP_REFUSED, reac_headamp_refuse_code(ha_seed_cap),
-			/* Correct-at-(re)build discovery (task #178): from this node's t=0 we are
+			/* Correct-at-(re)build discovery: from this node's t=0 we are
 			 * listening on this NIC; seq "0"/"[]" is re-stamped from the pacer's disco
 			 * table below. Kept live by sink_publish_disco_props on the log-timer. */
 			REAC_PROP_DISCO_SCOPE, n->disco_ifname ? n->disco_ifname : "",

@@ -27,7 +27,7 @@
  * libreac's include/reac/reac_cfg.h declares REAC_CFG_ROLE_PROP/_MASTER/
  * _SLAVE; this pins reac-pw's own copy to the exact values without needing
  * that sibling repo checked out (a build-time, not a source-parse, pin —
- * the cross-repo byte-for-byte parse lives in openmixer's conformance test
+ * the cross-repo byte-for-byte parse belongs to a consumer's conformance test
  * once a shared vocabulary increment mirrors this module's answer side). */
 static int test_wire_shape_matches_libreac(void)
 {

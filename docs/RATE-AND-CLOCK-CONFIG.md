@@ -1,7 +1,7 @@
 # Rate and clock configuration
 
 reac-pw owns the REAC sample rate and the clock for the segments it masters;
-openmixer (or any other console) is a client of that, never a source of it.
+a console is a client of that, never a source of it.
 
 ## The rate
 

@@ -461,8 +461,7 @@ echo "          the announce (REACPW_BOX_MASTER_FRAME=${REACPW_BOX_MASTER_FRAME:
 # ---- 6. THE LAMP IS THE PAIRING, NOT THE HEARING. ---------------------------------
 # The rig, 2026-09-09: "S-0808 is not enrolled but omx sees it available" — the segment
 # published reac.link-state=established off the RX's own evidence while the box's front
-# lamp sat unlocked. A console keys a stagebox off that key (openmixer's
-# stageboxConnected: only `established` is a locked, streaming box), so it must follow the
+# lamp sat unlocked. A console keys a stagebox off that key (only `established` is a locked, streaming box), so it must follow the
 # ENGINE. The timeline below is that claim, both edges of it, on the graph.
 LS=$(node_prop reac-capture.bmx0 reac.link-state)
 [ "$LS" = "established" ] || {

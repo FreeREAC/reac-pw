@@ -5,7 +5,7 @@
 # REAL SOCKETS: a segment in TAP role puts ZERO frames on the wire, measured from the
 # other end.
 #
-# The ruling (openmixer master-arbitration, eighth amendment, 2026-09-13; the courtship
+# The ruling (2026-09-13; the courtship
 # trials of 2026-09-12): beside a real Roland desk, a courting slave of ours kept that
 # desk's own S-1608 from enrolling for 180 s, and a granted one blocked it outright. So
 # the console gains a role that never transmits — no announce, no join, no grant, no

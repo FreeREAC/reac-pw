@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* SLAVE-role establishment, driven from the gold §13d slave sequence. openmixer as
+/* SLAVE-role establishment, driven from the gold §13d slave sequence. a console as
  * a SLAVE responds to an EXTERNAL master and LOCKS to its cadence; this asserts the
  * pure decision core (reac_slave_step_* over the reac_fsm brain) walks the captured
  * establishment + HOLD exactly:
