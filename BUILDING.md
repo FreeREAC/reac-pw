@@ -15,9 +15,9 @@ sudo apt install meson pkgconf gcc libpipewire-0.3-dev libspa-0.2-dev libreac-de
 The first line is for Fedora, the second for Debian and Raspberry Pi OS; both read the FreeMixer
 channel described in the [README](README.md).
 
-`libreac-transport-devel` is a hard requirement (no fallback). `libreac-devel` is resolved
-the same way, or meson's wrap fetches and builds it as a subproject when no system package
-is new enough. The version floors are the ones `meson.build` declares.
+`libreac-devel` and `libreac-transport-devel` are hard requirements, found by pkg-config; nothing of
+libreac is fetched or bundled. The version floors are the ones `meson.build` declares, and the spec
+and `debian/control` add the ceiling (the next minor).
 
 ## Build and test
 
@@ -40,29 +40,19 @@ the inode and every relink drops them, so a freshly compiled `reac-pw` cannot op
 socket. `tools/build.sh [builddir]` compiles, sets
 `cap_net_raw,cap_net_admin,cap_sys_nice=ep` and refuses if `getcap` does not show them.
 
-## Against a libreac checkout
-
-When the libreac you need is not released yet, build against a sibling checkout with
-nothing installed:
-
-```
-tools/build-with-libreac.sh ../libreac [builddir] [-- meson-test-args...]
-```
-
-It builds libreac into a static prefix inside the build directory and puts that prefix
-first on `PKG_CONFIG_PATH`, so an installed libreac of another version is never picked up.
-
 ## The CI suite
 
 `.github/workflows/test.yml` runs `tools/ci-suite.sh` in a privileged `fedora:44`
-container, against libreac at the tag the workflow pins (`LIBREAC_REF`). The same script
-runs on a desk:
+container, against the libreac packages of the FreeMixer channel, which `dnf builddep
+packaging/reac-pw.spec` installs at the floor and ceiling the spec declares (`libreac-devel`,
+`libreac-transport-devel` and `libreac-tests`, which carries `fake_box`, the far end several tests
+drive). The same script runs on a desk with those packages installed:
 
 ```
-tools/ci-suite.sh ../libreac build-ci [../reac-protocol]
+tools/ci-suite.sh [builddir] [../reac-protocol]
 ```
 
-It builds libreac's `fake_box` (the far end several tests drive), runs the unit suite,
+It builds against the installed libreac, runs the unit suite,
 then the `netns` suite, and fails if any namespace test did not report OK. With a
 reac-protocol checkout it also builds against perturbed protocol facts
 (`tools/facts-perturb-check.sh`).
