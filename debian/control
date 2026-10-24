@@ -12,7 +12,7 @@ Build-Depends: debhelper-compat (= 13),
  libreac-dev (<< 1.8~),
  libreac-transport-dev (>= 1.7.0),
  libreac-transport-dev (<< 1.8~),
- libreac-tests (>= 1.7.2~),
+ libreac-tests (>= 1.7.3~),
  libreac-tests (<< 1.8~)
 Standards-Version: 4.6.2
 Homepage: https://github.com/FreeREAC/reac-pw

@@ -28,8 +28,8 @@ BuildRequires:  pkgconfig(libreac) < 1.8
 BuildRequires:  pkgconfig(libreac-transport) >= 1.7.0
 BuildRequires:  pkgconfig(libreac-transport) < 1.8
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships libreac-tests, and the minor after it
-BuildRequires:  libreac-tests >= 1.7.2
+# ships fake_box (libreac-tests 1.7.3), and the minor after it
+BuildRequires:  libreac-tests >= 1.7.3
 BuildRequires:  libreac-tests < 1.8
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
