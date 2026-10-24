@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.34',
+  version: '1.0.35',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -27,15 +27,11 @@ threads_dep  = dependency('threads')
 # libm only needed by the decode core's siblings; harmless if unused.
 m_dep        = cc.find_library('m', required : false)
 
-# --- libreac: RX/measure core, pulled as a meson subproject -----------------
-# subprojects/libreac.wrap clones FreeREAC/libreac. It builds a static lib and
-# exposes `libreac_dep` (see subprojects/packagefiles/libreac/meson.build, which
-# the wrap drops in via patch_directory since upstream libreac ships only a
-# hand Makefile). The header is <reac/reac.h>. libreac-transport (below) has no
-# fallback subproject yet — it is a hard system-package requirement for now.
-# Prefer the system libreac (Fedora libreac-devel -> found via pkg-config and
-# linked dynamically). Fall back to the bundled subproject where there is no
-# system lib (OpenWrt SDK / a plain dev checkout).
+# --- libreac: RX/measure core, the installed package ----------------------
+# libreac-devel (RPM) / libreac-dev (deb) from the FreeMixer channel, found by pkg-config and
+# linked dynamically. The floor below is also written, with a ceiling, in packaging/reac-pw.spec
+# and debian/control (tests/libreac-is-a-bounded-package-dependency.sh keeps them so); nothing of
+# libreac is fetched, cloned or bundled. The header is <reac/reac.h>.
 # >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
 # clean-len rule, the ENCODE side (since 0.4.0 — reac_braid_encode +
 # reac_downstream_build) AND, since 0.5.0, a reac_decode() that reads the SAME
@@ -100,14 +96,11 @@ m_dep        = cc.find_library('m', required : false)
 # reac_box_facts.h (the family off the hw block, the derived name), the model catalogue
 # rename, the declared widths in discovery, the identity re-poll and the S-0808 name
 # reassembly. An older header does not compile.
-libreac_dep = dependency('libreac', version : '>=1.7.0',
-  fallback : ['libreac', 'libreac_dep'],
-  required : true)
+libreac_dep = dependency('libreac', version : '>=1.7.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
-# compiled here as src/*.c now live in this library, unchanged. No fallback subproject yet
-# -- a checkout without pkgconfig(libreac-transport) simply fails to configure, same as any
+# compiled here as src/*.c now live in this library, unchanged. # -- a machine without pkgconfig(libreac-transport) simply fails to configure, same as any
 # other required system dependency.
 # >=1.1.0: struct reac_pacer embeds libreac 1.1.0's grown reac_identity, so it went
 # 24304 -> 24312 bytes and its soname moved to libreac-transport.so.4. This build
@@ -266,6 +259,12 @@ endif
 test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
   args : rt_single_door_args)
+
+# --- source sweep: NO PINS (reac-pw#23) --------------------------------------
+# libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
+test('libreac_is_a_bounded_package_dependency',
+  find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
+  args : [meson.current_source_dir()])
 
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',
