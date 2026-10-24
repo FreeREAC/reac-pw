@@ -74,11 +74,11 @@ struct reac_source_node_cfg {
  *   NULL/"" keeps the bare "reac-capture" (single-box / back-compat).
  * `label` = optional operator box name for the node DESCRIPTION only
  *   (e.g. "Drums" -> "Drums — 16 ch (REAC box inputs)"). Port names stay the stable
- *   "capture_NN" so a saved openmixer patch keeps linking; the box identity is on
+ *   "capture_NN" so a saved patch keeps linking; the box identity is on
  *   the node (name + description). NULL/"" -> the role-default description.
  * `master_role` = 1 when this process runs --role master (a reac_pacer + master
  *   FSM exists, or is about to). Stamps the CREATE-TIME reac.link-state /
- *   reac.box-model / reac.box-width properties (task #154's stagebox-badge
+ *   reac.box-model / reac.box-width properties (stagebox-badge
  *   need) at "probing"/"none"/"0x0" — a real master enters PROBING
  *   unconditionally on its first frame (#130), so that is truthful from t=0.
  *   0 (slave role) omits the three keys entirely: the slave-side link state
@@ -113,7 +113,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 
 void reac_source_node_destroy(struct reac_source_node *n);
 
-/* Live-update the reac-capture node's badge props (task #154 / issue #208). This node
+/* Live-update the reac-capture node's badge props. This node
  * is built before the pacer exists and has no pacer handle or timer of its own, so its
  * create-time seed (probing/none/0x0) would otherwise never change even after the box
  * establishes. The reac-playback sink — which DOES own the pacer + a main-loop timer —
@@ -151,7 +151,7 @@ int reac_source_node_badge_stamped(const struct reac_source_node *n);
  * RX's own evidence — frames arriving and decoding — on 0.5.2's reasoning that a
  * receive-only join IS the slave role performed. That reasoning went with the receive-only
  * join: since 0.5.6 the daemon actually ENROLS with a box on M, and the console keys a
- * stagebox off `reac.link-state` (openmixer's `stageboxConnected`: only `established` is a
+ * stagebox off `reac.link-state` (only `established` is a
  * locked, streaming box). The rig said it plainly on 2026-09-09 — "S-0808 is not enrolled
  * but omx sees it available", with the box's own lamp unlocked. A box we can merely HEAR is
  * not a box we have joined, so this is now the slave engine's own ESTABLISHED flag:

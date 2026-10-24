@@ -14,8 +14,8 @@
  * never a target that spells out the full bus path. Building `<root>/<ifname>/device` as a
  * plain absolute-target symlink (this test's first draft) does not exercise that shape at
  * all: a single readlink() on an absolute-target symlink returns the very string a fix is
- * supposed to be needed to obtain, so the sabotage check (revert to a single readlink(), as
- * openmixer's classifyBus does) passed GREEN against the wrong fixture — caught only by
+ * supposed to be needed to obtain, so the sabotage check (revert to a single readlink(), as a naive
+ * implementation does) passed GREEN against the wrong fixture — caught only by
  * actually running the sabotage, per false-signals discipline. */
 #include <reac/transport/reac_ifname.h>
 
