@@ -5782,6 +5782,24 @@ static void segconf_announce(void)
 			        sg->knock_set ? sg->knock_file : "",
 			        sg->knock_set ? ")" : "");
 		}
+		/* `ignore = yes` IS HONOURED AND, SINCE #40, RARELY NEEDED. It was the #31
+		 * workaround for a trunk NIC flooded on silence; a silent wire is now listened to
+		 * and knocked on, and a trunk parent goes quiet once its VLANs' tags are heard. One
+		 * line, so a file written for the old daemon says what it still does. */
+		char ign[160] = "";
+		size_t in = 0;
+		int n_ign = 0;
+		for (int i = 0; i < g_segconf.n; i++)
+			if (g_segconf.seg[i].ignore && in + 2 < sizeof ign) {
+				in += (size_t)snprintf(ign + in, sizeof ign - in, "%s%s", n_ign ? ", " : "",
+				                       g_segconf.seg[i].name);
+				n_ign++;
+			}
+		if (n_ign)
+			fprintf(stderr, "reac-pw: `ignore = yes` on %s is honoured: never listened to, "
+			        "never sent on. It is no longer needed for a trunk NIC or a NIC with no REAC "
+			        "on it (such a wire is listened to and knocked on, never streamed at); keep "
+			        "it only to leave that NIC untouched\n", ign);
 	}
 	for (int i = 0; i < g_segconf.n_refusals; i++)
 		fprintf(stderr, "reac-pw: REFUSED %s\n", g_segconf.refusal[i]);
