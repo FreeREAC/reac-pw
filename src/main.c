@@ -92,6 +92,7 @@
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include <reac/reac_knock.h>      /* waking a cold box on a wire nobody pinned */
 #include "reac_knock_wire.h"      /* ... with a bounded knock, never the stream (#40) */
+#include "reac_empty_master.h"    /* ... and a master that streams at nobody stops (#40) */
 #include <reac/reac_packet_socket.h>        /* the knock's deaf sender, through the one door */
 #include <reac/reac_tapwait.h>    /* how long an unplaced sighting holds the hunt off a wire */
 #include "reac_wake.h"       /* waking a box that DROPPED, which no frame can do */
@@ -1295,10 +1296,14 @@ struct listener {
 	 * filler, which the peer lock refuses as a sighting), and deciding from it destroyed
 	 * a live box-master join — measured, tests/box-master-slave-join.sh. */
 	int follows_nobody_ticks;
-	/* POLLS THIS MASTER HAS STREAMED AT NOBODY (#40): no box recognised, never past
-	 * PROBING, no frame arriving: listener_budget_empty's three facts. An unpinned master
-	 * goes back to listening and knocking past REACPW_EMPTY_MASTER_TICKS. */
-	int empty_master_ticks;
+	/* WHETHER THIS MASTER STREAMS AT NOBODY (#40, reac_empty_master.h): the box it had was
+	 * given up, or it courts with not one box frame arriving. An unpinned master goes back
+	 * to listening and knocking on the poll that says so. */
+	struct reac_empty_master empty;
+	int empty_open;             /* `empty` was initialised for this open */
+	/* A BOX'S ANSWER TO THE KNOCK WAS HANDED TO THIS OPEN'S MASTER: the one case in which the
+	 * roster may say "a box answered" (reac_roster_probing_said). */
+	int knock_answered;
 
 	struct autodetect_ctx adc;
 	struct spa_source *ad_timer;
@@ -5123,44 +5128,53 @@ static void hearing_reevaluate(struct hearing *h, uint64_t now)
  * pinned is started on a box that answered; when that box goes away (unplugged, powered
  * off, switched to M), libreac's master falls back to PROBING and would pour its stream onto
  * the empty wire for as long as the daemon runs, which is the flood of #31 reached the long
- * way round. So a hearing-served master whose three facts say it carries nothing
- * (listener_budget_empty: not past PROBING, no box recognised, no frame arriving) for
- * REACPW_EMPTY_MASTER_TICKS is dropped and the wire re-heard: listening, then the bounded
- * knock, and the box that comes back answers it.
+ * way round. So a hearing-served master that reac_empty_master says streams at nobody (the
+ * box it had was given up by libreac's own ride-through, or it has courted
+ * REAC_EMPTY_MASTER_QUIET_NS with not one box frame) is dropped on that poll and the wire
+ * re-heard: listening, then the knock, and the box that comes back answers it.
  *
- * TEN SECONDS, AND WHY NOT LESS. The RX latch alone takes REAC_SEGMENT_HEARD_QUIET_TICKS
- * (5 s) to say "nothing is arriving", and an enrolment in progress is never empty: a box that
- * answered the knock streams to its master, which keeps the latch set, and a box that
- * declared itself is recognised. It is also below the wake ladder's 12 s grace
- * (REAC_WAKE_GRACE_NS), so for an unpinned wire it is the knock's ladder, not the stream's,
- * that makes the PHY edge a dropped box needs: one ladder per silent wire, and it runs at
- * the knock's rate.
+ * It is well inside the wake ladder's 12 s grace (REAC_WAKE_GRACE_NS), so for an unpinned
+ * wire it is the knock's ladder, not the stream's, that makes the PHY edge a dropped box
+ * needs: one ladder per silent wire, and it runs at the knock's rate.
  *
  * A PIN IS EXEMPT. `[segment X] role = master` asks for a master that drives on link, with
  * or without a box; the operator answered for that wire. */
-#define REACPW_EMPTY_MASTER_TICKS 50   /* 200 ms polls: 10 s */
-
 static void hearing_rehear_empty_masters(struct hearing *h, uint64_t now)
 {
 	for (int i = 0; i < h->n_slots; i++) {
 		struct listener *L = &h->listeners[i];
 		if (!L->opened || L->cfg.door_only || L->cfg.tap || L->cfg.role != REAC_ROLE_MASTER ||
-		    L->cfg.role_pinned || !L->cfg.rxcfg.source || L->cfg.rxcfg.kind != REAC_RX_LIVE)
-			continue;
-		if (!listener_budget_empty(L)) {
-			L->empty_master_ticks = 0;
+		    L->cfg.role_pinned || !L->cfg.rxcfg.source || L->cfg.rxcfg.kind != REAC_RX_LIVE) {
+			L->empty_open = 0;
 			continue;
 		}
-		if (++L->empty_master_ticks < REACPW_EMPTY_MASTER_TICKS)
+		struct reac_wake_obs o = { 0 };
+		if (!reac_sink_node_wake_obs(L->sink, &o))
+			continue;           /* no pacer yet: nothing streams */
+		if (!L->empty_open) {
+			reac_empty_master_init(&L->empty, now, o.rx_box_frames);
+			L->empty_open = 1;
+			continue;
+		}
+		const int had_box = L->empty.was_past;
+		if (!reac_empty_master_step(&L->empty, now, o.rx_box_frames,
+		                            reac_sink_node_past_probing(L->sink)))
 			continue;
 		char name[IFNAMSIZ];
 		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source);
 		if (!hearing_listener(h, name))
 			continue;               /* a --live segment: not one this hearing serves */
-		fprintf(stderr, "reac-pw: [%s] the master here has had no box for %d s (no box "
-		        "recognised, nothing granted, not one frame arriving), so it stops "
-		        "streaming at nobody: back to LISTENING, and to the bounded knock that the "
-		        "box answers when it comes back\n", name, REACPW_EMPTY_MASTER_TICKS / 5);
+		L->empty_open = 0;
+		if (had_box)
+			fprintf(stderr, "reac-pw: [%s] the box this master enrolled is gone (the master "
+			        "gave it up after its own ride-through), so it stops streaming at "
+			        "nobody: back to LISTENING, and to the knock that the box answers when "
+			        "it comes back\n", name);
+		else
+			fprintf(stderr, "reac-pw: [%s] the master here has heard not one box frame in "
+			        "%.1f s, so it stops streaming at nobody: back to LISTENING, and to the "
+			        "knock that the box answers when it comes back\n", name,
+			        (double)REAC_EMPTY_MASTER_QUIET_NS / 1e9);
 		hearing_drop(h, name, "no box on the wire: back to listening and knocking");
 		sniffer_close(h, name);
 		sniffer_open_ex(h, name, 0);
