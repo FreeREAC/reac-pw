@@ -1293,6 +1293,10 @@ struct listener {
 	 * filler, which the peer lock refuses as a sighting), and deciding from it destroyed
 	 * a live box-master join — measured, tests/box-master-slave-join.sh. */
 	int follows_nobody_ticks;
+	/* POLLS THIS MASTER HAS STREAMED AT NOBODY (#40): no box recognised, never past
+	 * PROBING, no frame arriving — listener_budget_empty's three facts. An unpinned master
+	 * goes back to listening and knocking past REACPW_EMPTY_MASTER_TICKS. */
+	int empty_master_ticks;
 
 	struct autodetect_ctx adc;
 	struct spa_source *ad_timer;
@@ -5061,6 +5065,55 @@ static void hearing_reevaluate(struct hearing *h, uint64_t now)
 	}
 }
 
+/* A MASTER THAT STREAMS AT NOBODY GOES BACK TO KNOCKING (#40). The master on a wire nobody
+ * pinned is started on a box that answered; when that box goes away — unplugged, powered
+ * off, switched to M — libreac's master falls back to PROBING and would pour its stream onto
+ * the empty wire for as long as the daemon runs, which is the flood of #31 reached the long
+ * way round. So a hearing-served master whose three facts say it carries nothing
+ * (listener_budget_empty: not past PROBING, no box recognised, no frame arriving) for
+ * REACPW_EMPTY_MASTER_TICKS is dropped and the wire re-heard: listening, then the bounded
+ * knock, and the box that comes back answers it.
+ *
+ * TEN SECONDS, AND WHY NOT LESS. The RX latch alone takes REAC_SEGMENT_HEARD_QUIET_TICKS
+ * (5 s) to say "nothing is arriving", and an enrolment in progress is never empty: a box that
+ * answered the knock streams to its master, which keeps the latch set, and a box that
+ * declared itself is recognised. It is also below the wake ladder's 12 s grace
+ * (REAC_WAKE_GRACE_NS), so for an unpinned wire it is the knock's ladder, not the stream's,
+ * that makes the PHY edge a dropped box needs: one ladder per silent wire, and it runs at
+ * the knock's rate.
+ *
+ * A PIN IS EXEMPT. `[segment X] role = master` asks for a master that drives on link, with
+ * or without a box; the operator answered for that wire. */
+#define REACPW_EMPTY_MASTER_TICKS 50   /* 200 ms polls: 10 s */
+
+static void hearing_rehear_empty_masters(struct hearing *h, uint64_t now)
+{
+	for (int i = 0; i < h->n_slots; i++) {
+		struct listener *L = &h->listeners[i];
+		if (!L->opened || L->cfg.door_only || L->cfg.tap || L->cfg.role != REAC_ROLE_MASTER ||
+		    L->cfg.role_pinned || !L->cfg.rxcfg.source || L->cfg.rxcfg.kind != REAC_RX_LIVE)
+			continue;
+		if (!listener_budget_empty(L)) {
+			L->empty_master_ticks = 0;
+			continue;
+		}
+		if (++L->empty_master_ticks < REACPW_EMPTY_MASTER_TICKS)
+			continue;
+		char name[IFNAMSIZ];
+		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source);
+		if (!hearing_listener(h, name))
+			continue;               /* a --live segment: not one this hearing serves */
+		fprintf(stderr, "reac-pw: [%s] the master here has had no box for %d s — no box "
+		        "recognised, nothing granted, not one frame arriving — so it stops "
+		        "streaming at nobody: back to LISTENING, and to the bounded knock that the "
+		        "box answers when it comes back\n", name, REACPW_EMPTY_MASTER_TICKS / 5);
+		hearing_drop(h, name, "no box on the wire — back to listening and knocking");
+		sniffer_close(h, name);
+		sniffer_open_ex(h, name, 0);
+		reac_ifscan_serve_failed(&h->scan, name, now);
+	}
+}
+
 static void hearing_poll(struct hearing *h)
 {
 	if (!h->enabled)
@@ -5075,6 +5128,7 @@ static void hearing_poll(struct hearing *h)
 	hearing_hunt(h, now);
 	hearing_join_box_master_on_pinned(h, now);
 	hearing_reevaluate(h, now);
+	hearing_rehear_empty_masters(h, now);
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	hearing_apply(h);
