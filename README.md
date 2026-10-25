@@ -156,26 +156,57 @@ environment can change a role.
 
 ### A silent wire: listen, then knock
 
-A master never pours its stream onto a wire to find out whether a box is there. A wire
-that carries no REAC frame for 500 ms has no master on it, and a cold stagebox on it says
-nothing until a master speaks: it answers one COMPLETE scene transfer and ignores an
-interrupted one (libreac `reac_knock.h`, `tools/fake_box.c`). So the daemon KNOCKS: it
-sends what a hunting master's control cycle carries and nothing else, the scene transfer
-(one header, 341 chunks, the final chunk), the channel map and the master announce, at
-the slots a real desk sends them, and leaves every audio filler slot empty. That is at
-most 347 frames per cycle (10778 slots at 48 kHz, about 2.7 s at every rate), about
-1.5 Mbit/s averaged and 6 Mbit/s inside the 0.68 s chunk burst, where the stream is 4000
-or 8000 frames a second (about 48 Mbit/s at 48 kHz, 96 Mbit/s at 96 kHz).
+A master never pours its stream onto a wire, for as long as the daemon runs, to find out
+whether a box is there. A wire that carries no REAC frame for 500 ms has no master on it,
+and a cold stagebox on it says nothing until a master speaks. So the daemon KNOCKS, by a
+declared plan ([docs/KNOCK.md](docs/KNOCK.md) has the table, the numbers and every
+citation):
+
+- a **control knock** is one hunting cycle of libreac's own master with every audio
+  filler slot left empty: the scene transfer (header, 341 chunks, final), the channel map
+  and the announces, 347 frames per 2.7 s cycle, 341 of them inside a 0.68 s burst;
+- a **stream knock** is that cycle whole, filler included (10 778 frames at 48 kHz,
+  21 556 at 96 kHz): what a real box was seen to answer. The default plan sends two
+  control knocks, then one stream knock, and at most three stream knocks until something
+  is heard on the wire;
+- the period doubles with every knock nothing answers (2.7, 5.4, 10.8, 21.6 s) up to
+  30 s, so a wire with nothing on it carries one control cycle every 30 s once the stream
+  knocks are spent. A frame heard after a silence, or a link that comes up, starts the
+  plan again.
+
+**What is proven and what is not.** A real box was recorded answering the continuous
+stream, never a lone announce; NO record shows a real box answering the control knock
+alone, and none shows one refusing it. libreac's `fake_box` answers it, because it ignores
+filler by construction. So the stream knock stays in the default plan until the rig check
+in [docs/KNOCK.md](docs/KNOCK.md) has been run per box family; `knock = control` or
+`knock = stream` on one segment in the conf is how that check is run, with no rebuild.
 
 The first frame heard from a box ends the knock. The master stream starts only then, and
 the box's answer is handed to it, so the box that committed the knocked scene is enrolled
-by the master that follows. A master whose box goes away and stays silent through the
-wake ladder goes back to listening and knocking; it does not stream at nobody.
+by the master that follows. A master whose box goes away stops streaming on the poll that
+shows it: at once when libreac's master gives an enrolled box up (its own ~6.5 s
+ride-through, as a desk does), or 2 s after the last box frame while it is still courting;
+then the wire is listened to and knocked on again.
 
-A box straight on a NIC, a box on an access port behind a trunk, and one box per VLAN
-across several switches all enrol this way with nothing written in a file. A trunk parent
+A box straight on a NIC is found this way with nothing written in a file. A trunk parent
 knocks untagged like any NIC until tagged REAC is heard on one of its VLANs; from then on
 it is not a segment, it stops knocking, and its VLAN sub-interfaces are the segments.
+
+### A box behind a trunk
+
+A VLAN's sub-interface is created when its tag is heard on the parent (a tagged frame of
+any kind names the VLAN). A box that already speaks names its VLAN by itself, and so does a
+cold box that powers up, or whose switch port comes up, while the daemon runs: its
+presence flood is tagged on the trunk. A cold box that came up BEFORE the daemon and has
+been silent since sends nothing a trunk can carry, so nothing names its VLAN, and naming
+it as `[segment <nic>.<vid>]` in the conf does not create it either (that rule is the
+2026-09-23 ruling in `src/reac_declared_vlan.h`). For that box, the VLAN sub-interface
+must exist in the host's network config (`ip link add link <nic> name <nic>.<vid> type vlan
+id <vid>`, or a systemd-networkd `.netdev` as in [docs/fedora-network.md](docs/fedora-network.md));
+the daemon then knocks on it like any NIC. Two boxes on two VLANs through two switches
+therefore enrol with no file edited only when each one powers up while the daemon runs;
+otherwise each needs its VLAN in the host's network config. reac-pw#40 has the proposal
+for finding them without that.
 
 To override ONE segment — a switch mirror port, a recorder, a NIC to leave alone —
 write `~/.config/reac-pw/reac-pw.conf` by hand (`[segment IFNAME]` with `role =` or
