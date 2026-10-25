@@ -198,6 +198,16 @@ else
 
 	wait_for "S_SEGMENT_UP.*\[gs0\.11\]" 90 && echo "holder-up yes" || echo "holder-up no"
 	settle $PID gs0.11 2 60
+	# AND THEN A BOX ON THE SIBLING, since #40: a wire nothing is heard on is knocked on and
+	# never asks for the port, so the refusal loop this arm needs is a sibling WITH a box,
+	# heard after the holder has the port and refused on its budget every few seconds. A
+	# second box-side daemon, so the order is forced and not raced.
+	mkdir -p "$RT/boxes2/.config/reac-pw"
+	{ printf '[segment pgs0]\nignore = yes\n'
+	  printf '[segment pgs0.11]\nignore = yes\n'
+	  printf '[segment pgs0.13]\nrole = box\nmodel = s1608\n'
+	} > "$RT/boxes2/.config/reac-pw/reac-pw.conf"
+	$in_peer env HOME="$RT/boxes2" "$BIN" >"$RT/boxes2.log" 2>&1 &
 	wait_for "E_LINK_BUDGET.*\[gs0\.13\]" 60 && echo "refused yes" || echo "refused no"
 	# LET THE REFUSAL LOOP RUN. The holder has a box of its own so it never yields, and
 	# the empty sibling is re-served and re-refused every few seconds -- 690 times in 30

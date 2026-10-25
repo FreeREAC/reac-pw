@@ -91,6 +91,8 @@
 #include <reac/reac_disco.h>      /* the sniffer's bar: a frame that IS REAC gear */
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include <reac/reac_knock.h>      /* waking a cold box on a wire nobody pinned */
+#include "reac_knock_wire.h"      /* ... with a bounded knock, never the stream (#40) */
+#include <reac/reac_packet_socket.h>        /* the knock's deaf sender, through the one door */
 #include <reac/reac_tapwait.h>    /* how long an unplaced sighting holds the hunt off a wire */
 #include "reac_wake.h"       /* waking a box that DROPPED, which no frame can do */
 #include "reac_served_mark.h" /* the alias that tells the host a NIC is a REAC wire */
@@ -1213,6 +1215,11 @@ struct listener_cfg {
 	 * with something on it from one taken on the masterless licence, and only the first
 	 * may take a neighbour's budget. 0 for a `--live` segment: nothing heard it. */
 	int wire_heard;
+	/* WHAT THE BOX ANSWERED THE KNOCK WITH (#40), copied out of the sniffer before it may
+	 * close, for the master this segment opens (reac_sink_cfg.knock_answer). */
+	uint8_t knock_answer[REAC_KNOCK_WIRE_ANSWERS][REAC_FRAME_BYTES];
+	size_t knock_answer_len[REAC_KNOCK_WIRE_ANSWERS];
+	int n_knock_answer;
 	/* THE PASSIVE ROLE (2026-09-13).
 	 * `REAC_ROLE_<segment>=tap` or `--role tap`: serve what is heard and TRANSMIT
 	 * NOTHING — no announce, no join, no grant, no seglock, no TX socket. It is not a
@@ -2124,7 +2131,12 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * REACPW_RATE_MATCH=1. See reac_pacer.h's
 		                               * cfg.rate_match_off for the full measurement —
 		                               * unchanged by this refactor. */
-		                              .rate_match_off = rate_match_off };
+		                              .rate_match_off = rate_match_off,
+		                              /* #40: the box's answer to the knock, for this
+		                               * master to hear before its pacer runs. */
+		                              .knock_answer = c->n_knock_answer ? c->knock_answer : NULL,
+		                              .knock_answer_len = c->knock_answer_len,
+		                              .n_knock_answer = c->n_knock_answer };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
@@ -2747,13 +2759,19 @@ struct sniffer {
 	 * that is served, or a link that goes away, gets a fresh hunt next time. */
 	struct reac_hunt hunt;
 	int undecided_said;         /* the "heard, nothing decides it yet" line, said once */
-	/* THE MASTERLESS OBSERVATION (reac_knock.h). A wire nobody pinned that carries not
-	 * one frame for REAC_KNOCK_LISTEN_NS has no master on it — a master fills every
-	 * audio slot — and is then DRIVEN, because a cold box in slave mode never speaks
-	 * first and a lone announce does not wake one (measured on the rig with 0.5.0-3).
-	 * A PINNED interface does not need it: it is already driving. */
-	struct reac_knock knock;
+	/* THE MASTERLESS OBSERVATION AND THE KNOCK IT BUYS (reac_knock_wire.h, #40). A wire
+	 * nobody pinned that carries not one frame for REAC_KNOCK_LISTEN_NS has no master on
+	 * it, and a cold box in slave mode never speaks first, so it is KNOCKED ON: the scene
+	 * transfer a box answers, at its slots, and no audio filler. It used to be DRIVEN —
+	 * the whole stream onto a wire nothing had been heard on (#31). A PINNED interface
+	 * does not need it: it is already driving. */
+	struct reac_knock_wire kw;
 	int watch_silence;          /* 0 = pinned, so the observation does not apply */
+	int knock_fd;               /* the knock's deaf sender, open only while knocking */
+	int knock_ifindex;
+	int knock_tx_open;
+	struct spa_source *knock_timer;
+	struct hearing *h;
 	/* WHEN THIS SNIFFER LAST HEARD A REAC FRAME (0 = never). The tap-authority wait in
 	 * hearing_hunt is measured from it, so that "something was heard here" can expire
 	 * the way every other fact about a wire does — reac_tapwait.h. */
@@ -2859,6 +2877,12 @@ struct hearing {
 	struct pw_loop *loop;
 	int forced_rate;            /* a whole-invocation --rate, applied to every heard segment */
 	unsigned long served, dropped;
+	/* THE KNOCK'S ANSWER ON ITS WAY TO A MASTER (#40). Set from the sniffer in the SERVE
+	 * verb, read and cleared by the hearing_serve it is set for: the sniffer may close
+	 * between the two, and the answer is the one thing the new master cannot hear again. */
+	uint8_t carry[REAC_KNOCK_WIRE_ANSWERS][REAC_FRAME_BYTES];
+	size_t carry_len[REAC_KNOCK_WIRE_ANSWERS];
+	int n_carry;
 	/* THE DECLARED SEGMENTS (reac_declared_vlan.h): the names the operator wrote, for the
 	 * start-up report. Their netdevs are the heard table's — minted when the VID is heard,
 	 * released when it is silent — since 2026-09-23. */
@@ -3042,6 +3066,129 @@ static struct sniffer *sniffer_find(struct hearing *h, const char *name)
 	return NULL;
 }
 
+/* ---- THE KNOCK'S HANDS: a deaf sender and a timer, open only while knocking (#40) ----
+ *
+ * reac_knock_wire decides what goes out and when; this is the socket and the clock. The
+ * sender is libreac's reac_tx — bound with protocol 0, so it hears nothing and cannot
+ * cancel its own knock — and every frame leaves at the slot the master would send it. */
+
+/* THE CADENCE AND THE ADDRESS THE MASTER ON THIS WIRE WOULD USE, resolved the way
+ * listener_open resolves them: a whole-invocation --rate, else REAC_RATE for this segment,
+ * else the built-in; REAC_SRC_MAC for this segment, else this NIC's own address. A box
+ * commits the scene it was knocked with, and the master that follows must push the same
+ * one from the same address. */
+static void knock_params(struct hearing *h, const char *name, uint8_t src[6], int *fps)
+{
+	struct listener_cfg c;
+	memset(&c, 0, sizeof c);
+	c.rxcfg.kind = REAC_RX_LIVE;
+	c.rxcfg.source = name;
+	snprintf(c.tag, sizeof c.tag, "[%s] ", name);
+	enum reac_conf_layer layer;
+	int hz = h->forced_rate ? h->forced_rate : listener_resolve_rate(&c, &layer);
+	*fps = hz / REAC_SAMPLES_PER_PKT;
+	char v[64];
+	unsigned b[6];
+	if (reac_conf_lookup("REAC_SRC_MAC", name, NULL, v, sizeof v) != REAC_CONF_NONE &&
+	    sscanf(v, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
+		for (int i = 0; i < 6; i++)
+			src[i] = (uint8_t)b[i];
+		return;
+	}
+	(void)reac_mac_default_src(name, src);
+}
+
+static int knock_send(void *ctx, const uint8_t *frame, size_t len)
+{
+	struct sniffer *sn = ctx;
+	struct sockaddr_ll sll;
+	memset(&sll, 0, sizeof sll);
+	sll.sll_family = AF_PACKET;
+	sll.sll_ifindex = sn->knock_ifindex;
+	sll.sll_halen = 6;
+	memset(sll.sll_addr, 0xFF, 6);
+	ssize_t r = sendto(sn->knock_fd, frame, len, MSG_DONTWAIT,
+	                   (struct sockaddr *)&sll, sizeof sll);
+	return r == (ssize_t)len ? 0 : -1;
+}
+
+/* Arm the timer at the knock's next frame, or disarm it. CLOCK_MONOTONIC, absolute, the
+ * clock every deadline here is on. */
+static void knock_arm(struct sniffer *sn)
+{
+	if (!sn->knock_timer)
+		return;
+	struct timespec v = { 0, 0 };
+	if (sn->knock_tx_open && sn->kw.state == REAC_KNOCK_WIRE_KNOCKING && sn->kw.due_ns) {
+		v.tv_sec = (time_t)(sn->kw.due_ns / 1000000000ULL);
+		v.tv_nsec = (long)(sn->kw.due_ns % 1000000000ULL);
+	}
+	pw_loop_update_timer(sn->h->loop, sn->knock_timer, &v, NULL, true);
+}
+
+static void on_knock_timer(void *data, uint64_t expirations)
+{
+	(void)expirations;
+	struct sniffer *sn = data;
+	if (!sn->knock_tx_open)
+		return;
+	const uint64_t errs = sn->kw.send_errors;
+	reac_knock_wire_run(&sn->kw, monotonic_ns(), knock_send, sn);
+	if (sn->kw.send_errors && !errs)
+		reac_code_emit(stderr, "reac-pw", RC_E_KNOCK_TX,
+		        "[%s] the knock could not send a frame (%s) — the wire is still "
+		        "listened to, and a box that speaks first is still heard\n",
+		        sn->name, strerror(errno));
+	knock_arm(sn);
+}
+
+static void knock_start(struct sniffer *sn)
+{
+	if (!sn->knock_tx_open) {
+		/* PROTOCOL 0, BOUND TO THIS NIC: it hears nothing, so it can never answer its own
+		 * knock, and it queues nothing from any other interface (libreac
+		 * reac_packet_socket.h, the door every AF_PACKET socket goes through). */
+		const unsigned idx = if_nametoindex(sn->name);
+		const int fd = idx ? reac_packet_socket_bound((int)idx, 0, SOCK_NONBLOCK | SOCK_CLOEXEC)
+		                   : -1;
+		if (fd < 0) {
+			reac_code_emit(stderr, "reac-pw", RC_E_KNOCK_TX,
+			        "[%s] the knock's sender could not open (%s) — this wire is "
+			        "listened to and NOT knocked on; a box that speaks first is still "
+			        "heard\n", sn->name, strerror(errno));
+			return;
+		}
+		sn->knock_fd = fd;
+		sn->knock_ifindex = (int)idx;
+		sn->knock_tx_open = 1;
+	}
+	if (!sn->knock_timer)
+		sn->knock_timer = pw_loop_add_timer(sn->h->loop, on_knock_timer, sn);
+	knock_arm(sn);
+}
+
+/* Close the sender and disarm the timer. Safe from the sniffer's own io callback: the
+ * timer source is only disarmed here, and destroyed with the sniffer, from the poll. */
+static void knock_stop(struct sniffer *sn)
+{
+	if (sn->knock_tx_open) {
+		close(sn->knock_fd);
+		sn->knock_tx_open = 0;
+	}
+	knock_arm(sn);
+}
+
+/* What the wire answered, said once per knock. */
+static void knock_say_answered(const struct sniffer *sn)
+{
+	const uint8_t *m = sn->kw.answer_src;
+	fprintf(stderr, "reac-pw: [%s] ANSWERED: %02x:%02x:%02x:%02x:%02x:%02x spoke after %llu "
+	        "knock frames (%llu complete scene transfers) — the knock is over, and the "
+	        "master starts on what the wire now shows\n", sn->name,
+	        m[0], m[1], m[2], m[3], m[4], m[5],
+	        (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.pushes);
+}
+
 /* Read a sniffer's socket dry, classify, and tell the table about the first frame that IS
  * REAC gear. Never transmits, never touches a listener, so it is safe to call from the
  * poll as well as from the socket's own callback. */
@@ -3075,7 +3222,16 @@ static void sniffer_drain(struct sniffer *sn)
 		 * every emitting role of ours sources from, reac_mac.h — so a hub or a loopback
 		 * that really does return our frames still cannot make us a peer of ourselves. */
 		if (seen >= 0) {
-			reac_knock_heard(&sn->knock, now);
+			/* AND WHILE KNOCKING, EVIDENCE IS THE ANSWER: a peer whose settled role is a
+			 * box or a master ends the knock, and its control frames are kept for the
+			 * master that will grant it. A flood of unknown-role FILLER does not: that
+			 * box is waiting to hear a master, which is the knock (reac_knock_wire.h). */
+			if (reac_knock_wire_heard(&sn->kw, now, frame, (size_t)n,
+			                          sight.role != REAC_DISCO_ROLE_UNKNOWN) ==
+			    REAC_KNOCK_WIRE_ACT_HUSH) {
+				knock_stop(sn);
+				knock_say_answered(sn);
+			}
 			/* AND THE SAME STAMP IS WHAT THE TAP-AUTHORITY WAIT IS MEASURED FROM:
 			 * "this wire has been heard" is a fact with a time on it, or it is a
 			 * latch. reac_tapwait.h has the nine minutes that cost. */
@@ -3114,6 +3270,11 @@ static void sniffer_close(struct hearing *h, const char *name)
 		return;
 	if (sn->io)
 		pw_loop_destroy_source(h->loop, sn->io);
+	/* THE KNOCK DIES WITH ITS WIRE: a link that went down, or a wire that was served. */
+	if (sn->knock_tx_open)
+		close(sn->knock_fd);
+	if (sn->knock_timer)
+		pw_loop_destroy_source(h->loop, sn->knock_timer);
 	reac_capture_close(&sn->cap);
 	memset(sn, 0, sizeof *sn);
 }
@@ -3273,10 +3434,15 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 	 * defined by putting nothing on the wire at all (eighth amendment). A tap pin
 	 * answers for this segment, so it is served on link like any other pin and has
 	 * nothing to observe. */
-	if (!pinned && !sn->tap_pinned && !reac_ifscan_is_wireless(NULL, name)) {
-		sn->watch_silence = 1;
-		reac_knock_init(&sn->knock, now);
+	sn->h = h;
+	{
+		uint8_t ksrc[6];
+		int kfps;
+		knock_params(h, name, ksrc, &kfps);
+		reac_knock_wire_init(&sn->kw, ksrc, kfps, now);
 	}
+	if (!pinned && !sn->tap_pinned && !reac_ifscan_is_wireless(NULL, name))
+		sn->watch_silence = 1;
 	/* AND A WIRELESS NIC IS NEVER DRIVEN ON SILENCE, even where the operator allowlisted
 	 * it into the scan (`REAC_IFACES_ALLOW_WIRELESS`). That allowlist buys LISTENING: an
 	 * associated Wi-Fi interface is quiet of 0x8819 by nature, so silence there proves
@@ -3454,10 +3620,27 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	 * from holders that have heard nothing, and one taken on the masterless licence
 	 * may not. The hunt is the only thing that knows, and it dies here. */
 	L->cfg.wire_heard = hunt_heard_reac_gear(hunt);
+	/* THE KNOCK'S ANSWER, for the master this open starts (#40, reac_sink_cfg.knock_answer).
+	 * Only a master hears it: a slave or a tap is not who the box reported to. */
+	L->cfg.n_knock_answer = 0;
+	if (h->n_carry > 0 && L->cfg.role == REAC_ROLE_MASTER && !L->cfg.tap && !L->cfg.door_only) {
+		for (int i = 0; i < h->n_carry; i++) {
+			memcpy(L->cfg.knock_answer[i], h->carry[i], h->carry_len[i]);
+			L->cfg.knock_answer_len[i] = h->carry_len[i];
+		}
+		L->cfg.n_knock_answer = h->n_carry;
+		fprintf(stderr, "reac-pw: [%s] handing the box's answer to the knock (%d control "
+		        "frame%s) to the master before it starts, so the box it reported to is the "
+		        "one that grants it\n", name, h->n_carry, h->n_carry == 1 ? "" : "s");
+	}
 	reac_role_swap_init(&L->role_swap, L->cfg.role);
 	/* listener_open cleans up after its own refusal (its contract); a feeder
 	 * that will not start leaves an opened listener to close, as in main(). */
 	int up = listener_open(L, h->loop) == 0;
+	/* The answer was for THIS open's master. A re-open at a new rate or role is a new
+	 * courtship, and replaying a JOIN the box sent to the old one would grant on a stale
+	 * frame. */
+	L->cfg.n_knock_answer = 0;
 	/* A DOOR HAS NO FEEDER. Starting one would decode the very wire this segment
 	 * refused, and the refusal is total: nothing transmitted, nothing received. */
 	/* A TAP'S FEEDERS ARE ALREADY RUNNING — one per stream, started inside
@@ -4261,9 +4444,21 @@ static void hearing_apply(struct hearing *h)
 			int keep = have && reac_watch_keep(sn->hunt.verdict, sn->hunt.pinned);
 			if (have)
 				verdict = sn->hunt;
+			/* AND WHAT THE BOX ANSWERED THE KNOCK WITH goes with the verdict: the
+			 * master that will grant it has to hear it, and cannot hear it again. */
+			h->n_carry = 0;
+			if (have && sn->kw.n_answer > 0) {
+				for (int i = 0; i < sn->kw.n_answer; i++) {
+					memcpy(h->carry[i], sn->kw.answer[i], sn->kw.answer_len[i]);
+					h->carry_len[i] = sn->kw.answer_len[i];
+				}
+				h->n_carry = sn->kw.n_answer;
+				reac_knock_wire_answer_taken(&sn->kw);
+			}
 			if (!keep)
 				sniffer_close(h, ev.name);
 			hearing_serve(h, ev.name, have ? &verdict : NULL);
+			h->n_carry = 0;
 			break;
 		}
 		case REAC_IFSCAN_DROP:
@@ -4369,9 +4564,25 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 		const struct reac_topo_parent *tp = reac_topo_find(&h->topo, sn->name);
 		/* #98: `tagged > 0` is "a tag was EVER heard here", and a re-patched cable
 		 * made that a permanent refusal. The hunt asks about the wire as it is now,
-		 * so it reads the same freshness topo_apply does. */
-		if (tp && tp->tagged > 0 && topo_trunk_now(h, sn->name, now))
+		 * so it reads the same freshness topo_apply does.
+		 *
+		 * AND A TRUNK IS NOT KNOCKED ON (#39, #40). It knocked untagged like any NIC
+		 * while nothing was known about it; from the first tagged REAC on one of its
+		 * VLANs nothing more is sent on it, and the tag-stripped frames its own socket
+		 * hears are its VLANs' boxes, never an answer. */
+		if (tp && tp->tagged > 0 && topo_trunk_now(h, sn->name, now)) {
+			if (sn->watch_silence &&
+			    reac_knock_wire_step(&sn->kw, &sn->hunt, now, 1) == REAC_KNOCK_WIRE_ACT_TRUNK) {
+				const int was = sn->knock_tx_open;
+				knock_stop(sn);
+				fprintf(stderr, "reac-pw: [%s] tagged REAC is heard on this parent's VLANs: "
+				        "it is a TRUNK, not a segment%s, and its VLAN sub-interfaces are "
+				        "the segments\n", sn->name,
+				        was ? " — the knock stops here and nothing more is sent on it"
+				            : " — nothing is sent on it");
+			}
 			continue;
+		}
 		/* AND THE WAIT IS BOUNDED, because the tap can only place a frame that KEEPS
 		 * ARRIVING. This was `reac_hunt_heard_anything`, an EVER question, and on
 		 * 2026-09-21 a frame belonging to the S-1608 on ANOTHER interface was
@@ -4411,20 +4622,35 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			continue;
 		}
 
-		/* THE MASTERLESS OBSERVATION, then the decision. A wire nobody pinned that has
-		 * carried not one frame for REAC_KNOCK_LISTEN_NS has no master on it, so it may
-		 * be DRIVEN — the hunt's own licence, granted here and ruled on below like any
-		 * other input. It is not a transmission of its own: the port is taken through
-		 * the ordinary master role, with the ordinary pacer and this NIC's own address,
-		 * because a cold box answers a master that is driving and not a lone announce
-		 * (measured on the rig with 0.5.0-3: two knocks in six seconds, rx +0 for over a
-		 * minute; the pinned path brought the same box up in two seconds). */
-		if (sn->watch_silence && reac_knock_step(&sn->knock, now) == REAC_KNOCK_ACT_DRIVE) {
-			reac_hunt_silence_proven(&sn->hunt);
-			fprintf(stderr, "reac-pw: [%s] no REAC heard in %llu ms — a master fills "
-			        "every slot, so this wire has none: taking it as MASTER and probing "
-			        "until a box cold-connects\n", sn->name,
-			        (unsigned long long)(REAC_KNOCK_LISTEN_NS / 1000000ULL));
+		/* THE MASTERLESS OBSERVATION, then the KNOCK (#40). A wire nobody pinned that has
+		 * carried not one frame for REAC_KNOCK_LISTEN_NS has no master on it, and a cold
+		 * box on it says nothing until a master speaks. It used to be DRIVEN here — the
+		 * licence handed to the hunt and the whole stream onto a wire nothing had been
+		 * heard on, which a managed switch answered by shutting the port (#31). What a
+		 * cold box answers is one complete scene transfer (a lone announce, measured on
+		 * the rig with 0.5.0-3, is not answered), so that and the master's other control
+		 * frames go out at their slots and no audio filler does. The hunt reaches MASTER
+		 * on the box that answers, which is evidence, and never on the silence. */
+		if (sn->watch_silence) {
+			const uint64_t was_sent = sn->kw.sent;
+			const enum reac_knock_wire_act ka = reac_knock_wire_step(&sn->kw, &sn->hunt, now, 0);
+			if (ka == REAC_KNOCK_WIRE_ACT_UNTRUNK)
+				fprintf(stderr, "reac-pw: [%s] no tagged REAC on this parent any more — "
+				        "LISTENING to it again as a wire of its own\n", sn->name);
+			if (ka == REAC_KNOCK_WIRE_ACT_KNOCK) {
+				knock_start(sn);
+				if (sn->knock_tx_open)
+					fprintf(stderr, "reac-pw: [%s] nothing heard in %llu ms, so no master "
+					        "is on this wire, and a cold box says nothing until one "
+					        "speaks — KNOCKING: the scene transfer a box answers, at the "
+					        "slots a desk sends it, at most %d frames per %.1f s cycle and "
+					        "no audio filler (knock #%u, %llu frames so far). The master "
+					        "stream starts only when a box answers\n", sn->name,
+					        (unsigned long long)(REAC_KNOCK_LISTEN_NS / 1000000ULL),
+					        REAC_KNOCK_WIRE_BUDGET_PER_CYCLE,
+					        sn->kw.fps > 0 ? (double)sn->kw.master.cycle_len / sn->kw.fps : 0.0,
+					        sn->kw.knocks, (unsigned long long)was_sent);
+			}
 		}
 
 		int changed = reac_hunt_step(&sn->hunt, now);
@@ -4469,30 +4695,18 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        "driving on link, with no frame waited for (a cold box has none "
 				        "to give)\n", sn->name, REAC_SEGCONF_FILE, sn->name);
 			else if (changed)
-				/* TWO ROADS REACH THIS VERDICT AND THEY ARE NOT THE SAME FACT.
-				 * A box HEARD on the wire is one; a wire PROVEN SILENT is the
-				 * other (reac_knock's licence, `silence_proven`), and this
-				 * sentence claimed the first in both cases. Read straight off
-				 * the desk's journal, 2026-09-16 14:38:56, two lines apart:
-				 *
-				 *   no REAC heard in 500 ms — ... this wire has none: taking it
-				 *   as MASTER and probing until a box cold-connects
-				 *   no master heard in 3 s and a box is present — taking the
-				 *   wire as MASTER: probe, grant, establish
-				 *
-				 * Nothing had been heard at all. An operator reading the second
-				 * line believes the daemon can see a box, which is the one thing
-				 * it could not see for the next 73 minutes. */
-				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and %s — "
-				        "taking the wire as MASTER: probe, grant, establish\n",
+				/* ONE ROAD REACHES THIS VERDICT NOW, AND IT IS EVIDENCE (#40). A wire
+				 * PROVEN SILENT used to be the second road — the licence handed to
+				 * the hunt — and this line then said "NOTHING at all was heard on
+				 * it ... taking the wire as MASTER" while the stream went out at
+				 * every slot. The silence buys a knock and no more; the master is
+				 * started on a box that was heard, the knock's answer or a box that
+				 * spoke first. */
+				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
+				        "present%s — taking the wire as MASTER: probe, grant, establish\n",
 				        sn->name,
 				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL),
-				        sn->hunt.silence_proven
-				          ? "NOTHING at all was heard on it — a master fills every "
-				            "audio slot, so this wire has none. Whether a box is "
-				            "there is still unknown: a slave is silent until a "
-				            "master speaks"
-				          : "a box is present");
+				        sn->kw.n_answer ? " (it answered the knock)" : "");
 			/* THE PIN DECIDES WHETHER WE KEEP WATCHING IT, not the evidence we won
 			 * it with (0.5.4). A wire nobody answered for is ours only while nobody
 			 * else claims it, however we came to be driving it; a pinned one keeps

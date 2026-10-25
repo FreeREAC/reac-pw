@@ -23,6 +23,8 @@
 
 #include "reac_wake.h"   /* struct reac_wake_obs — what the wake ladder reads from here */
 
+#include <stddef.h>
+#include <reac/reac.h>   /* REAC_FRAME_BYTES — the knock's answer frames */
 #include <reac/transport/reac_ring.h>
 
 struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */
@@ -106,6 +108,15 @@ struct reac_sink_cfg {
 	 * retired: a box on M grants a SLAVE and never announces, so what reaches its
 	 * outputs is an upstream at ITS width, unicast to it (DESIGN.md 0.5.6). */
 	struct reac_ring *upstream_ring;
+	/* WHAT THE BOX ANSWERED THE KNOCK WITH (#40, reac_knock_wire.h). A cold box answers
+	 * one complete scene transfer with its declaration, ONCE, and then waits for the
+	 * ENROLL of the master it reported to; the knock's master is not the pacer's, so the
+	 * pacer's master is handed the answer before its thread starts (reac_pacer_rx_ingest
+	 * is pacer-thread-only, and before reac_pacer_start no pacer thread exists). It holds
+	 * the edge until its own push completes, then grants. NULL / 0 = nothing answered. */
+	const uint8_t (*knock_answer)[REAC_FRAME_BYTES];
+	const size_t *knock_answer_len;
+	int n_knock_answer;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX
