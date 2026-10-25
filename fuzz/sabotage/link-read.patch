@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_link.c:524 (a text shorter than its buffer is ended at the buffer's last byte, not after the text).
+Caught by the seed input "read-served" of fuzz_link.
+
+diff --git a/src/reac_link_alias.c b/src/reac_link_alias.c
+index ff9cfea..913e667 100644
+--- a/src/reac_link_alias.c
++++ b/src/reac_link_alias.c
+@@ -32,7 +32,7 @@ static void copy_attr(const struct rtattr *a, char *out, size_t n)
+ 	if (k >= n)
+ 		k = n - 1;
+ 	memcpy(out, s, k);
+-	out[k] = '\0';
++	out[n - 1] = '\0';
+ }
+ 
+ /* Send one request and read the answer until its ACK or its RTM_NEWLINK. */

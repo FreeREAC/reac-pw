@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_rate.c:156 (the rate is read from the role key, so a rate write is never read).
+Caught by the seed input "rate-48000" of fuzz_rate.
+
+diff --git a/src/reac_rate_cfg.c b/src/reac_rate_cfg.c
+index a6b08f8..e7a7c9d 100644
+--- a/src/reac_rate_cfg.c
++++ b/src/reac_rate_cfg.c
+@@ -144,7 +144,7 @@ int reac_rate_prop_parse(const struct spa_pod *props, int *out_hz)
+ 		const char *k = key;
+ 		key = NULL;                      /* consume the pair regardless of outcome */
+ 
+-		if (strcmp(k, REAC_CFG_PROP_RATE) != 0)
++		if (strcmp(k, REAC_CFG_ROLE_PROP) != 0)
+ 			continue;                    /* some other params entry (head-amp, ...) */
+ 
+ 		int hz;
