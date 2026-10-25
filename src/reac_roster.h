@@ -36,14 +36,14 @@
 
 /* The same bound as reac_segconf's table and reac_ifscan's: two trunks' worth of VLANs. */
 #define REAC_ROSTER_MAX 32
-/* name, state, model, role, source, width, status — see the key grammar below. */
+/* name, state, model, role, source, width, status: see the key grammar below. */
 #define REAC_ROSTER_FIELDS 7
 /* The count key plus every field of every group. The worst case is exact: a group is
  * either in the new roster (fields) or leaving it (removals), never both. */
 #define REAC_ROSTER_KV_MAX (1 + REAC_ROSTER_MAX * REAC_ROSTER_FIELDS)
 
 /* WHAT A SEGMENT IS DOING, in the spec's words and no others. A wire the daemon is sniffing
- * that has decided nothing — no box, no node, and once no row anywhere but the journal — is
+ * that has decided nothing (no box, no node, and once no row anywhere but the journal) is
  * the state the whole amendment is about: `listening`, `knocking` or `trunk` since #40,
  * `probing` before it. */
 enum reac_roster_state {

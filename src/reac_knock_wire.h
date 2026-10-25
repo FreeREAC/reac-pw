@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
-/* reac_knock_wire — A WIRE NOBODY PINNED IS LISTENED TO, THEN KNOCKED ON, NEVER FLOODED.
+/* reac_knock_wire: A WIRE NOBODY PINNED IS LISTENED TO, THEN KNOCKED ON, NEVER FLOODED.
  *
  * THE DEFECT IT EXISTS AGAINST (#31, #40). libreac's masterless licence (reac_knock.h) proves
  * that a wire which carried no REAC frame for 500 ms has no master on it, and until this module
@@ -141,8 +141,8 @@ enum reac_knock_wire_act reac_knock_wire_step(struct reac_knock_wire *w,
                                               uint64_t now_ns, int trunk_now);
 
 /* A REAC frame was heard on this wire. It cancels the licence (libreac's rule: ANY frame).
- * While knocking, a frame that is EVIDENCE — a sighting whose settled role is a box or a
- * master (reac_disco), never a peer of unknown role — is the answer: the knock ends
+ * While knocking, a frame that is EVIDENCE (a sighting whose settled role is a box or a
+ * master, reac_disco, never a peer of unknown role) is the answer: the knock ends
  * (ACT_HUSH). Unknown-role FILLER does not end it, and that is the case that needs the knock
  * most: a box that has just come up floods broadcast FILLER and goes on flooding until it
  * has heard a master (libreac reac_fsm.c FSM_FLOOD_ANNOUNCE needs `have_master`), and only

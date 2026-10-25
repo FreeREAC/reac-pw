@@ -245,7 +245,7 @@ echo "$OUT" | grep -qa '^SKIP:' && { echo "$OUT" | grep -a '^SKIP:'; exit $SKIP;
 [ "$(val "$OUT" knob-announced)" = "yes" ] \
 	|| fail "REACPW_LINK_MBIT=100 was never announced — the port was not capped, so nothing below is a budget measurement"
 [ "$(val "$OUT" holder-knocks)" = "yes" ] \
-	|| fail "the empty VLAN was never knocked on — it came up and the daemon said nothing about it"
+	|| fail "the empty VLAN was never knocked on: it came up and the daemon said nothing about it"
 [ "$(val "$OUT" box-running)" = "yes" ] \
 	|| fail "the box side did not start"
 [ "$(val "$OUT" box-heard)" = "yes" ] \
@@ -255,15 +255,15 @@ echo "$OUT" | grep -qa "S_SEGMENT_HEARD.*\[lb0\.13\].*($FACT_BOX_S1608_IN ch)" \
 
 # ---- and now the claim itself (#40: an empty VLAN holds nothing, so #107 cannot start)
 [ "$(val "$OUT" holder-up)" = "no" ] \
-	|| fail "the empty VLAN was SERVED on silence — a master on a wire nothing was heard on (#40)"
+	|| fail "the empty VLAN was SERVED on silence: a master on a wire nothing was heard on (#40)"
 [ "$(val "$OUT" first-refusal)" = "no" ] \
-	|| fail "the empty second VLAN asked for the port's budget — it is knocked on and asks for nothing"
+	|| fail "the empty second VLAN asked for the port's budget; it is knocked on and asks for nothing"
 [ "$(val "$OUT" taker-up)" = "yes" ] \
 	|| fail "the segment with the box did not come up on a port nothing else holds"
 [ "$(val "$OUT" yielded)" = "no" ] \
 	|| fail "a budget yield ran, so an empty segment held the port after all"
 [ "$(val "$OUT" holder-ups)" = "0" ] \
-	|| fail "the empty segment took the wire (S_SEGMENT_UP x$(val "$OUT" holder-ups)) — it must stay listening and knocking until it hears something itself"
+	|| fail "the empty segment took the wire (S_SEGMENT_UP x$(val "$OUT" holder-ups)); it must stay listening and knocking until it hears something itself"
 [ "$(val "$OUT" taker-drops)" = "0" ] \
 	|| fail "the segment with the box was dropped again ($(val "$OUT" taker-drops)x) — the budget is ping-ponging"
 

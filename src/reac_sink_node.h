@@ -24,7 +24,7 @@
 #include "reac_wake.h"   /* struct reac_wake_obs — what the wake ladder reads from here */
 
 #include <stddef.h>
-#include <reac/reac.h>   /* REAC_FRAME_BYTES — the knock's answer frames */
+#include <reac/reac.h>   /* REAC_FRAME_BYTES, the knock's answer frames */
 #include <reac/transport/reac_ring.h>
 
 struct reac_rx;   /* reac_rx.h — the BOX clock reference measurement source (#75) */

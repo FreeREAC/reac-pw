@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 //
-// reac_knock_wire — see reac_knock_wire.h for what a silent wire is sent and why.
+// reac_knock_wire: see reac_knock_wire.h for what a silent wire is sent and why.
 
 #include "reac_knock_wire.h"
 
@@ -128,8 +128,8 @@ enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64
 			memcpy(w->answer_src, frame + 6, 6);
 		act = REAC_KNOCK_WIRE_ACT_HUSH;
 	}
-	/* WHAT IS KEPT IS WHAT THE MASTER ACTS ON: the box's control frames — its declaration
-	 * after a whole transfer, its cold-connect JOIN — and not its audio or presence FILLER,
+	/* WHAT IS KEPT IS WHAT THE MASTER ACTS ON: the box's control frames (its declaration
+	 * after a whole transfer, its cold-connect JOIN), and not its audio or presence FILLER,
 	 * which only says it is there (libreac reac_master.h: presence "never gates the
 	 * grant"). Once a box streams to us, the frames after its answer are FILLER. */
 	if (w->state == REAC_KNOCK_WIRE_ANSWERED && frame && len > 0 &&

@@ -49,7 +49,7 @@
 
 # A WIRE WE DRIVE WHATEVER WE HEAR. Rarely what you want: `auto` already knocks on a silent
 # wire and masters it once a box answers, and a pin cannot beat a box that is already
-# mastering — it joins it. A pin streams on link without waiting for an answer.
+# mastering: it joins it. A pin streams on link without waiting for an answer.
 #[segment enp131s0.1]
 #role = master
 

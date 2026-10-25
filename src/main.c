@@ -1294,7 +1294,7 @@ struct listener {
 	 * a live box-master join — measured, tests/box-master-slave-join.sh. */
 	int follows_nobody_ticks;
 	/* POLLS THIS MASTER HAS STREAMED AT NOBODY (#40): no box recognised, never past
-	 * PROBING, no frame arriving — listener_budget_empty's three facts. An unpinned master
+	 * PROBING, no frame arriving: listener_budget_empty's three facts. An unpinned master
 	 * goes back to listening and knocking past REACPW_EMPTY_MASTER_TICKS. */
 	int empty_master_ticks;
 
@@ -2766,7 +2766,7 @@ struct sniffer {
 	/* THE MASTERLESS OBSERVATION AND THE KNOCK IT BUYS (reac_knock_wire.h, #40). A wire
 	 * nobody pinned that carries not one frame for REAC_KNOCK_LISTEN_NS has no master on
 	 * it, and a cold box in slave mode never speaks first, so it is KNOCKED ON: the scene
-	 * transfer a box answers, at its slots, and no audio filler. It used to be DRIVEN —
+	 * transfer a box answers, at its slots, and no audio filler. It used to be DRIVEN:
 	 * the whole stream onto a wire nothing had been heard on (#31). A PINNED interface
 	 * does not need it: it is already driving. */
 	struct reac_knock_wire kw;
@@ -3093,8 +3093,9 @@ static struct sniffer *sniffer_find(struct hearing *h, const char *name)
 /* ---- THE KNOCK'S HANDS: a deaf sender and a timer, open only while knocking (#40) ----
  *
  * reac_knock_wire decides what goes out and when; this is the socket and the clock. The
- * sender is libreac's reac_tx — bound with protocol 0, so it hears nothing and cannot
- * cancel its own knock — and every frame leaves at the slot the master would send it. */
+ * sender is a packet socket through libreac's one door (reac_packet_socket_bound), bound
+ * with protocol 0, so it hears nothing and cannot cancel its own knock; every frame leaves
+ * at the slot the master would send it. */
 
 /* THE CADENCE AND THE ADDRESS THE MASTER ON THIS WIRE WOULD USE, resolved the way
  * listener_open resolves them: a whole-invocation --rate, else REAC_RATE for this segment,
@@ -3160,7 +3161,7 @@ static void on_knock_timer(void *data, uint64_t expirations)
 	reac_knock_wire_run(&sn->kw, monotonic_ns(), knock_send, sn);
 	if (sn->kw.send_errors && !errs)
 		reac_code_emit(stderr, "reac-pw", RC_E_KNOCK_TX,
-		        "[%s] the knock could not send a frame (%s) — the wire is still "
+		        "[%s] the knock could not send a frame (%s); the wire is still "
 		        "listened to, and a box that speaks first is still heard\n",
 		        sn->name, strerror(errno));
 	knock_arm(sn);
@@ -3177,7 +3178,7 @@ static void knock_start(struct sniffer *sn)
 		                   : -1;
 		if (fd < 0) {
 			reac_code_emit(stderr, "reac-pw", RC_E_KNOCK_TX,
-			        "[%s] the knock's sender could not open (%s) — this wire is "
+			        "[%s] the knock's sender could not open (%s): this wire is "
 			        "listened to and NOT knocked on; a box that speaks first is still "
 			        "heard\n", sn->name, strerror(errno));
 			return;
@@ -3207,7 +3208,7 @@ static void knock_say_answered(const struct sniffer *sn)
 {
 	const uint8_t *m = sn->kw.answer_src;
 	fprintf(stderr, "reac-pw: [%s] ANSWERED: %02x:%02x:%02x:%02x:%02x:%02x spoke after %llu "
-	        "knock frames (%llu complete scene transfers) — the knock is over, and the "
+	        "knock frames (%llu complete scene transfers): the knock is over, and the "
 	        "master starts on what the wire now shows\n", sn->name,
 	        m[0], m[1], m[2], m[3], m[4], m[5],
 	        (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.pushes);
@@ -3274,7 +3275,7 @@ static void sniffer_drain(struct sniffer *sn)
 		 * and saying "this interface is a segment" here read as the parent re-admitting
 		 * itself on the desk's journal of 2026-10-25 11:32. */
 		if (sn->kw.state == REAC_KNOCK_WIRE_TRUNK) {
-			fprintf(stderr, "reac-pw: [%s] REAC heard on one of this trunk's VLANs — %s "
+			fprintf(stderr, "reac-pw: [%s] REAC heard on one of this trunk's VLANs: %s "
 			        "%02x:%02x:%02x:%02x:%02x:%02x%s (%u ch): it belongs to that VLAN's "
 			        "segment, and this parent is still not one\n",
 			        sn->name, reac_disco_role_name(sight.role),
@@ -4615,8 +4616,8 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				fprintf(stderr, "reac-pw: [%s] tagged REAC is heard on this parent's VLANs: "
 				        "it is a TRUNK, not a segment%s, and its VLAN sub-interfaces are "
 				        "the segments\n", sn->name,
-				        was ? " — the knock stops here and nothing more is sent on it"
-				            : " — nothing is sent on it");
+				        was ? "; the knock stops here and nothing more is sent on it"
+				            : "; nothing is sent on it");
 			}
 			continue;
 		}
@@ -4661,7 +4662,7 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 
 		/* THE MASTERLESS OBSERVATION, then the KNOCK (#40). A wire nobody pinned that has
 		 * carried not one frame for REAC_KNOCK_LISTEN_NS has no master on it, and a cold
-		 * box on it says nothing until a master speaks. It used to be DRIVEN here — the
+		 * box on it says nothing until a master speaks. It used to be DRIVEN here: the
 		 * licence handed to the hunt and the whole stream onto a wire nothing had been
 		 * heard on, which a managed switch answered by shutting the port (#31). What a
 		 * cold box answers is one complete scene transfer (a lone announce, measured on
@@ -4672,14 +4673,14 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 			const uint64_t was_sent = sn->kw.sent;
 			const enum reac_knock_wire_act ka = reac_knock_wire_step(&sn->kw, &sn->hunt, now, 0);
 			if (ka == REAC_KNOCK_WIRE_ACT_UNTRUNK)
-				fprintf(stderr, "reac-pw: [%s] no tagged REAC on this parent any more — "
+				fprintf(stderr, "reac-pw: [%s] no tagged REAC on this parent any more: "
 				        "LISTENING to it again as a wire of its own\n", sn->name);
 			if (ka == REAC_KNOCK_WIRE_ACT_KNOCK) {
 				knock_start(sn);
 				if (sn->knock_tx_open)
 					fprintf(stderr, "reac-pw: [%s] nothing heard in %llu ms, so no master "
 					        "is on this wire, and a cold box says nothing until one "
-					        "speaks — KNOCKING: the scene transfer a box answers, at the "
+					        "speaks. KNOCKING: the scene transfer a box answers, at the "
 					        "slots a desk sends it, at most %d frames per %.1f s cycle and "
 					        "no audio filler (knock #%u, %llu frames so far). The master "
 					        "stream starts only when a box answers\n", sn->name,
@@ -4733,14 +4734,14 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				        "to give)\n", sn->name, REAC_SEGCONF_FILE, sn->name);
 			else if (changed)
 				/* ONE ROAD REACHES THIS VERDICT NOW, AND IT IS EVIDENCE (#40). A wire
-				 * PROVEN SILENT used to be the second road — the licence handed to
-				 * the hunt — and this line then said "NOTHING at all was heard on
+				 * PROVEN SILENT used to be the second road (the licence handed to
+				 * the hunt), and this line then said "NOTHING at all was heard on
 				 * it ... taking the wire as MASTER" while the stream went out at
 				 * every slot. The silence buys a knock and no more; the master is
 				 * started on a box that was heard, the knock's answer or a box that
 				 * spoke first. */
 				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
-				        "present%s — taking the wire as MASTER: probe, grant, establish\n",
+				        "present%s; taking the wire as MASTER: probe, grant, establish\n",
 				        sn->name,
 				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL),
 				        sn->kw.n_answer ? " (it answered the knock)" : "");
@@ -5099,8 +5100,8 @@ static void hearing_reevaluate(struct hearing *h, uint64_t now)
 }
 
 /* A MASTER THAT STREAMS AT NOBODY GOES BACK TO KNOCKING (#40). The master on a wire nobody
- * pinned is started on a box that answered; when that box goes away — unplugged, powered
- * off, switched to M — libreac's master falls back to PROBING and would pour its stream onto
+ * pinned is started on a box that answered; when that box goes away (unplugged, powered
+ * off, switched to M), libreac's master falls back to PROBING and would pour its stream onto
  * the empty wire for as long as the daemon runs, which is the flood of #31 reached the long
  * way round. So a hearing-served master whose three facts say it carries nothing
  * (listener_budget_empty: not past PROBING, no box recognised, no frame arriving) for
@@ -5136,11 +5137,11 @@ static void hearing_rehear_empty_masters(struct hearing *h, uint64_t now)
 		snprintf(name, sizeof name, "%s", L->cfg.rxcfg.source);
 		if (!hearing_listener(h, name))
 			continue;               /* a --live segment: not one this hearing serves */
-		fprintf(stderr, "reac-pw: [%s] the master here has had no box for %d s — no box "
-		        "recognised, nothing granted, not one frame arriving — so it stops "
+		fprintf(stderr, "reac-pw: [%s] the master here has had no box for %d s (no box "
+		        "recognised, nothing granted, not one frame arriving), so it stops "
 		        "streaming at nobody: back to LISTENING, and to the bounded knock that the "
 		        "box answers when it comes back\n", name, REACPW_EMPTY_MASTER_TICKS / 5);
-		hearing_drop(h, name, "no box on the wire — back to listening and knocking");
+		hearing_drop(h, name, "no box on the wire: back to listening and knocking");
 		sniffer_close(h, name);
 		sniffer_open_ex(h, name, 0);
 		reac_ifscan_serve_failed(&h->scan, name, now);
@@ -5183,7 +5184,7 @@ static void hearing_knock_wake(struct hearing *h, uint64_t now)
 			        "wire is down until it is: `ip link set %s up`.\n",
 			        kl->name, kl->name, errno, kl->name);
 		else
-			fprintf(stderr, "reac-pw: [%s] '%s' is back up — a box that had dropped sees "
+			fprintf(stderr, "reac-pw: [%s] '%s' is back up; a box that had dropped sees "
 			        "this as PHY LINK-UP; the knock resumes on the fresh link\n",
 			        kl->name, kl->name);
 	}
@@ -5204,7 +5205,7 @@ static void hearing_knock_wake(struct hearing *h, uint64_t now)
 			kl->frames0 = sn->frames;
 		} else if (sn->kw.knocks != kl->knocks_seen || sn->kw.pushes < kl->pushes_last ||
 		           sn->frames < kl->frames0) {
-			/* A FRESH KNOCK — after an answer that went quiet, or on the fresh sniffer of a
+			/* A FRESH KNOCK, after an answer that went quiet, or on the fresh sniffer of a
 			 * link that came back: the grace restarts from here and the EDGE COUNT does not
 			 * (reac_wake_reopen). */
 			reac_wake_reopen(&kl->wake, now);
@@ -5241,7 +5242,7 @@ static void hearing_knock_wake(struct hearing *h, uint64_t now)
 			        kl->wake.bounces, REAC_WAKE_MAX_BOUNCES);
 			if (reac_link_admin(sn->name, 0) != 0) {
 				reac_code_emit(stderr, "reac-pw", RC_E_WAKE_EDGE,
-				        "[%s] the wake edge was REFUSED (errno %d) — nothing was touched; "
+				        "[%s] the wake edge was REFUSED (errno %d): nothing was touched; "
 				        "the knock goes on\n", sn->name, errno);
 				break;
 			}
