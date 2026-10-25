@@ -176,7 +176,7 @@ grep -a "roster is on the graph" "$LOG" | head -1 | sed 's/^/  rosterline /'
 # ---- C. THE BOX GOES, AND THE NODE MUST NOT --------------------------------------------
 kill -TERM $FAKEPID 2>/dev/null; kill -9 $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 for ((i = 0; i < 120; i++)); do
-	roster_of $PID | grep -qa "rn1.*probing\|probing.*rn1" && break
+	roster_of $PID | grep -qa "rn1.*\(probing\|knocking\|listening\)\|\(probing\|knocking\|listening\).*rn1" && break
 	sleep 0.5
 done
 sleep 2
@@ -287,8 +287,12 @@ C=$(line_of C)
 	|| fail "the roster node id moved from $(echo "$A" | awk '{print $3}') to $(echo "$C" | awk '{print $3}') — a state change is a property update, never a new node"
 gc=$(group_of C rn1)
 [ -n "$gc" ] || fail "rn1 left the roster when its box did — the segment is still there, it is just empty: $C"
-[ "$(prop C reac.roster.$gc.state)" = "probing" ] \
-	|| fail "the box left and rn1 still reads state=$(prop C reac.roster.$gc.state)"
+# A master whose box left reads `probing` until it has had no box for 10 s, and then the
+# wire is listened to and knocked on again (#40): any of the three says the box is gone.
+case "$(prop C reac.roster.$gc.state)" in
+probing|knocking|listening) ;;
+*) fail "the box left and rn1 still reads state=$(prop C reac.roster.$gc.state)" ;;
+esac
 [ "$(prop C reac.roster.$gc.model)" = "none" ] \
 	|| fail "the box left and rn1 still names model=$(prop C reac.roster.$gc.model)"
 [ "$(prop C reac.roster.$gc.width)" = "0/0" ] \
