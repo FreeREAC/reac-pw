@@ -514,7 +514,8 @@ test('reac_declared_vlan', declared_vlan_test)
 # is not doing what their file says -- which, one level up, is the defect the whole
 # autodetect spec exists to remove.
 segconf_test = executable('test_reac_segconf',
-  ['tests/test_reac_segconf.c', 'src/reac_segconf.c', 'src/reac_declared_vlan.c'],
+  ['tests/test_reac_segconf.c', 'src/reac_segconf.c', 'src/reac_declared_vlan.c',
+   'src/reac_knock_wire.c', 'src/reac_wake.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_segconf', segconf_test)
