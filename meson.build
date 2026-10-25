@@ -159,6 +159,7 @@ reac_pw_src = [
   'src/reac_watch.c',
   'src/reac_wake.c',
   'src/reac_knock_wire.c',
+  'src/reac_empty_master.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
   'src/reac_headamp_state.c',
@@ -1543,6 +1544,14 @@ knock_wire_test = executable('test_reac_knock_wire',
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_knock_wire', knock_wire_test)
+
+# --- unit test: a MASTER THAT STREAMS AT NOBODY STOPS (#40) ---------------------------------
+# The master a knock's answer started stops on the poll that shows no box: 2 s with not one
+# box frame while it courts, at once when libreac gives an enrolled box up. With values.
+empty_master_test = executable('test_reac_empty_master',
+  ['tests/test_reac_empty_master.c', 'src/reac_empty_master.c'],
+  include_directories : src_inc)
+test('reac_empty_master', empty_master_test)
 
 enrolment_binding_test = executable('test_reac_enrolment_binding',
   ['tests/test_reac_enrolment_binding.c'],
