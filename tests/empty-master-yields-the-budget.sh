@@ -42,9 +42,16 @@
 # trigger under test. libreac's fake_box is silent until a master pushes a complete scene
 # transfer, which on a port whose budget is already held is a master that never starts.
 #
-# THE UNTAGGED PARENT IS IGNORED, by the shipped override and on purpose: a trunk parent
-# with no tag heard yet would take the wire on silence like any other segment and hold the
-# very budget this test is about. The rig's own remedy was the same file.
+# THE UNTAGGED PARENT IS LEFT ALONE, WITH NO STANZA (#40). Before #40 a trunk parent with no
+# tag heard yet took the wire on silence and held the very budget this test is about, and the
+# rig's remedy was `[segment <parent>] ignore = yes`. Now nothing heard on it buys a bounded
+# knock and never a master, so it holds no budget and the daemon under test reads no file.
+#
+# THE VLAN SUB-INTERFACES ARE STILL MADE HERE, BY HAND, AND THAT IS NOT AUTOCONFIGURATION. A
+# cold box tags nothing, and the daemon mints a VLAN only when its tag is heard
+# (reac_declared_vlan.h, ruling 2026-09-23), so a cold box behind a trunk is found only on a
+# sub-interface the host already has (README, "A box behind a trunk"). This test stands for
+# that host network config; it does not prove the daemon finds the VLAN by itself.
 #
 # ISOLATION IS PART OF THE TEST. An unprivileged user+net+mount+pid namespace, its own
 # sysfs, its own PipeWire on a private runtime dir, the peer ends in a NESTED network
@@ -110,16 +117,16 @@ in_peer="nsenter -t $NSPID -n -m"
 ip link set lbp0 netns $NSPID || exit 90
 ip link set lb0 up; $in_peer ip link set lbp0 up
 
+# The host's own VLAN config (see the header: a cold box tags nothing for the daemon to mint
+# from). The daemon under test gets NO conf file at all: the parent needs no stanza.
 for v in 11 13; do
 	ip link add link lb0 name lb0.$v type vlan id $v || exit 90
 	$in_peer ip link add link lbp0 name lbp0.$v type vlan id $v || exit 90
 	$in_peer ip link set lbp0.$v up || exit 90
 	ip link set lb0.$v down
 done
-
-# The untagged parent is not part of this question; see the header.
 mkdir -p "$CONF/.config/reac-pw"
-printf '[segment lb0]\nignore = yes\n' > "$CONF/.config/reac-pw/reac-pw.conf"
+[ ! -e "$CONF/.config/reac-pw/reac-pw.conf" ] || exit 90
 
 # ---- THE DAEMON, ON A PORT DECLARED 100 Mbit/s. One 96 kHz master costs 97 024 kbit/s of
 # it, so the port carries exactly one -- which is the rig's own arithmetic, not a test one.

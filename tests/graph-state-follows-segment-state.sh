@@ -173,10 +173,13 @@ else
 		$in_peer ip link set pgs0.$v up || exit 90
 		ip link set gs0.$v up || exit 90
 	done
-	# The untagged parent would take the wire on silence like any other segment and hold
-	# the very budget this arm is about; the rig's own remedy was the same file.
+	# THE PARENT NEEDS NO STANZA (#40): nothing heard on it buys a bounded knock, never a
+	# master, so it holds no budget and the daemon under test reads no file at all. The
+	# VLAN sub-interfaces above are the HOST's config, made by hand: a cold box tags
+	# nothing, and the daemon mints a VLAN only when its tag is heard (reac_declared_vlan.h),
+	# so this arm does not prove the daemon finds a cold box's VLAN by itself.
 	mkdir -p "$CONF/.config/reac-pw"
-	printf '[segment gs0]\nignore = yes\n' > "$CONF/.config/reac-pw/reac-pw.conf"
+	[ ! -e "$CONF/.config/reac-pw/reac-pw.conf" ] || exit 90
 
 	HOME="$CONF" REAC_DEBUG=1 "$BIN" --set REACPW_LINK_MBIT=100 >"$LOG" 2>&1 &
 	PID=$!
