@@ -2877,13 +2877,8 @@ struct declared_seg {
  * UNLISTEN) and the count of edges made must survive it. */
 struct knock_ladder {
 	char name[IFNAMSIZ];        /* "" = free slot */
-	struct reac_wake wake;
+	struct reac_knock_ladder kl; /* the ladder and its eyes (reac_knock_wire.h) */
 	uint64_t up_at_ns;          /* the link is down until here (0 = no edge in flight) */
-	uint64_t tx_seen;           /* the knock's frames sent at the last step */
-	uint64_t pushes0;           /* the knock's completed pushes when this spell opened */
-	uint64_t pushes_last;
-	unsigned knocks_seen;       /* which knock of the sniffer the counters belong to */
-	unsigned long frames0;      /* the sniffer's 0x8819 frames read when this spell opened */
 	int exhausted_said;
 };
 
@@ -3158,7 +3153,16 @@ static void on_knock_timer(void *data, uint64_t expirations)
 	if (!sn->knock_tx_open)
 		return;
 	const uint64_t errs = sn->kw.send_errors;
+	const uint64_t cycles = sn->kw.cycles;
 	reac_knock_wire_run(&sn->kw, monotonic_ns(), knock_send, sn);
+	/* A STREAM KNOCK IS SAID EVERY TIME: it is the one that carries FILLER, and the rig check
+	 * reads from here which content a box answered (docs/KNOCK.md). */
+	if (sn->kw.cycles != cycles && !sn->kw.resting && sn->kw.content == REAC_KNOCK_STREAM)
+		fprintf(stderr, "reac-pw: [%s] knock %llu is a STREAM cycle (%s plan): every slot of "
+		        "one %d-slot hunting cycle, FILLER included, what a real box was seen to "
+		        "answer; stream knock %u of at most %u until something is heard\n", sn->name,
+		        (unsigned long long)sn->kw.cycles, sn->kw.plan ? sn->kw.plan->name : "?",
+		        sn->kw.master.cycle_len, sn->kw.stream_knocks, REAC_KNOCK_WIRE_STREAM_KNOCKS);
 	if (sn->kw.send_errors && !errs)
 		reac_code_emit(stderr, "reac-pw", RC_E_KNOCK_TX,
 		        "[%s] the knock could not send a frame (%s); the wire is still "
@@ -3207,11 +3211,16 @@ static void knock_stop(struct sniffer *sn)
 static void knock_say_answered(const struct sniffer *sn)
 {
 	const uint8_t *m = sn->kw.answer_src;
-	fprintf(stderr, "reac-pw: [%s] ANSWERED: %02x:%02x:%02x:%02x:%02x:%02x spoke after %llu "
-	        "knock frames (%llu complete scene transfers): the knock is over, and the "
-	        "master starts on what the wire now shows\n", sn->name,
+	fprintf(stderr, "reac-pw: [%s] ANSWERED: %02x:%02x:%02x:%02x:%02x:%02x spoke during knock "
+	        "%llu, a %s knock (%s plan), after %llu knock frames (%llu of them stream, %llu "
+	        "complete scene transfers): the knock is over, and the master starts on what the "
+	        "wire now shows\n", sn->name,
 	        m[0], m[1], m[2], m[3], m[4], m[5],
-	        (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.pushes);
+	        (unsigned long long)sn->kw.answered_cycle,
+	        reac_knock_content_name(sn->kw.answered_content),
+	        sn->kw.plan ? sn->kw.plan->name : "?",
+	        (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.stream_sent,
+	        (unsigned long long)sn->kw.pushes);
 }
 
 /* Read a sniffer's socket dry, classify, and tell the table about the first frame that IS
@@ -4680,13 +4689,19 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				if (sn->knock_tx_open)
 					fprintf(stderr, "reac-pw: [%s] nothing heard in %llu ms, so no master "
 					        "is on this wire, and a cold box says nothing until one "
-					        "speaks. KNOCKING: the scene transfer a box answers, at the "
-					        "slots a desk sends it, at most %d frames per %.1f s cycle and "
-					        "no audio filler (knock #%u, %llu frames so far). The master "
-					        "stream starts only when a box answers\n", sn->name,
+					        "speaks. KNOCKING with the '%s' plan (%s): a control knock is "
+					        "the %d control frames of one %.1f s hunting cycle and no "
+					        "audio filler; a stream knock is that cycle whole, at most %u "
+					        "until something is heard; the period doubles while nothing "
+					        "answers, up to %llu s (spell #%u, %llu frames so far). The "
+					        "master stream starts only when a box answers\n", sn->name,
 					        (unsigned long long)(REAC_KNOCK_LISTEN_NS / 1000000ULL),
-					        REAC_KNOCK_WIRE_BUDGET_PER_CYCLE,
+					        sn->kw.plan ? sn->kw.plan->name : "?",
+					        sn->kw.plan ? sn->kw.plan->said : "?",
+					        reac_knock_wire_control_per_cycle(sn->kw.fps),
 					        sn->kw.fps > 0 ? (double)sn->kw.master.cycle_len / sn->kw.fps : 0.0,
+					        REAC_KNOCK_WIRE_STREAM_KNOCKS,
+					        (unsigned long long)(REAC_KNOCK_WIRE_PERIOD_MAX_NS / 1000000000ULL),
 					        sn->kw.knocks, (unsigned long long)was_sent);
 			}
 		}
@@ -5168,8 +5183,7 @@ static struct knock_ladder *knock_ladder_of(struct hearing *h, const char *name,
  * reac_wake's and is not re-made here: these are its eyes (the knock's completed pushes and
  * frames sent, the carrier, the siblings on the port) and its hands (two rtnetlink writes).
  * Nothing heard is `rx_box_frames = 0` by construction: a wire that is knocking has heard no
- * box. Once a second because a knock sends a frame a second at the least (the announce),
- * where a 200 ms step could read 0 frames sent and say NOTHING_SENT between two of them. */
+ * box. reac_knock_ladder_step holds the spell across the knock's rests (reac_knock_wire.h). */
 static void hearing_knock_wake(struct hearing *h, uint64_t now)
 {
 	/* AN EDGE IN FLIGHT IS FINISHED FIRST, every poll: the link is ours to bring back. */
@@ -5197,41 +5211,16 @@ static void hearing_knock_wake(struct hearing *h, uint64_t now)
 		struct knock_ladder *kl = knock_ladder_of(h, sn->name, 1);
 		if (!kl || kl->up_at_ns)
 			continue;
-		if (!kl->wake.opened_ns) {
-			reac_wake_init(&kl->wake, now);
-			kl->pushes0 = sn->kw.pushes;
-			kl->tx_seen = sn->kw.sent;
-			kl->knocks_seen = sn->kw.knocks;
-			kl->frames0 = sn->frames;
-		} else if (sn->kw.knocks != kl->knocks_seen || sn->kw.pushes < kl->pushes_last ||
-		           sn->frames < kl->frames0) {
-			/* A FRESH KNOCK, after an answer that went quiet, or on the fresh sniffer of a
-			 * link that came back: the grace restarts from here and the EDGE COUNT does not
-			 * (reac_wake_reopen). */
-			reac_wake_reopen(&kl->wake, now);
-			kl->pushes0 = sn->kw.pushes;
-			kl->tx_seen = sn->kw.sent;
-			kl->knocks_seen = sn->kw.knocks;
-			kl->frames0 = sn->frames;
-		}
-		kl->pushes_last = sn->kw.pushes;
-		struct reac_wake_obs o = {
-			.probing = 1,
-			.carrier = reac_link_carrier(sn->name),
-			/* A BOX THAT FLOODS IS TALKING, and an edge would only cost it its flood: any
-			 * 0x8819 frame this wire carried since the spell opened refuses the bounce.
-			 * Evidence would have ended the knock; this is the unknown-role rest. */
-			.rx_box_frames = sn->frames - kl->frames0,
-			.scene_pushes = sn->kw.pushes - kl->pushes0,
-			.siblings_served = port_siblings_served(sn->name),
-			.tx_frames = sn->kw.sent - kl->tx_seen,
-		};
-		kl->tx_seen = sn->kw.sent;
-		switch (reac_wake_step(&kl->wake, now, &o)) {
+		struct reac_wake_obs o;
+		const enum reac_wake_act act =
+			reac_knock_ladder_step(&kl->kl, &sn->kw, now, sn->frames,
+			                       reac_link_carrier(sn->name),
+			                       port_siblings_served(sn->name), &o);
+		switch (act) {
 		case REAC_WAKE_ACT_NONE:
-			if (reac_wake_refusal_to_say(&kl->wake))
+			if (reac_wake_refusal_to_say(&kl->kl.wake))
 				fprintf(stderr, "reac-pw: [%s] the knock's wake ladder holds: %s\n",
-				        sn->name, reac_wake_refusal_text(kl->wake.refusal));
+				        sn->name, reac_wake_refusal_text(kl->kl.wake.refusal));
 			break;
 		case REAC_WAKE_ACT_BOUNCE:
 			fprintf(stderr, "reac-pw: [%s] nothing has answered %llu COMPLETE scene "
@@ -5239,7 +5228,7 @@ static void hearing_knock_wake(struct hearing *h, uint64_t now)
 			        "on a PHY link-up and on nothing else, so the daemon makes the edge: "
 			        "'%s' goes down for %u ms and back up (edge %u of %u)\n", sn->name,
 			        (unsigned long long)o.scene_pushes, sn->name, REAC_WAKE_DOWN_MS,
-			        kl->wake.bounces, REAC_WAKE_MAX_BOUNCES);
+			        kl->kl.wake.bounces, REAC_WAKE_MAX_BOUNCES);
 			if (reac_link_admin(sn->name, 0) != 0) {
 				reac_code_emit(stderr, "reac-pw", RC_E_WAKE_EDGE,
 				        "[%s] the wake edge was REFUSED (errno %d): nothing was touched; "
@@ -5491,9 +5480,10 @@ static void roster_collect(struct roster_ctx *rc)
 			st = REAC_ROSTER_TRUNK;
 		} else if (sn->kw.state == REAC_KNOCK_WIRE_KNOCKING) {
 			st = REAC_ROSTER_KNOCKING;
-			snprintf(said, sizeof said, "nothing heard here: knocking for a box, %llu frames "
-			         "and %llu scene pushes so far, never the stream",
-			         (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.pushes);
+			snprintf(said, sizeof said, "nothing heard: knock %llu of the %s plan, %llu frames "
+			         "sent, %llu of them stream",
+			         (unsigned long long)sn->kw.cycles, sn->kw.plan ? sn->kw.plan->name : "?",
+			         (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.stream_sent);
 		} else if (sn->kw.state == REAC_KNOCK_WIRE_ANSWERED) {
 			snprintf(said, sizeof said, "something answered the knock: listening to "
 			         "it before the master starts");

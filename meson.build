@@ -1531,13 +1531,14 @@ test('reac_wake', wake_test)
 # A floor bump that silently picked up a library without them, or a libreac that reverted
 # either latch, fails HERE, at reac-pw's own gate, instead of on a desk. Pure; no socket.
 # --- unit test: THE WIRE MODEL, a silent wire is knocked on and never flooded (#40) ----
-# A fake wire counts every frame by kind; on it, nothing, a cold box built from libreac's
-# own builders on fake_box's rules, or a trunk parent. A silent wire carries at most the
-# knock's budget per cycle and no stream frame; the first answer ends the knock and starts
-# the stream, whose master reaches ENROLL; a trunk parent goes quiet on its VLANs' tags.
-# Handing the licence back to the hunt (the old probe) turns three of the four arms red.
+# A fake wire counts every frame by kind; on it, nothing, fake_box, a box that answers only
+# through FILLER, or a trunk parent. Ten silent minutes carry no stream frame, exactly the
+# capped stream knocks and the backoff's gaps, against budgets derived from libreac's own
+# master; the first answer ends the knock and starts the stream, whose master reaches ENROLL;
+# a trunk parent goes quiet on its VLANs' tags; the knock's wake ladder bounces on schedule.
+# Handing the licence back to the hunt (the old probe) turns eight of the nine arms red.
 knock_wire_test = executable('test_reac_knock_wire',
-  ['tests/test_reac_knock_wire.c', 'src/reac_knock_wire.c'],
+  ['tests/test_reac_knock_wire.c', 'src/reac_knock_wire.c', 'src/reac_wake.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_knock_wire', knock_wire_test)
