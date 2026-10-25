@@ -19,3 +19,6 @@ logs/
 # compiled Python embeds the build machine paths
 __pycache__/
 *.py[co]
+
+# inputs a fuzz run crashed on (make -C fuzz fuzz-run)
+/fuzz/findings/
