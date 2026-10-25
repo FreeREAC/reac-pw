@@ -13,7 +13,10 @@
 #   * an interface that appears or disappears while the daemon runs adds or removes its
 #     segment with no restart;
 #   * and every segment's ROLE is `auto`: a box mastering the wire is slave-joined, a desk
-#     mastering it is tapped, a silent wire is mastered and flooded.
+#     mastering it is tapped, a silent wire is listened to and knocked on (the scene
+#     transfer a cold box answers, never the stream) and mastered once a box answers.
+#     A trunk parent stops knocking when its VLANs carry REAC and is never a segment,
+#     so a trunk NIC needs no `ignore = yes` here.
 #
 # THIS FILE IS THE EXCEPTION, AND reac-pw.env IS NOT. `REAC_ROLE` and `REAC_ROLE_<segment>`
 # no longer decide anything, in any layer: a role written before there was anything to
@@ -44,8 +47,9 @@
 #[segment enp131s0.12]
 #role = slave
 
-# A WIRE WE DRIVE WHATEVER WE HEAR. Rarely what you want: `auto` already masters a silent
-# wire, and a pin cannot beat a box that is already mastering — it joins it.
+# A WIRE WE DRIVE WHATEVER WE HEAR. Rarely what you want: `auto` already knocks on a silent
+# wire and masters it once a box answers, and a pin cannot beat a box that is already
+# mastering — it joins it. A pin streams on link without waiting for an answer.
 #[segment enp131s0.1]
 #role = master
 
