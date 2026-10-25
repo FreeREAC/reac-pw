@@ -176,7 +176,14 @@ grep -a "roster is on the graph" "$LOG" | head -1 | sed 's/^/  rosterline /'
 # ---- C. THE BOX GOES, AND THE NODE MUST NOT --------------------------------------------
 kill -TERM $FAKEPID 2>/dev/null; kill -9 $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 for ((i = 0; i < 120; i++)); do
-	roster_of $PID | grep -qa "rn1.*\(probing\|knocking\|listening\)\|\(probing\|knocking\|listening\).*rn1" && break
+	# rn1's OWN state key, never a word anywhere on the line: the status sentences are
+	# prose, and rn0's tap sentence says "listening" (a whole-line grep broke this wait on
+	# the first poll and read the roster while rn1 was still established).
+	R=$(roster_of $PID | tr ' ' '\n')
+	G=$(echo "$R" | sed -n 's/^reac\.roster\.\([0-9]*\)\.name=rn1$/\1/p' | head -1)
+	case "$(echo "$R" | grep -a "^reac\.roster\.$G\.state=" | head -1 | cut -d= -f2)" in
+	probing|knocking|listening) [ -n "$G" ] && break ;;
+	esac
 	sleep 0.5
 done
 sleep 2
