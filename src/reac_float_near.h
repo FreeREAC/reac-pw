@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com> */
 
-/* reac_float_near — THE NUMBER A FLOAT CONTROL VALUE CARRIES.
+/* reac_float_near: THE NUMBER A FLOAT CONTROL VALUE CARRIES.
  *
  * The three readers of SPA_PROP_params (reac_headamp_prop, reac_rate_cfg, reac_role_cfg)
  * take a value as Float as well as Int, because a slider or a JSON-number bridge sends
