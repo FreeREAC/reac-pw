@@ -3,32 +3,42 @@
 
 /* THE WIRE MODEL: a silent wire is knocked on, never flooded (#40, #31, #39).
  *
- * A fake wire counts every frame the daemon puts on it, by kind (libreac's reac_ctrl_parse).
- * On it sit, case by case, nothing at all; a linked silent box; a trunk parent whose VLANs
- * carry REAC. The daemon's side is what main.c's 200 ms poll runs for an unpinned wire:
- * libreac's hunt fed by every frame heard, reac_knock_wire stepped and run, and the master
- * stream started when the hunt says MASTER. The stream is modelled as the pacer is: libreac's
- * reac_master stepped every slot and every slot sent, FILLER included, with the answer the
- * knock kept handed to it first (main.c does that with reac_pacer_rx_ingest before the pacer
- * thread starts).
+ * A fake wire counts every frame the daemon puts on it, by kind (libreac's reac_ctrl_parse),
+ * and notes when each knock opened. On it sit, case by case, nothing at all; a linked silent
+ * box; a trunk parent whose VLANs carry REAC. The daemon's side is what main.c runs for an
+ * unpinned wire: libreac's hunt fed by every frame heard, reac_knock_wire stepped every
+ * 200 ms poll and run when its timer falls due, and the master stream started when the hunt
+ * says MASTER. The stream is modelled as the pacer is: libreac's reac_master stepped every
+ * slot and every slot sent, FILLER included, with the answer the knock kept handed to it
+ * first (main.c does that with reac_pacer_rx_ingest before the pacer thread starts).
  *
- * THE BOX IS libreac's fake_box, RULE FOR RULE (tools/fake_box.c, from the desk-arrival
+ * THE BUDGETS ARE THE WIRE'S, NEVER THE MODULE'S. What a knock may carry is derived here from
+ * libreac's own master, stepped through one hunting cycle from the header (cycle_ctrl, the
+ * frames it stamps with a control block; cycle_slots, the whole cycle), and what went out is
+ * counted on the fake wire. No counter of reac_knock_wire's is asserted as a budget.
+ *
+ * TWO BOXES. `fake_box` is libreac's, rule for rule (tools/fake_box.c, from the desk-arrival
  * capture of 2026-09-14): silent until a COMPLETE transfer (FIRST, 341 MIDDLE, LAST) reaches
- * it, an interrupted one ignored; it answers 8.4 ms after the LAST with its declaration,
- * unicast to whoever pushed, then streams upstream filler to it. The frames are libreac's
- * builders, not bytes typed here.
+ * it, an interrupted one ignored; it answers 8.4 ms after the LAST with its declaration, then
+ * streams upstream filler. It ignores FILLER by construction, so it answers a control knock,
+ * and that proves the knock's SEQUENCE and nothing about a real box. `stream_box` is the case
+ * no record rules out (docs/KNOCK.md): the same box, but a transfer counts only if the master's
+ * FILLER ran through it, as it does in every capture of a real box answering. It is what the
+ * escalation exists for.
  *
  * WHAT GOES RED ON THE OLD PROBE. Before #40 the licence was handed to the hunt
  * (reac_hunt_silence_proven) and the stream went out at every slot of a wire nothing had been
  * heard on. Put that line back into reac_knock_wire_step and A, B and C fail on their stream
- * counts; that is the sabotage recorded in the PR.
+ * counts. Make reac_knock_wire_period_ns return one cycle and A fails on the gaps; drop the
+ * stream cap and A fails on its FILLER count.
  *
- *   A. A SILENT WIRE: at most REAC_KNOCK_WIRE_BUDGET_PER_CYCLE frames per cycle, ZERO stream
- *      frames, and every cycle carries a whole transfer (the knock is the sequence a box
- *      answers, not a token).
- *   B. A DIRECT NIC WITH A COLD BOX: the first frame heard ends the knock, no knock frame
- *      after it, the stream starts only after it, and the master that starts reaches ENROLL
- *      (the box's next step, its JOIN, follows the group map: fake_box.c).
+ *   A. A SILENT WIRE, ten minutes: ZERO master-stream frames; exactly STREAM_KNOCKS stream
+ *      cycles of FILLER; knock gaps of 1, 2, 4, 8 cycles, then the 30 s ceiling; once the cap
+ *      is spent, at most one control cycle per 30 s on the wire.
+ *   B. A DIRECT NIC WITH fake_box: the first answer ends the knock, the stream starts only
+ *      after it, and the master that starts reaches ENROLL.
+ *   B2. A DIRECT NIC WITH stream_box: the `control` plan never gets an answer in a minute;
+ *      the default plan gets it on its first stream knock, and the master reaches ENROLL.
  *   C. A TRUNK PARENT: knocks untagged until tagged REAC is heard on its VLANs, then sends
  *      nothing, and the tag-stripped box frames its socket then hears neither answer a knock
  *      nor make it a segment.
@@ -36,6 +46,11 @@
  *   E. A BOX POWERED ON A WIRE BEING KNOCKED ON: its flood of FILLER does not end the knock,
  *      so it hears a master and JOINs; the JOIN ends the knock and is what reaches the
  *      master, which leaves PROBING on it.
+ *   F. THE RESET: a wire backed off to the ceiling hears one frame after a silence; the next
+ *      knock opens at once and the gaps start again from one cycle.
+ *   G. THE KNOCK'S WAKE LADDER, with values: the edge falls on the first once-a-second step
+ *      past the 12 s grace with three whole pushes behind it, across the knock's rests; a
+ *      wire that carried any frame is refused the edge.
  */
 #include "reac_knock_wire.h"
 
@@ -56,9 +71,41 @@
 #define POLL_NS (200ULL * MS)
 #define COMMIT_DELAY_NS (8400ULL * 1000ULL)   /* fake_box.c COMMIT_DELAY_NS */
 #define BOX_STREAM_NS   (2ULL * MS)
+#define MAX_OPENS 64
 
 static const uint8_t OUR_MAC[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 static const uint8_t BOX_MAC[6] = { 0x00, 0x40, 0xab, 0xc4, 0x08, 0xbc };  /* fake_box.c */
+
+/* ONE HUNTING CYCLE OF libreac's MASTER, from the header: the frames it stamps with a control
+ * block and the slots in all. This is the knock's content by definition, derived here from
+ * libreac and never typed in. */
+static int cycle_ctrl, cycle_slots, transfer_slots;
+static uint64_t cycle_ns;
+
+static void derive_cycle(int fps)
+{
+	struct reac_master m;
+	struct reac_console_cfg c = REAC_CONSOLE_CFG_IDLE;
+	c.console_field = reac_pace_code(fps);
+	reac_master_init(&m, OUR_MAC, &c, fps);
+	for (int i = 0; i < m.cycle_len && m.cycle_pos != m.sub01_off; i++) {
+		uint16_t counter;
+		int idx;
+		(void)reac_master_next(&m, &counter, &idx);
+	}
+	cycle_slots = m.cycle_len;
+	cycle_ctrl = 0;
+	for (int i = 0; i < m.cycle_len; i++) {
+		uint16_t counter;
+		int idx;
+		const enum reac_master_emit e = reac_master_next(&m, &counter, &idx);
+		if (e != REAC_M_EMIT_FILLER)
+			cycle_ctrl++;
+		if (e == REAC_M_EMIT_SCENE_TAIL)
+			transfer_slots = i;     /* header to LAST */
+	}
+	cycle_ns = (uint64_t)cycle_slots * SEC / (uint64_t)fps;
+}
 
 struct wire {
 	uint64_t now;
@@ -67,10 +114,17 @@ struct wire {
 	uint64_t knock_frames;          /* of which the knock's */
 	uint64_t stream_frames;         /* of which the master stream's */
 	uint64_t first_stream_ns;       /* when the stream's first frame went out (0 = never) */
+	uint64_t frames_since;          /* knock frames from `since_ns` on */
+	uint64_t since_ns;
 	int sending_stream;             /* who is sending this frame */
+	/* when each knock opened: the time of each knock FIRST */
+	uint64_t open_ns[MAX_OPENS];
+	int n_open;
 	/* the box */
 	int box;
-	int saw_first, mids, committed;
+	int needs_filler;               /* stream_box: a transfer counts only through FILLER */
+	int saw_first, mids, filler_in;
+	int committed;
 	uint64_t commit_at, next_stream;
 	uint16_t box_counter;
 	/* the box's frames, delivered to the daemon's socket */
@@ -91,14 +145,23 @@ static int wire_send(void *ctx, const uint8_t *f, size_t n)
 			w->first_stream_ns = w->now;
 	} else {
 		w->knock_frames++;
+		if (w->now >= w->since_ns)
+			w->frames_since++;
 	}
-	if (k == REAC_CTRL_FILLER)
+	if (k == REAC_CTRL_FILLER) {
 		w->filler++;
+		if (w->saw_first)
+			w->filler_in++;
+	}
 	if (k == REAC_CTRL_SCENE_TRANSFER && p.link == REAC_LINK_CTRL && p.opcode == REAC_OP_BULK) {
 		if (p.seg == REAC_SEG_FIRST) {
 			w->first++;
 			w->saw_first = 1;
 			w->mids = 0;
+			w->filler_in = 0;
+			/* a knock opens on its transfer's header and carries one */
+			if (!w->sending_stream && w->n_open < MAX_OPENS)
+				w->open_ns[w->n_open++] = w->now;
 		} else if (p.seg == REAC_SEG_MIDDLE) {
 			w->middle++;
 			if (w->saw_first)
@@ -107,7 +170,7 @@ static int wire_send(void *ctx, const uint8_t *f, size_t n)
 			w->last++;
 			/* fake_box.c: a complete transfer, and the box has not committed yet */
 			if (w->box && w->saw_first && w->mids == REAC_SCENE_CHUNKS && !w->committed &&
-			    !w->commit_at)
+			    !w->commit_at && (!w->needs_filler || w->filler_in > 0))
 				w->commit_at = w->now + COMMIT_DELAY_NS;
 			w->saw_first = 0;
 			w->mids = 0;
@@ -156,13 +219,14 @@ struct daemon {
 	int granting_seen;              /* the master left PROBING forward at some slot */
 };
 
-static void daemon_init(struct daemon *d, uint64_t t0, int pinned)
+static void daemon_init(struct daemon *d, uint64_t t0, int pinned, const char *plan)
 {
 	memset(d, 0, sizeof *d);
 	reac_hunt_init(&d->hunt, OUR_MAC, t0);
 	if (pinned)
 		reac_hunt_pin(&d->hunt, REAC_ROLE_MASTER);
 	reac_knock_wire_init(&d->kw, OUR_MAC, FPS_96K, t0);
+	reac_knock_wire_set_plan(&d->kw, reac_knock_plan_find(plan));
 }
 
 static void apply(struct daemon *d, enum reac_knock_wire_act a, uint64_t now)
@@ -226,7 +290,8 @@ static void daemon_tick(struct daemon *d, struct wire *w, int poll)
 		if (!d->trunk_now && d->hunt.verdict == REAC_HUNT_MASTER)
 			daemon_serve(d, w->now);
 	}
-	if (d->knock_open && !d->served) {
+	/* main.c's timer: armed at the knock's due time, a rest included */
+	if (d->knock_open && !d->served && d->kw.due_ns && w->now >= d->kw.due_ns) {
 		w->sending_stream = 0;
 		reac_knock_wire_run(&d->kw, w->now, wire_send, w);
 	}
@@ -262,47 +327,71 @@ static void run(struct daemon *d, struct wire *w, uint64_t t0, uint64_t secs,
 	}
 }
 
-/* ---- A. A SILENT WIRE ------------------------------------------------------------ */
+/* |a - b| <= tol */
+static int near(uint64_t a, uint64_t b, uint64_t tol)
+{
+	return a > b ? a - b <= tol : b - a <= tol;
+}
+
+/* ---- A. A SILENT WIRE, TEN MINUTES ---------------------------------------------------- */
 static int arm_silent_wire(uint64_t t0)
 {
 	struct daemon d;
-	struct wire w;
+	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0);
-	run(&d, &w, t0, 30, 0, 0);
-	fprintf(stderr, "A: 30 s on a silent wire: %llu frames (%llu knock, %llu stream, "
-	        "%llu FILLER), worst cycle %llu (budget %d), %llu complete transfers\n",
+	daemon_init(&d, t0, 0, NULL);
+	w.since_ns = t0 + 300 * SEC;
+	run(&d, &w, t0, 600, 0, 0);
+	fprintf(stderr, "A: 600 s on a silent wire: %llu frames (%llu knock, %llu stream, %llu "
+	        "FILLER) in %d knocks; a cycle is %d slots, %d of them control (libreac's master)\n",
 	        (unsigned long long)w.frames, (unsigned long long)w.knock_frames,
-	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler,
-	        (unsigned long long)d.kw.cycle_max, REAC_KNOCK_WIRE_BUDGET_PER_CYCLE,
-	        (unsigned long long)d.kw.pushes);
+	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open,
+	        cycle_slots, cycle_ctrl);
+	fprintf(stderr, "A: knock gaps (s):");
+	for (int i = 1; i < w.n_open; i++)
+		fprintf(stderr, " %.3f", (double)(w.open_ns[i] - w.open_ns[i - 1]) / 1e9);
+	fprintf(stderr, "\n");
 	CHK(w.stream_frames == 0);
-	CHK(w.filler == 0);
 	CHK(!d.served);
-	CHK(d.kw.cycle_max <= REAC_KNOCK_WIRE_BUDGET_PER_CYCLE);
-	/* the stream's own count over the same 30 s, for scale: 240 000 frames */
-	CHK(w.frames < 30 * FPS_96K / 50);
-	/* POSITIVE CONTROL: the knock is the sequence a box answers, every cycle. */
 	CHK(d.acts_knock == 1);
-	CHK(d.kw.pushes >= 10);
-	CHK(w.first == d.kw.pushes || w.first == d.kw.pushes + 1);
-	CHK(w.middle >= d.kw.pushes * REAC_SCENE_CHUNKS);
 	/* nothing before the masterless observation closed */
-	CHK(d.kw.t0_ns >= t0 + REAC_KNOCK_LISTEN_NS);
+	CHK(w.n_open > 0 && w.open_ns[0] >= t0 + REAC_KNOCK_LISTEN_NS);
+	/* THE ESCALATION IS BOUNDED: exactly the cap's stream cycles of FILLER in ten minutes */
+	CHK(w.filler == (uint64_t)REAC_KNOCK_WIRE_STREAM_KNOCKS * (uint64_t)(cycle_slots - cycle_ctrl));
+	/* THE BACKOFF, with values: 1, 2, 4, 8 cycles, then the ceiling for good */
+	CHK(w.n_open >= 10);
+	for (int i = 1; i < w.n_open; i++) {
+		uint64_t want = cycle_ns << (i - 1);
+		if (want > REAC_KNOCK_WIRE_PERIOD_MAX_NS || i - 1 >= 16)
+			want = REAC_KNOCK_WIRE_PERIOD_MAX_NS;
+		CHK(near(w.open_ns[i] - w.open_ns[i - 1], want, 2 * MS));
+	}
+	/* AND ONCE THE CAP IS SPENT, the second five minutes carry control knocks only, at most
+	 * one per ceiling period: 10 or 11 of them, each at most one cycle's control frames */
+	CHK(w.frames_since <= 11ULL * (uint64_t)cycle_ctrl);
+	CHK(w.frames_since >= 9ULL * (uint64_t)(cycle_ctrl - 1));
+	/* POSITIVE CONTROL: every knock is the sequence fake_box answers, a whole transfer */
+	CHK(w.first == (uint64_t)w.n_open);
+	CHK(w.middle == (uint64_t)w.n_open * REAC_SCENE_CHUNKS);
+	/* and the module's own derivation agrees with this one */
+	CHK(reac_knock_wire_control_per_cycle(FPS_96K) == cycle_ctrl);
+	CHK(reac_knock_wire_cycle_slots(FPS_96K) == cycle_slots);
 	return 0;
 }
 
-/* ---- B. A DIRECT NIC WITH A COLD BOX ------------------------------------------- */
+/* ---- B. A DIRECT NIC WITH fake_box ------------------------------------------------ */
 static int arm_direct_nic(uint64_t t0)
 {
 	struct daemon d;
-	struct wire w;
+	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0);
+	daemon_init(&d, t0, 0, NULL);
 	run(&d, &w, t0, 12, 0, t0);
-	fprintf(stderr, "B: box answered at +%.3f s; knock %llu frames, stream %llu frames "
-	        "from +%.3f s; ENROLL %llu\n",
+	fprintf(stderr, "B: fake_box answered at +%.3f s on knock %llu (%s); knock %llu frames, "
+	        "stream %llu frames from +%.3f s; ENROLL %llu\n",
 	        d.answered_ns ? (double)(d.answered_ns - t0) / 1e9 : -1.0,
+	        (unsigned long long)d.kw.answered_cycle,
+	        reac_knock_content_name(d.kw.answered_content),
 	        (unsigned long long)w.knock_frames, (unsigned long long)w.stream_frames,
 	        w.first_stream_ns ? (double)(w.first_stream_ns - t0) / 1e9 : -1.0,
 	        (unsigned long long)w.enroll);
@@ -312,8 +401,51 @@ static int arm_direct_nic(uint64_t t0)
 	CHK(d.acts_knock == 1);
 	CHK(d.acts_hush == 1);
 	CHK(d.kw.state != REAC_KNOCK_WIRE_KNOCKING);
-	CHK(w.knock_frames <= 2 * REAC_KNOCK_WIRE_BUDGET_PER_CYCLE);
+	/* fake_box ignores FILLER, so the first control knock is enough for IT */
+	CHK(d.kw.answered_cycle == 1 && d.kw.answered_content == REAC_KNOCK_CONTROL);
+	CHK(w.knock_frames <= (uint64_t)cycle_ctrl);
 	/* and the master that starts on the answer goes on to ENROLL the box */
+	CHK(w.enroll > 0);
+	return 0;
+}
+
+/* ---- B2. A DIRECT NIC WITH A BOX THAT ANSWERS ONLY THE STREAM ------------------------- */
+static int arm_stream_box(uint64_t t0)
+{
+	struct daemon d;
+	static struct wire w;
+	/* the `control` plan: never a FILLER, so this box never answers */
+	memset(&w, 0, sizeof w);
+	w.needs_filler = 1;
+	daemon_init(&d, t0, 0, "control");
+	run(&d, &w, t0, 60, 0, t0);
+	fprintf(stderr, "B2: stream_box, control plan: %d knocks, %llu FILLER, answered=%d\n",
+	        w.n_open, (unsigned long long)w.filler, d.acts_hush);
+	CHK(w.filler == 0);
+	CHK(d.acts_hush == 0 && !d.served);
+	CHK(w.n_open >= 5);
+	/* the default plan: answered on its first stream knock, the third */
+	memset(&w, 0, sizeof w);
+	w.needs_filler = 1;
+	daemon_init(&d, t0, 0, NULL);
+	run(&d, &w, t0, 20, 0, t0);
+	fprintf(stderr, "B2: stream_box, %s plan: answered at +%.3f s on knock %llu (%s), %llu "
+	        "knock frames (%llu FILLER); ENROLL %llu\n", REAC_KNOCK_PLAN_DEFAULT,
+	        d.answered_ns ? (double)(d.answered_ns - t0) / 1e9 : -1.0,
+	        (unsigned long long)d.kw.answered_cycle,
+	        reac_knock_content_name(d.kw.answered_content),
+	        (unsigned long long)w.knock_frames, (unsigned long long)w.filler,
+	        (unsigned long long)w.enroll);
+	CHK(d.acts_hush == 1 && d.served);
+	CHK(d.kw.answered_cycle == 3 && d.kw.answered_content == REAC_KNOCK_STREAM);
+	/* knock 3 opens one cycle and two after knocks 1 and 2, and the box answers its LAST:
+	 * the header-to-LAST span of libreac's master plus fake_box's 8.4 ms */
+	CHK(w.n_open >= 3);
+	CHK(near(w.open_ns[1] - w.open_ns[0], cycle_ns, 2 * MS));
+	CHK(near(w.open_ns[2] - w.open_ns[1], 2 * cycle_ns, 2 * MS));
+	CHK(near(d.answered_ns - w.open_ns[2],
+	         (uint64_t)transfer_slots * SEC / FPS_96K + COMMIT_DELAY_NS, 2 * MS));
+	CHK(w.first_stream_ns >= d.answered_ns);
 	CHK(w.enroll > 0);
 	return 0;
 }
@@ -322,16 +454,16 @@ static int arm_direct_nic(uint64_t t0)
 static int arm_trunk_parent(uint64_t t0)
 {
 	struct daemon d;
-	struct wire w;
+	static struct wire w, w2;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0);
+	daemon_init(&d, t0, 0, NULL);
 	/* knocks untagged from +0.5 s; tagged REAC heard on a VLAN at +2 s; from +4 s its
 	 * socket hears a box's frames with the tag stripped */
 	run(&d, &w, t0, 2, 0, 0);
 	const uint64_t before = w.knock_frames;
 	CHK(w.stream_frames == 0 && !d.served);   /* the parent is knocked on, not streamed at */
 	CHK(d.acts_knock == 1 && before > 0);
-	struct wire w2 = w;
+	w2 = w;
 	run(&d, &w2, t0 + 2 * SEC, 2, t0 + 2 * SEC, 0);
 	CHK(d.acts_trunk == 1);
 	CHK(w2.frames == w.frames);           /* nothing at all after the tags */
@@ -358,9 +490,9 @@ static int arm_trunk_parent(uint64_t t0)
 static int arm_pinned(uint64_t t0)
 {
 	struct daemon d;
-	struct wire w;
+	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 1);
+	daemon_init(&d, t0, 1, NULL);
 	run(&d, &w, t0, 3, 0, 0);
 	CHK(d.acts_knock == 0);
 	CHK(w.knock_frames == 0);
@@ -378,9 +510,9 @@ static int arm_box_powers_up(uint64_t t0)
 {
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	struct daemon d;
-	struct wire w;
+	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0);
+	daemon_init(&d, t0, 0, NULL);
 	run(&d, &w, t0, 4, 0, 0);               /* knocking, nothing on the wire */
 	CHK(d.acts_knock == 1 && !d.served);
 	const uint64_t knock0 = w.knock_frames, frames0 = w.frames;
@@ -425,20 +557,111 @@ static int arm_box_powers_up(uint64_t t0)
 	return 0;
 }
 
+/* ---- F. THE RESET ----------------------------------------------------------------- */
+static int arm_reset(uint64_t t0)
+{
+	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	struct daemon d;
+	static struct wire w;
+	memset(&w, 0, sizeof w);
+	daemon_init(&d, t0, 0, "control");
+	run(&d, &w, t0, 200, 0, 0);              /* backed off to the ceiling */
+	const int opens0 = w.n_open;
+	CHK(opens0 >= 2);
+	CHK(near(w.open_ns[opens0 - 1] - w.open_ns[opens0 - 2], REAC_KNOCK_WIRE_PERIOD_MAX_NS, 2 * MS));
+	/* one frame that is not evidence, after a silence, 5 s into a 30 s rest. Handed to the
+	 * knock alone: a box's flood frame would also take the hunt to MASTER (a box is present),
+	 * which is arm E's case, and this arm is about the backoff. */
+	const uint64_t heard = w.open_ns[opens0 - 1] + 5 * SEC;
+	run(&d, &w, t0 + 200 * SEC, (heard - (t0 + 200 * SEC)) / SEC, 0, 0);
+	w.now = heard;
+	uint8_t f[REAC_FRAME_BYTES];
+	const size_t fl = reac_ctrl_build_flood_filler(f, BCAST, BOX_MAC, 1, 16, NULL,
+	                                               REAC_SAMPLES_PER_PKT);
+	CHK(reac_knock_wire_heard(&d.kw, heard, f, fl, 0) == REAC_KNOCK_WIRE_ACT_NONE);
+	daemon_tick(&d, &w, 0);
+	run(&d, &w, heard + MS, 40, 0, 0);
+	fprintf(stderr, "F: a frame at +%.3f s after a silence: next knock +%.3f s after it, then "
+	        "gaps %.3f %.3f s\n", (double)(heard - t0) / 1e9,
+	        (double)(w.open_ns[opens0] - heard) / 1e9,
+	        (double)(w.open_ns[opens0 + 1] - w.open_ns[opens0]) / 1e9,
+	        (double)(w.open_ns[opens0 + 2] - w.open_ns[opens0 + 1]) / 1e9);
+	CHK(w.n_open >= opens0 + 3);
+	CHK(w.open_ns[opens0] - heard <= 2 * MS);                       /* at once */
+	CHK(near(w.open_ns[opens0 + 1] - w.open_ns[opens0], cycle_ns, 2 * MS));      /* from 1 */
+	CHK(near(w.open_ns[opens0 + 2] - w.open_ns[opens0 + 1], 2 * cycle_ns, 2 * MS));
+	return 0;
+}
+
+/* ---- G. THE KNOCK'S WAKE LADDER, once a second as main.c steps it ----------------------- */
+static int arm_ladder(uint64_t t0, uint64_t rx_per_s, enum reac_wake_act want,
+                      enum reac_wake_refusal refusal)
+{
+	struct daemon d;
+	static struct wire w;
+	struct reac_knock_ladder kl;
+	memset(&w, 0, sizeof w);
+	memset(&kl, 0, sizeof kl);
+	daemon_init(&d, t0, 0, NULL);
+	uint64_t ladder_open = 0, bounced = 0, pushes_at = 0;
+	enum reac_wake_refusal last = REAC_WAKE_OK;
+	for (uint64_t t = t0; t < t0 + 40 * SEC && !bounced; t += MS) {
+		w.now = t;
+		daemon_tick(&d, &w, (t - t0) % POLL_NS == 0);
+		if ((t - t0) % SEC || d.kw.state != REAC_KNOCK_WIRE_KNOCKING)
+			continue;
+		struct reac_wake_obs o;
+		const enum reac_wake_act a =
+			reac_knock_ladder_step(&kl, &d.kw, t, rx_per_s * ((t - t0) / SEC), 1, 0, &o);
+		if (!ladder_open)
+			ladder_open = t;
+		last = kl.wake.refusal;
+		if (a == REAC_WAKE_ACT_BOUNCE) {
+			bounced = t;
+			pushes_at = o.scene_pushes;
+		}
+		/* across the rests the frames are counted from the spell: never NOTHING_SENT */
+		CHK(kl.wake.refusal != REAC_WAKE_NOTHING_SENT);
+	}
+	fprintf(stderr, "G: %llu box frames a second: ladder opened +%.3f s, %s at +%.3f s with %llu pushes "
+	        "(last refusal %d)\n", (unsigned long long)rx_per_s,
+	        (double)(ladder_open - t0) / 1e9, bounced ? "EDGE" : "no edge",
+	        bounced ? (double)(bounced - t0) / 1e9 : -1.0, (unsigned long long)pushes_at,
+	        (int)last);
+	if (want == REAC_WAKE_ACT_BOUNCE) {
+		/* the first step at or past the grace, with three whole pushes behind it */
+		CHK(bounced == ladder_open + REAC_WAKE_GRACE_NS);
+		CHK(pushes_at >= REAC_WAKE_MIN_PUSHES);
+	} else {
+		CHK(!bounced);
+		CHK(last == refusal);
+	}
+	return 0;
+}
+
 int main(void)
 {
 	const uint64_t t0 = 1000ULL * SEC;
+	derive_cycle(FPS_96K);
+	fprintf(stderr, "libreac's hunting cycle: 48 kHz %d slots, %d control; 96 kHz %d slots, %d "
+	        "control\n", reac_knock_wire_cycle_slots(4000), reac_knock_wire_control_per_cycle(4000),
+	        reac_knock_wire_cycle_slots(FPS_96K), reac_knock_wire_control_per_cycle(FPS_96K));
 	int failed = 0;
 	failed += arm_silent_wire(t0);
 	failed += arm_direct_nic(t0);
+	failed += arm_stream_box(t0);
 	failed += arm_trunk_parent(t0);
 	failed += arm_pinned(t0);
 	failed += arm_box_powers_up(t0);
+	failed += arm_reset(t0);
+	failed += arm_ladder(t0, 0, REAC_WAKE_ACT_BOUNCE, REAC_WAKE_OK);
+	failed += arm_ladder(t0, 5, REAC_WAKE_ACT_NONE, REAC_WAKE_BOX_IS_TALKING);
 	if (failed) {
-		fprintf(stderr, "FAIL: %d of 5 arms\n", failed);
+		fprintf(stderr, "FAIL: %d of 9 arms\n", failed);
 		return 1;
 	}
-	printf("OK: a silent wire is knocked on within its budget and never streamed at; the "
-	       "first answer ends the knock and starts the stream; a trunk parent goes quiet\n");
+	printf("OK: a silent wire is knocked on inside its derived budget, backs off to the "
+	       "ceiling and never streamed at; the first answer ends the knock and starts the "
+	       "stream; a trunk parent goes quiet; the ladder bounces on schedule\n");
 	return 0;
 }
