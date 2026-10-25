@@ -158,6 +158,7 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_watch.c',
   'src/reac_wake.c',
+  'src/reac_knock_wire.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
   'src/reac_headamp_state.c',

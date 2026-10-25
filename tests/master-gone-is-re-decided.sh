@@ -117,21 +117,24 @@ if ! ip link show gone0 | grep -q "state UP"; then
 	echo "      ifscan hold and not #97"; ip link show gone0; exit 1
 fi
 
-# ---- 3. THE SEGMENT IS RE-DECIDED, AND IT TAKES THE WIRE. Bounded: the heard latch costs
-# REAC_SEGMENT_HEARD_QUIET_TICKS (5 s) to clear and hearing_reevaluate waits the same again,
-# so ~10 s, plus the fresh hunt's own masterless observation. 60 s is generous for a loaded
-# machine and still cannot pass by waiting: nothing else in this daemon re-decides a joined
-# segment at all.
+# ---- 3. THE SEGMENT IS RE-DECIDED, AND THE WIRE IS KNOCKED ON. Bounded: the heard latch
+# costs REAC_SEGMENT_HEARD_QUIET_TICKS (5 s) to clear and hearing_reevaluate waits the same
+# again, so ~10 s, plus the fresh hunt's own masterless observation. 60 s is generous for a
+# loaded machine and still cannot pass by waiting: nothing else in this daemon re-decides a
+# joined segment at all. Since #40 a wire nothing is heard on is KNOCKED ON for the box that
+# was switched to S, never streamed at: the master starts when that box answers.
 wait_for_since "$MARK" "\[gone0\] the master this segment was following has been silent" 60 || {
 	echo "FAIL: the box master stopped and the segment went on courting nobody — this is"
 	echo "      #97 exactly: ESTABLISHED -> DROP -> FLOOD_ANNOUNCE for ever"
 	tail -n "+$MARK" "$LOG" | tail -25; exit 1; }
-wait_for_since "$MARK" "\[gone0\] segment up (master," 40 || {
-	echo "FAIL: the segment was re-decided and never took the wire it now has to itself"
+wait_for_since "$MARK" "\[gone0\] nothing heard in .* KNOCKING" 40 || {
+	echo "FAIL: the segment was re-decided and the silent wire it now has to itself was"
+	echo "      never knocked on, so a box switched to S on it would never be woken"
 	tail -n "+$MARK" "$LOG" | tail -25; exit 1; }
-# AND IT IS DRIVING: a master that is not probing is a master in the journal only.
-wait_for_since "$MARK" "reac-master: .* PROBING" 30 || {
-	echo "FAIL: the segment came up as master and its engine never probed"
+# AND IT IS NOT STREAMED AT: no master comes up on a wire nothing answered (#40, #31).
+sleep 5
+tail -n "+$MARK" "$LOG" | grep -q "\[gone0\] segment up (master," && {
+	echo "FAIL: the re-decided wire was MASTERED with nothing on it — the flood of #31"
 	tail -n "+$MARK" "$LOG" | tail -25; exit 1; }
 
 # ---- 4. AND IT DID NOT DO IT WHILE THE MASTER WAS STILL THERE. The whole first phase ran
@@ -144,7 +147,7 @@ if tail -n "+1" "$LOG" | head -n "$((MARK - 1))" | grep -q "has been silent"; th
 	head -n "$((MARK - 1))" "$LOG" | tail -25; exit 1
 fi
 
-echo "OK: a segment whose master left is re-decided and takes the wire (#97)"
+echo "OK: a segment whose master left is re-decided and the wire is knocked on, not streamed at (#97, #40)"
 INNER
 )
 rc=$?
