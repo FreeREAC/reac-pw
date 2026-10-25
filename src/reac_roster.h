@@ -113,6 +113,11 @@ int reac_roster_status(struct reac_roster *r, const char *name, const char *stat
 /* The sentence a state says when nobody said more. Never NULL. */
 const char *reac_roster_state_said(enum reac_roster_state s);
 
+/* What a `probing` master says, from the two facts that tell its cases apart: the role was
+ * pinned in the conf, and a box's answer to the knock was handed to it at open. Never NULL;
+ * "answered" only when `answered`. */
+const char *reac_roster_probing_said(int pinned, int answered);
+
 /* WHAT MOVED, as properties to set or remove, in the grammar:
  *
  *   reac.roster            = 1                  (create-time, on the node itself)
