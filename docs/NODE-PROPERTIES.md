@@ -126,11 +126,14 @@ The first three states are a wire with no engine on it yet:
 | state | the wire | what goes out on it |
 |---|---|---|
 | `listening` | linked, and nothing has decided it: inside the 500 ms masterless observation, or heard but not yet classified | nothing |
-| `knocking` | no master on it and no box heard: the bounded knock is out (README, "A silent wire") | the scene transfer, channel map and announce of one master cycle, no audio filler |
+| `knocking` | no master on it and no box heard: the knock is out, by its declared plan ([KNOCK.md](KNOCK.md)) | a control knock (one master cycle's 347 control frames, no audio filler) or, at most three times until something is heard, a stream knock (that cycle whole); one knock per period, doubling up to 30 s |
 | `trunk` | a parent whose VLANs carry tagged REAC; its sub-interfaces are the segments, it is not one | nothing |
 
-`probing` is a master engine that has started because a box answered, and has not yet
-granted it.
+`probing` is a master engine that has started and has not yet granted a box. Its status
+says which of three it is: a box answered the knock and is being enrolled; the role is
+pinned `master` in the conf and it streams on link with no box yet; or neither. Only the
+first says "answered". An unpinned master with no box stops within 2 s of its last box
+frame (at once when libreac gives an enrolled box up) and the wire goes back to `knocking`.
 
 The node is created once and lives for the process: every change is a property update, so a
 client that has found it once never has to find it again. It is a READ surface only — a role
