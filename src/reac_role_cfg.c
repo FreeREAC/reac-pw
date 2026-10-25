@@ -42,7 +42,7 @@ const char *reac_role_cfg_apply_state(enum reac_role current_role,
  * controller might naturally send for a two-state flag: Int, or Float (a
  * toggle/JSON-number bridge that always emits floats, read as its nearest
  * integer: reac_float_near.h). Mirrors reac_rate_cfg.c's value_pod_to_hz, which
- * mirrors reac_headamp_prop.c's value_pod_to_byte in turn — the same tolerance
+ * mirrors reac_headamp_prop.c's value_pod_to_byte in turn: the same tolerance
  * at a third width. */
 static int value_pod_to_role_flag(const struct spa_pod *v, int *out)
 {
