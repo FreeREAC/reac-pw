@@ -350,6 +350,34 @@ int main(void)
 		      "the role a later file was silent about did not survive");
 	}
 
+	/* ---- A LINE IS READ WHOLE OR REFUSED BY NAME -------------------------------- *
+	 * A line too long to hold is refused, never cut to the first 511 bytes it can hold:
+	 * cut there, `role = master` and its padding read as a pin of a line that said
+	 * something else. A header with text after its ']' is refused too, and ends the
+	 * section before it, as an unclosed one does. */
+	{
+		static char text[1024];
+		struct reac_segconf b;
+		int k = snprintf(text, sizeof text, "[segment e0]\nrole = master%*s\n", 520, "x");
+		CHECK(k > 0 && (size_t)k < sizeof text, "the long-line text did not fit");
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, text);
+		CHECK(b.refused == 1, "a 540-byte line was not refused (%u)", b.refused);
+		CHECK(refusal_names(&b, "reac-pw.conf:2: line is longer"),
+		      "the refusal does not name the long line: %s", b.refusal[0]);
+		CHECK(!reac_segconf_role(&b, "e0", NULL), "a line read in part pinned a role");
+
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment e0]\nrole = tap\n[segment e1] x\nrole = slave\n");
+		CHECK(b.refused == 2, "text after ']' was not refused, or its keys were kept (%u)",
+		      b.refused);
+		CHECK(refusal_names(&b, "reac-pw.conf:3: text after the closing ']'"),
+		      "the refusal does not name the header");
+		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_TAP,
+		      "the key under a refused header went to the section before it");
+		CHECK(reac_segconf_find(&b, "e1") == NULL, "a refused header opened its segment");
+	}
+
 	unlink(path);
 	snprintf(cmd, sizeof cmd, "rm -rf '%s'", home);
 	if (system(cmd) != 0)
