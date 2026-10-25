@@ -3680,7 +3680,9 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 	/* THE KNOCK'S ANSWER, for the master this open starts (#40, reac_sink_cfg.knock_answer).
 	 * Only a master hears it: a slave or a tap is not who the box reported to. */
 	L->cfg.n_knock_answer = 0;
+	L->knock_answered = 0;
 	if (h->n_carry > 0 && L->cfg.role == REAC_ROLE_MASTER && !L->cfg.tap && !L->cfg.door_only) {
+		L->knock_answered = 1;
 		for (int i = 0; i < h->n_carry; i++) {
 			memcpy(L->cfg.knock_answer[i], h->carry[i], h->carry_len[i]);
 			L->cfg.knock_answer_len[i] = h->carry_len[i];
@@ -5456,6 +5458,9 @@ static void roster_add_listener(struct listener *L, int *dup)
 	roster_source(seg, src, sizeof src);
 	if (reac_roster_add(&g_roster, seg, st, model, role, src, in, out) != 0)
 		(*dup)++;
+	else if (st == REAC_ROSTER_PROBING)
+		reac_roster_status(&g_roster, seg,
+		                   reac_roster_probing_said(L->cfg.role_pinned, L->knock_answered));
 }
 
 static void roster_collect(struct roster_ctx *rc)

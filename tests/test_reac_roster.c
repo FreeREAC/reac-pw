@@ -147,6 +147,26 @@ int main(void)
 		      "state %s has no sentence, or one that does not fit a value",
 		      reac_roster_state_name((enum reac_roster_state)s));
 	}
+	/* ---- 5c. "A BOX ANSWERED" IS SAID ONLY WHEN ONE DID (review of PR 41). A pinned master
+	 * streams on link with no answer, and a master on a wire whose box left has none either;
+	 * the state's own sentence and those two cases must not claim one. */
+	CHECK(!strstr(reac_roster_state_said(REAC_ROSTER_PROBING), "answered"),
+	      "probing's own sentence claims an answer: '%s'",
+	      reac_roster_state_said(REAC_ROSTER_PROBING));
+	CHECK(!strstr(reac_roster_probing_said(1, 0), "answered"),
+	      "a pinned master claims an answer: '%s'", reac_roster_probing_said(1, 0));
+	CHECK(strstr(reac_roster_probing_said(1, 0), "pinned") != NULL,
+	      "a pinned master does not say it is pinned: '%s'", reac_roster_probing_said(1, 0));
+	CHECK(!strstr(reac_roster_probing_said(0, 0), "answered"),
+	      "an unanswered master claims an answer: '%s'", reac_roster_probing_said(0, 0));
+	CHECK(strstr(reac_roster_probing_said(0, 1), "answered") != NULL,
+	      "a master started on a knock's answer does not say so: '%s'",
+	      reac_roster_probing_said(0, 1));
+	for (int p = 0; p < 2; p++)
+		for (int a = 0; a < 2; a++)
+			CHECK(strlen(reac_roster_probing_said(p, a)) < sizeof kv[0].val,
+			      "a probing sentence does not fit a value");
+
 	reac_roster_init(&r);
 	reac_roster_begin(&r);
 	CHECK(reac_roster_add(&r, "enp131s0", REAC_ROSTER_TRUNK, NULL, "auto", "autodetected", 0, 0) == 0,

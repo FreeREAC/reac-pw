@@ -34,11 +34,11 @@ const char *reac_roster_state_said(enum reac_roster_state s)
 	case REAC_ROSTER_LISTENING:
 		return "listening: nothing heard here yet, and nothing is sent";
 	case REAC_ROSTER_KNOCKING:
-		return "nothing heard here: knocking for a box now and then, never streaming";
+		return "nothing heard here: knocking for a box now and then, inside a declared budget";
 	case REAC_ROSTER_TRUNK:
 		return "a trunk: its VLANs carry the boxes and are the segments; nothing is sent here";
 	case REAC_ROSTER_PROBING:
-		return "a box answered: the master is running and enrolling it";
+		return "the master is running and no box is enrolled yet";
 	case REAC_ROSTER_ESTABLISHED:
 		return "box enrolled: the master is running and its audio is on the graph";
 	case REAC_ROSTER_SLAVE:
@@ -51,6 +51,18 @@ const char *reac_roster_state_said(enum reac_roster_state s)
 		return "switched off in the conf: never listened to, never sent on";
 	}
 	return "listening: nothing heard here yet, and nothing is sent";
+}
+
+/* A RUNNING MASTER WITH NO BOX ENROLLED IS THREE DIFFERENT FACTS, and only one of them is
+ * "a box answered" (review of PR 41: the line was shown for a pinned master and for one
+ * streaming at an empty wire, where no box had answered anything). */
+const char *reac_roster_probing_said(int pinned, int answered)
+{
+	if (answered)
+		return "a box answered the knock: the master is running and enrolling it";
+	if (pinned)
+		return "master pinned in the conf: streaming on link, no box enrolled yet";
+	return "the master is running and no box is enrolled yet";
 }
 
 int reac_roster_status(struct reac_roster *r, const char *name, const char *status)
