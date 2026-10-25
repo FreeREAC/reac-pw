@@ -134,6 +134,38 @@ int main(void)
 	CHECK(strcmp(reac_roster_state_name(REAC_ROSTER_TAP), "tap") == 0, "tap");
 	CHECK(strcmp(reac_roster_state_name(REAC_ROSTER_REFUSED), "refused") == 0, "refused");
 	CHECK(strcmp(reac_roster_state_name(REAC_ROSTER_IGNORED), "ignored") == 0, "ignored");
+	CHECK(strcmp(reac_roster_state_name(REAC_ROSTER_LISTENING), "listening") == 0, "listening");
+	CHECK(strcmp(reac_roster_state_name(REAC_ROSTER_KNOCKING), "knocking") == 0, "knocking");
+	CHECK(strcmp(reac_roster_state_name(REAC_ROSTER_TRUNK), "trunk") == 0, "trunk");
+
+	/* ---- 5b. EVERY WIRE SAYS WHAT WAS FOUND AND WHAT IS BEING DONE, IN PLAIN WORDS (#40).
+	 * Each state has its own sentence and it fits a property value; a caller's own sentence
+	 * replaces it for that tick, and a wire nobody said more about reads its state's. */
+	for (int s = REAC_ROSTER_PROBING; s <= REAC_ROSTER_TRUNK; s++) {
+		const char *said = reac_roster_state_said((enum reac_roster_state)s);
+		CHECK(said && *said && strlen(said) < sizeof kv[0].val,
+		      "state %s has no sentence, or one that does not fit a value",
+		      reac_roster_state_name((enum reac_roster_state)s));
+	}
+	reac_roster_init(&r);
+	reac_roster_begin(&r);
+	CHECK(reac_roster_add(&r, "enp131s0", REAC_ROSTER_TRUNK, NULL, "auto", "autodetected", 0, 0) == 0,
+	      "the trunk row was refused");
+	CHECK(reac_roster_add(&r, "enp131s0.11", REAC_ROSTER_KNOCKING, NULL, "auto", "autodetected",
+	                      0, 0) == 0, "the knocking row was refused");
+	CHECK(reac_roster_status(&r, "enp131s0.11", "knocking for a box, 347 frames so far") == 0,
+	      "a row in this tick could not be given its sentence");
+	CHECK(reac_roster_status(&r, "enp9s0", "nobody") == -1,
+	      "a sentence was accepted for a row that is not in this tick");
+	n = reac_roster_delta(&r, kv, REAC_ROSTER_KV_MAX);
+	CHECK(carries(kv, n, "reac.roster.0.state", "trunk"), "the trunk row's state");
+	CHECK(carries(kv, n, "reac.roster.0.status", reac_roster_state_said(REAC_ROSTER_TRUNK)),
+	      "a row nobody said more about does not read its state's sentence");
+	CHECK(carries(kv, n, "reac.roster.1.state", "knocking"), "the knocking row's state");
+	CHECK(carries(kv, n, "reac.roster.1.status", "knocking for a box, 347 frames so far"),
+	      "the caller's sentence was not published: '%s'",
+	      delta_val(kv, n, "reac.roster.1.status", NULL));
+	reac_roster_commit(&r);
 
 	/* ---- 6. THE BOUNDS ARE REPORTED, NEVER TRUNCATED IN SILENCE ------------------ */
 	reac_roster_begin(&r);
