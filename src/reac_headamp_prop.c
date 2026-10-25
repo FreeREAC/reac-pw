@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_headamp_prop.h"
+#include "reac_float_near.h"    /* a Float value is its nearest integer */
 #include <reac/reac_ctrl.h>     /* enum reac_headamp_param, REAC_HEADAMP_SENS_MAX */
 
 #include <reac/reac.h>     /* REAC_SAMPLES_PER_PKT, ... */
@@ -16,14 +17,16 @@
 
 /* Coerce a scalar value pod to a byte, accepting the three encodings a
  * controller might naturally send: Bool (phantom/pad toggles), Int (any of the
- * three), or Float (a slider that carries sens as a float). Returns 0 on
- * success. Out-of-byte-range values are rejected so a stray huge number never
- * wraps into a valid-looking setting; the caller range-checks per param too. */
+ * three), or Float (a slider that carries sens as a float, read as its nearest
+ * integer: reac_float_near.h). Returns 0 on success. Out-of-byte-range values are
+ * rejected so a stray huge number never wraps into a valid-looking setting; the
+ * caller range-checks per param too. */
 static int value_pod_to_byte(const struct spa_pod *v, uint8_t *out)
 {
 	bool b;
 	int32_t i;
 	float f;
+	long long near;
 	if (spa_pod_get_bool(v, &b) == 0) {
 		*out = b ? 1 : 0;
 		return 0;
@@ -35,9 +38,9 @@ static int value_pod_to_byte(const struct spa_pod *v, uint8_t *out)
 		return 0;
 	}
 	if (spa_pod_get_float(v, &f) == 0) {
-		if (f < 0.0f || f > 255.0f)
+		if (reac_float_nearest(f, 0, 255, &near) != 0)
 			return -1;
-		*out = (uint8_t)(f + 0.5f);
+		*out = (uint8_t)near;
 		return 0;
 	}
 	return -1;

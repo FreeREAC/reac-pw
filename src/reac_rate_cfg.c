@@ -3,11 +3,13 @@
 
 #include "reac_rate_cfg.h"
 #include "reac_facts_pw.h"   /* REAC_SAMPLE_RATE_*: the legal paces, declared once */
+#include "reac_float_near.h" /* a Float value is its nearest integer */
 
 #include <spa/param/props.h>
 #include <spa/pod/pod.h>
 #include <spa/pod/iter.h>
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -94,18 +96,22 @@ enum reac_rate_refuse reac_rate_cfg_decide(enum reac_role role, int requested_hz
 
 /* Coerce a scalar value pod to a plain int, accepting the two encodings a
  * controller might naturally send for a sample rate: Int, or Float (a slider
- * or a JSON-number bridge that always emits floats). Mirrors
- * reac_headamp_prop.c's value_pod_to_byte, widened from a byte to a rate. */
+ * or a JSON-number bridge that always emits floats, read as its nearest integer:
+ * reac_float_near.h). Mirrors reac_headamp_prop.c's value_pod_to_byte, widened
+ * from a byte to a rate. */
 static int value_pod_to_hz(const struct spa_pod *v, int *out)
 {
 	int32_t i;
 	float f;
+	long long near;
 	if (spa_pod_get_int(v, &i) == 0) {
 		*out = (int)i;
 		return 0;
 	}
 	if (spa_pod_get_float(v, &f) == 0) {
-		*out = (int)(f + 0.5f);
+		if (reac_float_nearest(f, INT_MIN, INT_MAX, &near) != 0)
+			return -1;
+		*out = (int)near;
 		return 0;
 	}
 	return -1;

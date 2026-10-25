@@ -2,11 +2,13 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_role_cfg.h"
+#include "reac_float_near.h"   /* a Float value is its nearest integer */
 
 #include <spa/param/props.h>
 #include <spa/pod/pod.h>
 #include <spa/pod/iter.h>
 
+#include <limits.h>
 #include <string.h>
 
 const char *reac_role_refuse_code(enum reac_role_refuse r)
@@ -38,19 +40,23 @@ const char *reac_role_cfg_apply_state(enum reac_role current_role,
 
 /* Coerce a scalar value pod to a plain int, accepting the two encodings a
  * controller might naturally send for a two-state flag: Int, or Float (a
- * toggle/JSON-number bridge that always emits floats). Mirrors
- * reac_rate_cfg.c's value_pod_to_hz, which mirrors reac_headamp_prop.c's
- * value_pod_to_byte in turn — the same tolerance at a third width. */
+ * toggle/JSON-number bridge that always emits floats, read as its nearest
+ * integer: reac_float_near.h). Mirrors reac_rate_cfg.c's value_pod_to_hz, which
+ * mirrors reac_headamp_prop.c's value_pod_to_byte in turn — the same tolerance
+ * at a third width. */
 static int value_pod_to_role_flag(const struct spa_pod *v, int *out)
 {
 	int32_t i;
 	float f;
+	long long near;
 	if (spa_pod_get_int(v, &i) == 0) {
 		*out = (int)i;
 		return 0;
 	}
 	if (spa_pod_get_float(v, &f) == 0) {
-		*out = (int)(f + 0.5f);
+		if (reac_float_nearest(f, INT_MIN, INT_MAX, &near) != 0)
+			return -1;
+		*out = (int)near;
 		return 0;
 	}
 	return -1;
