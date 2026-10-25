@@ -2869,6 +2869,24 @@ struct declared_seg {
 	char name[IFNAMSIZ];        /* `<parent>.<vid>`, resolved once */
 };
 
+/* THE WAKE LADDER OF A WIRE THAT IS BEING KNOCKED ON (#40, reac_wake.h). A box that has
+ * DROPPED answers no frame at all, a knock included, and leaves that state on a PHY edge
+ * only; the master used to make that edge after its own completed pushes, and since #40 no
+ * master runs on a silent wire, so the knock's completed pushes feed the same ladder. Kept
+ * by NAME and not in the sniffer, because the edge it makes closes the sniffer (link down,
+ * UNLISTEN) and the count of edges made must survive it. */
+struct knock_ladder {
+	char name[IFNAMSIZ];        /* "" = free slot */
+	struct reac_wake wake;
+	uint64_t up_at_ns;          /* the link is down until here (0 = no edge in flight) */
+	uint64_t tx_seen;           /* the knock's frames sent at the last step */
+	uint64_t pushes0;           /* the knock's completed pushes when this spell opened */
+	uint64_t pushes_last;
+	unsigned knocks_seen;       /* which knock of the sniffer the counters belong to */
+	unsigned long frames0;      /* the sniffer's 0x8819 frames read when this spell opened */
+	int exhausted_said;
+};
+
 struct hearing {
 	int enabled;
 	struct reac_ifscan scan;
@@ -2887,6 +2905,8 @@ struct hearing {
 	uint8_t carry[REAC_KNOCK_WIRE_ANSWERS][REAC_FRAME_BYTES];
 	size_t carry_len[REAC_KNOCK_WIRE_ANSWERS];
 	int n_carry;
+	struct knock_ladder ladder[REAC_IFSCAN_MAX];
+	unsigned ladder_polls;      /* the ladder is stepped once a second, every 5th poll */
 	/* THE DECLARED SEGMENTS (reac_declared_vlan.h): the names the operator wrote, for the
 	 * start-up report. Their netdevs are the heard table's — minted when the VID is heard,
 	 * released when it is silent — since 2026-09-23. */
@@ -5114,6 +5134,117 @@ static void hearing_rehear_empty_masters(struct hearing *h, uint64_t now)
 	}
 }
 
+static struct knock_ladder *knock_ladder_of(struct hearing *h, const char *name, int make)
+{
+	struct knock_ladder *free_slot = NULL;
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
+		if (h->ladder[i].name[0] && strcmp(h->ladder[i].name, name) == 0)
+			return &h->ladder[i];
+		if (!h->ladder[i].name[0] && !free_slot)
+			free_slot = &h->ladder[i];
+	}
+	if (!make || !free_slot)
+		return NULL;
+	memset(free_slot, 0, sizeof *free_slot);
+	snprintf(free_slot->name, sizeof free_slot->name, "%s", name);
+	return free_slot;
+}
+
+/* ONE TURN OF THE KNOCK'S WAKE LADDER, per knocking wire, once a second. The decision is
+ * reac_wake's and is not re-made here: these are its eyes (the knock's completed pushes and
+ * frames sent, the carrier, the siblings on the port) and its hands (two rtnetlink writes).
+ * Nothing heard is `rx_box_frames = 0` by construction: a wire that is knocking has heard no
+ * box. Once a second because a knock sends a frame a second at the least (the announce),
+ * where a 200 ms step could read 0 frames sent and say NOTHING_SENT between two of them. */
+static void hearing_knock_wake(struct hearing *h, uint64_t now)
+{
+	/* AN EDGE IN FLIGHT IS FINISHED FIRST, every poll: the link is ours to bring back. */
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
+		struct knock_ladder *kl = &h->ladder[i];
+		if (!kl->name[0] || !kl->up_at_ns || now < kl->up_at_ns)
+			continue;
+		kl->up_at_ns = 0;
+		if (reac_link_admin(kl->name, 1) != 0)
+			reac_code_emit(stderr, "reac-pw", RC_E_WAKE_EDGE,
+			        "[%s] COULD NOT BRING '%s' BACK UP after the wake edge (errno %d). The "
+			        "wire is down until it is: `ip link set %s up`.\n",
+			        kl->name, kl->name, errno, kl->name);
+		else
+			fprintf(stderr, "reac-pw: [%s] '%s' is back up — a box that had dropped sees "
+			        "this as PHY LINK-UP; the knock resumes on the fresh link\n",
+			        kl->name, kl->name);
+	}
+	if (++h->ladder_polls % 5)
+		return;
+	for (int i = 0; i < REAC_IFSCAN_MAX; i++) {
+		struct sniffer *sn = &h->sniff[i];
+		if (!sn->name[0] || !sn->knock_tx_open || sn->kw.state != REAC_KNOCK_WIRE_KNOCKING)
+			continue;
+		struct knock_ladder *kl = knock_ladder_of(h, sn->name, 1);
+		if (!kl || kl->up_at_ns)
+			continue;
+		if (!kl->wake.opened_ns) {
+			reac_wake_init(&kl->wake, now);
+			kl->pushes0 = sn->kw.pushes;
+			kl->tx_seen = sn->kw.sent;
+			kl->knocks_seen = sn->kw.knocks;
+			kl->frames0 = sn->frames;
+		} else if (sn->kw.knocks != kl->knocks_seen || sn->kw.pushes < kl->pushes_last ||
+		           sn->frames < kl->frames0) {
+			/* A FRESH KNOCK — after an answer that went quiet, or on the fresh sniffer of a
+			 * link that came back: the grace restarts from here and the EDGE COUNT does not
+			 * (reac_wake_reopen). */
+			reac_wake_reopen(&kl->wake, now);
+			kl->pushes0 = sn->kw.pushes;
+			kl->tx_seen = sn->kw.sent;
+			kl->knocks_seen = sn->kw.knocks;
+			kl->frames0 = sn->frames;
+		}
+		kl->pushes_last = sn->kw.pushes;
+		struct reac_wake_obs o = {
+			.probing = 1,
+			.carrier = reac_link_carrier(sn->name),
+			/* A BOX THAT FLOODS IS TALKING, and an edge would only cost it its flood: any
+			 * 0x8819 frame this wire carried since the spell opened refuses the bounce.
+			 * Evidence would have ended the knock; this is the unknown-role rest. */
+			.rx_box_frames = sn->frames - kl->frames0,
+			.scene_pushes = sn->kw.pushes - kl->pushes0,
+			.siblings_served = port_siblings_served(sn->name),
+			.tx_frames = sn->kw.sent - kl->tx_seen,
+		};
+		kl->tx_seen = sn->kw.sent;
+		switch (reac_wake_step(&kl->wake, now, &o)) {
+		case REAC_WAKE_ACT_NONE:
+			if (reac_wake_refusal_to_say(&kl->wake))
+				fprintf(stderr, "reac-pw: [%s] the knock's wake ladder holds: %s\n",
+				        sn->name, reac_wake_refusal_text(kl->wake.refusal));
+			break;
+		case REAC_WAKE_ACT_BOUNCE:
+			fprintf(stderr, "reac-pw: [%s] nothing has answered %llu COMPLETE scene "
+			        "transfers with the carrier up. A box that has DROPPED leaves that state "
+			        "on a PHY link-up and on nothing else, so the daemon makes the edge: "
+			        "'%s' goes down for %u ms and back up (edge %u of %u)\n", sn->name,
+			        (unsigned long long)o.scene_pushes, sn->name, REAC_WAKE_DOWN_MS,
+			        kl->wake.bounces, REAC_WAKE_MAX_BOUNCES);
+			if (reac_link_admin(sn->name, 0) != 0) {
+				reac_code_emit(stderr, "reac-pw", RC_E_WAKE_EDGE,
+				        "[%s] the wake edge was REFUSED (errno %d) — nothing was touched; "
+				        "the knock goes on\n", sn->name, errno);
+				break;
+			}
+			kl->up_at_ns = now + (uint64_t)REAC_WAKE_DOWN_MS * 1000000ULL;
+			break;
+		case REAC_WAKE_ACT_EXHAUSTED:
+			if (!kl->exhausted_said++)
+				fprintf(stderr, "reac-pw: [%s] nothing answered %u PHY edges either. The "
+				        "knock goes on at its own bounded rate and the port is not flapped "
+				        "again; a box that is simply not on this wire looks exactly the "
+				        "same from here\n", sn->name, REAC_WAKE_MAX_BOUNCES);
+			break;
+		}
+	}
+}
+
 static void hearing_poll(struct hearing *h)
 {
 	if (!h->enabled)
@@ -5129,6 +5260,7 @@ static void hearing_poll(struct hearing *h)
 	hearing_join_box_master_on_pinned(h, now);
 	hearing_reevaluate(h, now);
 	hearing_rehear_empty_masters(h, now);
+	hearing_knock_wake(h, now);
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	hearing_apply(h);
