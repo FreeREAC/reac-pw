@@ -150,8 +150,32 @@ With no flags at all — the packaged shape — reac-pw works the rig out for it
 every linked Ethernet interface is sniffed, the first REAC frame heard makes it a
 segment, every VLAN sub-interface is an interface like any other, a tagged VLAN id
 with no sub-interface is created or named in a refusal, and every segment's ROLE is
-`auto`: a box mastering the wire is slave-joined, a desk mastering it is tapped, a
-silent wire is mastered and flooded. Nothing in the environment can change a role.
+`auto`: a box mastering the wire is slave-joined, a desk mastering it is tapped, and a
+silent wire is listened to and KNOCKED on, never flooded (below). Nothing in the
+environment can change a role.
+
+### A silent wire: listen, then knock
+
+A master never pours its stream onto a wire to find out whether a box is there. A wire
+that carries no REAC frame for 500 ms has no master on it, and a cold stagebox on it says
+nothing until a master speaks: it answers one COMPLETE scene transfer and ignores an
+interrupted one (libreac `reac_knock.h`, `tools/fake_box.c`). So the daemon KNOCKS: it
+sends what a hunting master's control cycle carries and nothing else, the scene transfer
+(one header, 341 chunks, the final chunk), the channel map and the master announce, at
+the slots a real desk sends them, and leaves every audio filler slot empty. That is at
+most 347 frames per cycle (10778 slots at 48 kHz, about 2.7 s at every rate), about
+1.5 Mbit/s averaged and 6 Mbit/s inside the 0.68 s chunk burst, where the stream is 4000
+or 8000 frames a second (about 48 Mbit/s at 48 kHz, 96 Mbit/s at 96 kHz).
+
+The first frame heard from a box ends the knock. The master stream starts only then, and
+the box's answer is handed to it, so the box that committed the knocked scene is enrolled
+by the master that follows. A master whose box goes away and stays silent through the
+wake ladder goes back to listening and knocking; it does not stream at nobody.
+
+A box straight on a NIC, a box on an access port behind a trunk, and one box per VLAN
+across several switches all enrol this way with nothing written in a file. A trunk parent
+knocks untagged like any NIC until tagged REAC is heard on one of its VLANs; from then on
+it is not a segment, it stops knocking, and its VLAN sub-interfaces are the segments.
 
 To override ONE segment — a switch mirror port, a recorder, a NIC to leave alone —
 write `~/.config/reac-pw/reac-pw.conf` by hand (`[segment IFNAME]` with `role =` or

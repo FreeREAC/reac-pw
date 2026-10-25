@@ -98,7 +98,7 @@ pushed at a box that arrives later.
 ## Reading — the ROSTER, including the segments that have no node
 
 The two nodes above exist only where there is **something to carry** — a box recognised, a
-master to tap, or a width the operator pinned. A segment that is probing an empty wire has
+master to tap, or a width the operator pinned. A wire that is listened to or knocked on has
 no node at all, by ruling. So the daemon publishes ONE more node, for itself:
 
 | | |
@@ -114,11 +114,23 @@ Its properties are the roster, one index-keyed group per segment the daemon runs
 |---|---|
 | `reac.roster.n` | how many groups there are |
 | `reac.roster.<i>.name` | the interface name — the segment's identity, and what a reader keys on. The index is an ORDER (byte order of the names), not an identity |
-| `reac.roster.<i>.state` | `probing` \| `established` \| `slave` \| `tap` \| `refused` \| `ignored` |
+| `reac.roster.<i>.state` | `listening` \| `knocking` \| `trunk` \| `probing` \| `established` \| `slave` \| `tap` \| `refused` \| `ignored` |
+| `reac.roster.<i>.status` | what was found on this wire and what the daemon is doing about it, in one plain sentence for a person to read; never parsed |
 | `reac.roster.<i>.model` | the recognised box in `reac.box-model`'s own vocabulary (`s1608`, `s4000s`), or `none` |
 | `reac.roster.<i>.role` | `auto` \| `master` \| `slave` \| `tap`, as RESOLVED — never as asked |
 | `reac.roster.<i>.source` | `autodetected`, or `conf:<file>` naming the file that pinned it |
 | `reac.roster.<i>.width` | the published pair's `in/out`, `0/0` where there is no pair |
+
+The first three states are a wire with no engine on it yet:
+
+| state | the wire | what goes out on it |
+|---|---|---|
+| `listening` | linked, and nothing has decided it: inside the 500 ms masterless observation, or heard but not yet classified | nothing |
+| `knocking` | no master on it and no box heard: the bounded knock is out (README, "A silent wire") | the scene transfer, channel map and announce of one master cycle, no audio filler |
+| `trunk` | a parent whose VLANs carry tagged REAC; its sub-interfaces are the segments, it is not one | nothing |
+
+`probing` is a master engine that has started because a box answered, and has not yet
+granted it.
 
 The node is created once and lives for the process: every change is a property update, so a
 client that has found it once never has to find it again. It is a READ surface only — a role
