@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_headamp.c:257 (a `pad` key addresses the phantom of its channel).
+Caught by the seed input "cells-and-refusals" of fuzz_headamp.
+
+diff --git a/src/reac_headamp_prop.c b/src/reac_headamp_prop.c
+index a82d667..49bd0c8 100644
+--- a/src/reac_headamp_prop.c
++++ b/src/reac_headamp_prop.c
+@@ -53,7 +53,7 @@ static int param_name_to_id(const char *name)
+ 	if (strcmp(name, "phantom") == 0)
+ 		return REAC_HEADAMP_PHANTOM;
+ 	if (strcmp(name, "pad") == 0)
+-		return REAC_HEADAMP_PAD;
++		return REAC_HEADAMP_PHANTOM;
+ 	if (strcmp(name, "sens") == 0)
+ 		return REAC_HEADAMP_SENS;
+ 	return -1;

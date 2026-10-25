@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_pin.c:68 (a pin with no ':' is labelled with its own token, not the model's display name).
+Caught by the seed input "s0808" of fuzz_pin.
+
+diff --git a/src/reac_box_pin.c b/src/reac_box_pin.c
+index f7d730d..3623a2d 100644
+--- a/src/reac_box_pin.c
++++ b/src/reac_box_pin.c
+@@ -39,7 +39,7 @@ int reac_box_pin_parse(const char *spec,
+ 	if (!found)
+ 		return -1;
+ 
+-	const char *label = (spec[toklen] == ':') ? spec + toklen + 1 : NULL;
++	const char *label = (spec[toklen] == ':') ? spec + toklen + 1 : spec;
+ 	/* An empty label is not a label. Naming a node "" is worse than naming it S-1608. */
+ 	if (!label || !*label)
+ 		label = found->display;
