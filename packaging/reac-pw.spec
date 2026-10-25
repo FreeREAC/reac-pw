@@ -28,7 +28,7 @@ BuildRequires:  pkgconfig(libreac) < 1.9
 BuildRequires:  pkgconfig(libreac-transport) >= 1.7.0
 BuildRequires:  pkgconfig(libreac-transport) < 1.9
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships fake_box (libreac-tests 1.7.3), and the minor after it
+# ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
 BuildRequires:  libreac-tests >= 1.7.3
 BuildRequires:  libreac-tests < 1.9
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
