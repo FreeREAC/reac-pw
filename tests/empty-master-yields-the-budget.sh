@@ -42,10 +42,10 @@
 # trigger under test. libreac's fake_box is silent until a master pushes a complete scene
 # transfer, which on a port whose budget is already held is a master that never starts.
 #
-# THE UNTAGGED PARENT IS LEFT ALONE, WITH NO STANZA (#40). Before #40 a trunk parent with no
-# tag heard yet took the wire on silence and held the very budget this test is about, and the
-# rig's remedy was `[segment <parent>] ignore = yes`. Now nothing heard on it buys a bounded
-# knock and never a master, so it holds no budget and the daemon under test reads no file.
+# THE UNTAGGED PARENT IS IGNORED, FOR THE ORDER, NOT THE FLOOD (#40). Before #40 a trunk
+# parent with no tag heard yet took the wire on silence and held the very budget this test is
+# about. Now it is knocked on and never mastered, but its tap still adopts and raises a VLAN
+# whose tag it hears, which would reorder the VLANs this test raises by hand (see below).
 #
 # THE VLAN SUB-INTERFACES ARE STILL MADE HERE, BY HAND, AND THAT IS NOT AUTOCONFIGURATION. A
 # cold box tags nothing, and the daemon mints a VLAN only when its tag is heard
@@ -118,15 +118,21 @@ ip link set lbp0 netns $NSPID || exit 90
 ip link set lb0 up; $in_peer ip link set lbp0 up
 
 # The host's own VLAN config (see the header: a cold box tags nothing for the daemon to mint
-# from). The daemon under test gets NO conf file at all: the parent needs no stanza.
+# from).
 for v in 11 13; do
 	ip link add link lb0 name lb0.$v type vlan id $v || exit 90
 	$in_peer ip link add link lbp0 name lbp0.$v type vlan id $v || exit 90
 	$in_peer ip link set lbp0.$v up || exit 90
 	ip link set lb0.$v down
 done
+# THE PARENT IS STILL IGNORED HERE, AND NOT AGAINST A FLOOD. This test orders the VLANs by
+# hand (lb0.11 up first, lb0.13 later) and that order IS the subject. A tapped parent adopts
+# and raises a host-made VLAN the moment its tag is heard (CI at 699c8cf: "[lb0] vid 13:
+# adopted lb0.13", lb0.13 up before the test raised it, its box took the port first, and the
+# held arm failed). The stanza keeps the parent's tap out of the ordering; README and #41 say
+# that a trunk parent needs no stanza in ordinary use.
 mkdir -p "$CONF/.config/reac-pw"
-[ ! -e "$CONF/.config/reac-pw/reac-pw.conf" ] || exit 90
+printf '[segment lb0]\nignore = yes\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
 # ---- THE DAEMON, ON A PORT DECLARED 100 Mbit/s. One 96 kHz master costs 97 024 kbit/s of
 # it, so the port carries exactly one -- which is the rig's own arithmetic, not a test one.
