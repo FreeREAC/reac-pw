@@ -30,12 +30,15 @@
  * follows: nothing here encodes a frame of its own. That is at most
  * REAC_KNOCK_WIRE_BUDGET_PER_CYCLE frames per cycle against the stream's whole cycle.
  *
- * THE FIRST FRAME HEARD ENDS IT, and the stream starts only after a box answered. The answer
- * is kept (REAC_KNOCK_WIRE_ANSWERS frames) because it is a fact about the push that produced
- * it: the box committed THIS scene and reports it once (fake_box answers one complete
- * transfer, then waits for the ENROLL group map). The master that is started on it must hear
- * that report or it waits in PROBING for one that never comes, so the caller hands the kept
- * frames to the new master before its pacer runs.
+ * THE FIRST EVIDENCE HEARD ENDS IT, and the stream starts only after a box answered. Evidence
+ * is a peer whose settled role is a box or a master: a box's declaration, its JOIN, a desk.
+ * A flood of unknown-role FILLER is a box that has just come up and is waiting to hear a
+ * master, so it is knocked on through it. The answer is kept (REAC_KNOCK_WIRE_ANSWERS control
+ * frames) because it is a fact about the push that produced it: the box committed THIS scene
+ * and reports it once (fake_box answers one complete transfer, then waits for the ENROLL
+ * group map). The master that is started on it must hear that report or it waits in PROBING
+ * for one that never comes, so the caller hands the kept frames to the new master before its
+ * pacer runs.
  *
  * A TRUNK PARENT IS NOT A SEGMENT (#39). It knocks untagged like any NIC until tagged REAC is
  * heard on one of its VLANs; from then on nothing is sent on it, the frames its socket hears
@@ -137,12 +140,18 @@ enum reac_knock_wire_act reac_knock_wire_step(struct reac_knock_wire *w,
                                               const struct reac_hunt *hunt,
                                               uint64_t now_ns, int trunk_now);
 
-/* A REAC frame was heard on this wire. It cancels the licence (libreac's rule), and while
- * knocking it is the answer: the knock ends (ACT_HUSH). Its control frames, and those that
- * follow, are kept up to REAC_KNOCK_WIRE_ANSWERS. On a trunk it is a VLAN's frame with the
- * tag stripped and changes nothing here. */
+/* A REAC frame was heard on this wire. It cancels the licence (libreac's rule: ANY frame).
+ * While knocking, a frame that is EVIDENCE — a sighting whose settled role is a box or a
+ * master (reac_disco), never a peer of unknown role — is the answer: the knock ends
+ * (ACT_HUSH). Unknown-role FILLER does not end it, and that is the case that needs the knock
+ * most: a box that has just come up floods broadcast FILLER and goes on flooding until it
+ * has heard a master (libreac reac_fsm.c FSM_FLOOD_ANNOUNCE needs `have_master`), and only
+ * then cold-connects. Hushing on its flood would leave it flooding and us listening for
+ * ever. Control frames heard from the answer on are kept, up to REAC_KNOCK_WIRE_ANSWERS. On
+ * a trunk it is a VLAN's frame with the tag stripped and changes nothing here. */
 enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64_t now_ns,
-                                               const uint8_t *frame, size_t len);
+                                               const uint8_t *frame, size_t len,
+                                               int evidence);
 
 /* Send every frame of the knock whose slot has come, through `send`. Returns how many were
  * sent; 0 when not knocking. `w->due_ns` is then the next one's time. */

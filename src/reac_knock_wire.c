@@ -110,7 +110,8 @@ enum reac_knock_wire_act reac_knock_wire_step(struct reac_knock_wire *w,
 }
 
 enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64_t now_ns,
-                                               const uint8_t *frame, size_t len)
+                                               const uint8_t *frame, size_t len,
+                                               int evidence)
 {
 	if (w->state == REAC_KNOCK_WIRE_TRUNK)
 		return REAC_KNOCK_WIRE_ACT_NONE;
@@ -119,7 +120,7 @@ enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64
 	 * on again, 500 ms after the last frame it carried. */
 	reac_knock_heard(&w->licence, now_ns);
 	enum reac_knock_wire_act act = REAC_KNOCK_WIRE_ACT_NONE;
-	if (w->state == REAC_KNOCK_WIRE_KNOCKING) {
+	if (w->state == REAC_KNOCK_WIRE_KNOCKING && evidence) {
 		w->state = REAC_KNOCK_WIRE_ANSWERED;
 		w->due_ns = 0;
 		w->n_answer = 0;
@@ -128,10 +129,9 @@ enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64
 		act = REAC_KNOCK_WIRE_ACT_HUSH;
 	}
 	/* WHAT IS KEPT IS WHAT THE MASTER ACTS ON: the box's control frames — its declaration
-	 * after a whole transfer, its cold-connect JOIN on its own PHY-up — and not its audio
-	 * or presence FILLER, which only says it is there (libreac reac_master.h: presence
-	 * "never gates the grant"). A box's PHY-up flood is thousands of FILLER with the JOIN
-	 * inside it, and the first frames heard would otherwise be all filler. */
+	 * after a whole transfer, its cold-connect JOIN — and not its audio or presence FILLER,
+	 * which only says it is there (libreac reac_master.h: presence "never gates the
+	 * grant"). Once a box streams to us, the frames after its answer are FILLER. */
 	if (w->state == REAC_KNOCK_WIRE_ANSWERED && frame && len > 0 &&
 	    w->n_answer < REAC_KNOCK_WIRE_ANSWERS &&
 	    reac_ctrl_parse(frame, len, NULL) > REAC_CTRL_FILLER) {

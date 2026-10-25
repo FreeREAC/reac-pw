@@ -33,8 +33,9 @@
  *      nothing, and the tag-stripped box frames its socket then hears neither answer a knock
  *      nor make it a segment.
  *   D. A PINNED WIRE IS NEVER KNOCKED: a pin serves on link.
- *   E. A BOX POWERED ON A WIRE BEING KNOCKED ON: its flood's FILLER ends the knock, and the
- *      JOIN inside the flood is what reaches the master, which leaves PROBING on it.
+ *   E. A BOX POWERED ON A WIRE BEING KNOCKED ON: its flood of FILLER does not end the knock,
+ *      so it hears a master and JOINs; the JOIN ends the knock and is what reaches the
+ *      master, which leaves PROBING on it.
  */
 #include "reac_knock_wire.h"
 
@@ -179,9 +180,11 @@ static void daemon_hear(struct daemon *d, struct wire *w)
 {
 	for (int i = 0; i < w->n_rx; i++) {
 		struct reac_disco_sighting sight;
-		if (reac_hunt_observe(&d->hunt, w->rx[i], w->rx_len[i], w->now, &sight) >= 0 &&
-		    !d->served)
-			apply(d, reac_knock_wire_heard(&d->kw, w->now, w->rx[i], w->rx_len[i]), w->now);
+		const int seen = reac_hunt_observe(&d->hunt, w->rx[i], w->rx_len[i], w->now, &sight);
+		/* main.c's evidence: a sighting whose settled role is a box or a master */
+		if (seen >= 0 && !d->served)
+			apply(d, reac_knock_wire_heard(&d->kw, w->now, w->rx[i], w->rx_len[i],
+			                               sight.role != REAC_DISCO_ROLE_UNKNOWN), w->now);
 		/* and the running master's own RX, which is how the pacer hears its box */
 		if (d->served) {
 			struct reac_ctrl_parsed p;
@@ -364,10 +367,13 @@ static int arm_pinned(uint64_t t0)
 	return 0;
 }
 
-/* ---- E. A BOX THAT COMES UP ON A WIRE BEING KNOCKED ON: its PHY-up flood is FILLER with
- * its cold-connect JOIN inside it (libreac reac_ctrl.h: "the box emits it x3 on PHY-up while
- * still in broadcast mode"), and the JOIN is what lets a master leave PROBING. The flood's
- * FILLER answers the knock first; what is handed to the master must be the JOIN. */
+/* ---- E. A BOX THAT COMES UP ON A WIRE BEING KNOCKED ON. libreac's own slave FSM, rule for
+ * rule (reac_fsm.c FSM_FLOOD_ANNOUNCE): on PHY-up it floods broadcast FILLER, and it leaves
+ * the flood for the cold-connect JOIN only once its bounded burst (REAC_FSM_FLOOD_BURST,
+ * ~1.36 s) is spent AND it has heard a master. Its flood is FILLER of unknown role; if that
+ * ended the knock, no master frame would reach it and it would flood for ever while we
+ * listened. The JOIN is what lets a master leave PROBING, so it must be what is handed on. */
+#define FLOOD_NS (1360ULL * MS)
 static int arm_box_powers_up(uint64_t t0)
 {
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -377,25 +383,39 @@ static int arm_box_powers_up(uint64_t t0)
 	daemon_init(&d, t0, 0);
 	run(&d, &w, t0, 4, 0, 0);               /* knocking, nothing on the wire */
 	CHK(d.acts_knock == 1 && !d.served);
+	const uint64_t knock0 = w.knock_frames, frames0 = w.frames;
 	uint16_t c = 0;
-	for (uint64_t t = t0 + 4 * SEC; t < t0 + 12 * SEC; t += MS) {
+	int joins = 0;
+	uint64_t join_ns = 0;
+	for (uint64_t t = t0 + 4 * SEC; t < t0 + 14 * SEC; t += MS) {
 		w.now = t;
 		const uint64_t dt = t - (t0 + 4 * SEC);
-		if (dt < 30 * MS) {                 /* the flood: FILLER, 4 a millisecond */
+		const int heard_master = w.frames > frames0;   /* any frame of ours: knock or stream */
+		if (dt < FLOOD_NS || (!heard_master && !joins)) {   /* the flood: FILLER */
 			for (int i = 0; i < 4; i++)
-				w.rx_len[w.n_rx + i] = reac_ctrl_build_flood_filler(
-					w.rx[w.n_rx + i], BCAST, BOX_MAC, c++, 16, NULL, REAC_SAMPLES_PER_PKT);
+				w.rx_len[i] = reac_ctrl_build_flood_filler(w.rx[i], BCAST, BOX_MAC, c++, 16,
+				                                           NULL, REAC_SAMPLES_PER_PKT);
 			w.n_rx = 4;
-		} else if (dt < 33 * MS) {          /* the JOIN, three times */
+		} else if (joins < 3) {                              /* then the JOIN, three times */
 			w.rx_len[0] = reac_ctrl_build_coldconnect(w.rx[0], BCAST, BOX_MAC, c++, 16, NULL,
 			                                          REAC_SAMPLES_PER_PKT);
 			w.n_rx = 1;
+			if (!joins)
+				join_ns = t;
+			joins++;
 		}
 		daemon_tick(&d, &w, (t - t0) % POLL_NS == 0);
 	}
-	fprintf(stderr, "E: box powered at +4 s: served=%d, %d control frame(s) handed over, "
-	        "the master %s GRANTING\n", d.served, d.handed,
+	fprintf(stderr, "E: box powered at +4 s: %llu knock frames reached it during its flood, "
+	        "JOIN at +%.3f s, served=%d, %d control frame(s) handed over, the master %s "
+	        "GRANTING\n", (unsigned long long)(w.knock_frames - knock0),
+	        join_ns ? (double)(join_ns - t0) / 1e9 : -1.0, d.served, d.handed,
 	        d.granting_seen ? "reached" : "never reached");
+	CHK(joins > 0);                          /* the box heard a master */
+	/* AND THE STREAM WAITED FOR THE EVIDENCE: the knock went on through the flood of
+	 * unknown-role FILLER, and the master stream started only after the JOIN. */
+	CHK(w.knock_frames > knock0);
+	CHK(w.first_stream_ns >= join_ns);
 	CHK(d.acts_hush == 1);
 	CHK(d.served);
 	CHK(d.handed > 0);
