@@ -162,13 +162,13 @@ val() { echo "$OUT" | grep -a "^$1 " | head -1 | awk '{print $2}'; }
 	|| fail "REACPW_LINK_MBIT=100 was never announced — the port was not capped"
 [ "$(val box-running)" = "yes" ] || fail "the box side did not start"
 [ "$(val holder-knocks)" = "yes" ] \
-	|| fail "the empty lb0.11 was never knocked on — it came up first and the daemon said nothing about it"
+	|| fail "the empty lb0.11 was never knocked on: it came up first and the daemon said nothing about it"
 [ "$(val box-heard)" = "yes" ] \
 	|| fail "the box on the parent was never HEARD"
 
 # ---- the claim (#40: the #107 race cannot start, because silence buys no master)
 [ "$(val holder-up)" = "no" ] \
-	|| fail "the empty lb0.11 was SERVED on silence — a master on a wire nothing was heard on (#40)"
+	|| fail "the empty lb0.11 was SERVED on silence: a master on a wire nothing was heard on (#40)"
 [ "$(val taker-up)" = "yes" ] \
 	|| fail "the parent with the box on it never came up — the 690-refusals night"
 [ "$(val box-enrolled)" = "yes" ] \

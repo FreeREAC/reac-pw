@@ -66,7 +66,7 @@
 	 * speaks first is still served; a cold box on it is not woken until this clears. */ \
 	X(RC_E_KNOCK_TX,        "E_KNOCK_TX") \
 	/* The knock's wake ladder could not make or undo its PHY edge (#40, reac_wake.h): the
-	 * link would not go down, or would not come back up — the second leaves the wire down
+	 * link would not go down, or would not come back up; the second leaves the wire down
 	 * until someone runs the `ip link` line the message names. */ \
 	X(RC_E_WAKE_EDGE,       "E_WAKE_EDGE") \
 	/* status */ \

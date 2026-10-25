@@ -134,7 +134,7 @@ wait_for_since "$MARK" "\[gone0\] nothing heard in .* KNOCKING" 40 || {
 # AND IT IS NOT STREAMED AT: no master comes up on a wire nothing answered (#40, #31).
 sleep 5
 tail -n "+$MARK" "$LOG" | grep -q "\[gone0\] segment up (master," && {
-	echo "FAIL: the re-decided wire was MASTERED with nothing on it — the flood of #31"
+	echo "FAIL: the re-decided wire was MASTERED with nothing on it: the flood of #31"
 	tail -n "+$MARK" "$LOG" | tail -25; exit 1; }
 
 # ---- 4. AND IT DID NOT DO IT WHILE THE MASTER WAS STILL THERE. The whole first phase ran
