@@ -55,11 +55,16 @@ static int nl_talk(void *req, size_t len, char *kind, size_t kind_n,
 			rc = -errno;
 			break;
 		}
+		/* `n` stays signed: a last message whose length is not padded leaves it below
+		 * 0, and NLMSG_OK on an unsigned cast of that would read on past the reply. */
 		struct nlmsghdr *nh = (struct nlmsghdr *)buf;
-		for (; NLMSG_OK(nh, (unsigned)n); nh = NLMSG_NEXT(nh, n)) {
+		for (; NLMSG_OK(nh, n); nh = NLMSG_NEXT(nh, n)) {
 			if (nh->nlmsg_type == NLMSG_ERROR) {
 				const struct nlmsgerr *err = NLMSG_DATA(nh);
-				rc = err->error; /* 0 is the ACK */
+				/* An error too short to hold its code is no answer: its code
+				 * would be read from past the message. */
+				rc = nh->nlmsg_len < NLMSG_LENGTH(sizeof *err) ? -EIO
+				                                               : err->error; /* 0 is the ACK */
 				goto out;
 			}
 			if (nh->nlmsg_type != RTM_NEWLINK)
