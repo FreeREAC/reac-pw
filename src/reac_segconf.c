@@ -130,13 +130,25 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 	while (*p) {
 		const char *nl = strchr(p, '\n');
 		size_t len = nl ? (size_t)(nl - p) : strlen(p);
-		char buf[512];
-		if (len >= sizeof buf)
-			len = sizeof buf - 1;
-		memcpy(buf, p, len);
-		buf[len] = '\0';
-		p = nl ? nl + 1 : p + strlen(p);
+		const char *at = p;
+		p = nl ? nl + 1 : p + len;
 		lineno++;
+
+		/* A LINE TOO LONG TO HOLD IS REFUSED WHOLE, never read in part: its first
+		 * bytes are a different line, and one that may well read as valid. A refused
+		 * line that opens a section ends the section before it, as an unclosed
+		 * header does, so the keys below it are not handed to the wrong segment. */
+		char buf[512];
+		if (len >= sizeof buf) {
+			size_t lead = strspn(at, " \t\r");
+			if (lead < len && at[lead] == '[')
+				cur = NULL;
+			refuse(c, lineno, "line is longer than %zu bytes and was NOT read",
+			       sizeof buf - 1);
+			continue;
+		}
+		memcpy(buf, at, len);
+		buf[len] = '\0';
 
 		strip_comment(buf);
 		char *line = trim(buf);
@@ -147,6 +159,13 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			char *close = strchr(line, ']');
 			if (!close) {
 				refuse(c, lineno, "section is not closed: '%s'", line);
+				cur = NULL;
+				continue;
+			}
+			/* Nothing may follow the header: the line is trimmed, so anything after
+			 * its first ']' is text this grammar does not read. */
+			if (close[1]) {
+				refuse(c, lineno, "text after the closing ']' of '%s'", line);
 				cur = NULL;
 				continue;
 			}
