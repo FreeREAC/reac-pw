@@ -225,6 +225,11 @@ grep -qa "\[lb0\.11\] still LISTENING — this segment yielded" "$LOG" \
 echo "--- refusals ---"
 grep -a "E_LINK_BUDGET\|S_BUDGET_YIELDED\|S_SEGMENT_UP\|S_SEGMENT_DROPPED\|S_SEGMENT_HEARD" \
 	"$LOG" | sed 's/^/  /' | head -40
+# AND WHAT THE PARENT AND THE KNOCK DID (#40): the parent is sniffed and knocked on now, with
+# no stanza, so a failure has to show what it did, and what a master that stopped did.
+echo "--- the parent, the knock, a stopped master ---"
+grep -a "\[lb0\] \|KNOCKING\|ANSWERED\|STREAM cycle\|wake\|edge\|stops streaming" \
+	"$LOG" | cut -c1-220 | sed 's/^/  /' | head -30
 kill -TERM $PID 2>/dev/null; sleep 0.5; kill -9 $PID 2>/dev/null
 exit 0
 INNER
