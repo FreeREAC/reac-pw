@@ -3269,6 +3269,19 @@ static void sniffer_drain(struct sniffer *sn)
 		if (sight.has_decl)
 			snprintf(declared, sizeof declared, " that declared %u in / %u out",
 			         (unsigned)sight.decl_in, (unsigned)sight.decl_out);
+		/* ON A TRUNK PARENT THIS IS A VLAN'S BOX, heard with its tag stripped (#39): the
+		 * kernel hands the parent's socket every VLAN's frames. It is that VLAN's segment,
+		 * and saying "this interface is a segment" here read as the parent re-admitting
+		 * itself on the desk's journal of 2026-10-25 11:32. */
+		if (sn->kw.state == REAC_KNOCK_WIRE_TRUNK) {
+			fprintf(stderr, "reac-pw: [%s] REAC heard on one of this trunk's VLANs — %s "
+			        "%02x:%02x:%02x:%02x:%02x:%02x%s (%u ch): it belongs to that VLAN's "
+			        "segment, and this parent is still not one\n",
+			        sn->name, reac_disco_role_name(sight.role),
+			        sight.mac[0], sight.mac[1], sight.mac[2],
+			        sight.mac[3], sight.mac[4], sight.mac[5], declared, sight.channels);
+			continue;
+		}
 		reac_code_emit(stderr, "reac-pw", RC_S_SEGMENT_HEARD,
 		        "[%s] REAC heard — %s %02x:%02x:%02x:%02x:%02x:%02x"
 		        "%s (%u ch): this interface is a segment\n",
