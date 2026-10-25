@@ -33,6 +33,8 @@
  *      nothing, and the tag-stripped box frames its socket then hears neither answer a knock
  *      nor make it a segment.
  *   D. A PINNED WIRE IS NEVER KNOCKED: a pin serves on link.
+ *   E. A BOX POWERED ON A WIRE BEING KNOCKED ON: its flood's FILLER ends the knock, and the
+ *      JOIN inside the flood is what reaches the master, which leaves PROBING on it.
  */
 #include "reac_knock_wire.h"
 
@@ -149,6 +151,8 @@ struct daemon {
 	struct reac_master eng;
 	uint64_t eng_t0, eng_slot;
 	uint64_t answered_ns;
+	int handed;                     /* control frames handed to the master at serve */
+	int granting_seen;              /* the master left PROBING forward at some slot */
 };
 
 static void daemon_init(struct daemon *d, uint64_t t0, int pinned)
@@ -195,6 +199,7 @@ static void daemon_serve(struct daemon *d, uint64_t now)
 	struct reac_console_cfg c = REAC_CONSOLE_CFG_IDLE;
 	c.console_field = reac_pace_code(FPS_96K);
 	reac_master_init(&d->eng, OUR_MAC, &c, FPS_96K);
+	d->handed = d->kw.n_answer;
 	for (int i = 0; i < d->kw.n_answer; i++) {
 		struct reac_ctrl_parsed p;
 		enum reac_master_rx_event ev;
@@ -229,6 +234,8 @@ static void daemon_tick(struct daemon *d, struct wire *w, int poll)
 			uint16_t counter;
 			int idx;
 			enum reac_master_emit e = reac_master_next(&d->eng, &counter, &idx);
+			if (d->eng.state == REAC_M_GRANTING || d->eng.state == REAC_M_ESTABLISHED)
+				d->granting_seen = 1;
 			reac_downstream_build(frame, NULL, 0, 0, counter, OUR_MAC);
 			reac_master_stamp(&d->eng, frame, e, idx);
 			wire_send(w, frame, sizeof frame);
@@ -357,6 +364,47 @@ static int arm_pinned(uint64_t t0)
 	return 0;
 }
 
+/* ---- E. A BOX THAT COMES UP ON A WIRE BEING KNOCKED ON: its PHY-up flood is FILLER with
+ * its cold-connect JOIN inside it (libreac reac_ctrl.h: "the box emits it x3 on PHY-up while
+ * still in broadcast mode"), and the JOIN is what lets a master leave PROBING. The flood's
+ * FILLER answers the knock first; what is handed to the master must be the JOIN. */
+static int arm_box_powers_up(uint64_t t0)
+{
+	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	struct daemon d;
+	struct wire w;
+	memset(&w, 0, sizeof w);
+	daemon_init(&d, t0, 0);
+	run(&d, &w, t0, 4, 0, 0);               /* knocking, nothing on the wire */
+	CHK(d.acts_knock == 1 && !d.served);
+	uint16_t c = 0;
+	for (uint64_t t = t0 + 4 * SEC; t < t0 + 12 * SEC; t += MS) {
+		w.now = t;
+		const uint64_t dt = t - (t0 + 4 * SEC);
+		if (dt < 30 * MS) {                 /* the flood: FILLER, 4 a millisecond */
+			for (int i = 0; i < 4; i++)
+				w.rx_len[w.n_rx + i] = reac_ctrl_build_flood_filler(
+					w.rx[w.n_rx + i], BCAST, BOX_MAC, c++, 16, NULL, REAC_SAMPLES_PER_PKT);
+			w.n_rx = 4;
+		} else if (dt < 33 * MS) {          /* the JOIN, three times */
+			w.rx_len[0] = reac_ctrl_build_coldconnect(w.rx[0], BCAST, BOX_MAC, c++, 16, NULL,
+			                                          REAC_SAMPLES_PER_PKT);
+			w.n_rx = 1;
+		}
+		daemon_tick(&d, &w, (t - t0) % POLL_NS == 0);
+	}
+	fprintf(stderr, "E: box powered at +4 s: served=%d, %d control frame(s) handed over, "
+	        "the master %s GRANTING\n", d.served, d.handed,
+	        d.granting_seen ? "reached" : "never reached");
+	CHK(d.acts_hush == 1);
+	CHK(d.served);
+	CHK(d.handed > 0);
+	/* the JOIN it was handed takes it out of PROBING once its own push is whole (libreac
+	 * reac_master.c: a forward edge that lands mid-push is HELD, not dropped) */
+	CHK(d.granting_seen);
+	return 0;
+}
+
 int main(void)
 {
 	const uint64_t t0 = 1000ULL * SEC;
@@ -365,8 +413,9 @@ int main(void)
 	failed += arm_direct_nic(t0);
 	failed += arm_trunk_parent(t0);
 	failed += arm_pinned(t0);
+	failed += arm_box_powers_up(t0);
 	if (failed) {
-		fprintf(stderr, "FAIL: %d of 4 arms\n", failed);
+		fprintf(stderr, "FAIL: %d of 5 arms\n", failed);
 		return 1;
 	}
 	printf("OK: a silent wire is knocked on within its budget and never streamed at; the "

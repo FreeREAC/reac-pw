@@ -7,6 +7,7 @@
 
 #include <string.h>
 
+#include <reac/reac_ctrlblk.h>  /* reac_ctrl_parse: which answer frames are kept */
 #include <reac/reac_encode.h>   /* reac_downstream_build */
 
 void reac_knock_wire_init(struct reac_knock_wire *w, const uint8_t src[6], int fps,
@@ -126,8 +127,14 @@ enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64
 			memcpy(w->answer_src, frame + 6, 6);
 		act = REAC_KNOCK_WIRE_ACT_HUSH;
 	}
+	/* WHAT IS KEPT IS WHAT THE MASTER ACTS ON: the box's control frames — its declaration
+	 * after a whole transfer, its cold-connect JOIN on its own PHY-up — and not its audio
+	 * or presence FILLER, which only says it is there (libreac reac_master.h: presence
+	 * "never gates the grant"). A box's PHY-up flood is thousands of FILLER with the JOIN
+	 * inside it, and the first frames heard would otherwise be all filler. */
 	if (w->state == REAC_KNOCK_WIRE_ANSWERED && frame && len > 0 &&
-	    w->n_answer < REAC_KNOCK_WIRE_ANSWERS) {
+	    w->n_answer < REAC_KNOCK_WIRE_ANSWERS &&
+	    reac_ctrl_parse(frame, len, NULL) > REAC_CTRL_FILLER) {
 		size_t n = len < REAC_FRAME_BYTES ? len : REAC_FRAME_BYTES;
 		memcpy(w->answer[w->n_answer], frame, n);
 		w->answer_len[w->n_answer] = n;
