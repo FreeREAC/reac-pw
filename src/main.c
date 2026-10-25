@@ -715,12 +715,14 @@ static void usage(const char *p)
 	  "the ONE override, ~/.config/reac-pw/reac-pw.conf (hand-written; nothing generates it):\n"
 	  "    [segment IFNAME]\n"
 	  "    role = auto|master|slave|tap     default: auto -- the wire decides\n"
-	  "    ignore = yes                     never sniffed, served or minted\n"
-	  "  Naming [segment <parent>.<vid>] also DECLARES that VLAN: its netdev is created,\n"
-	  "  brought up and marked ours at START and whenever its parent appears, without\n"
-	  "  waiting to hear a tagged frame on the trunk -- on a cold rig no box speaks until\n"
-	  "  a master does, and the master needs the netdev first. The exit removes what it\n"
-	  "  created. With no such file every segment is auto, which is the shipping default.\n"
+	  "    ignore = yes                     never sniffed, served or minted; NOT needed for a\n"
+	  "                                     trunk NIC or a NIC with no REAC (#40)\n"
+	  "    knock = escalate|control|stream  how a silent wire is knocked on; default\n"
+	  "                                     escalate (docs/KNOCK.md, for the rig check)\n"
+	  "  Naming [segment <parent>.<vid>] names that VLAN IF IT EXISTS: its role and ignore\n"
+	  "  apply when the VID is heard on the parent. It creates no netdev by itself; a cold\n"
+	  "  box that sends no tag needs its VLAN in the host's network config (README).\n"
+	  "  With no such file every segment is auto, which is the shipping default.\n"
 	  "    REAC_TX=IFNAME             default: the same interface (this rig's masters\n"
 	  "                               always tx == live)\n"
 	  "    REAC_ROLE / REAC_ROLE_<segment>  RETIRED (2026-09-16). Read only to be NAMED\n"
@@ -3487,6 +3489,9 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 		int kfps;
 		knock_params(h, name, ksrc, &kfps);
 		reac_knock_wire_init(&sn->kw, ksrc, kfps, now);
+		/* `knock =` for this segment, already checked against the table at parse. */
+		reac_knock_wire_set_plan(&sn->kw,
+		                         reac_knock_plan_find(reac_segconf_knock(&g_segconf, name)));
 	}
 	if (!pinned && !sn->tap_pinned && !reac_ifscan_is_wireless(NULL, name))
 		sn->watch_silence = 1;
@@ -5743,7 +5748,7 @@ static void segconf_announce(void)
 			/* AND WHICH FILE SET EACH KEY. This is the whole safety of last-wins:
 			 * an override nobody can trace back to a file is the 2026-09-16 fault
 			 * with one more file in it. */
-			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s%s%s%s%s%s\n", sg->name,
+			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s%s%s%s%s%s%s%s%s%s%s\n", sg->name,
 			        sg->role_set ? " role=" : "",
 			        sg->role_set ? reac_role_intent_name(sg->role) : "",
 			        sg->role_set ? " (" : "",
@@ -5751,7 +5756,12 @@ static void segconf_announce(void)
 			        sg->role_set ? ")" : "",
 			        sg->ignore ? " ignore (" : "",
 			        sg->ignore ? sg->ignore_file : "",
-			        sg->ignore ? ")" : "");
+			        sg->ignore ? ")" : "",
+			        sg->knock_set ? " knock=" : "",
+			        sg->knock_set ? sg->knock : "",
+			        sg->knock_set ? " (" : "",
+			        sg->knock_set ? sg->knock_file : "",
+			        sg->knock_set ? ")" : "");
 		}
 	}
 	for (int i = 0; i < g_segconf.n_refusals; i++)
