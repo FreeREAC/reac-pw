@@ -5282,9 +5282,30 @@ static void roster_collect(struct roster_ctx *rc)
 		char src[112];
 		roster_source(nm, src, sizeof src);
 		enum reac_role_intent want = segment_role_intent(nm);
-		if (reac_roster_add(&g_roster, nm, REAC_ROSTER_PROBING, NULL,
+		/* WHAT IS ON THIS WIRE AND WHAT WE ARE DOING ABOUT IT (#40): the knock wire's own
+		 * state, never `probing`, which names a master stream no such wire carries. */
+		const struct sniffer *sn = &g_hear.sniff[i];
+		enum reac_roster_state st = REAC_ROSTER_LISTENING;
+		char said[112] = "";
+		if (sn->kw.state == REAC_KNOCK_WIRE_TRUNK) {
+			st = REAC_ROSTER_TRUNK;
+		} else if (sn->kw.state == REAC_KNOCK_WIRE_KNOCKING) {
+			st = REAC_ROSTER_KNOCKING;
+			snprintf(said, sizeof said, "nothing heard here: knocking for a box, %llu frames "
+			         "and %llu scene pushes so far, never the stream",
+			         (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.pushes);
+		} else if (sn->kw.state == REAC_KNOCK_WIRE_ANSWERED) {
+			snprintf(said, sizeof said, "something answered the knock: listening to "
+			         "it before the master starts");
+		} else if (sn->last_heard_ns) {
+			snprintf(said, sizeof said, "REAC heard here: listening until the wire says "
+			         "who masters it");
+		}
+		if (reac_roster_add(&g_roster, nm, st, NULL,
 		                    reac_role_intent_name(want), src, 0, 0) != 0)
 			dup++;
+		else if (said[0])
+			reac_roster_status(&g_roster, nm, said);
 	}
 	if (dup) {
 		/* Two tables claiming one wire, or more segments than the roster holds.

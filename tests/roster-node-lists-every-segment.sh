@@ -249,7 +249,7 @@ g0=$(group_of A rn0); g1=$(group_of A rn1)
 [ -n "$g1" ] || fail "the BOXED segment rn1 is on no roster group: $A"
 
 # A3. THE EMPTY SEGMENT SAYS SO, in every field.
-[ "$(prop A reac.roster.$g0.state)" = "tap" ] || [ "$(prop A reac.roster.$g0.state)" = "probing" ] \
+[ "$(prop A reac.roster.$g0.state)" = "tap" ] || [ "$(prop A reac.roster.$g0.state)" = "listening" ] \
 	|| fail "rn0 has no box and reads state=$(prop A reac.roster.$g0.state)"
 [ "$(prop A reac.roster.$g0.model)" = "none" ] \
 	|| fail "an empty segment's model is '$(prop A reac.roster.$g0.model)', expected none"
