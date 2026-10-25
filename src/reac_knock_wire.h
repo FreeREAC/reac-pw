@@ -74,8 +74,8 @@
  * interrupted, which a box ignores, and the next cycle's is whole. */
 #define REAC_KNOCK_WIRE_LATE_NS (8ULL * 1000000ULL)
 
-/* The frames kept from the answer, in order: the box's commit report and what follows it
- * before the poll serves the master. */
+/* The CONTROL frames kept from the answer, in order: the box's declaration or its JOIN, and
+ * what follows before the poll serves the master. FILLER is not kept. */
 #define REAC_KNOCK_WIRE_ANSWERS 4
 
 enum reac_knock_wire_state {
@@ -138,9 +138,9 @@ enum reac_knock_wire_act reac_knock_wire_step(struct reac_knock_wire *w,
                                               uint64_t now_ns, int trunk_now);
 
 /* A REAC frame was heard on this wire. It cancels the licence (libreac's rule), and while
- * knocking it is the answer: the knock ends (ACT_HUSH) and the frame is kept. Frames that
- * follow are kept too, up to REAC_KNOCK_WIRE_ANSWERS. On a trunk it is a VLAN's frame with
- * the tag stripped and changes nothing here. */
+ * knocking it is the answer: the knock ends (ACT_HUSH). Its control frames, and those that
+ * follow, are kept up to REAC_KNOCK_WIRE_ANSWERS. On a trunk it is a VLAN's frame with the
+ * tag stripped and changes nothing here. */
 enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64_t now_ns,
                                                const uint8_t *frame, size_t len);
 
