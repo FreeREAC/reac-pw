@@ -23,7 +23,8 @@
  *   - the cells are the well-formed ones, in order, up to the capacity;
  *   - it counts every key under the prefix it reached, good or bad;
  *   - it reports the first refusal, and none when every key stood;
- *   - and the plain parse returns what the parse with a result returns. */
+ *   - and the plain parse returns the count and writes the cells that the parse with a
+ *     result returns and writes. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -283,13 +284,27 @@ static FUZZ_NOINLINE void check_refusal(const struct reac_headamp_prop_result *r
 		abort();
 }
 
-static FUZZ_NOINLINE void check_plain(int plain, int rc)
+/* The first n cells of a and b hold the same channel, param and value, field by field. */
+static int cells_same(const struct reac_headamp_setting *a, const struct reac_headamp_setting *b,
+                      int n)
 {
-	/* The parse without a result is the same parse.
+	for (int i = 0; i < n; i++)
+		if (a[i].ch != b[i].ch || a[i].param != b[i].param || a[i].value != b[i].value)
+			return 0;
+	return 1;
+}
+
+static FUZZ_NOINLINE void check_plain(int plain, int rc, const struct reac_headamp_setting *out,
+                                      const struct reac_headamp_setting *first)
+{
+	/* The parse without a result is the same parse: the same count, and the same cells,
+	 * field by field, as the parse with one wrote.
 	 * contract: src/reac_headamp_prop.h:94-96 (the same parse, discarding what it saw)
 	 * mutant: src/reac_headamp_prop.c:105 `out, max, NULL` -> `out, max - 1, NULL`
-	 * input: cap-one-two-cells */
-	if (plain != rc)
+	 * input: cap-one-two-cells
+	 * mutant: src/reac_headamp_prop.c:173 `= value;` -> `= res ? value : 0;`
+	 * input: sens-edges */
+	if (plain != rc || !cells_same(out, first, rc))
 		abort();
 }
 
@@ -330,10 +345,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 			check_refusal(&res, &x);
 		}
 	}
+	/* the cells of the first parse, before the plain parse writes over them */
+	struct reac_headamp_setting *first =
+		(struct reac_headamp_setting *)fuzz_dup(out, (size_t)(rc > 0 ? rc : 0) * sizeof *out);
 	memset(out, 0xa5, (size_t)(cap + 1) * sizeof *out);
 	int plain = reac_headamp_prop_parse(null ? NULL : (const struct spa_pod *)pod, out, cap);
-	check_plain(plain, rc);
+	check_plain(plain, rc, out, first);
 
+	free(first);
 	free(out);
 	free(pod);
 	free(pp);

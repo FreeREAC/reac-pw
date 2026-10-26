@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_headamp.c:257 (a `pad` key addresses the phantom of its channel).
+Breaks the check of fuzz/fuzz_headamp.c:258 (a `pad` key addresses the phantom of its channel).
 Caught by the seed input "cells-and-refusals" of fuzz_headamp.
 
 diff --git a/src/reac_headamp_prop.c b/src/reac_headamp_prop.c

@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_headamp.c:308 (the plain parse hands on 0 in place of each value).
+Caught by the seed input "sens-edges" of fuzz_headamp.
+
+diff --git a/src/reac_headamp_prop.c b/src/reac_headamp_prop.c
+index a82d667..d7e3bfc 100644
+--- a/src/reac_headamp_prop.c
++++ b/src/reac_headamp_prop.c
+@@ -170,7 +170,7 @@ int reac_headamp_prop_parse_result(const struct spa_pod *props,
+ 			break;                       /* out is full: stop, never overrun */
+ 		out[n].ch = ch;
+ 		out[n].param = param;
+-		out[n].value = value;
++		out[n].value = res ? value : 0;
+ 		n++;
+ 	}
+ 	if (res) {
