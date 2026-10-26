@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.35
+Version:        1.0.36
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -231,6 +231,10 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.36-1
+- libreac, libreac-transport and libreac-tests 1.8 are in range: the ceiling is the next minor (< 1.9).
+  1.0.35 pinned them below 1.8, so a channel carrying libreac 1.8.0 could not install it.
+
 * Wed Oct 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.35-1
 - libreac, libreac-transport and libreac-tests are declared once, in the package, with a floor and a
   ceiling (the next minor). The build and the tests take them from the FreeMixer channel instead of
