@@ -16,7 +16,7 @@
  *
  * The expectations come from the grammar the header and the reader's comments document,
  * read here line by line on the harness's own copy (src/reac_segconf.h:4-37, 46-109,
- * 146-158; src/reac_segconf.c:23-117, 269-296):
+ * 146-158; src/reac_segconf.c:25-119, 269-296):
  *   - a line ends at '\n'; one of 512 bytes or more is refused whole, and one that
  *     opens a section ends the section before it; a '#' or ';' at the start or after a
  *     blank starts a comment; blanks are spaces, tabs and CRs;
@@ -63,7 +63,7 @@
 #define KEPT_MAX      8
 #define LABEL_LEN     96
 #define BASE_FILE     "reac-pw.conf"
-/* contract: src/reac_segconf.c:133 (a line buffer of 512 bytes: 511 and a NUL) */
+/* contract: src/reac_segconf.c:135 (a line buffer of 512 bytes: 511 and a NUL) */
 #define LINE_MAX_     512
 /* contract: linux/if.h IFNAMSIZ (16) */
 #define NAME_LEN      16
@@ -401,20 +401,20 @@ static FUZZ_NOINLINE void check_segments(const struct reac_segconf *c, const str
 {
 	/* The segments are the names the sections opened, each once, in the order first
 	 * opened; a section past the bound is counted as overflow and opens nothing.
-	 * contract: src/reac_segconf.h:46-49, 85-89, src/reac_segconf.c:100-117, 155-157
-	 * mutant: src/reac_segconf.c:106 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
+	 * contract: src/reac_segconf.h:46-49, 85-89, src/reac_segconf.c:102-119, 155-157
+	 * mutant: src/reac_segconf.c:108 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
 	 * input: names-differ-in-case
-	 * mutant: src/reac_segconf.c:109 `c->overflow++;` -> ``
+	 * mutant: src/reac_segconf.c:111 `c->overflow++;` -> ``
 	 * input: thirty-three-segments
-	 * mutant: src/reac_segconf.c:176 `strncasecmp(body, "segment", 7)` -> `strncmp(body, "segment", 7)`
+	 * mutant: src/reac_segconf.c:178 `strncasecmp(body, "segment", 7)` -> `strncmp(body, "segment", 7)`
 	 * input: keyword-in-capitals
-	 * mutant: src/reac_segconf.c:177 `body[7] != ' ' && body[7] != '\t'` -> `body[7] != ' '`
+	 * mutant: src/reac_segconf.c:179 `body[7] != ' ' && body[7] != '\t'` -> `body[7] != ' '`
 	 * input: tab-after-keyword
-	 * mutant: src/reac_segconf.c:167 `if (close[1])` -> `if (0)`
+	 * mutant: src/reac_segconf.c:169 `if (close[1])` -> `if (0)`
 	 * input: text-after-header
-	 * mutant: src/reac_segconf.c:285 `return c->n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:305 `return c->n;` -> `return 0;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:321 `return n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:341 `return n;` -> `return 0;`
 	 * input: operator-file */
 	if (!segments_are(c, m) || !returned)
 		abort();
@@ -425,22 +425,22 @@ static FUZZ_NOINLINE void check_role(int got_set, enum reac_role_intent got,
 {
 	/* A segment's role is the last one its files pinned, a value of the vocabulary in any
 	 * case and without its quotes; a box that names no model falls back to no pin.
-	 * contract: src/reac_segconf.h:197-202, src/reac_segconf.c:269-296
-	 * mutant: src/reac_segconf.c:236 `(char)(*q - 'A' + 'a')` -> `*q`
+	 * contract: src/reac_segconf.h:197-202, src/reac_segconf.c:271-316
+	 * mutant: src/reac_segconf.c:238 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: role-in-capitals
-	 * mutant: src/reac_segconf.c:243 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
+	 * mutant: src/reac_segconf.c:245 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:311 `s->role_set = 0;` -> ``
+	 * mutant: src/reac_segconf.c:331 `s->role_set = 0;` -> ``
 	 * input: box-without-model
-	 * mutant: src/reac_segconf.c:297 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
+	 * mutant: src/reac_segconf.c:317 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:222 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
+	 * mutant: src/reac_segconf.c:224 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:145 `cur = NULL;` -> ``
+	 * mutant: src/reac_segconf.c:147 `cur = NULL;` -> ``
 	 * input: long-header-line
-	 * mutant: src/reac_segconf.c:189 `strlen(name) >= IFNAMSIZ` -> `strlen(name) > IFNAMSIZ`
+	 * mutant: src/reac_segconf.c:191 `strlen(name) >= IFNAMSIZ` -> `strlen(name) > IFNAMSIZ`
 	 * input: name-sixteen
-	 * mutant: src/reac_segconf.c:254 `(char)(*q - 'A' + 'a')` -> `*q`
+	 * mutant: src/reac_segconf.c:256 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: model-in-capitals */
 	if (got_set != want->role_set || (got_set && got != want->role))
 		abort();
@@ -451,9 +451,9 @@ static FUZZ_NOINLINE void check_model(const char *got, const struct mseg *want)
 	/* A segment's model is a token of the box-model table, folded to lower case, and
 	 * only on a segment whose role is box; on any other role it is dropped.
 	 * contract: src/reac_segconf.h:92-101, 215-219
-	 * mutant: src/reac_segconf.c:298 `s->model_set && !is_box` -> `0`
+	 * mutant: src/reac_segconf.c:318 `s->model_set && !is_box` -> `0`
 	 * input: model-on-a-tap
-	 * mutant: src/reac_segconf.c:267 `"%s", low` -> `"%s", val`
+	 * mutant: src/reac_segconf.c:269 `"%s", low` -> `"%s", val`
 	 * input: model-in-capitals */
 	if (!same_text(got, want->model_set ? want->model : NULL))
 		abort();
@@ -464,11 +464,11 @@ static FUZZ_NOINLINE void check_ignore(int got, const struct mseg *want)
 	/* A segment is switched off when the last file to say `ignore` said yes, true or 1,
 	 * and on when it said no, false or 0.
 	 * contract: src/reac_segconf.h:89, 193-195
-	 * mutant: src/reac_segconf.c:89 `!strcmp(v, "1")` -> `!strcmp(v, "0")`
+	 * mutant: src/reac_segconf.c:91 `!strcmp(v, "1")` -> `!strcmp(v, "0")`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:277 `cur->ignore = b;` -> `cur->ignore = 1;`
+	 * mutant: src/reac_segconf.c:279 `cur->ignore = b;` -> `cur->ignore = 1;`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:520 `s && s->ignore` -> `s != NULL`
+	 * mutant: src/reac_segconf.c:540 `s && s->ignore` -> `s != NULL`
 	 * input: ignore-words */
 	if (got != want->ignore)
 		abort();
@@ -480,11 +480,11 @@ static FUZZ_NOINLINE void check_provenance(const char *role_file, const char *ig
 	/* Each answer names the file that gave it, per key: the hand-written file or the
 	 * drop-in, and nothing when no file said that key.
 	 * contract: src/reac_segconf.h:102-107, 204-213
-	 * mutant: src/reac_segconf.c:245 `c->reading` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:247 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
-	 * mutant: src/reac_segconf.c:279 `c->reading` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:281 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
-	 * mutant: src/reac_segconf.c:121 `label ? label : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:123 `label ? label : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides */
 	if (!same_text(role_file, want->role_set ? want->role_file : NULL) ||
 	    !same_text(ignore_file, want->ignore_set ? want->ignore_file : NULL))
@@ -496,11 +496,11 @@ static FUZZ_NOINLINE void check_refusals(const struct reac_segconf *c, const str
 	/* Every line the grammar cannot use is refused and counted, and the first ones are
 	 * kept.
 	 * contract: src/reac_segconf.h:30-34, 51-54, 126-128
-	 * mutant: src/reac_segconf.c:31 `c->refused++;` -> ``
+	 * mutant: src/reac_segconf.c:33 `c->refused++;` -> ``
 	 * input: refusals-many
-	 * mutant: src/reac_segconf.c:206 `!is_new && cur->seen_gen == c->gen` -> `0`
+	 * mutant: src/reac_segconf.c:208 `!is_new && cur->seen_gen == c->gen` -> `0`
 	 * input: header-twice-in-one-file
-	 * mutant: src/reac_segconf.c:32 `c->n_refusals >= REAC_SEGCONF_REFUSALS` -> `c->n_refusals >= REAC_SEGCONF_REFUSALS - 1`
+	 * mutant: src/reac_segconf.c:34 `c->n_refusals >= REAC_SEGCONF_REFUSALS` -> `c->n_refusals >= REAC_SEGCONF_REFUSALS - 1`
 	 * input: refusals-many */
 	if (c->refused != m->refused || c->n_refusals != m->n_kept)
 		abort();
@@ -510,10 +510,10 @@ static FUZZ_NOINLINE void check_address(const char *got, const char *want)
 {
 	/* A kept refusal starts with its address: the file and the line, or the file alone
 	 * for a rule that needed every file read.
-	 * contract: src/reac_segconf.c:35-39 (the file is part of the address)
-	 * mutant: src/reac_segconf.c:38 `where, line)` -> `where, line + 1)`
+	 * contract: src/reac_segconf.c:37-41 (the file is part of the address)
+	 * mutant: src/reac_segconf.c:40 `where, line)` -> `where, line + 1)`
 	 * input: refusals-many
-	 * mutant: src/reac_segconf.c:37 `c->reading[0] ? c->reading : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:39 `c->reading[0] ? c->reading : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-refusal */
 	if (strncmp(got, want, strlen(want)) != 0)
 		abort();
@@ -524,7 +524,7 @@ static FUZZ_NOINLINE void check_absent(const struct reac_segconf *c, const char 
 	/* A name no section opened has no entry and no answer.
 	 * contract: src/reac_segconf.h:188-202 (the entry for `name`, or NULL; compared case
 	 * sensitively)
-	 * mutant: src/reac_segconf.c:512 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
+	 * mutant: src/reac_segconf.c:532 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
 	 * input: absent-probes */
 	if (reac_segconf_find(c, name) || reac_segconf_role(c, name, NULL) ||
 	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name))
@@ -546,7 +546,7 @@ static FUZZ_NOINLINE void check_declared(int got, int want, const struct reac_de
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:73 `*n >= max` -> `*n > max`
 	 * input: vlans-full
-	 * mutant: src/reac_segconf.c:558 `if (c->seg[i].ignore)` -> `if (0)`
+	 * mutant: src/reac_segconf.c:584 `if (c->seg[i].ignore)` -> `if (0)`
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:58 `!name_ok(parent)` -> `0`
 	 * input: vlans */

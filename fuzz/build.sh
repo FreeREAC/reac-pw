@@ -27,7 +27,7 @@ EXTRA=${FUZZ_EXTRA:-}
 
 # The reac-pw sources each harness drives.
 case $h in
-segconf) srcs="src/reac_segconf.c src/reac_declared_vlan.c" ;;
+segconf) srcs="src/reac_segconf.c src/reac_declared_vlan.c src/reac_knock_wire.c" ;;
 pin) srcs="src/reac_box_pin.c" ;;
 headamp) srcs="src/reac_headamp_prop.c" ;;
 rate) srcs="src/reac_rate_cfg.c" ;;
@@ -56,6 +56,13 @@ own_flags() {
 }
 
 STD="-std=c11 -D_GNU_SOURCE -Wall -Wextra -Isrc -Ifacts -Ifuzz $DEPS"
+# reac_knock_wire.c is linked for its plan table alone (reac_knock_plan_find, which
+# reac_segconf.c reads a `knock =` name through). The rest of that file calls into the
+# libreac library (reac_master_*, reac_wake_*, reac_knock_*), which no harness links, and
+# fuzz_segconf calls none of it: the segconf link leaves those symbols unresolved.
+LDX=
+[ "$h" = segconf ] && LDX="-Wl,--unresolved-symbols=ignore-all"
+
 case $variant in
 san)
 	opt="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
@@ -102,4 +109,4 @@ for s in $driver; do
 done
 $CC $STD $lib $EXTRA -c "fuzz/fuzz_$h.c" -o "$obj/fuzz_$h.o"
 # shellcheck disable=SC2086
-$CC $link "$obj/fuzz_$h.o" $objs -lm -o "$out"
+$CC $link $LDX "$obj/fuzz_$h.o" $objs -lm -o "$out"
