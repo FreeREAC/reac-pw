@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.36
+Version:        1.0.37
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -231,6 +231,14 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.37-1
+- A silent wire is knocked on instead of driven: a master stays off a wire where no box has been
+  heard, knocks with a backed-off plan (two control knocks, then one hunting cycle, at most three)
+  and streams only on the box that answered (#40, #31, #39). Until now the autodetection took a
+  silent wire as its own and drove it at the stream rate for as long as it ran. Two limits remain
+  on a NIC the host shares: the third knock is still one full cycle at the stream rate, and the
+  wake ladder still cycles the link when nothing answers.
+
 * Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.36-1
 - libreac, libreac-transport and libreac-tests 1.8 are in range: the ceiling is the next minor (< 1.9).
   1.0.35 pinned them below 1.8, so a channel carrying libreac 1.8.0 could not install it.
