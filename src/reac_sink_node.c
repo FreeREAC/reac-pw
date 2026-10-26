@@ -2295,6 +2295,12 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
 
+	/* THE KNOCK'S ANSWER, TO THE MASTER THAT WILL GRANT IT (#40). Single-threaded here:
+	 * the pacer is open and its thread is not started, so this is the one moment the
+	 * main loop may feed its master. */
+	for (int i = 0; i < cfg->n_knock_answer && cfg->knock_answer && cfg->knock_answer_len; i++)
+		reac_pacer_rx_ingest(&n->pacer, cfg->knock_answer[i], cfg->knock_answer_len[i]);
+
 	/* Start the SCHED_FIFO pacer thread. The master FSM probes immediately and
 	 * unconditionally (a real unlinked M-5000 always hunts) and only GRANTS on
 	 * the box's own cold-connect — no presence assumption, no timer advance

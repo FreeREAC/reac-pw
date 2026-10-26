@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# WHOLE-BINARY: THE UNTAGGED PARENT THAT HEARS A BOX TAKES THE PORT FROM AN EMPTY VLAN THAT
-# WON IT FIRST (#107, the rig's own geometry).
+# WHOLE-BINARY: THE UNTAGGED PARENT THAT HEARS A BOX TAKES THE PORT, AND AN EMPTY VLAN THAT
+# CAME UP FIRST HOLDS NOTHING (#107, the rig's own geometry; #40).
+#
+# SINCE #40 THE EMPTY VLAN CANNOT WIN THE PORT AT ALL: a wire nothing was heard on is
+# knocked on at a bounded rate and never mastered, so the race below has no holder and
+# nothing has to yield. The ordering is still forced, because it is the one the rig had,
+# and the claim is now that the parent comes up without any yield being needed.
 #
 # THE ORDERING THE RIG COULD NOT FORCE. 2026-09-20 20:10: the S-1608 sits on the UNTAGGED
 # parent `enp131s0`, the empty `enp131s0.11` took master on the 500 ms silence rule, and
@@ -103,21 +108,24 @@ kill -0 $BOXPID 2>/dev/null && echo "box-running yes" || echo "box-running no"
 grep -qa "S_KNOB_SET knob REACPW_LINK_MBIT=100" "$LOG" \
 	&& echo "knob-announced yes" || echo "knob-announced no"
 
-# ---- 1. THE EMPTY VLAN WINS THE PORT, before the parent has carrier: the 20:10 ordering.
+# ---- 1. THE EMPTY VLAN COMES UP FIRST, the 20:10 ordering, and since #40 it does NOT win
+#         the port: a wire nothing was heard on is knocked on, never mastered, so there is
+#         no holder for the parent to take the budget from.
 ip link set lb0.11 up
-wait_for "S_SEGMENT_UP.*\[lb0\.11\]" 25 \
+wait_for "\[lb0\.11\] nothing heard in .* KNOCKING" 15 \
+	&& echo "holder-knocks yes" || echo "holder-knocks no"
+sleep 3
+grep -qa "S_SEGMENT_UP.*\[lb0\.11\]" "$LOG" \
 	&& echo "holder-up yes" || echo "holder-up no"
-grep -qa "\[lb0\.11\] no REAC heard in" "$LOG" \
-	&& echo "holder-on-silence yes" || echo "holder-on-silence no"
 
 # ---- 2. THE PARENT, WITH THE BOX ON IT, COMES UP SECOND.
 ip link set lb0 up
 wait_for "S_SEGMENT_HEARD.*\[lb0\]" 40 \
 	&& echo "box-heard yes" || echo "box-heard no"
-wait_for "S_BUDGET_YIELDED.*\[lb0\.11\]" 30 \
-	&& echo "yielded yes" || echo "yielded no"
 wait_for "S_SEGMENT_UP.*\[lb0\]" 30 \
 	&& echo "taker-up yes" || echo "taker-up no"
+grep -qa "S_BUDGET_YIELDED.*\[lb0\.11\]" "$LOG" \
+	&& echo "yielded yes" || echo "yielded no"
 # THE JOB, NOT A PART OF IT: the box is heard on the parent by what it DECLARED — 16 in /
 # 8 out — the only facts a passive sighting carries (1.0.30: a box is never named from the
 # model catalogue).
@@ -153,24 +161,24 @@ val() { echo "$OUT" | grep -a "^$1 " | head -1 | awk '{print $2}'; }
 [ "$(val knob-announced)" = "yes" ] \
 	|| fail "REACPW_LINK_MBIT=100 was never announced — the port was not capped"
 [ "$(val box-running)" = "yes" ] || fail "the box side did not start"
-[ "$(val holder-up)" = "yes" ] \
-	|| fail "the empty lb0.11 never took the port — there was no holder, so this is not the 20:10 ordering"
-[ "$(val holder-on-silence)" = "yes" ] \
-	|| fail "lb0.11 did not take the wire on the silence licence — not the race #107 is about"
+[ "$(val holder-knocks)" = "yes" ] \
+	|| fail "the empty lb0.11 was never knocked on: it came up first and the daemon said nothing about it"
 [ "$(val box-heard)" = "yes" ] \
-	|| fail "the box on the parent was never HEARD — the yield's trigger never fired"
+	|| fail "the box on the parent was never HEARD"
 
-# ---- the claim
-[ "$(val yielded)" = "yes" ] \
-	|| fail "the empty lb0.11 did NOT yield the port to the parent that heard a box (#107)"
+# ---- the claim (#40: the #107 race cannot start, because silence buys no master)
+[ "$(val holder-up)" = "no" ] \
+	|| fail "the empty lb0.11 was SERVED on silence: a master on a wire nothing was heard on (#40)"
 [ "$(val taker-up)" = "yes" ] \
 	|| fail "the parent with the box on it never came up — the 690-refusals night"
 [ "$(val box-enrolled)" = "yes" ] \
 	|| fail "the parent came up and the S-1608 was never recognised on it"
-[ "$(val holder-ups)" = "1" ] \
-	|| fail "the yielded lb0.11 took the port again (S_SEGMENT_UP x$(val holder-ups)) on silence"
+[ "$(val yielded)" = "no" ] \
+	|| fail "a budget yield ran, so an empty segment held the port after all"
+[ "$(val holder-ups)" = "0" ] \
+	|| fail "the empty lb0.11 took the port (S_SEGMENT_UP x$(val holder-ups)) on silence"
 [ "$(val taker-drops)" = "0" ] \
 	|| fail "the parent with the box was dropped again ($(val taker-drops)x) — the budget ping-pongs"
 
 [ $FAIL -eq 0 ] || exit 1
-echo "PASS: an empty VLAN that won the port first yields it to the untagged parent that hears a box, and the box enrols there"
+echo "PASS: an empty VLAN that comes up first is knocked on and holds nothing, and the untagged parent that hears a box takes the port and enrols it"

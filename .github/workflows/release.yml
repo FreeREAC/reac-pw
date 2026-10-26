@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   rpm:
-    uses: FreeMixer/.github/.github/workflows/build-rpm.yml@main
+    uses: FreeMixer/.github/.github/workflows/build-rpm.yml@v1
     with:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}
@@ -36,7 +36,7 @@ jobs:
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
   deb:
-    uses: FreeMixer/.github/.github/workflows/build-deb.yml@main
+    uses: FreeMixer/.github/.github/workflows/build-deb.yml@v1
     with:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}

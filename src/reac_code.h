@@ -61,6 +61,14 @@
 	 * alias could not be read or written. The segment is served anyway; what is missing
 	 * is the host being told to keep its network manager off the link. */ \
 	X(RC_E_NOT_MARKED,      "E_NOT_MARKED") \
+	/* The knock on a silent wire could not go out (#40, reac_knock_wire.h): its deaf sender
+	 * would not open, or a frame was refused. The wire is still listened to, so a box that
+	 * speaks first is still served; a cold box on it is not woken until this clears. */ \
+	X(RC_E_KNOCK_TX,        "E_KNOCK_TX") \
+	/* The knock's wake ladder could not make or undo its PHY edge (#40, reac_wake.h): the
+	 * link would not go down, or would not come back up; the second leaves the wire down
+	 * until someone runs the `ip link` line the message names. */ \
+	X(RC_E_WAKE_EDGE,       "E_WAKE_EDGE") \
 	/* status */ \
 	X(RC_S_SEGMENT_HEARD,   "S_SEGMENT_HEARD") \
 	X(RC_S_BUDGET_YIELDED,  "S_BUDGET_YIELDED") \

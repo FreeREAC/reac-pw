@@ -295,8 +295,8 @@ grep -qE "S_SEGMENT_UP.*\[hear0\]" "$LOG" || { echo "FAIL: heard but not served"
 # positive control at the end of the file, where the same string is REQUIRED to have
 # appeared for cold0 -- a grep that cannot match is indistinguishable from a daemon that
 # behaved.
-if grep -q "\[hear0\] no REAC heard in" "$LOG"; then
-	echo "FAIL: a desk was streaming on hear0 and the daemon called the wire silent"
+if grep -q "\[hear0\] nothing heard in .* KNOCKING" "$LOG"; then
+	echo "FAIL: a desk was streaming on hear0 and the daemon called the wire silent and knocked"
 	cat "$LOG"; exit 1
 fi
 # AND ON THE RIGHT END OF THE PAIRING. A desk masters this wire, so the daemon DEFERS to
@@ -508,14 +508,13 @@ kill -TERM $SNIFF1 2>/dev/null; wait $SNIFF1 2>/dev/null
 kill -TERM $PBOXPID 2>/dev/null; wait $PBOXPID 2>/dev/null
 down_pair pin0 pbox0
 
-# ---- AN UNPINNED WIRE PROVEN SILENT IS DRIVEN, AND THAT IS WHAT WAKES A COLD BOX.
+# ---- AN UNPINNED WIRE PROVEN SILENT IS KNOCKED ON, NEVER STREAMED AT (#40, #31).
 # A final-user system has NO pins on its first boot, so the pin above cannot be the whole
-# answer. AND A LONE ANNOUNCE IS NOT THE ANSWER EITHER: measured on the rig 2026-09-08
-# with 0.5.0-3, an unpinned enp128s20f0u2 knocked, tx rose by two frames per six seconds,
-# and rx stayed at ZERO for over a minute -- a cold box answers a master that is DRIVING,
-# the continuous probing stream, which is what the pinned path and 0.4.8 both send. So an
-# interface observed masterless for REAC_KNOCK_LISTEN_NS (a master fills every audio slot
-# and cannot be present and silent) takes the wire through the ordinary master role.
+# answer. A lone announce is not the answer either (measured on the rig 2026-09-08 with
+# 0.5.0-3: rx +0 for over a minute), and the master stream is not one a daemon may pour
+# onto a wire nothing was heard on: on a trunk's native VLAN a managed switch shut the
+# port for it every 17 s (2026-10-24). What a cold box answers is one COMPLETE scene
+# transfer, so that is what goes out, at the slots a desk sends it, with no audio filler.
 #
 # The peer here is a bare veth end -- no daemon, no box, not one byte -- so what the
 # capture sees is ours and nothing prompted it.
@@ -523,23 +522,26 @@ up_pair cold0 kbox0
 $in_peer python3 "$RT/sniff.py" kbox0 "$RT/cold0.cnt" & SNIFF2=$!
 wait_for "\[cold0\] listening — role auto (autodetected)" 10 || {
 	echo "FAIL: cold0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
-wait_for "\[cold0\] no REAC heard in .* taking it as MASTER" 10 || {
-	echo "FAIL: an unpinned wire proven silent was never taken"; tail -20 "$LOG"; exit 1; }
-wait_for "\[cold0\] segment up (master, chosen by hearing the wire)" 15 || {
-	echo "FAIL: the wire was taken on silence and the segment never came up"
-	tail -20 "$LOG"; exit 1; }
-# A STREAM, NOT A FRAME. The whole rig correction is here: what reaches the box has to be
-# a master's continuous cadence. One announce every two seconds was ~0.5 frames/s and woke
-# nothing; a driving master is thousands. Measured on the peer's own capture over 1 s.
+wait_for "\[cold0\] nothing heard in .* KNOCKING" 10 || {
+	echo "FAIL: an unpinned wire proven silent was never knocked on"; tail -20 "$LOG"; exit 1; }
+# A KNOCK, NOT A STREAM, measured on the peer's own capture over 6 s (two whole cycles of
+# the hunting master, ~2.7 s each): something arrives, and at most the knock's budget of
+# 347 frames a cycle -- where the stream would be 48 000 frames in the same 6 s at 96 kHz.
 sleep 1
-D0=$(seen x "$RT/cold0.cnt" ""); sleep 1; D1=$(seen x "$RT/cold0.cnt" "")
-[ "$((D1 - D0))" -gt 500 ] || {
-	echo "FAIL: cold0 was taken as master but only $((D1 - D0)) frames/s reach the peer --"
-	echo "      that is a knock, not a master driving, and a cold box does not answer it"
+D0=$(seen x "$RT/cold0.cnt" ""); sleep 6; D1=$(seen x "$RT/cold0.cnt" "")
+[ "$((D1 - D0))" -gt 0 ] || {
+	echo "FAIL: cold0 is knocking in the journal and NOTHING reached the peer in 6 s"
 	tail -20 "$LOG"; exit 1; }
-# THE COLD BOX ANSWERS THE STREAM. It is started only now, so it could not have begun this
-# exchange; and it is started with its PHY already up on a wire that is ALREADY being
-# driven, which is the rig's own case (boxes powered before the daemon).
+[ "$((D1 - D0))" -le 1041 ] || {
+	echo "FAIL: $((D1 - D0)) frames reached the peer in 6 s -- more than three cycles of"
+	echo "      the knock's 347, so this wire is being streamed at, not knocked on"
+	tail -20 "$LOG"; exit 1; }
+grep -q "\[cold0\] segment up" "$LOG" && {
+	echo "FAIL: cold0 was served as a segment before anything answered the knock"
+	tail -20 "$LOG"; exit 1; }
+# THE COLD BOX ANSWERS. It is started only now, so it could not have begun this exchange;
+# its PHY is already up on a wire that is being knocked on, which is the rig's own case
+# (boxes powered before the daemon). The master starts on what it heard.
 $in_peer "$BIN" --live kbox0 --tx kbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name kbox \
        --src-mac 00:40:ab:c4:80:43 >"$PEER" 2>&1 &
 KBOXPID=$!
@@ -552,39 +554,37 @@ kill -TERM $SNIFF2 2>/dev/null; wait $SNIFF2 2>/dev/null
 kill -TERM $KBOXPID 2>/dev/null; wait $KBOXPID 2>/dev/null
 down_pair cold0 kbox0
 
-# ---- A DESK TURNS UP ON A WIRE WE TOOK ON SILENCE: WE YIELD, WE NEVER FIGHT. The other
-# half of the safety argument, and the one that costs something. Driving is a BET that
-# nothing was there; a desk powered up second proves the bet wrong, and two masters on one
-# segment is the fault the seglock exists to make impossible between our own processes --
-# it is no better against a real desk. So the sniffer is KEPT on a wire taken this way and
-# the segment is handed over: master down, slave up, no shouting.
+# ---- A DESK TURNS UP ON A WIRE WE ARE KNOCKING ON: THE KNOCK ENDS, WE DEFER, WE NEVER
+# FIGHT. The other half of the safety argument. Knocking is a BET that nothing was there; a
+# desk powered up second proves the bet wrong. Its first frame ends the knock, the hunt
+# classifies it, and the segment is served as a TAP: nothing of ours goes back on the wire.
+# (Until #40 this wire was DRIVEN on its silence and the phase proved a master yielding.)
 up_pair cold1 kdesk1
 $in_peer python3 "$RT/sniff.py" kdesk1 "$RT/cold1.cnt" & SNIFF3=$!
-wait_for "\[cold1\] no REAC heard in .* taking it as MASTER" 10 || {
-	echo "FAIL: cold1 was never taken on silence"; tail -20 "$LOG"; exit 1; }
-wait_for "\[cold1\] segment up (master, chosen by hearing the wire)" 15 || {
-	echo "FAIL: cold1 was taken and never served"; tail -20 "$LOG"; exit 1; }
-# We are driving. Our own MAC on the wire is the one the peer sees most of.
-sleep 1
+wait_for "\[cold1\] nothing heard in .* KNOCKING" 10 || {
+	echo "FAIL: cold1 was never knocked on"; tail -20 "$LOG"; exit 1; }
+# We are knocking. Our own MAC on the wire is the only one the peer sees, and at the knock's
+# rate, not the stream's.
+sleep 3
 OURMAC=$(awk '{print substr($1, 1, 12), $2}' "$RT/cold1.cnt" | sort -k2 -n | tail -1 | awk '{print $1}')
 [ -n "$OURMAC" ] || { echo "FAIL: nothing of ours reached kdesk1"; tail -20 "$LOG"; exit 1; }
-[ "$(seen x "$RT/cold1.cnt" "$OURMAC-b")" -gt 500 ] || {
-	echo "FAIL: cold1 was served as master and is not BROADCASTING a downstream"
+[ "$(seen x "$RT/cold1.cnt" "$OURMAC-b")" -gt 0 ] && [ "$(seen x "$RT/cold1.cnt" "$OURMAC-b")" -lt 1500 ] || {
+	echo "FAIL: cold1 is knocking and $(seen x "$RT/cold1.cnt" "$OURMAC-b") of our broadcasts"
+	echo "      reached kdesk1 in ~3 s: none is no knock, thousands is a stream"
 	cat "$RT/cold1.cnt"; tail -20 "$LOG"; exit 1; }
 $in_peer "$BIN" --live kdesk1 --tx kdesk1 --mixer m5000 --rate "$FACT_SAMPLE_RATE_96K" --name kdesk \
        --src-mac 00:40:ab:de:5c:02 >"$PEER" 2>&1 &
 KDESKPID=$!
-wait_for "\[cold1\] a desk masters this segment .* yielding the master role" 25 || {
-	echo "FAIL: a desk took the wire we were driving and we did not yield"
+wait_for "\[cold1\] ANSWERED" 25 || {
+	echo "FAIL: a desk spoke on the wire we were knocking on and the knock did not end"
 	tail -25 "$LOG"; tail -5 "$PEER"; exit 1; }
-# AND IT COMES BACK AS A TAP, not as a courting slave (courtship ruling 2026-09-14,
-# option C). A yield to a desk is the same deferral the first phase makes on a wire a desk
-# already held; the two must not be two different answers to one fact.
+# AND IT COMES UP AS A TAP, not as a courting slave (courtship ruling 2026-09-14,
+# option C): the same deferral the first phase makes on a wire a desk already held.
 wait_for "\[cold1\] segment up (tap, deferring to the master it heard)" 15 || {
-	echo "FAIL: yielded, but never came back up as the tap the ruling calls for"
+	echo "FAIL: the desk was heard, and the segment never came up as the tap the ruling calls for"
 	tail -25 "$LOG"; exit 1; }
-# AND WE STOPPED DRIVING. A yield that leaves our pacer on the wire is two masters with a
-# polite log line.
+# AND WE SEND NOTHING. A deferral that leaves our knock or a pacer on the wire is a second
+# master with a polite log line.
 #
 # COUNTING OUR FRAMES CANNOT ANSWER THIS: a slave transmits at the wire cadence too, from
 # the same NIC address, and it first spends a bounded ~5460-frame BROADCAST cold-connect
@@ -606,7 +606,7 @@ AFTER=$(seen x "$RT/cold1.cnt" "$OURMAC-b");  DESKAFTER=$(other "$RT/cold1.cnt" 
 # Four seconds of mastering is ~32000 broadcasts at 96 k. A yielded segment broadcasts
 # nothing at all, and the bar leaves room for a stray frame rather than demanding zero.
 [ "$((AFTER - BEFORE))" -lt 500 ] || {
-	echo "FAIL: we yielded the segment in the journal and BROADCAST $((AFTER - BEFORE))"
+	echo "FAIL: we deferred to the desk in the journal and BROADCAST $((AFTER - BEFORE))"
 	echo "      frames in 4 s anyway -- that is still a master over a desk"; exit 1; }
 kill -TERM $SNIFF3 2>/dev/null; wait $SNIFF3 2>/dev/null
 kill -TERM $KDESKPID 2>/dev/null; wait $KDESKPID 2>/dev/null
@@ -630,27 +630,28 @@ $in_peer python3 "$RT/sniff.py" vbox0 "$RT/venue.cnt" & SNIFFV=$!
 up_pair venue0 vbox0
 wait_for "\[venue0\] listening — role auto (autodetected)" 10 || {
 	echo "FAIL: venue0 never came up as an unpinned sniffer"; tail -20 "$LOG"; exit 1; }
-# EITHER ROUTE TO THE WIRE IS CORRECT HERE, and which one runs is a race nobody needs to
-# win -- since 0.5.4 both keep the sniffer, which is the whole point of the release. The
-# box floods broadcast FILLER on its PHY-up, and a FILLER from a peer no control frame has
-# proved yet is deliberately NOT a sighting (reac_disco's peer lock), so a box that has not
-# joined yet leaves the wire looking empty: measured here, the licence route ran.
-for ((i = 0; i < 60; i++)); do
-	grep -qE "\[venue0\] (no master heard in|no REAC heard in .* taking it as MASTER)" "$LOG" && break
-	sleep 0.2
-done
-grep -qE "\[venue0\] (no master heard in|no REAC heard in .* taking it as MASTER)" "$LOG" || {
-	echo "FAIL: a masterless wire with a box on it was taken by neither route"
-	tail -25 "$LOG"; tail -5 "$RT/venue-box.log"; exit 1; }
-wait_for "\[venue0\] segment up (master, chosen by hearing the wire)" 15 || {
-	echo "FAIL: venue0 was taken and never served"; tail -20 "$LOG"; exit 1; }
-# THE BOX IS POWERED ON A WIRE THAT IS ALREADY BEING DRIVEN -- the rig's own case, and the
-# only order in which a stagebox enrols: it leaves BOOT for ANNOUNCE on ITS OWN PHY-up
-# edge and cold-connects then, so a box already up when we start driving floods once and
-# is never heard from again (measured here: rx_box_frames climbing with rx_joins=0).
+# NOTHING IS ON THE WIRE YET, so it is KNOCKED ON (#40) -- never driven, which is what this
+# phase used to wait for before it powered the box.
+wait_for "\[venue0\] nothing heard in .* KNOCKING" 12 || {
+	echo "FAIL: a masterless wire was never knocked on"
+	tail -25 "$LOG"; exit 1; }
+# THE BOX IS POWERED ON A WIRE THAT IS BEING KNOCKED ON -- the rig's own case. It leaves
+# BOOT for ANNOUNCE on ITS OWN PHY-up edge and cold-connects then (a box already up floods
+# once and is never heard from again: rx_box_frames climbing with rx_joins=0, measured here
+# when this wire was driven). Its flood ends the knock and its JOIN, kept by the knock, is
+# handed to the master that starts on it.
 $in_peer "$BIN" --live vbox0 --tx vbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name vbox \
        --src-mac $VBOXMAC >"$RT/venue-box.log" 2>&1 &
 VBOXPID=$!
+for ((i = 0; i < 75; i++)); do
+	grep -qE "\[venue0\] no master heard in" "$LOG" && break
+	sleep 0.2
+done
+grep -qE "\[venue0\] no master heard in" "$LOG" || {
+	echo "FAIL: a box spoke on the knocked wire and the daemon never took it as master"
+	tail -25 "$LOG"; tail -5 "$RT/venue-box.log"; exit 1; }
+wait_for "\[venue0\] segment up (master, chosen by hearing the wire)" 15 || {
+	echo "FAIL: venue0 was taken and never served"; tail -20 "$LOG"; exit 1; }
 # AND THE BOX IS OURS: granted, enrolled, established. "The box is no longer granted by
 # us" below is an ABSENCE claim, so it is worth nothing until this presence is on record.
 VLINE0=$(LINE0)
@@ -1354,8 +1355,8 @@ grep -qE "\[trunk0\] segment up|\[trunk1\] segment up" "$LOG" && {
 # ABSENCE of the masterless-licence line (hear0 with a desk on it, and the yield's frame
 # count). A grep that can never match reports absence exactly like a daemon that behaved,
 # so the same string is required to be PRESENT for the wires that really were silent.
-[ "$(grep -c "no REAC heard in .* taking it as MASTER" "$LOG")" -ge 2 ] || {
-	echo "FAIL: the licence line never appeared for ANY wire, so every absence of it"
+[ "$(grep -c "nothing heard in .* KNOCKING" "$LOG")" -ge 2 ] || {
+	echo "FAIL: the knock line never appeared for ANY wire, so every absence of it"
 	echo "      asserted above was meaningless"; tail -30 "$LOG"; exit 1; }
 
 # ---- EVERY SERVED NIC SAYS SO ON THE INTERFACE (reac_served_mark.h). The packaged root
