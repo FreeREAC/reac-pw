@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.35
+Version:        1.0.36
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -21,16 +21,16 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
 # >=1.5.1 SINCE 1.0.27: the grant takes a box up to 40 channels wide (a 40 in / 0 out box).
 BuildRequires:  pkgconfig(libreac) >= 1.7.0
-BuildRequires:  pkgconfig(libreac) < 1.8
+BuildRequires:  pkgconfig(libreac) < 1.9
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.7.0
-BuildRequires:  pkgconfig(libreac-transport) < 1.8
+BuildRequires:  pkgconfig(libreac-transport) < 1.9
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships fake_box (libreac-tests 1.7.3), and the minor after it
+# ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
 BuildRequires:  libreac-tests >= 1.7.3
-BuildRequires:  libreac-tests < 1.8
+BuildRequires:  libreac-tests < 1.9
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -42,9 +42,9 @@ Requires:       iproute
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
 Requires:       libreac >= 1.7.0
-Requires:       libreac < 1.8
+Requires:       libreac < 1.9
 Requires:       libreac-transport >= 1.7.0
-Requires:       libreac-transport < 1.8
+Requires:       libreac-transport < 1.9
 %{?systemd_requires}
 
 %description
@@ -231,6 +231,10 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.36-1
+- libreac, libreac-transport and libreac-tests 1.8 are in range: the ceiling is the next minor (< 1.9).
+  1.0.35 pinned them below 1.8, so a channel carrying libreac 1.8.0 could not install it.
+
 * Wed Oct 14 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.35-1
 - libreac, libreac-transport and libreac-tests are declared once, in the package, with a floor and a
   ceiling (the next minor). The build and the tests take them from the FreeMixer channel instead of
