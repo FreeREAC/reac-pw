@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_qdisc.c:398 (each read asks for two dumps of the qdiscs).
+Caught by the seed input "two-etf-qdiscs" of fuzz_qdisc.
+
+diff --git a/src/reac_qdisc.c b/src/reac_qdisc.c
+index 077634a..32e79f7 100644
+--- a/src/reac_qdisc.c
++++ b/src/reac_qdisc.c
+@@ -274,7 +274,7 @@ int reac_qdisc_stats_read(int ifindex, struct reac_qdisc_stats *out)
+ 	req.tcm.tcm_family  = AF_UNSPEC;
+ 	req.tcm.tcm_ifindex = ifindex;
+
+-	if (send(fd, &req, req.nh.nlmsg_len, 0) < 0) {
++	if (send(fd, &req, req.nh.nlmsg_len, 0) < 0 || send(fd, &req, req.nh.nlmsg_len, 0) < 0) {
+ 		int e = -errno;
+ 		close(fd);
+ 		return e;

@@ -294,12 +294,19 @@ int reac_qdisc_stats_read(int ifindex, struct reac_qdisc_stats *out)
 		}
 		if (n == 0)
 			break;
+		/* `n` stays signed: a last message whose length is not padded leaves it below
+		 * 0, and NLMSG_OK on an unsigned cast of that would read on past the reply. */
 		for (struct nlmsghdr *nh = (struct nlmsghdr *)buf;
-		     NLMSG_OK(nh, (unsigned)n); nh = NLMSG_NEXT(nh, n)) {
+		     NLMSG_OK(nh, n); nh = NLMSG_NEXT(nh, n)) {
 			if (nh->nlmsg_type == NLMSG_DONE) { done = 1; break; }
 			if (nh->nlmsg_type == NLMSG_ERROR) {
 				const struct nlmsgerr *err = NLMSG_DATA(nh);
-				rc = err->error ? err->error : -EIO;
+				/* An error too short to hold its code is no answer: its code
+				 * would be read from past the message. */
+				if (nh->nlmsg_len < NLMSG_LENGTH(sizeof *err))
+					rc = -EIO;
+				else
+					rc = err->error ? err->error : -EIO;
 				done = 1;
 				break;
 			}
