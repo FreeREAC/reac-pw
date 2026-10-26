@@ -669,6 +669,21 @@ test('reac_wake_holds_when_nothing_is_sent',
   args : [reac_pw_exe],
   timeout : 240)
 
+# --- whole-binary: a NIC the host uses HOLDS the ladder, said once (#46, 2026-10-26) ------
+#
+# The desk 2026-10-26 19:19Z: the ladder took the trunk parent down for 1200 ms, the NIC
+# with the management address and every REAC VLAN, and every browser tab on the host
+# dropped every stream. The held arm puts an address on the daemon's own veth before it
+# starts and requires NO edge in 40 s, the host's-NIC refusal said exactly once with the
+# kernel's reason, and frames leaving (so the hold is this refusal's, not NOTHING_SENT's);
+# the control arm is the same bare veth, which must be bounced.
+test('reac_wake_holds_on_a_host_nic',
+  find_program('tests/wake-holds-on-a-host-nic.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 240)
+
 # --- whole-binary: the split box enrols at its DECLARED width (2026-09-17) ---------
 #
 # The live defect of that morning: an S-4000H-0832 declaring 8 in / 32 out and returning
