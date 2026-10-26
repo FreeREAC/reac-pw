@@ -13,7 +13,10 @@
 #   * an interface that appears or disappears while the daemon runs adds or removes its
 #     segment with no restart;
 #   * and every segment's ROLE is `auto`: a box mastering the wire is slave-joined, a desk
-#     mastering it is tapped, a silent wire is mastered and flooded.
+#     mastering it is tapped, a silent wire is listened to and knocked on by a bounded,
+#     backed-off plan (docs/KNOCK.md) and mastered once a box answers. A trunk parent stops
+#     knocking when its VLANs carry REAC and is never a segment, so a trunk NIC needs no
+#     `ignore = yes` here.
 #
 # THIS FILE IS THE EXCEPTION, AND reac-pw.env IS NOT. `REAC_ROLE` and `REAC_ROLE_<segment>`
 # no longer decide anything, in any layer: a role written before there was anything to
@@ -44,22 +47,34 @@
 #[segment enp131s0.12]
 #role = slave
 
-# A WIRE WE DRIVE WHATEVER WE HEAR. Rarely what you want: `auto` already masters a silent
-# wire, and a pin cannot beat a box that is already mastering — it joins it.
+# A WIRE WE DRIVE WHATEVER WE HEAR. Rarely what you want: `auto` already knocks on a silent
+# wire and masters it once a box answers, and a pin cannot beat a box that is already
+# mastering: it joins it. A pin streams on link without waiting for an answer.
 #[segment enp131s0.1]
 #role = master
 
 # SWITCH A SEGMENT OFF ENTIRELY. Never sniffed, never served, never minted; its netdev is
 # left exactly as found. For a NIC that carries REAC you do not want this host to touch.
+# It is NOT needed for a trunk NIC or a NIC with no REAC on it: since reac-pw#40 such a wire
+# is listened to and knocked on, never streamed at. A file that still carries it for that
+# reason is honoured, and the daemon says at start that it is no longer needed.
 #[segment enp131s0.13]
 #ignore = yes
 
-# DECLARING A VLAN THAT IS NOT THERE YET. Naming `[segment <parent>.<vid>]` also DECLARES
-# it: the sub-interface is created at start and whenever its parent appears, whether or not
-# anything has ever been heard on it. That is the cold-boot case — a stagebox is a slave,
-# it says nothing until a master speaks, and the master cannot speak until the netdev
-# exists — and it is the ONLY reason to name a VLAN here. A VLAN with a box on it that
-# already speaks needs no mention at all.
+# HOW A SILENT WIRE IS KNOCKED ON: `escalate` (the default: two control knocks, then one
+# cycle of the stream a real box was seen to answer), `control` (never an audio filler) or
+# `stream` (the stream cycle on every knock). Every plan keeps the same caps: at most three
+# stream knocks until something is heard, and a period that doubles up to 30 s. It exists
+# for the rig check in docs/KNOCK.md; a rig whose boxes enrol needs no such line.
+#[segment enp131s0]
+#knock = control
+
+# NAMING A VLAN. `[segment <parent>.<vid>]` names a VLAN IF IT EXISTS: its role and ignore
+# apply when that VID is heard on the parent and the daemon creates the sub-interface. It
+# creates NOTHING by itself (ruling 2026-09-23). A cold box that came up before the daemon
+# sends no tag, so for it the sub-interface must be in the host's network config
+# (README, "A box behind a trunk"); a box that speaks, or powers up while the daemon runs,
+# names its VLAN by itself.
 #[segment enp131s0.14]
 
 # ============================================================================

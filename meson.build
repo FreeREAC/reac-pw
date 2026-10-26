@@ -158,6 +158,8 @@ reac_pw_src = [
   'src/reac_box_pin.c',
   'src/reac_watch.c',
   'src/reac_wake.c',
+  'src/reac_knock_wire.c',
+  'src/reac_empty_master.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
   'src/reac_headamp_state.c',
@@ -513,7 +515,8 @@ test('reac_declared_vlan', declared_vlan_test)
 # is not doing what their file says -- which, one level up, is the defect the whole
 # autodetect spec exists to remove.
 segconf_test = executable('test_reac_segconf',
-  ['tests/test_reac_segconf.c', 'src/reac_segconf.c', 'src/reac_declared_vlan.c'],
+  ['tests/test_reac_segconf.c', 'src/reac_segconf.c', 'src/reac_declared_vlan.c',
+   'src/reac_knock_wire.c', 'src/reac_wake.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_segconf', segconf_test)
@@ -1529,6 +1532,27 @@ test('reac_wake', wake_test)
 #
 # A floor bump that silently picked up a library without them, or a libreac that reverted
 # either latch, fails HERE, at reac-pw's own gate, instead of on a desk. Pure; no socket.
+# --- unit test: THE WIRE MODEL, a silent wire is knocked on and never flooded (#40) ----
+# A fake wire counts every frame by kind; on it, nothing, fake_box, a box that answers only
+# through FILLER, or a trunk parent. Ten silent minutes carry no stream frame, exactly the
+# capped stream knocks and the backoff's gaps, against budgets derived from libreac's own
+# master; the first answer ends the knock and starts the stream, whose master reaches ENROLL;
+# a trunk parent goes quiet on its VLANs' tags; the knock's wake ladder bounces on schedule.
+# Handing the licence back to the hunt (the old probe) turns eight of the nine arms red.
+knock_wire_test = executable('test_reac_knock_wire',
+  ['tests/test_reac_knock_wire.c', 'src/reac_knock_wire.c', 'src/reac_wake.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_knock_wire', knock_wire_test)
+
+# --- unit test: a MASTER THAT STREAMS AT NOBODY STOPS (#40) ---------------------------------
+# The master a knock's answer started stops on the poll that shows no box: 2 s with not one
+# box frame while it courts, at once when libreac gives an enrolled box up. With values.
+empty_master_test = executable('test_reac_empty_master',
+  ['tests/test_reac_empty_master.c', 'src/reac_empty_master.c'],
+  include_directories : src_inc)
+test('reac_empty_master', empty_master_test)
+
 enrolment_binding_test = executable('test_reac_enrolment_binding',
   ['tests/test_reac_enrolment_binding.c'],
   include_directories : src_inc,
