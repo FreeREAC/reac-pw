@@ -1,0 +1,16 @@
+Breaks the check of fuzz/fuzz_qdisc.c:426 (the byte counter of TCA_STATS2 sums the packets).
+Caught by the seed input "two-etf-qdiscs" of fuzz_qdisc.
+
+diff --git a/src/reac_qdisc.c b/src/reac_qdisc.c
+index 077634a..00ef973 100644
+--- a/src/reac_qdisc.c
++++ b/src/reac_qdisc.c
+@@ -198,7 +198,7 @@ static void qd_take_stats2(const struct rtattr *rta, struct reac_qdisc_stats *o)
+ 		    RTA_PAYLOAD(a) >= sizeof(struct gnet_stats_basic)) {
+ 			struct gnet_stats_basic b;
+ 			memcpy(&b, RTA_DATA(a), sizeof b);
+-			o->bytes   += b.bytes;
++			o->bytes   += b.packets;
+ 			o->packets += b.packets;
+ 		} else if (a->rta_type == TCA_STATS_QUEUE &&
+ 		           RTA_PAYLOAD(a) >= sizeof(struct gnet_stats_queue)) {

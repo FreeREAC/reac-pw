@@ -146,6 +146,26 @@ static int test_prop_parse(void)
 		CHK(r == REAC_ROLE_SLAVE);
 	}
 
+	/* The NEAREST flag, not a float sum's rounding: 0.49999997 is the master (float
+	 * arithmetic rounds 0.49999997f + 0.5f to 1, the slave), and -0.7 is nearest -1,
+	 * no flag at all, where truncating -0.2 toward zero read it as the master. */
+	{
+		static const float v[] = { 0.49999997f, -0.7f };
+		static const int want[] = { 1, -1 };
+		for (int i = 0; i < 2; i++) {
+			struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
+			struct spa_pod_frame obj, st;
+			begin_props(&b, &obj, &st);
+			spa_pod_builder_string(&b, REAC_CFG_PROP_ROLE);
+			spa_pod_builder_float(&b, v[i]);
+			const struct spa_pod *pod = end_props(&b, &obj, &st);
+
+			enum reac_role r = REAC_ROLE_SLAVE;
+			CHK(reac_role_prop_parse(pod, &r) == want[i]);
+			CHK(want[i] != 1 || r == REAC_ROLE_MASTER);
+		}
+	}
+
 	/* No reac.cfg.role key at all (a plain rate/head-amp write) -> 0,
 	 * untouched. */
 	{
