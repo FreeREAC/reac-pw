@@ -382,16 +382,19 @@ static FUZZ_NOINLINE void check_socket(const struct nl_kernel *k)
 		abort();
 }
 
-static FUZZ_NOINLINE void check_request(const uint8_t *m, size_t len, int ifindex)
+static FUZZ_NOINLINE void check_request(const struct nl_kernel *k, int sent_before, int ifindex)
 {
-	/* The one request is a dump of the qdiscs (RTM_GETQDISC, NLM_F_REQUEST | NLM_F_DUMP)
-	 * of the device asked for, a header and a tcmsg.
+	/* A read sends exactly one request, and it is a dump of the qdiscs (RTM_GETQDISC,
+	 * NLM_F_REQUEST | NLM_F_DUMP) of the device asked for, a header and a tcmsg.
 	 * contract: src/reac_qdisc.h:101-105 (one RTM_GETQDISC dump), linux/rtnetlink.h
 	 * mutant: src/reac_qdisc.c:272 `NLM_F_REQUEST | NLM_F_DUMP` -> `NLM_F_REQUEST`
 	 * input: two-etf-qdiscs
 	 * mutant: src/reac_qdisc.c:275 `= ifindex;` -> `= 0;`
+	 * input: two-etf-qdiscs
+	 * mutant: src/reac_qdisc.c:277 `< 0) {` -> `< 0 || send(fd, &req, req.nh.nlmsg_len, 0) < 0) {`
 	 * input: two-etf-qdiscs */
-	if (!request_is(m, len, ifindex))
+	if (k->n_sent != sent_before + 1 ||
+	    !request_is(k->sent[sent_before], k->sent_len[sent_before], ifindex))
 		abort();
 }
 
@@ -502,7 +505,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 				check_failed(rc, -call_errno, &out);
 				continue;
 			}
-			check_request(g_nl.sent[sent_before], g_nl.sent_len[sent_before], ifindex);
+			check_request(&g_nl, sent_before, ifindex);
 			if (x.rc == 0)
 				check_sums(rc, &out, &x.sum);
 			else
