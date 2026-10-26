@@ -88,7 +88,7 @@ jobs:
                 diffutils gawk sed grep coreutils rsync
               git config --global --add safe.directory "*"
               # the channel, then everything the spec BuildRequires: libreac, libreac-transport, libreac-tests
-              dnf config-manager addrepo --setopt=retries=10 --from-repofile=https://freemixer.github.io/rpm/freemixer.repo
+              dnf install -y --setopt=retries=10 https://www.openmixer.org/rpm/openmixer-release.noarch.rpm
               dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
               tools/ci-suite.sh build-ci ../reac-protocol
               # THE TARBALL THE RPM IS BUILT FROM, CHECKED THE WAY THE RPM CHECKS IT.

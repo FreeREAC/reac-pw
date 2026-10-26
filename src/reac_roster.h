@@ -36,22 +36,28 @@
 
 /* The same bound as reac_segconf's table and reac_ifscan's: two trunks' worth of VLANs. */
 #define REAC_ROSTER_MAX 32
-/* name, state, model, role, source, width — see the key grammar below. */
-#define REAC_ROSTER_FIELDS 6
+/* name, state, model, role, source, width, status: see the key grammar below. */
+#define REAC_ROSTER_FIELDS 7
 /* The count key plus every field of every group. The worst case is exact: a group is
  * either in the new roster (fields) or leaving it (removals), never both. */
 #define REAC_ROSTER_KV_MAX (1 + REAC_ROSTER_MAX * REAC_ROSTER_FIELDS)
 
-/* WHAT A SEGMENT IS DOING, in the spec's words and no others. `probing` is the state the
- * whole amendment is about: a segment the daemon is sniffing that has decided nothing —
- * no box, no node, and until now no row anywhere but the journal. */
+/* WHAT A SEGMENT IS DOING, in the spec's words and no others. A wire the daemon is sniffing
+ * that has decided nothing (no box, no node, and once no row anywhere but the journal) is
+ * the state the whole amendment is about: `listening`, `knocking` or `trunk` since #40,
+ * `probing` before it. */
 enum reac_roster_state {
-	REAC_ROSTER_PROBING = 0,
+	REAC_ROSTER_PROBING = 0,     /* a master engine started on a box, not yet granted it  */
 	REAC_ROSTER_ESTABLISHED,
 	REAC_ROSTER_SLAVE,
 	REAC_ROSTER_TAP,
 	REAC_ROSTER_REFUSED,
 	REAC_ROSTER_IGNORED,
+	/* A WIRE WITH NO ENGINE ON IT YET (#40). Until then every such wire read `probing`,
+	 * which named a master stream that, by the #40 ruling, is never on a wire like this. */
+	REAC_ROSTER_LISTENING,       /* nothing decides it yet, and nothing is sent on it     */
+	REAC_ROSTER_KNOCKING,        /* no master, no box heard: the bounded knock is out     */
+	REAC_ROSTER_TRUNK,           /* its VLANs carry REAC and are the segments; not one    */
 };
 
 const char *reac_roster_state_name(enum reac_roster_state s);
@@ -63,6 +69,9 @@ struct reac_roster_seg {
 	char role[16];                    /* auto|master|slave|tap, as RESOLVED */
 	char source[112];                 /* `autodetected` or `conf:<file>` */
 	int in, out;                      /* published as `in/out`; 0/0 when there is no pair */
+	/* WHAT WAS FOUND AND WHAT THE DAEMON IS DOING, in one sentence for a person (#40).
+	 * Empty = the state's own sentence. A property value carries 111 bytes. */
+	char status[112];
 };
 
 /* One property to set, or to REMOVE. `remove` is not "set it to empty": a group that left
@@ -97,16 +106,30 @@ void reac_roster_begin(struct reac_roster *r);
 int reac_roster_add(struct reac_roster *r, const char *name, enum reac_roster_state state,
                     const char *model, const char *role, const char *source, int in, int out);
 
+/* Say what this tick found on `name`, in plain words, over the state's own sentence. A name
+ * not in this tick's roster is -1. */
+int reac_roster_status(struct reac_roster *r, const char *name, const char *status);
+
+/* The sentence a state says when nobody said more. Never NULL. */
+const char *reac_roster_state_said(enum reac_roster_state s);
+
+/* What a `probing` master says, from the two facts that tell its cases apart: the role was
+ * pinned in the conf, and a box's answer to the knock was handed to it at open. Never NULL;
+ * "answered" only when `answered`. */
+const char *reac_roster_probing_said(int pinned, int answered);
+
 /* WHAT MOVED, as properties to set or remove, in the grammar:
  *
  *   reac.roster            = 1                  (create-time, on the node itself)
  *   reac.roster.n          = 3
  *   reac.roster.<i>.name   = enp131s0.11
- *   reac.roster.<i>.state  = probing|established|slave|tap|refused|ignored
+ *   reac.roster.<i>.state  = listening|knocking|trunk|probing|established|slave|tap|
+ *                            refused|ignored
  *   reac.roster.<i>.model  = S-1608 | none
  *   reac.roster.<i>.role   = auto|master|slave|tap
  *   reac.roster.<i>.source = autodetected | conf:reac-pw.conf.d/50-openmixer.conf
  *   reac.roster.<i>.width  = 16/8 | 0/0
+ *   reac.roster.<i>.status = no master and no box heard: knocking for a box, never the stream
  *
  * Returns how many entries were written (0 = nothing changed, publish nothing), or -1 when
  * `max` is smaller than the delta needs — REFUSED, not truncated, because a roster

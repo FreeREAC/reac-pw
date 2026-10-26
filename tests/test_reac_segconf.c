@@ -14,6 +14,7 @@
  *
  * No filesystem except one file this test writes, no netlink, no PipeWire. */
 #include "reac_segconf.h"
+#include "reac_knock_wire.h"   /* reac_knock_plan_find: the plans `knock =` names */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,6 +277,26 @@ int main(void)
 	if (f) { fputs("[segment s0]\nrole = master\n", f); fclose(f); }
 	CHECK(reac_segconf_refresh(&c) == 1, "a drop-in rewritten in the same second was not seen");
 	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_MASTER, "the rewritten drop-in was not applied");
+
+	/* ---- THE KNOCK PLAN (#40): a row of reac_knock_plans, or refused by name ---- */
+	{
+		struct reac_segconf k;
+		reac_segconf_init(&k);
+		reac_segconf_parse(&k, "[segment e0]\nknock = Control\n[segment e1]\nrole = auto\n");
+		CHECK(k.refused == 0, "a well-formed knock key was refused: %s",
+		      k.n_refusals ? k.refusal[0] : "");
+		CHECK(reac_segconf_knock(&k, "e0") && strcmp(reac_segconf_knock(&k, "e0"), "control") == 0,
+		      "knock = Control was not carried as the plan's own name");
+		CHECK(reac_knock_plan_find(reac_segconf_knock(&k, "e0")) != NULL,
+		      "the carried knock name does not find its plan");
+		CHECK(reac_segconf_knock(&k, "e1") == NULL, "a segment with no knock key has one");
+		reac_segconf_init(&k);
+		reac_segconf_parse(&k, "[segment e0]\nknock = flood\n");
+		CHECK(k.refused == 1 && refusal_names(&k, "flood"),
+		      "an unknown knock plan was not refused by name");
+		CHECK(refusal_names(&k, "escalate"), "the refusal does not list the plans");
+		CHECK(reac_segconf_knock(&k, "e0") == NULL, "a refused knock plan was kept anyway");
+	}
 
 	/* ---- THE BOX ROLE AND ITS MODEL ROW (2026-09-17 spec §4) ----
 	 * A box declares a MODEL, and a box that declares the wrong width to a mixer

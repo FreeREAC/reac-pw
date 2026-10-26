@@ -17,10 +17,65 @@ const char *reac_roster_state_name(enum reac_roster_state s)
 	case REAC_ROSTER_TAP:         return "tap";
 	case REAC_ROSTER_REFUSED:     return "refused";
 	case REAC_ROSTER_IGNORED:     return "ignored";
+	case REAC_ROSTER_LISTENING:   return "listening";
+	case REAC_ROSTER_KNOCKING:    return "knocking";
+	case REAC_ROSTER_TRUNK:       return "trunk";
 	}
 	/* No default: the compiler's exhaustiveness proof is the point, and a state added
 	 * without a word here must not compile into a silent "". */
-	return "probing";
+	return "listening";
+}
+
+/* ONE SENTENCE PER STATE, for a person who knows nothing about masters or VLANs (operator,
+ * 2026-10-25: "a daemon that has to autoconfigure for any use and for non-expert users"). */
+const char *reac_roster_state_said(enum reac_roster_state s)
+{
+	switch (s) {
+	case REAC_ROSTER_LISTENING:
+		return "listening: nothing heard here yet, and nothing is sent";
+	case REAC_ROSTER_KNOCKING:
+		return "nothing heard here: knocking for a box now and then, inside a declared budget";
+	case REAC_ROSTER_TRUNK:
+		return "a trunk: its VLANs carry the boxes and are the segments; nothing is sent here";
+	case REAC_ROSTER_PROBING:
+		return "the master is running and no box is enrolled yet";
+	case REAC_ROSTER_ESTABLISHED:
+		return "box enrolled: the master is running and its audio is on the graph";
+	case REAC_ROSTER_SLAVE:
+		return "following the master on this wire";
+	case REAC_ROSTER_TAP:
+		return "a desk masters this wire: listening to it and sending nothing";
+	case REAC_ROSTER_REFUSED:
+		return "refused: this wire is not served; the journal says why and what to change";
+	case REAC_ROSTER_IGNORED:
+		return "switched off in the conf: never listened to, never sent on";
+	}
+	return "listening: nothing heard here yet, and nothing is sent";
+}
+
+/* A RUNNING MASTER WITH NO BOX ENROLLED IS THREE DIFFERENT FACTS, and only one of them is
+ * "a box answered" (review of PR 41: the line was shown for a pinned master and for one
+ * streaming at an empty wire, where no box had answered anything). */
+const char *reac_roster_probing_said(int pinned, int answered)
+{
+	if (answered)
+		return "a box answered the knock: the master is running and enrolling it";
+	if (pinned)
+		return "master pinned in the conf: streaming on link, no box enrolled yet";
+	return "the master is running and no box is enrolled yet";
+}
+
+int reac_roster_status(struct reac_roster *r, const char *name, const char *status)
+{
+	if (!r || !name)
+		return -1;
+	for (int i = 0; i < r->n_want; i++)
+		if (strcmp(r->want[i].name, name) == 0) {
+			snprintf(r->want[i].status, sizeof r->want[i].status, "%s",
+			         status ? status : "");
+			return 0;
+		}
+	return -1;
 }
 
 void reac_roster_init(struct reac_roster *r)
@@ -82,14 +137,17 @@ static void field_val(const struct reac_roster_seg *s, int f, char *out, size_t 
 	case 2: snprintf(out, len, "%s", s->model); return;
 	case 3: snprintf(out, len, "%s", s->role); return;
 	case 4: snprintf(out, len, "%s", s->source); return;
-	default: snprintf(out, len, "%d/%d", s->in, s->out); return;
+	case 5: snprintf(out, len, "%d/%d", s->in, s->out); return;
+	default:
+		snprintf(out, len, "%s", s->status[0] ? s->status : reac_roster_state_said(s->state));
+		return;
 	}
 }
 
 static const char *field_key(int f)
 {
 	static const char *k[REAC_ROSTER_FIELDS] = { "name", "state", "model", "role",
-	                                             "source", "width" };
+	                                             "source", "width", "status" };
 	return k[f];
 }
 
