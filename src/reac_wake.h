@@ -32,7 +32,9 @@
  * turns ACT_BOUNCE into the two rtnetlink writes and feeds the result back as the next
  * observation. The ladder, the constants and every refusal are
  * 2026-09-16-a-dropped-box-wakes-on-a-phy-edge §3-§5; this header does
- * not restate them, it instantiates them.
+ * not restate them, it instantiates them. One refusal came later (#46,
+ * 2026-10-26-a-host-nic-is-never-bounced-or-streamed-at): the premise above holds for a
+ * NIC that is a REAC segment and nothing else, and the kernel says which NICs are not.
  */
 #ifndef REAC_WAKE_H
 #define REAC_WAKE_H
@@ -81,6 +83,7 @@ enum reac_wake_refusal {
 	REAC_WAKE_NO_CARRIER,        /* no link to break; only the cable fixes this     */
 	REAC_WAKE_CARRIER_UNKNOWN,   /* -1 is not 0; an unreadable probe is not evidence */
 	REAC_WAKE_BOX_IS_TALKING,    /* rx_box_frames > 0: the far end is alive         */
+	REAC_WAKE_HOST_NIC,          /* the interface is the host's: never cycled (#46) */
 	REAC_WAKE_NOTHING_SENT,      /* our own frames are not leaving the host          */
 	REAC_WAKE_PUSH_NOT_PROVEN,   /* the cheap rung has not been played to the end   */
 	REAC_WAKE_SETTLING,          /* inside the settle window of the last edge       */
@@ -97,6 +100,13 @@ struct reac_wake_obs {
 	uint64_t rx_box_frames;    /* frames received from any box, ever, this pacer    */
 	uint64_t scene_pushes;     /* scene transfers COMPLETED since PROBING opened    */
 	int      siblings_served;  /* other segments served over this same device       */
+	/* THE INTERFACE IS THE HOST'S (reac_link_owner.h, #46): it carries an address beyond
+	 * link scope, a sub-interface is stacked on it, or a default route goes out of it.
+	 * Desk 2026-10-26 19:19Z: the knock's ladder took the trunk parent down for 1200 ms,
+	 * the NIC that carries the management address and every REAC VLAN; every browser tab
+	 * on the host dropped every stream. A box behind such a NIC is reached through its
+	 * VLAN, never by cycling the parent, and an unreadable fact counts as 1 here. */
+	int      host_nic;
 	/* FRAMES THAT LEFT THE HOST since the last observation — sendto() succeeded, not
 	 * merely attempted. A "completed" push is counted by the master when it has HANDED
 	 * its chunks to the pacer; whether the kernel then put them on the wire is this
