@@ -173,10 +173,13 @@ else
 		$in_peer ip link set pgs0.$v up || exit 90
 		ip link set gs0.$v up || exit 90
 	done
-	# The untagged parent would take the wire on silence like any other segment and hold
-	# the very budget this arm is about; the rig's own remedy was the same file.
+	# THE PARENT NEEDS NO STANZA (#40): nothing heard on it buys a bounded knock, never a
+	# master, so it holds no budget and the daemon under test reads no file at all. The
+	# VLAN sub-interfaces above are the HOST's config, made by hand: a cold box tags
+	# nothing, and the daemon mints a VLAN only when its tag is heard (reac_declared_vlan.h),
+	# so this arm does not prove the daemon finds a cold box's VLAN by itself.
 	mkdir -p "$CONF/.config/reac-pw"
-	printf '[segment gs0]\nignore = yes\n' > "$CONF/.config/reac-pw/reac-pw.conf"
+	[ ! -e "$CONF/.config/reac-pw/reac-pw.conf" ] || exit 90
 
 	HOME="$CONF" REAC_DEBUG=1 "$BIN" --set REACPW_LINK_MBIT=100 >"$LOG" 2>&1 &
 	PID=$!
@@ -198,6 +201,16 @@ else
 
 	wait_for "S_SEGMENT_UP.*\[gs0\.11\]" 90 && echo "holder-up yes" || echo "holder-up no"
 	settle $PID gs0.11 2 60
+	# AND THEN A BOX ON THE SIBLING, since #40: a wire nothing is heard on is knocked on and
+	# never asks for the port, so the refusal loop this arm needs is a sibling WITH a box,
+	# heard after the holder has the port and refused on its budget every few seconds. A
+	# second box-side daemon, so the order is forced and not raced.
+	mkdir -p "$RT/boxes2/.config/reac-pw"
+	{ printf '[segment pgs0]\nignore = yes\n'
+	  printf '[segment pgs0.11]\nignore = yes\n'
+	  printf '[segment pgs0.13]\nrole = box\nmodel = s1608\n'
+	} > "$RT/boxes2/.config/reac-pw/reac-pw.conf"
+	$in_peer env HOME="$RT/boxes2" "$BIN" >"$RT/boxes2.log" 2>&1 &
 	wait_for "E_LINK_BUDGET.*\[gs0\.13\]" 60 && echo "refused yes" || echo "refused no"
 	# LET THE REFUSAL LOOP RUN. The holder has a box of its own so it never yields, and
 	# the empty sibling is re-served and re-refused every few seconds -- 690 times in 30

@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# WHOLE-BINARY: AN EMPTY PROBING MASTER GIVES ITS PORT'S LINK BUDGET TO THE SEGMENT THAT
-# HAS A BOX ON IT -- and does NOT give it to one that only wants it (#107, auto-role spec
-# amendment 2026-09-20).
+# WHOLE-BINARY: AN EMPTY VLAN NEVER HOLDS ITS PORT'S LINK BUDGET, SO THE SEGMENT THAT HAS
+# A BOX ON IT COMES UP; and a holder with a box of its own keeps the port against one that
+# only wants it (#107, auto-role spec amendment 2026-09-20; #40).
+#
+# SINCE #40 THE EMPTY HOLDER OF #107 CANNOT EXIST. A wire nothing was heard on is knocked on
+# at a bounded rate and never mastered, so the yield arm now proves the race never starts:
+# the empty VLAN knocks, holds nothing, and the box's VLAN comes up with no refusal and no
+# yield. The history below is why the arm exists.
 #
 # THE TRIGGER IS `S_SEGMENT_HEARD`, NOT A RECOGNISED BOX, and this run is where that was
 # measured. A cold stagebox's presence flood is broadcast FILLER, classified role-UNKNOWN by
@@ -37,9 +42,16 @@
 # trigger under test. libreac's fake_box is silent until a master pushes a complete scene
 # transfer, which on a port whose budget is already held is a master that never starts.
 #
-# THE UNTAGGED PARENT IS IGNORED, by the shipped override and on purpose: a trunk parent
-# with no tag heard yet would take the wire on silence like any other segment and hold the
-# very budget this test is about. The rig's own remedy was the same file.
+# THE UNTAGGED PARENT IS IGNORED, FOR THE ORDER, NOT THE FLOOD (#40). Before #40 a trunk
+# parent with no tag heard yet took the wire on silence and held the very budget this test is
+# about. Now it is knocked on and never mastered, but its tap still adopts and raises a VLAN
+# whose tag it hears, which would reorder the VLANs this test raises by hand (see below).
+#
+# THE VLAN SUB-INTERFACES ARE STILL MADE HERE, BY HAND, AND THAT IS NOT AUTOCONFIGURATION. A
+# cold box tags nothing, and the daemon mints a VLAN only when its tag is heard
+# (reac_declared_vlan.h, ruling 2026-09-23), so a cold box behind a trunk is found only on a
+# sub-interface the host already has (README, "A box behind a trunk"). This test stands for
+# that host network config; it does not prove the daemon finds the VLAN by itself.
 #
 # ISOLATION IS PART OF THE TEST. An unprivileged user+net+mount+pid namespace, its own
 # sysfs, its own PipeWire on a private runtime dir, the peer ends in a NESTED network
@@ -105,14 +117,20 @@ in_peer="nsenter -t $NSPID -n -m"
 ip link set lbp0 netns $NSPID || exit 90
 ip link set lb0 up; $in_peer ip link set lbp0 up
 
+# The host's own VLAN config (see the header: a cold box tags nothing for the daemon to mint
+# from).
 for v in 11 13; do
 	ip link add link lb0 name lb0.$v type vlan id $v || exit 90
 	$in_peer ip link add link lbp0 name lbp0.$v type vlan id $v || exit 90
 	$in_peer ip link set lbp0.$v up || exit 90
 	ip link set lb0.$v down
 done
-
-# The untagged parent is not part of this question; see the header.
+# THE PARENT IS STILL IGNORED HERE, AND NOT AGAINST A FLOOD. This test orders the VLANs by
+# hand (lb0.11 up first, lb0.13 later) and that order IS the subject. A tapped parent adopts
+# and raises a host-made VLAN the moment its tag is heard (CI at 699c8cf: "[lb0] vid 13:
+# adopted lb0.13", lb0.13 up before the test raised it, its box took the port first, and the
+# held arm failed). The stanza keeps the parent's tap out of the ordering; README and #41 say
+# that a trunk parent needs no stanza in ordinary use.
 mkdir -p "$CONF/.config/reac-pw"
 printf '[segment lb0]\nignore = yes\n' > "$CONF/.config/reac-pw/reac-pw.conf"
 
@@ -154,16 +172,24 @@ if [ "$ARM" = "held" ]; then
 	sleep 3
 fi
 ip link set lb0.11 up
-wait_for "S_SEGMENT_UP.*\[lb0\.11\]" 25 \
-	&& echo "holder-up yes" || echo "holder-up no"
-grep -qa "\[lb0\.11\] no REAC heard in" "$LOG" \
-	&& echo "holder-on-silence yes" || echo "holder-on-silence no"
+if [ "$ARM" = "yield" ]; then
+	# SINCE #40 THE EMPTY VLAN IS KNOCKED ON, NEVER MASTERED: it cannot hold the port.
+	wait_for "\[lb0\.11\] nothing heard in .* KNOCKING" 15 \
+		&& echo "holder-knocks yes" || echo "holder-knocks no"
+	sleep 3
+	grep -qa "S_SEGMENT_UP.*\[lb0\.11\]" "$LOG" \
+		&& echo "holder-up yes" || echo "holder-up no"
+else
+	wait_for "S_SEGMENT_UP.*\[lb0\.11\]" 25 \
+		&& echo "holder-up yes" || echo "holder-up no"
+fi
 
-# ---- 2. THE SECOND VLAN COMES UP EMPTY AND IS REFUSED, and the refusal NAMES the holder.
-#         690 lines of this in 30 minutes named the port and the number and left the
-#         operator to dump the roster to find out who had it.
+# ---- 2. THE SECOND VLAN COMES UP. In the held arm a box is on it and it is refused, and
+#         the refusal NAMES the holder: 690 lines of this in 30 minutes named the port and
+#         the number and left the operator to dump the roster to find out who had it. In
+#         the yield arm it is empty, so it is knocked on too and asks for nothing.
 ip link set lb0.13 up
-wait_for "E_LINK_BUDGET.*\[lb0\.13\]" 30 \
+wait_for "E_LINK_BUDGET.*\[lb0\.13\]" "$([ "$ARM" = "yield" ] && echo 5 || echo 30)" \
 	&& echo "first-refusal yes" || echo "first-refusal no"
 grep -a -A 8 "E_LINK_BUDGET.*\[lb0\.13\]" "$LOG" | grep -a "Held by:" | head -1 \
 	| sed 's/^ */  held-by /'
@@ -184,13 +210,14 @@ fi
 wait_for "S_SEGMENT_HEARD.*\[lb0\.13\]" 40 \
 	&& echo "box-heard yes" || echo "box-heard no"
 
-# ---- 4. THE YIELD (or, in the `held` arm, its ABSENCE).
-wait_for "S_BUDGET_YIELDED.*\[lb0\.11\]" 30 \
-	&& echo "yielded yes" || echo "yielded no"
-wait_for "S_SEGMENT_DROPPED.*\[lb0\.11\]" 15 \
-	&& echo "holder-dropped yes" || echo "holder-dropped no"
-wait_for "S_SEGMENT_UP.*\[lb0\.13\]" 40 \
+# ---- 4. THE BOX'S VLAN COMES UP (yield arm), and no yield is ever needed for it; in the
+#         `held` arm it stays refused and nothing yields.
+wait_for "S_SEGMENT_UP.*\[lb0\.13\]" "$([ "$ARM" = "yield" ] && echo 40 || echo 15)" \
 	&& echo "taker-up yes" || echo "taker-up no"
+grep -qa "S_BUDGET_YIELDED.*\[lb0\.11\]" "$LOG" \
+	&& echo "yielded yes" || echo "yielded no"
+grep -qa "S_SEGMENT_DROPPED.*\[lb0\.11\]" "$LOG" \
+	&& echo "holder-dropped yes" || echo "holder-dropped no"
 
 # ---- 5. AND IT DOES NOT PING-PONG. A segment that yielded stays LISTENING until it hears
 #         something ITSELF: the silence licence that won it the wire is just as true five
@@ -204,6 +231,11 @@ grep -qa "\[lb0\.11\] still LISTENING — this segment yielded" "$LOG" \
 echo "--- refusals ---"
 grep -a "E_LINK_BUDGET\|S_BUDGET_YIELDED\|S_SEGMENT_UP\|S_SEGMENT_DROPPED\|S_SEGMENT_HEARD" \
 	"$LOG" | sed 's/^/  /' | head -40
+# AND WHAT THE PARENT AND THE KNOCK DID (#40): the parent is sniffed and knocked on now, with
+# no stanza, so a failure has to show what it did, and what a master that stopped did.
+echo "--- the parent, the knock, a stopped master ---"
+grep -a "\[lb0\] \|KNOCKING\|ANSWERED\|STREAM cycle\|wake\|edge\|stops streaming" \
+	"$LOG" | cut -c1-220 | sed 's/^/  /' | head -30
 kill -TERM $PID 2>/dev/null; sleep 0.5; kill -9 $PID 2>/dev/null
 exit 0
 INNER
@@ -230,34 +262,28 @@ echo "$OUT" | grep -qa '^SKIP:' && { echo "$OUT" | grep -a '^SKIP:'; exit $SKIP;
 # exactly like a daemon that behaved.
 [ "$(val "$OUT" knob-announced)" = "yes" ] \
 	|| fail "REACPW_LINK_MBIT=100 was never announced — the port was not capped, so nothing below is a budget measurement"
-[ "$(val "$OUT" holder-up)" = "yes" ] \
-	|| fail "the empty VLAN never took the port — there was no holder to yield, and the rest of this arm is vacuous"
-[ "$(val "$OUT" holder-on-silence)" = "yes" ] \
-	|| fail "the holder did not take the wire on the masterless licence — this is not the race #107 is about"
-[ "$(val "$OUT" first-refusal)" = "yes" ] \
-	|| fail "the second VLAN was never refused on the budget — the admission is not in this path, so a later 'it came up' proves nothing about a yield"
-echo "$OUT" | grep -qa "held-by .*lb0\.11 (probing, no box)" \
-	|| fail "the refusal did not name lb0.11 as an empty prober (issue #107's whole ask about the message)"
+[ "$(val "$OUT" holder-knocks)" = "yes" ] \
+	|| fail "the empty VLAN was never knocked on: it came up and the daemon said nothing about it"
 [ "$(val "$OUT" box-running)" = "yes" ] \
 	|| fail "the box side did not start"
 [ "$(val "$OUT" box-heard)" = "yes" ] \
-	|| fail "the box on lb0.13 was never HEARD — the yield's trigger never fired, so its absence below would mean nothing"
+	|| fail "the box on lb0.13 was never HEARD, so its segment coming up below would mean nothing"
 echo "$OUT" | grep -qa "S_SEGMENT_HEARD.*\[lb0\.13\].*($FACT_BOX_S1608_IN ch)" \
 	|| fail "what lb0.13 heard was not the 16-channel box this arm started — something else is on that wire"
 
-# ---- and now the claim itself
-[ "$(val "$OUT" yielded)" = "yes" ] \
-	|| fail "the empty holder did NOT yield the port to the segment that heard a box (#107)"
-[ "$(val "$OUT" holder-dropped)" = "yes" ] \
-	|| fail "S_BUDGET_YIELDED without S_SEGMENT_DROPPED: the sentence was printed and the engine was not taken down"
+# ---- and now the claim itself (#40: an empty VLAN holds nothing, so #107 cannot start)
+[ "$(val "$OUT" holder-up)" = "no" ] \
+	|| fail "the empty VLAN was SERVED on silence: a master on a wire nothing was heard on (#40)"
+[ "$(val "$OUT" first-refusal)" = "no" ] \
+	|| fail "the empty second VLAN asked for the port's budget; it is knocked on and asks for nothing"
 [ "$(val "$OUT" taker-up)" = "yes" ] \
-	|| fail "the budget was released and the segment with the box still did not come up"
-[ "$(val "$OUT" holder-ups)" = "1" ] \
-	|| fail "the yielded segment took the wire again (S_SEGMENT_UP x$(val "$OUT" holder-ups)) — it must stay LISTENING until it hears something itself"
+	|| fail "the segment with the box did not come up on a port nothing else holds"
+[ "$(val "$OUT" yielded)" = "no" ] \
+	|| fail "a budget yield ran, so an empty segment held the port after all"
+[ "$(val "$OUT" holder-ups)" = "0" ] \
+	|| fail "the empty segment took the wire (S_SEGMENT_UP x$(val "$OUT" holder-ups)); it must stay listening and knocking until it hears something itself"
 [ "$(val "$OUT" taker-drops)" = "0" ] \
 	|| fail "the segment with the box was dropped again ($(val "$OUT" taker-drops)x) — the budget is ping-ponging"
-[ "$(val "$OUT" holder-listening)" = "yes" ] \
-	|| fail "the yielded segment never said it was still listening — a segment that goes quiet for no stated reason is what this project's journal rules forbid"
 
 # ---- ARM 2: THE HOLDER HAS A BOX AND KEEPS THE PORT --------------------------------
 echo "=== arm: held (the holder has a box of its own) ==="
@@ -288,4 +314,4 @@ echo "$OUT2" | grep -qa "held-by .*lb0\.11 (" \
 	|| fail "held arm: the refusal did not name the holder at all"
 
 [ $FAIL -eq 0 ] || exit 1
-echo "PASS: an empty probing master yields its port's link budget to the segment with REAC gear on it, and a holder with a box of its own does not"
+echo "PASS: an empty VLAN is knocked on and never holds its port's link budget, so the segment with REAC gear on it comes up with no yield; and a holder with a box of its own keeps the port"
