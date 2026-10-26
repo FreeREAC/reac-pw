@@ -49,6 +49,14 @@
  * heard on one of its VLANs; from then on nothing is sent on it, the frames its socket hears
  * with their tags stripped are not answers, and it never becomes a segment.
  *
+ * THE HOST'S NIC GETS NO STREAM (#46, 2026-10-26-a-host-nic-is-never-bounced-or-streamed-at).
+ * A NIC that carries an address beyond link scope, a stacked sub-interface or a default route
+ * is the host's (reac_link_owner.h); the desk's trunk parent is one, and the stream knock on
+ * it is the flood of #31 for the length of a cycle, three times per spell. On such a wire a
+ * STREAM rung is sent as a CONTROL knock and does not count against the cap; the caller says
+ * so through reac_knock_wire_set_host, once a second, from the kernel's own answer. A bare
+ * NIC, the direct-cable case, is unchanged.
+ *
  * PURE: no sockets, no clock of its own, no allocation. The caller owns the sender (a deaf
  * AF_PACKET socket, libreac's reac_tx) and the timer; a test owns a fake wire. */
 #ifndef REAC_KNOCK_WIRE_H
@@ -145,6 +153,7 @@ struct reac_knock_wire {
 	uint8_t src[6];                /* the NIC's own address, the one the stream will use   */
 	int fps;
 	const struct reac_knock_plan *plan;
+	int host;                      /* the NIC is the host's: a STREAM rung goes out as CONTROL */
 	/* THE PLAN'S PLACE AND THE BACKOFF, reset by a frame after a silence and by init. */
 	int rung;                      /* the rung the next knock is taken from                */
 	unsigned rung_done;            /* knocks already taken from it                          */
@@ -161,6 +170,7 @@ struct reac_knock_wire {
 	uint64_t sent;                 /* frames handed to the wire and accepted                */
 	uint64_t spell_sent;           /* of which in this spell (since the licence's grant)   */
 	uint64_t stream_sent;          /* of which in STREAM knocks                             */
+	uint64_t stream_withheld;      /* STREAM rungs sent as CONTROL because the NIC is the host's */
 	uint64_t send_errors;          /* frames the wire refused                               */
 	uint64_t late;                 /* frames whose slot passed by REAC_KNOCK_WIRE_LATE_NS   */
 	uint64_t pushes;               /* complete transfers sent: a FIRST, then the LAST       */
@@ -186,6 +196,10 @@ void reac_knock_wire_init(struct reac_knock_wire *w, const uint8_t src[6], int f
 
 /* Use `plan` from the next knock on (NULL: the default). */
 void reac_knock_wire_set_plan(struct reac_knock_wire *w, const struct reac_knock_plan *plan);
+
+/* The kernel's answer about this NIC (reac_link_owner): 1 when it is the host's. From the
+ * next knock on a STREAM rung is sent as CONTROL and counted in `stream_withheld`. */
+void reac_knock_wire_set_host(struct reac_knock_wire *w, int host);
 
 /* One step of the poll. `hunt` is the wire's verdict-in-progress: a PINNED wire is never
  * knocked (a pin serves on link, reac_hunt.h). `trunk_now` is the topology tap's answer:
@@ -247,12 +261,13 @@ struct reac_knock_ladder {
 };
 
 /* One turn, once a second. `rx_frames` is every 0x8819 frame the wire's socket has heard,
- * `carrier` and `siblings_served` as reac_wake_obs has them. `o` is filled with what the
- * ladder was shown, for the journal. A fresh spell or a fresh sniffer re-opens the grace and
- * keeps the edge count (reac_wake_reopen). */
+ * `carrier`, `siblings_served` and `host_nic` as reac_wake_obs has them. `o` is filled with
+ * what the ladder was shown, for the journal. A fresh spell or a fresh sniffer re-opens the
+ * grace and keeps the edge count (reac_wake_reopen). */
 enum reac_wake_act reac_knock_ladder_step(struct reac_knock_ladder *kl,
                                           const struct reac_knock_wire *w, uint64_t now_ns,
                                           uint64_t rx_frames, int carrier,
-                                          int siblings_served, struct reac_wake_obs *o);
+                                          int siblings_served, int host_nic,
+                                          struct reac_wake_obs *o);
 
 #endif /* REAC_KNOCK_WIRE_H */
