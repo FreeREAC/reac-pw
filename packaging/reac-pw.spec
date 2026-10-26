@@ -232,9 +232,12 @@ fi
 
 %changelog
 * Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.37-1
-- A silent wire is knocked on, never flooded: a master stays off a wire where no box has been
-  heard, knocks at the hunting cadence, and streams only on the box that answered (#40, #31, #39).
-  Until now the autodetection took a silent wire as its own and drove it at the stream rate.
+- A silent wire is knocked on instead of driven: a master stays off a wire where no box has been
+  heard, knocks with a backed-off plan (two control knocks, then one hunting cycle, at most three)
+  and streams only on the box that answered (#40, #31, #39). Until now the autodetection took a
+  silent wire as its own and drove it at the stream rate for as long as it ran. Two limits remain
+  on a NIC the host shares: the third knock is still one full cycle at the stream rate, and the
+  wake ladder still cycles the link when nothing answers.
 
 * Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.36-1
 - libreac, libreac-transport and libreac-tests 1.8 are in range: the ceiling is the next minor (< 1.9).
