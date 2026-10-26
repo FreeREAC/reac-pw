@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_qdisc.c:423 (the byte counter of TCA_STATS2 sums the packets).
+Breaks the check of fuzz/fuzz_qdisc.c:426 (the byte counter of TCA_STATS2 sums the packets).
 Caught by the seed input "two-etf-qdiscs" of fuzz_qdisc.
 
 diff --git a/src/reac_qdisc.c b/src/reac_qdisc.c
