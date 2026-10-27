@@ -137,6 +137,27 @@ int main(void)
 		CHK(out[0].ch == 1);
 	}
 
+	/* 7. A Float is its NEAREST integer (reac_float_near.h): 0.49999997 is 0, not the
+	 * 1 that float arithmetic rounds 0.49999997f + 0.5f to, and a NaN has no nearest
+	 * integer at all, so its cell is refused rather than converted. */
+	{
+		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
+		struct spa_pod_frame obj, st;
+		begin_props(&b, &obj, &st);
+		spa_pod_builder_string(&b, "reac.headamp.4.phantom");
+		spa_pod_builder_float(&b, 0.49999997f);
+		spa_pod_builder_string(&b, "reac.headamp.5.phantom");
+		spa_pod_builder_float(&b, __builtin_nanf(""));
+		const struct spa_pod *pod = end_props(&b, &obj, &st);
+
+		struct reac_headamp_prop_result res;
+		int n = reac_headamp_prop_parse_result(pod, out, (int)(sizeof out / sizeof out[0]),
+		                                       &res);
+		CHK(n == 1);
+		CHK(out[0].ch == 4 && out[0].param == REAC_HEADAMP_PHANTOM && out[0].value == 0);
+		CHK(res.keys == 2 && res.refusal == REAC_HEADAMP_REFUSE_OUT_OF_RANGE);
+	}
+
 	printf("OK: head-amp prop parse — SPA_PROP_params keys, encodings, range gate, resync\n");
 	return 0;
 }
