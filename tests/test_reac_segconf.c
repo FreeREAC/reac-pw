@@ -14,7 +14,6 @@
  *
  * No filesystem except one file this test writes, no netlink, no PipeWire. */
 #include "reac_segconf.h"
-#include "reac_knock_wire.h"   /* reac_knock_plan_find: the plans `knock =` names */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -278,24 +277,21 @@ int main(void)
 	CHECK(reac_segconf_refresh(&c) == 1, "a drop-in rewritten in the same second was not seen");
 	CHECK(role_of(&c, "s0") == REAC_ROLE_INTENT_MASTER, "the rewritten drop-in was not applied");
 
-	/* ---- THE KNOCK PLAN (#40): a row of reac_knock_plans, or refused by name ---- */
+	/* ---- `knock =` TAKES NO PLAN (#61): the knock has one content, and a word in a file
+	 * must not be able to select the stream; the key is refused by name, old value or new ---- */
 	{
 		struct reac_segconf k;
 		reac_segconf_init(&k);
 		reac_segconf_parse(&k, "[segment e0]\nknock = Control\n[segment e1]\nrole = auto\n");
-		CHECK(k.refused == 0, "a well-formed knock key was refused: %s",
-		      k.n_refusals ? k.refusal[0] : "");
-		CHECK(reac_segconf_knock(&k, "e0") && strcmp(reac_segconf_knock(&k, "e0"), "control") == 0,
-		      "knock = Control was not carried as the plan's own name");
-		CHECK(reac_knock_plan_find(reac_segconf_knock(&k, "e0")) != NULL,
-		      "the carried knock name does not find its plan");
-		CHECK(reac_segconf_knock(&k, "e1") == NULL, "a segment with no knock key has one");
+		CHECK(k.refused == 1, "knock = control was not refused: the key takes no plan since 1.0.41");
+		CHECK(strstr(k.refusal[0], "knock") && strstr(k.refusal[0], "no plan"),
+		      "the refusal does not say the knock takes no plan: %s", k.refusal[0]);
+		reac_segconf_init(&k);
+		reac_segconf_parse(&k, "[segment e0]\nknock = stream\n");
+		CHECK(k.refused == 1, "knock = stream was not refused");
 		reac_segconf_init(&k);
 		reac_segconf_parse(&k, "[segment e0]\nknock = flood\n");
-		CHECK(k.refused == 1 && refusal_names(&k, "flood"),
-		      "an unknown knock plan was not refused by name");
-		CHECK(refusal_names(&k, "escalate"), "the refusal does not list the plans");
-		CHECK(reac_segconf_knock(&k, "e0") == NULL, "a refused knock plan was kept anyway");
+		CHECK(k.refused == 1, "an unknown knock value was not refused");
 	}
 
 	/* ---- THE BOX ROLE AND ITS MODEL ROW (2026-09-17 spec §4) ----

@@ -719,8 +719,6 @@ static void usage(const char *p)
 	  "    role = auto|master|slave|tap     default: auto -- the wire decides\n"
 	  "    ignore = yes                     never sniffed, served or minted; NOT needed for a\n"
 	  "                                     trunk NIC or a NIC with no REAC (#40)\n"
-	  "    knock = escalate|control|stream  how a silent wire is knocked on; default\n"
-	  "                                     escalate (docs/KNOCK.md, for the rig check)\n"
 	  "  Naming [segment <parent>.<vid>] names that VLAN IF IT EXISTS: its role and ignore\n"
 	  "  apply when the VID is heard on the parent. It creates no netdev by itself; a cold\n"
 	  "  box that sends no tag needs its VLAN in the host's network config (README).\n"
@@ -3187,16 +3185,7 @@ static void on_knock_timer(void *data, uint64_t expirations)
 	if (!sn->knock_tx_open)
 		return;
 	const uint64_t errs = sn->kw.send_errors;
-	const uint64_t cycles = sn->kw.cycles;
 	reac_knock_wire_run(&sn->kw, monotonic_ns(), knock_send, sn);
-	/* A STREAM KNOCK IS SAID EVERY TIME: it is the one that carries FILLER, and the rig check
-	 * reads from here which content a box answered (docs/KNOCK.md). */
-	if (sn->kw.cycles != cycles && !sn->kw.resting && sn->kw.content == REAC_KNOCK_STREAM)
-		fprintf(stderr, "reac-pw: [%s] knock %llu is a STREAM cycle (%s plan): every slot of "
-		        "one %d-slot hunting cycle, FILLER included, what a real box was seen to "
-		        "answer; stream knock %u of at most %u until something is heard\n", sn->name,
-		        (unsigned long long)sn->kw.cycles, sn->kw.plan ? sn->kw.plan->name : "?",
-		        sn->kw.master.cycle_len, sn->kw.stream_knocks, REAC_KNOCK_WIRE_STREAM_KNOCKS);
 	if (sn->kw.send_errors && !errs)
 		reac_code_emit(stderr, "reac-pw", RC_E_KNOCK_TX,
 		        "[%s] the knock could not send a frame (%s); the wire is still "
@@ -3246,15 +3235,11 @@ static void knock_say_answered(const struct sniffer *sn)
 {
 	const uint8_t *m = sn->kw.answer_src;
 	fprintf(stderr, "reac-pw: [%s] ANSWERED: %02x:%02x:%02x:%02x:%02x:%02x spoke during knock "
-	        "%llu, a %s knock (%s plan), after %llu knock frames (%llu of them stream, %llu "
-	        "complete scene transfers): the knock is over, and the master starts on what the "
-	        "wire now shows\n", sn->name,
+	        "%llu, after %llu knock frames (%llu complete scene transfers, no audio filler): "
+	        "the knock is over, and the master starts on what the wire now shows\n", sn->name,
 	        m[0], m[1], m[2], m[3], m[4], m[5],
 	        (unsigned long long)sn->kw.answered_cycle,
-	        reac_knock_content_name(sn->kw.answered_content),
-	        sn->kw.plan ? sn->kw.plan->name : "?",
-	        (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.stream_sent,
-	        (unsigned long long)sn->kw.pushes);
+	        (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.pushes);
 }
 
 /* Read a sniffer's socket dry, classify, and tell the table about the first frame that IS
@@ -3533,9 +3518,6 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 		int kfps;
 		knock_params(h, name, ksrc, &kfps);
 		reac_knock_wire_init(&sn->kw, ksrc, kfps, now);
-		/* `knock =` for this segment, already checked against the table at parse. */
-		reac_knock_wire_set_plan(&sn->kw,
-		                         reac_knock_plan_find(reac_segconf_knock(&g_segconf, name)));
 	}
 	if (!pinned && !sn->tap_pinned && !reac_ifscan_is_wireless(NULL, name))
 		sn->watch_silence = 1;
@@ -4685,10 +4667,9 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				fprintf(stderr, "reac-pw: [%s] no tagged REAC on this parent any more: "
 				        "LISTENING to it again as a wire of its own\n", sn->name);
 			if (ka == REAC_KNOCK_WIRE_ACT_KNOCK) {
-				/* THE HOST'S NIC GETS NO STREAM KNOCK (#46): the kernel is asked
-				 * before the first frame of the spell leaves, and once a second
-				 * after (hearing_knock_wake), so a stream rung never finds the
-				 * answer unread. */
+				/* THE HOST'S NIC IS SAID TO BE ONE (#46): the kernel is asked before
+				 * the first frame of the spell leaves, and once a second after
+				 * (hearing_knock_wake), which refuses it the PHY edge. */
 				const int hosts = reac_link_owner_is_hosts(
 					link_owner_cached(sn->name, &sn->owner, &sn->owner_read_ns, now));
 				reac_knock_wire_set_host(&sn->kw, hosts);
@@ -4696,22 +4677,18 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				if (sn->knock_tx_open)
 					fprintf(stderr, "reac-pw: [%s] nothing heard in %llu ms, so no master "
 					        "is on this wire, and a cold box says nothing until one "
-					        "speaks. KNOCKING with the '%s' plan (%s): a control knock is "
-					        "the %d control frames of one %.1f s hunting cycle and no "
-					        "audio filler; a stream knock is that cycle whole, at most %u "
-					        "until something is heard; the period doubles while nothing "
-					        "answers, up to %llu s (spell #%u, %llu frames so far). The "
-					        "master stream starts only when a box answers%s\n", sn->name,
+					        "speaks. KNOCKING: a knock is the %d control frames of one "
+					        "%.1f s hunting cycle and no audio filler, never the stream; "
+					        "the period doubles while nothing answers, up to %llu s (spell "
+					        "#%u, %llu frames so far). The master stream starts only when "
+					        "a box answers%s\n", sn->name,
 					        (unsigned long long)(REAC_KNOCK_LISTEN_NS / 1000000ULL),
-					        sn->kw.plan ? sn->kw.plan->name : "?",
-					        sn->kw.plan ? sn->kw.plan->said : "?",
 					        reac_knock_wire_control_per_cycle(sn->kw.fps),
 					        sn->kw.fps > 0 ? (double)sn->kw.master.cycle_len / sn->kw.fps : 0.0,
-					        REAC_KNOCK_WIRE_STREAM_KNOCKS,
 					        (unsigned long long)(REAC_KNOCK_WIRE_PERIOD_MAX_NS / 1000000000ULL),
 					        sn->kw.knocks, (unsigned long long)was_sent,
-					        hosts ? ". This interface is the host's, so no stream knock "
-					                "and no PHY edge go out on it" : "");
+					        hosts ? ". This interface is the host's, so no PHY edge goes "
+					                "out on it" : "");
 			}
 		}
 
@@ -5511,17 +5488,16 @@ static void roster_collect(struct roster_ctx *rc)
 		if (sn->kw.state == REAC_KNOCK_WIRE_TRUNK) {
 			st = REAC_ROSTER_TRUNK;
 		} else if (sn->kw.state == REAC_KNOCK_WIRE_KNOCKING) {
-			/* WHAT THIS WIRE WAS MADE TO CARRY AND SUFFER (#46): the stream cycles and
-			 * the PHY edges are what a console on this host reads to name a network
-			 * change, and the host's NIC says it gets neither. */
+			/* WHAT THIS WIRE WAS MADE TO CARRY AND SUFFER (#46): the frames sent and
+			 * the PHY edges made are what a console on this host reads to name a
+			 * network change, and the host's NIC says it gets no edge. */
 			const struct knock_ladder *kl = knock_ladder_of(&g_hear, nm, 0);
 			st = REAC_ROSTER_KNOCKING;
-			snprintf(said, sizeof said, "nothing heard: knock %llu of %s, %llu frames "
-			         "(%llu stream), %u edges%s",
-			         (unsigned long long)sn->kw.cycles, sn->kw.plan ? sn->kw.plan->name : "?",
-			         (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.stream_sent,
+			snprintf(said, sizeof said, "nothing heard: knock %llu, %llu control frames, "
+			         "no filler, %u edges%s",
+			         (unsigned long long)sn->kw.cycles, (unsigned long long)sn->kw.sent,
 			         kl ? kl->kl.wake.bounces : 0u,
-			         sn->kw.host ? "; the host's NIC: no stream, no edge" : "");
+			         sn->kw.host ? "; the host's NIC: no edge" : "");
 		} else if (sn->kw.state == REAC_KNOCK_WIRE_ANSWERED) {
 			snprintf(said, sizeof said, "something answered the knock: listening to "
 			         "it before the master starts");
@@ -5781,7 +5757,7 @@ static void segconf_announce(void)
 			/* AND WHICH FILE SET EACH KEY. This is the whole safety of last-wins:
 			 * an override nobody can trace back to a file is the 2026-09-16 fault
 			 * with one more file in it. */
-			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s%s%s%s%s%s%s%s%s%s%s\n", sg->name,
+			fprintf(stderr, "reac-pw:   [segment %s]%s%s%s%s%s%s%s%s\n", sg->name,
 			        sg->role_set ? " role=" : "",
 			        sg->role_set ? reac_role_intent_name(sg->role) : "",
 			        sg->role_set ? " (" : "",
@@ -5789,12 +5765,7 @@ static void segconf_announce(void)
 			        sg->role_set ? ")" : "",
 			        sg->ignore ? " ignore (" : "",
 			        sg->ignore ? sg->ignore_file : "",
-			        sg->ignore ? ")" : "",
-			        sg->knock_set ? " knock=" : "",
-			        sg->knock_set ? sg->knock : "",
-			        sg->knock_set ? " (" : "",
-			        sg->knock_set ? sg->knock_file : "",
-			        sg->knock_set ? ")" : "");
+			        sg->ignore ? ")" : "");
 		}
 		/* `ignore = yes` IS HONOURED AND, SINCE #40, RARELY NEEDED. It was the #31
 		 * workaround for a trunk NIC flooded on silence; a silent wire is now listened to

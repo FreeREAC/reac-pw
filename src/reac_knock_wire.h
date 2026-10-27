@@ -12,26 +12,22 @@
  * 2026-10-24). Operator ruling 2026-10-25 (#40): a master never floods a wire searching for a
  * box; a box straight on a NIC stays supported, and the rule is the METHOD.
  *
- * WHAT A REAL BOX WAS SEEN TO ANSWER, AND WHAT WAS NEVER SEEN (docs/KNOCK.md has every
- * citation). A cold box does not answer a lone announce (libreac reac_knock.h:21-25). It
- * answers a master that is DRIVING, the continuous probing stream (reac_knock.h:25-27): an
- * S-0808 declared itself 0.70 s after such a stream opened, 17 ms after its first transfer's
- * final chunk (logs/master-default-20260826.log:6,11). In that stream every slot that is not
- * a control slot is an audio FILLER (libreac reac_master.c:1266,1297), and so is a real desk's
- * (libreac tests/corpus-baseline.txt:54: 269 701 of 270 593 frames). NO RECORD shows a real
- * box answering the control frames with the FILLER slots left empty, and none shows one
- * refusing them. libreac's fake_box answers them because it ignores FILLER by construction
- * (tools/fake_box.c:230-254), which proves the knock's sequence and nothing about a box.
+ * WHAT A REAL BOX ANSWERS (docs/KNOCK.md has every citation). A cold box does not answer a
+ * lone announce (libreac reac_knock.h:21-25); it answers a master's push. On the rig
+ * (2026-10-27) an S-1608 and an S-4000S-3212, cold and silent, each answered the CONTROL
+ * frames of one hunting cycle with every audio FILLER slot left empty, within a second, 75
+ * times over a day's takes, straight on a NIC and on a VLAN of a trunk. libreac's fake_box
+ * answers them too (tools/fake_box.c:230-254).
  *
- * SO THE KNOCK IS A DECLARED PLAN OF TWO CONTENTS, BOTH libreac's OWN MASTER. A `struct
+ * SO THE KNOCK HAS ONE CONTENT, libreac's OWN MASTER WITHOUT ITS FILLER. A `struct
  * reac_master` is stepped slot by slot at the wire's cadence exactly as the pacer steps it,
- * through one hunting cycle per knock, opening on the transfer's header. A CONTROL knock sends
- * the frames the master stamps with a control block and leaves every FILLER slot empty: the
- * bounded knock, unproven on a real box. A STREAM knock sends every slot, FILLER included:
- * the content a real box was seen to answer, for ONE cycle and at most
- * REAC_KNOCK_WIRE_STREAM_KNOCKS times between two resets. Which knock carries which content is
- * the plan's table (reac_knock_plans), chosen per segment by `knock =` in reac-pw.conf, so the
- * rig check changes it without a build. Nothing here encodes a frame of its own.
+ * through one hunting cycle per knock, opening on the transfer's header; the frames it stamps
+ * with a control block go out (the scene transfer: header, 341 chunks, final; the channel
+ * map; the announces) and every FILLER slot is left empty. Nothing here encodes a frame of
+ * its own. THERE IS NO STREAM KNOCK (#61, 2026-10-27): a plan that sent one cycle of the
+ * whole stream onto a wire nothing had answered on was a flood by configuration, and the
+ * operator's law is that no segment is ever streamed at before a box answered on it, in any
+ * case. The stream starts on the answer.
  *
  * AND IT BACKS OFF. Knock n of a spell opens REAC_KNOCK_WIRE_PERIOD(n) after knock n-1 did:
  * one cycle, doubled per unanswered knock, up to REAC_KNOCK_WIRE_PERIOD_MAX_NS. A frame heard
@@ -49,13 +45,12 @@
  * heard on one of its VLANs; from then on nothing is sent on it, the frames its socket hears
  * with their tags stripped are not answers, and it never becomes a segment.
  *
- * THE HOST'S NIC GETS NO STREAM (#46, 2026-10-26-a-host-nic-is-never-bounced-or-streamed-at).
+ * THE HOST'S NIC GETS NO EDGE (#46, 2026-10-26-a-host-nic-is-never-bounced-or-streamed-at).
  * A NIC that carries an address beyond link scope, a stacked sub-interface or a default route
- * is the host's (reac_link_owner.h); the desk's trunk parent is one, and the stream knock on
- * it is the flood of #31 for the length of a cycle, three times per spell. On such a wire a
- * STREAM rung is sent as a CONTROL knock and does not count against the cap; the caller says
- * so through reac_knock_wire_set_host, once a second, from the kernel's own answer. A bare
- * NIC, the direct-cable case, is unchanged.
+ * is the host's (reac_link_owner.h); the desk's trunk parent is one. It is knocked on like
+ * any wire (the knock has no stream to withhold), and the knock's wake ladder refuses the PHY
+ * edge on it by name; the caller says which through reac_knock_wire_set_host, once a second,
+ * from the kernel's own answer, and the journal reads it from here.
  *
  * PURE: no sockets, no clock of its own, no allocation. The caller owns the sender (a deaf
  * AF_PACKET socket, libreac's reac_tx) and the timer; a test owns a fake wire. */
@@ -73,56 +68,8 @@
 
 #include "reac_wake.h"
 
-/* WHAT ONE KNOCK CARRIES: one hunting cycle of libreac's master, opening on the header. */
-enum reac_knock_content {
-	REAC_KNOCK_CONTROL = 0,  /* the control frames only; every FILLER slot left empty     */
-	REAC_KNOCK_STREAM,       /* every slot, FILLER included: what a real box answered      */
-};
-
-/* A RUNG OF A PLAN: `knocks` knocks in a row carry `content`. */
-struct reac_knock_rung {
-	enum reac_knock_content content;
-	unsigned knocks;
-};
-
-/* A PLAN: its rungs in order, then from the first again. `name` is the conf's word. */
-struct reac_knock_plan {
-	const char *name;
-	const char *said;                    /* what the plan does, for the journal        */
-	const struct reac_knock_rung *rung;
-	int n_rung;
-};
-
-/* THE PLANS, declared once (reac_knock_wire.c). `control` is the default: bounded control
- * knocks and never a FILLER. `escalate` is two control knocks, then one cycle of the stream
- * a real box was once seen to answer; `stream` sends that cycle on every knock. All inside
- * the same caps.
- *
- * WHY CONTROL, SINCE 2026-10-27. `escalate` shipped "until the rig check has run"
- * (docs/KNOCK.md); it ran: an S-1608 and an S-4000S, cold and silent, each answered a
- * CONTROL knock within a second (75 answers over a day's takes, 65 of them to knock 1, none
- * to a stream knock), straight on a NIC and on a VLAN of a trunk. The stream rung woke
- * nothing, and on the trunk's parent it went out UNTAGGED twice before a tag had named the
- * parent a trunk: 21 556 frames at 8000 fps on the native VLAN each time, which is the flood
- * the operator forbade (#31, #40). A box that answers only the stream is served by
- * `knock = escalate`. */
-extern const struct reac_knock_plan reac_knock_plans[];
-extern const int reac_knock_n_plans;
-#define REAC_KNOCK_PLAN_DEFAULT "control"
-
-/* The plan called `name` (case-insensitive), or NULL. */
-const struct reac_knock_plan *reac_knock_plan_find(const char *name);
-
-/* STREAM KNOCKS BETWEEN TWO RESETS. CHOSEN: three. A cold S-0808 answered the stream inside
- * its first cycle (logs/master-default-20260826.log:6,11), so one would do for the one box on
- * record; three cover a box that was mid-boot for the first. Past the cap a STREAM rung is
- * sent as CONTROL, so a wire with nothing on it sees at most this many stream cycles per
- * link-up, and the knock's wake ladder (REAC_WAKE_MAX_BOUNCES edges) bounds the link-ups. */
-#define REAC_KNOCK_WIRE_STREAM_KNOCKS 3u
-
 /* THE BACKOFF'S CEILING. CHOSEN: 30 s, so a wire with nothing on it carries one control
- * cycle every 30 s once the plan's stream knocks are spent: about 12 frames a second
- * averaged, against 4000 or 8000 for the stream. */
+ * cycle every 30 s: about 12 frames a second averaged, against 4000 or 8000 for the stream. */
 #define REAC_KNOCK_WIRE_PERIOD_MAX_NS (30ULL * 1000000000ULL)
 
 /* A SLOT WHOSE TIME PASSED BY MORE THAN THIS IS NOT SENT LATE. CHOSEN: four probe strides
@@ -162,15 +109,10 @@ struct reac_knock_wire {
 	struct reac_master master;     /* libreac's master, PROBING: its cycle is the knock    */
 	uint8_t src[6];                /* the NIC's own address, the one the stream will use   */
 	int fps;
-	const struct reac_knock_plan *plan;
-	int host;                      /* the NIC is the host's: a STREAM rung goes out as CONTROL */
-	/* THE PLAN'S PLACE AND THE BACKOFF, reset by a frame after a silence and by init. */
-	int rung;                      /* the rung the next knock is taken from                */
-	unsigned rung_done;            /* knocks already taken from it                          */
+	int host;                      /* the NIC is the host's: no PHY edge; said in the journal */
+	/* THE BACKOFF, reset by a frame after a silence and by init. */
 	unsigned unanswered;           /* knocks since the reset: the backoff's exponent        */
-	unsigned stream_knocks;        /* STREAM knocks since the reset, against the cap        */
 	/* THIS KNOCK. */
-	enum reac_knock_content content;
 	int resting;                   /* between two knocks: nothing goes out until next_ns   */
 	uint64_t next_ns;              /* when the next knock opens, while resting              */
 	uint64_t t0_ns;                /* when slot 0 of this knock fell                        */
@@ -179,8 +121,6 @@ struct reac_knock_wire {
 	/* WHAT LEFT, for the journal, the roster, the wake ladder and a test. */
 	uint64_t sent;                 /* frames handed to the wire and accepted                */
 	uint64_t spell_sent;           /* of which in this spell (since the licence's grant)   */
-	uint64_t stream_sent;          /* of which in STREAM knocks                             */
-	uint64_t stream_withheld;      /* STREAM rungs sent as CONTROL because the NIC is the host's */
 	uint64_t send_errors;          /* frames the wire refused                               */
 	uint64_t late;                 /* frames whose slot passed by REAC_KNOCK_WIRE_LATE_NS   */
 	uint64_t pushes;               /* complete transfers sent: a FIRST, then the LAST       */
@@ -195,20 +135,15 @@ struct reac_knock_wire {
 	int n_answer;
 	uint8_t answer_src[6];
 	uint64_t answered_cycle;       /* the knock of the spell that was out (1-based)         */
-	enum reac_knock_content answered_content;
 };
 
 /* A wire has just come up. `src` is the NIC's own address and `fps` the cadence the master
- * on it would run at; nothing is sent until the licence is granted. The plan is the
- * default until reac_knock_wire_set_plan says otherwise. */
+ * on it would run at; nothing is sent until the licence is granted. */
 void reac_knock_wire_init(struct reac_knock_wire *w, const uint8_t src[6], int fps,
                           uint64_t now_ns);
 
-/* Use `plan` from the next knock on (NULL: the default). */
-void reac_knock_wire_set_plan(struct reac_knock_wire *w, const struct reac_knock_plan *plan);
-
-/* The kernel's answer about this NIC (reac_link_owner): 1 when it is the host's. From the
- * next knock on a STREAM rung is sent as CONTROL and counted in `stream_withheld`. */
+/* The kernel's answer about this NIC (reac_link_owner): 1 when it is the host's. The knock
+ * itself is the same on either; the journal and the roster say which it is. */
 void reac_knock_wire_set_host(struct reac_knock_wire *w, int host);
 
 /* One step of the poll. `hunt` is the wire's verdict-in-progress: a PINNED wire is never
@@ -253,7 +188,6 @@ int reac_knock_wire_control_per_cycle(int fps);
 int reac_knock_wire_cycle_slots(int fps);
 
 const char *reac_knock_wire_state_name(enum reac_knock_wire_state s);
-const char *reac_knock_content_name(enum reac_knock_content c);
 
 /* THE KNOCK'S WAKE LADDER (#40, reac_wake.h). A box that has DROPPED answers no frame at all,
  * a knock included, and leaves that state on a PHY edge and on nothing else (reac_wake.h).

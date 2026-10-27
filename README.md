@@ -156,28 +156,22 @@ environment can change a role.
 
 A master never pours its stream onto a wire, for as long as the daemon runs, to find out
 whether a box is there. A wire that carries no REAC frame for 500 ms has no master on it,
-and a cold stagebox on it says nothing until a master speaks. So the daemon KNOCKS, by a
-declared plan ([docs/KNOCK.md](docs/KNOCK.md) has the table, the numbers and every
-citation):
+and a cold stagebox on it says nothing until a master speaks. So the daemon KNOCKS
+([docs/KNOCK.md](docs/KNOCK.md) has the numbers and every citation):
 
-- a **control knock** is one hunting cycle of libreac's own master with every audio
-  filler slot left empty: the scene transfer (header, 341 chunks, final), the channel map
-  and the announces, 347 frames per 2.7 s cycle, 341 of them inside a 0.68 s burst;
-- a **stream knock** is that cycle whole, filler included (10 778 frames at 48 kHz,
-  21 556 at 96 kHz): what a real box was seen to answer. The default plan sends two
-  control knocks, then one stream knock, and at most three stream knocks until something
-  is heard on the wire;
+- a **knock** is one hunting cycle of libreac's own master with every audio filler slot
+  left empty: the scene transfer (header, 341 chunks, final), the channel map and the
+  announces, 347 frames per 2.7 s cycle, 341 of them inside a 0.68 s burst. That is the
+  knock's one content; nothing the daemon does sends the stream onto a wire no box has
+  answered on, and no conf line can make it;
 - the period doubles with every knock nothing answers (2.7, 5.4, 10.8, 21.6 s) up to
-  30 s, so a wire with nothing on it carries one control cycle every 30 s once the stream
-  knocks are spent. A frame heard after a silence, or a link that comes up, starts the
-  plan again.
+  30 s, so a wire with nothing on it carries one control cycle every 30 s. A frame heard
+  after a silence, or a link that comes up, starts the period again.
 
-**What is proven and what is not.** A real box was recorded answering the continuous
-stream, never a lone announce; NO record shows a real box answering the control knock
-alone, and none shows one refusing it. libreac's `fake_box` answers it, because it ignores
-filler by construction. So the stream knock stays in the default plan until the rig check
-in [docs/KNOCK.md](docs/KNOCK.md) has been run per box family; `knock = control` or
-`knock = stream` on one segment in the conf is how that check is run, with no rebuild.
+**What is proven.** Both box families on the rig, an S-1608 and an S-4000S-3212, answer
+the knock within a second of it, on a direct cable and on a VLAN of a trunk (75 answers
+over 2026-10-27's takes). libreac's `fake_box` answers it too. A box family that does not
+is recorded as such in [docs/KNOCK.md](docs/KNOCK.md), never streamed at to find out.
 
 The first frame heard from a box ends the knock. The master stream starts only then, and
 the box's answer is handed to it, so the box that committed the knocked scene is enrolled

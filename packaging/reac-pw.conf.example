@@ -61,14 +61,6 @@
 #[segment enp131s0.13]
 #ignore = yes
 
-# HOW A SILENT WIRE IS KNOCKED ON: `escalate` (the default: two control knocks, then one
-# cycle of the stream a real box was seen to answer), `control` (never an audio filler) or
-# `stream` (the stream cycle on every knock). Every plan keeps the same caps: at most three
-# stream knocks until something is heard, and a period that doubles up to 30 s. It exists
-# for the rig check in docs/KNOCK.md; a rig whose boxes enrol needs no such line.
-#[segment enp131s0]
-#knock = control
-
 # NAMING A VLAN. `[segment <parent>.<vid>]` names a VLAN IF IT EXISTS: its role and ignore
 # apply when that VID is heard on the parent and the daemon creates the sub-interface. It
 # creates NOTHING by itself (ruling 2026-09-23). A cold box that came up before the daemon
