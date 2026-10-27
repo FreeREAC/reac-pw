@@ -96,7 +96,8 @@ val() { echo "$1" | grep -a "^$2 " | head -1 | awk '{print $2}'; }
 A1=$(run_arm 1 2>&1) || true
 case "$A1" in *"SKIP: "*) echo "${A1##*SKIP: }" | head -1 | sed 's/^/SKIP: /'; exit $SKIP;; esac
 say "$A1"
-echo "$A1" | grep -q "^addr-added 1" || { say "FAIL: the address was never added — the injection did not happen"; FAIL=1; }
+[ "$(val "$A1" addr-added)" = "1" ] \
+	|| { say "FAIL: the address was never added — the injection did not happen"; FAIL=1; }
 TX=$(val "$A1" tx-seen)
 [ -n "${TX:-}" ] && [ "$TX" -gt 1000 ] \
 	|| { say "FAIL: the pacer reports tx=${TX:-} — frames were not leaving, so 'no edge' is NOTHING_SENT's and not this refusal's"; FAIL=1; }
