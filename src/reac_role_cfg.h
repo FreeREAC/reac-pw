@@ -65,31 +65,14 @@ struct spa_pod;
 #define REAC_PROP_ROLE                      REAC_ROLE_PROP             /* the RUNNING role */
 #define REAC_PROP_ROLE_STATE                REAC_CFG_ROLE_STATE_PROP
 #define REAC_PROP_ROLE_REFUSED              REAC_CFG_ROLE_REFUSED_PROP
-/* A same-role assertion is genuinely, immediately true. */
-#define REAC_ROLE_STATE_APPLIED             REAC_CFG_ROLE_STATE_APPLIED
-/* The answer while the cross-engine swap is OWED or IN FLIGHT — published INSTEAD OF
- * ever claiming "applied" for a change that has not finished. reac_role_swap_state
- * moves it on only when the NEW engine is performing its role. */
-#define REAC_ROLE_STATE_REESTABLISH_PENDING REAC_CFG_ROLE_STATE_PENDING
-/* A tap serves and asserts nothing, so it answers neither "applied" nor "role_hunting". */
+/* REAC_ROLE_STATE_APPLIED (a same-role assertion is genuinely, immediately true) and
+ * REAC_ROLE_STATE_REESTABLISH_PENDING (the answer while the cross-engine swap is owed or in
+ * flight, moved on by reac_role_swap_state only when the NEW engine is performing its role)
+ * are libreac's, declared in <reac/reac_cfg.h> (libreac 1.9.0). */
 #define REAC_ROLE_STATE_TAP                 REAC_CFG_ROLE_STATE_TAP
 
-/* Why a `reac.cfg.role` assertion was refused. REFUSE_NONE doubles as the
- * published state once a refusal is superseded by an accepted role. There is
- * only one refusal today: role has no drivability-style constraint the way
- * rate does (every well-formed role value is a value we can, in principle,
- * become) — a future increment that DOES bar a transition (e.g.
- * reac_role_validate's "slave needs --tx") has exactly this enum to extend. */
-enum reac_role_refuse {
-	REAC_ROLE_REFUSE_NONE = 0,
-	REAC_ROLE_REFUSE_MALFORMED,   /* the prop value was not 0 or 1 */
-};
-
-/* The published code for each refusal, indexed by enum reac_role_refuse. */
-#define REAC_ROLE_REFUSE_CODES_INIT { \
-	[REAC_ROLE_REFUSE_NONE]      = REAC_CFG_REFUSED_NONE,      \
-	[REAC_ROLE_REFUSE_MALFORMED] = REAC_CFG_REFUSED_MALFORMED, \
-}
+/* enum reac_role_refuse and REAC_ROLE_REFUSE_CODES_INIT are libreac's, declared in
+ * <reac/reac_cfg.h> (libreac 1.9.0). */
 
 /* Short code for REAC_PROP_ROLE_REFUSED; REAC_CFG_REFUSED_NONE when nothing is refused. */
 const char *reac_role_refuse_code(enum reac_role_refuse r);
