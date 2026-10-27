@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.38
+Version:        1.0.39
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -231,10 +231,7 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
-* Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.38-1
-- libreac, libreac-transport and libreac-tests 1.9 are in range: the ceiling is the next minor (< 1.10).
-  1.0.37 pinned them below 1.9, so a channel carrying libreac 1.9.0 could not install it. The floor is
-  unchanged.
+* Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.39-1
 - A NIC the host uses is never bounced and never streamed at (#46): a wire carrying an address wider
   than link scope, a VLAN, macvlan or ipvlan child stacked on it, a bridge or bond it is enslaved to,
   or a default route out of it is the host's (reac_link_owner: three rtnetlink dumps, unprivileged, at
@@ -242,7 +239,11 @@ fi
   refuses HOST_NIC instead of cycling the link, and the knock sends its stream rungs there as control
   knocks. The trade: a box that answers only the stream, straight on such a NIC, is not found there;
   through its own VLAN sub-interface it is a bare wire and is knocked on in full.
-- 1.0.37 was never published: this release carries its changes too.
+
+* Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.38-1
+- libreac, libreac-transport and libreac-tests 1.9 are in range: the ceiling is the next minor (< 1.10).
+  1.0.37 pinned them below 1.9, so a channel carrying libreac 1.9.0 could not install it. The floor is
+  unchanged.
 
 * Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.37-1
 - A silent wire is knocked on instead of driven: a master stays off a wire where no box has been
