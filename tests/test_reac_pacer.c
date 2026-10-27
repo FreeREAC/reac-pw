@@ -11,6 +11,9 @@
  *      CAP_NET_RAW in the test sandbox) — the cadence math above already covers
  *      the timing contract; the live check is a bonus when privilege exists. */
 #include <reac/transport/reac_pacer.h>
+#include <reac/reac_ctrlblk.h>
+#include <reac/reac_master.h>
+#include "reac_knock_credit.h"
 #include <reac/reac_ctrl.h>
 #include <reac/reac.h>
 
@@ -32,6 +35,68 @@ static uint64_t mono_ns(void)
 
 int main(void)
 {
+	/* ---- THE KNOCK'S CREDIT (#58): the master handed a knock's answer grants the JOIN
+	 * it carried at once. Real frames through reac_pacer_rx_ingest, the seam the sink
+	 * node uses before the pacer thread starts; no wire, no thread, no socket: it runs before the
+	 * AF_PACKET parts below can skip. Here and not in a
+	 * binary of its own because it crosses into libreac's master exactly as this test's
+	 * ingest arms do (the copy finder's debt lists the binary, not the arm).
+	 *
+	 * THE DEFECT, rig 2026-10-27: the S-1608 answered the knock's complete scene push
+	 * with its commit report and JOIN; the fresh master held that JOIN for a push of
+	 * its own (~0.7 s), granted by that release, and the box went silent 1.2 s after
+	 * ESTABLISHED on every cycle. The box's answer belongs to a transfer already made. */
+	{
+		static const uint8_t KC_OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
+		static const uint8_t KC_BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
+		struct reac_pacer kc;
+		uint8_t bf[2048];
+		size_t bn;
+#define KC_FRESH() do { \
+		memset(&kc, 0, sizeof kc); kc.handle = NULL; kc.fps = REAC_PKT_RATE_96K; \
+		memcpy(kc.src, KC_OUR, 6); \
+		CHK(reac_frame_ring_init(&kc.ring, REAC_BOX_S0808_IN, 2048) == 0); \
+		reac_master_init(&kc.master, KC_OUR, NULL, REAC_PKT_RATE_96K); \
+		kc.prev_state = REAC_M_IDLE; } while (0)
+		/* What the S-1608 answered the knock with, in the order the knock kept it: its
+		 * commit report (config announce), then its JOIN. */
+#define KC_ANSWER() do { \
+		bn = reac_ctrl_build_config_announce(bf, KC_OUR, KC_BOX, 1, REAC_BOX_S1608_IN); \
+		reac_pacer_rx_ingest(&kc, bf, bn); \
+		bn = reac_ctrl_build_coldconnect(bf, KC_OUR, KC_BOX, 2, REAC_BOX_S1608_IN, NULL, \
+		                                 REAC_SAMPLES_PER_PKT); \
+		reac_pacer_rx_ingest(&kc, bf, bn); } while (0)
+
+		/* A. WITHOUT THE CREDIT, the answer is HELD: the master wants a push of its own
+		 * first. This is the rig's 0.7 s, and the control for B. */
+		KC_FRESH();
+		KC_ANSWER();
+		CHK(kc.master.state == REAC_M_PROBING);
+		CHK(kc.master.join_held == 1);
+
+		/* B. WITH THE CREDIT, the answer takes the edge as it is ingested. */
+		KC_FRESH();
+		reac_knock_credit_transfer(&kc.master);
+		CHK(kc.master.state == REAC_M_PROBING);      /* promoted, and the credit survived it */
+		CHK(kc.master.scene_complete == 1);
+		CHK(kc.master.scene_inflight == 0);
+		KC_ANSWER();
+		CHK(kc.master.state == REAC_M_GRANTING);
+		CHK(kc.master.join_held == 0);
+		CHK(reac_master_has_box(&kc.master) == 1);
+
+		/* C. THE PROMOTION IS THE TRAP THE CREDIT HAS TO FOLLOW: a bare field write on
+		 * an IDLE master is wiped by reac_master_rx's own IDLE -> PROBING. Kept as the
+		 * reason the helper steps first (take 6 on the rig, 2026-10-27). */
+		KC_FRESH();
+		kc.master.scene_complete = 1;
+		KC_ANSWER();
+		CHK(kc.master.state == REAC_M_PROBING);
+		CHK(kc.master.join_held == 1);
+#undef KC_FRESH
+#undef KC_ANSWER
+	}
+
 	/* 1. per-rate slot period (the 125 us @96k contract). */
 	CHK(reac_pacer_period_ns(REAC_PKT_RATE_96K) ==
 	    (1000000000 + REAC_PKT_RATE_96K / 2) / REAC_PKT_RATE_96K);   /* 96 kHz */
@@ -543,7 +608,7 @@ int main(void)
 	 * cadence should still be in the right ballpark, never wildly fast/slow. */
 	CHK(ratio > 0.5 && ratio < 1.5);
 
-	printf("OK: pacer period (125/250/272 us) + SPSC ring (FIFO/overrun/underrun) + "
+	printf("OK: pacer period (125/250/272 us) + SPSC ring (FIFO/overrun/underrun) + the knock's credit + "
 	       "steady ~8000 fps emit + sustained-discard detector + guard floor\n");
 	return 0;
 }

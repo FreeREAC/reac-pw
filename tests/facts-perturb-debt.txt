@@ -33,7 +33,7 @@ reac_master                   libreac: reac_master emitter (chanmap ring, sweep,
 reac_master_no_enroll         libreac: reac_master enrolment
 reac_ohrca_chanmap            libreac: reac_master chanmap markers
 reac_pace_watch               libreac: pace watch cadence from libreac's rates
-reac_pacer                    libreac: reac_pacer frame builder
+reac_pacer                    libreac: reac_pacer frame builder; the knock's credit through its ingest
 reac_rate_cfg                 libreac: reac_pacer establish at libreac's cadence
 reac_rx_dup                   libreac: reac_upstream_decode; fixture upstream frames
 reac_rx_gate                  fixture: captured UP16 decoded by libreac
