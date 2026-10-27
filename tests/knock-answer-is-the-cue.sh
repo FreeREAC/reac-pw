@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 # THE KNOCK'S ANSWER IS THE MASTER'S CUE, AND THE ANSWER IS GRANTED AS IT IS HANDED OVER (#58).
 #
 # Rig, 2026-10-27: reac-pw 1.0.39 lost an S-1608 and an S-4000S, straight on two NICs, on
