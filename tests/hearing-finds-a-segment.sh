@@ -545,6 +545,13 @@ grep -q "\[cold0\] segment up" "$LOG" && {
 $in_peer "$BIN" --live kbox0 --tx kbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name kbox \
        --src-mac 00:40:ab:c4:80:43 >"$PEER" 2>&1 &
 KBOXPID=$!
+wait_for "\[cold0\] ANSWERED" 25 || {
+	echo "FAIL: a box spoke on the wire we were knocking on and the knock did not end"
+	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
+# (That the master starts ON the answer, within 2 s, is knock-answer-is-the-cue.sh's bar:
+# its far end is libreac's fake_box, linked and silent until pushed, which is the rig's
+# case. This peer is a reac-pw slave that transmits from its first frame, so the daemon
+# takes the wire by the box-spoke-first road and never prints the knock-answer line.)
 wait_for "reac-master: .* -> ESTABLISHED" 25 || {
 	echo "FAIL: driving a silent wire never established with the box that answered"
 	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }

@@ -1245,6 +1245,7 @@ struct listener_cfg {
 	uint8_t knock_answer[REAC_KNOCK_WIRE_ANSWERS][REAC_FRAME_BYTES];
 	size_t knock_answer_len[REAC_KNOCK_WIRE_ANSWERS];
 	int n_knock_answer;
+	uint64_t knock_pushes;      /* whole transfers the knock delivered first (#58) */
 	/* THE PASSIVE ROLE (2026-09-13).
 	 * `REAC_ROLE_<segment>=tap` or `--role tap`: serve what is heard and TRANSMIT
 	 * NOTHING — no announce, no join, no grant, no seglock, no TX socket. It is not a
@@ -2169,7 +2170,8 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                               * master to hear before its pacer runs. */
 		                              .knock_answer = c->n_knock_answer ? c->knock_answer : NULL,
 		                              .knock_answer_len = c->knock_answer_len,
-		                              .n_knock_answer = c->n_knock_answer };
+		                              .n_knock_answer = c->n_knock_answer,
+		                              .knock_pushes = c->knock_pushes };
 		/* CLAIM THE SEGMENT BEFORE THE FIRST FRAME. Driving is what takes the
 		 * lock; RX above has been running unlocked, which is correct — observing a
 		 * segment is a copy and must stay safe beside somebody else's master. */
@@ -2931,6 +2933,7 @@ struct hearing {
 	uint8_t carry[REAC_KNOCK_WIRE_ANSWERS][REAC_FRAME_BYTES];
 	size_t carry_len[REAC_KNOCK_WIRE_ANSWERS];
 	int n_carry;
+	uint64_t carry_pushes;      /* the knock's whole transfers when it was answered (#58) */
 	struct knock_ladder ladder[REAC_IFSCAN_MAX];
 	unsigned ladder_polls;      /* the ladder is stepped once a second, every 5th poll */
 	/* THE DECLARED SEGMENTS (reac_declared_vlan.h): the names the operator wrote, for the
@@ -3296,6 +3299,18 @@ static void sniffer_drain(struct sniffer *sn)
 			    REAC_KNOCK_WIRE_ACT_HUSH) {
 				knock_stop(sn);
 				knock_say_answered(sn);
+				/* AND THE MASTER STARTS NOW, NOT THREE SECONDS FROM NOW (#58). The
+				 * knock only went out on a wire that carried nothing for
+				 * REAC_KNOCK_LISTEN_NS — a master fills every audio slot and cannot
+				 * be present and silent — so the wire is proven masterless and a box
+				 * has just answered on it. Without this the hunt's three-cadence
+				 * window ran from the answer (reac_hunt_observe anchors it on the
+				 * first sighting) and the master's first frame left 3.0 s after the
+				 * box's, measured on both NICs 2026-10-27; a knocked box holds for
+				 * 2 s (S-4000S) to 5 s (S-1608) and then goes quiet, so the box
+				 * was LOST on every cycle. The licence is the one the knock earned,
+				 * and evidence still outranks it: a desk heard here is joined. */
+				reac_hunt_silence_proven(&sn->hunt);
 			}
 			/* AND THE SAME STAMP IS WHAT THE TAP-AUTHORITY WAIT IS MEASURED FROM:
 			 * "this wire has been heard" is a fact with a time on it, or it is a
@@ -3712,9 +3727,12 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 			L->cfg.knock_answer_len[i] = h->carry_len[i];
 		}
 		L->cfg.n_knock_answer = h->n_carry;
+		L->cfg.knock_pushes = h->carry_pushes;
 		fprintf(stderr, "reac-pw: [%s] handing the box's answer to the knock (%d control "
-		        "frame%s) to the master before it starts, so the box it reported to is the "
-		        "one that grants it\n", name, h->n_carry, h->n_carry == 1 ? "" : "s");
+		        "frame%s, %llu whole scene transfer%s delivered by the knock) to the master "
+		        "before it starts, so the box it reported to is the one that grants it\n",
+		        name, h->n_carry, h->n_carry == 1 ? "" : "s",
+		        (unsigned long long)h->carry_pushes, h->carry_pushes == 1 ? "" : "s");
 	}
 	reac_role_swap_init(&L->role_swap, L->cfg.role);
 	/* listener_open cleans up after its own refusal (its contract); a feeder
@@ -4481,6 +4499,7 @@ static void hearing_apply(struct hearing *h)
 					h->carry_len[i] = sn->kw.answer_len[i];
 				}
 				h->n_carry = sn->kw.n_answer;
+				h->carry_pushes = sn->kw.pushes;
 				reac_knock_wire_answer_taken(&sn->kw);
 			}
 			if (!keep)
@@ -4745,11 +4764,16 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				 * every slot. The silence buys a knock and no more; the master is
 				 * started on a box that was heard, the knock's answer or a box that
 				 * spoke first. */
-				fprintf(stderr, "reac-pw: [%s] no master heard in %llu s and a box is "
-				        "present%s; taking the wire as MASTER: probe, grant, establish\n",
+				fprintf(stderr, sn->kw.n_answer
+				        ? "reac-pw: [%s] the wire carried nothing for %llu ms before the "
+				          "knock and a box answered it; taking the wire as MASTER now: "
+				          "probe, grant, establish\n"
+				        : "reac-pw: [%s] no master heard in %llu s and a box is present; "
+				          "taking the wire as MASTER: probe, grant, establish\n",
 				        sn->name,
-				        (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL),
-				        sn->kw.n_answer ? " (it answered the knock)" : "");
+				        sn->kw.n_answer
+				        ? (unsigned long long)(REAC_KNOCK_LISTEN_NS / 1000000ULL)
+				        : (unsigned long long)(REAC_HUNT_WINDOW_NS / 1000000000ULL));
 			/* THE PIN DECIDES WHETHER WE KEEP WATCHING IT, not the evidence we won
 			 * it with (0.5.4). A wire nobody answered for is ours only while nobody
 			 * else claims it, however we came to be driving it; a pinned one keeps

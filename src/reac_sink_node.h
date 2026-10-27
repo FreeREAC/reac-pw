@@ -117,6 +117,13 @@ struct reac_sink_cfg {
 	const uint8_t (*knock_answer)[REAC_FRAME_BYTES];
 	const size_t *knock_answer_len;
 	int n_knock_answer;
+	/* HOW MANY WHOLE SCENE TRANSFERS THE KNOCK DELIVERED before it was answered (#58).
+	 * The box answered one of them with its commit report and its JOIN, so the master
+	 * that is handed that answer starts with the transfer already delivered and grants
+	 * the carried JOIN on its first slot — it does not re-push and hold the grant for the
+	 * 0.7 s its own transfer takes. 0 = the box answered a control knock with no push
+	 * complete, and the master pushes first, as before. */
+	uint64_t knock_pushes;
 };
 
 /* Create the sink node = the REAC MASTER ENGINE: opens the AF_PACKET 0x8819 TX

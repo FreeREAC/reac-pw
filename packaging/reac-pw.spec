@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.39
+Version:        1.0.40
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -231,6 +231,21 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.40-1
+- A box that answers the knock is granted on that answer (#58). 1.0.39 lost every real box on a
+  bare NIC: the master started only three seconds after the box spoke (the hunt's slow-desk window
+  ran on top of the knock's answer) and then held the box's JOIN for a second push of the scene the
+  knock had already delivered, granting 0.7 s later; a knocked S-4000S holds 2 s, an S-1608 5 s, and
+  the S-1608 left 1.2 s after ESTABLISHED on every cycle. Now the knock's answer is the master's cue
+  (the wire was proven masterless before the knock) and the master starts credited with the knock's
+  transfer, so the carried JOIN takes the edge as it is ingested. Measured on both boxes: enrolled
+  within a second of the answer, streaming for the whole take.
+- The default knock plan is `control`; `escalate` is opt-in (docs/KNOCK.md). Both box families on
+  the rig answered a control knock within a second, on a bare NIC and on a VLAN (75 answers over the
+  day's takes, 65 of them to knock 1, none to a stream knock). The escalate plan's stream knock
+  streamed a trunk parent before its first tagged frame had named it a trunk: 45 199
+  untagged REAC frames in 95 s onto the switch's native VLAN, waking nothing.
+
 * Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.39-1
 - A NIC the host uses is never bounced and never streamed at (#46): a wire carrying an address wider
   than link scope, a VLAN, macvlan or ipvlan child stacked on it, a bridge or bond it is enslaved to,
