@@ -165,7 +165,7 @@ static FUZZ_NOINLINE void check_malformed(int rc, int hz)
 	 * Object pod), src/reac_float_near.h:8-10
 	 * mutant: src/reac_float_near.h:27 `d >= (double)lo &&` -> ``
 	 * input: rate-float-huge
-	 * mutant: src/reac_rate_cfg.c:118 `return -1;` -> `return 0;`
+	 * mutant: src/reac_rate_cfg.c:112 `return -1;` -> `return 0;`
 	 * input: rate-bool
 	 * mutant: src/reac_rate_cfg.c:117 `SPA_TYPE_OBJECT_Props` -> `SPA_TYPE_OBJECT_PropInfo`
 	 * input: not-props-rate */
@@ -206,7 +206,7 @@ static FUZZ_NOINLINE void check_list(int hz, unsigned bit, int closed, unsigned 
 	 * exactly when it has a bit, and the best drivable rate is the highest whose bit the
 	 * mask sets, 0 for none.
 	 * contract: src/reac_rate_cfg.h:83-93
-	 * mutant: src/reac_rate_cfg.c:43 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
+	 * mutant: src/reac_rate_cfg.c:35 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
 	 * input: rate-96000
 	 * mutant: src/reac_rate_cfg.c:43 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
 	 * input: rate-not-drivable */
