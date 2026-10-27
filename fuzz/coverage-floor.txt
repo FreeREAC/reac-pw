@@ -1,0 +1,9 @@
+# Reader lines each harness's seed corpus covers (make fuzz-coverage, fuzz/coverage.sh); a
+# harness below its floor turns fuzz-coverage red. harness covered-lines
+segconf 320
+pin 23
+headamp 114
+rate 108
+role 63
+qdisc 120
+link 180

@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+#
+# THE libFuzzer HARNESSES OF fuzz/ (fuzz/README.md), on every push to main and every pull
+# request: reac-pw's own readers of the config file, the `--box` pin, the three Props
+# control writes and the two rtnetlink replies, each built with clang under
+# AddressSanitizer and UndefinedBehaviorSanitizer and fuzzed for 60 s from its seed corpus;
+# every patch of fuzz/sabotage/ found at the check it names; every check's own record met;
+# every check reached and each harness at its coverage floor; the corpus current; and each
+# harness linked fully static. An input that crashes a harness is uploaded as the
+# fuzz-findings artifact.
+#
+# libreac IS THE PUBLISHED PACKAGE, as in test.yml: `dnf builddep packaging/reac-pw.spec`
+# installs its -devel packages from the FreeMixer channel, in the range the spec declares,
+# and only their headers are used. No harness links libreac.
+
+name: fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz the config, control and netlink readers
+    runs-on: ubuntu-latest
+    # a backstop: fuzz-run spends 60 s on each of seven harnesses and the rest runs seeds
+    # only, so the job ends well inside it
+    timeout-minutes: 40
+    container:
+      image: fedora:44
+    steps:
+      - name: Install clang, libFuzzer, llvm-cov and the static libc
+        run: |
+          dnf install -y --setopt=install_weak_deps=False --setopt=retries=10 git clang compiler-rt llvm \
+            make gawk diffutils glibc-static pkgconf-pkg-config dnf5-plugins
+
+      - uses: actions/checkout@v4
+
+      # the channel, then what the spec BuildRequires: the libreac, libreac-transport and
+      # SPA headers, in the range the spec declares (it is declared there and nowhere else)
+      - name: libreac and PipeWire headers, from the spec
+        run: |
+          dnf config-manager addrepo --setopt=retries=10 \
+            --from-repofile=https://freemixer.github.io/rpm/freemixer.repo
+          dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
+
+      # fuzz-records and fuzz-sabotage apply each patch with git and restore it with git
+      - name: Let git work in the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build the harnesses (clang, libFuzzer, ASan, UBSan)
+        run: make -C fuzz fuzz
+
+      - name: The seed corpus is what fuzz/gen-corpus.c writes
+        run: make -C fuzz fuzz-corpus-check
+
+      - name: Fuzz each harness for 60 s
+        run: make -C fuzz fuzz-run FUZZ_TIME=60
+
+      # a property no breakage can make fail checks nothing: each patch must make its
+      # harness abort, over the corpus, in the check it names
+      - name: Find every sabotage patch, each in its own check
+        run: make -C fuzz fuzz-sabotage
+
+      # every check of fuzz/ records the one-line bug it catches and the seed it catches it
+      # on, and each record, alone, makes that check abort on that seed
+      - name: Meet every check's record
+        run: make -C fuzz fuzz-records
+
+      # every property check of every harness reached by a seed, and the reader lines each
+      # harness covers held to fuzz/coverage-floor.txt
+      - name: Hold the coverage floor
+        run: make -C fuzz fuzz-coverage
+
+      - name: Each harness linked fully static, over its corpus
+        run: make -C fuzz fuzz-static
+
+      - name: Upload the crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: fuzz/findings/
+          if-no-files-found: ignore

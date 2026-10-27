@@ -182,6 +182,24 @@ static int test_prop_parse(void)
 		CHK(hz == REAC_SAMPLE_RATE_96K);
 	}
 
+	/* A Float with no integer in an int's range (NaN, an infinity, 1e10) carries no
+	 * rate: malformed, never a conversion whose result is undefined. */
+	{
+		const float v[] = { __builtin_nanf(""), __builtin_inff(), 1e10f };
+		for (int i = 0; i < 3; i++) {
+			struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
+			struct spa_pod_frame obj, st;
+			begin_props(&b, &obj, &st);
+			spa_pod_builder_string(&b, REAC_CFG_PROP_RATE);
+			spa_pod_builder_float(&b, v[i]);
+			const struct spa_pod *pod = end_props(&b, &obj, &st);
+
+			int hz = -1;
+			CHK(reac_rate_prop_parse(pod, &hz) == -1);
+			CHK(hz == -1);
+		}
+	}
+
 	/* No reac.cfg.rate key at all (a plain head-amp write) -> 0, untouched. */
 	{
 		struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
