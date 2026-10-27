@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.38',
+  version: '1.0.39',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -163,6 +163,7 @@ reac_pw_src = [
   'src/reac_watch.c',
   'src/reac_wake.c',
   'src/reac_knock_wire.c',
+  'src/reac_link_owner.c',
   'src/reac_empty_master.c',
   'src/reac_node_recover.c',
   'src/reac_headamp_prop.c',
@@ -672,6 +673,21 @@ test('reac_wake_holds_when_nothing_is_sent',
   args : [reac_pw_exe],
   timeout : 240)
 
+# --- whole-binary: a NIC the host uses HOLDS the ladder, said once (#46, 2026-10-26) ------
+#
+# The desk 2026-10-26 19:19Z: the ladder took the trunk parent down for 1200 ms, the NIC
+# with the management address and every REAC VLAN, and every browser tab on the host
+# dropped every stream. The held arm puts an address on the daemon's own veth before it
+# starts and requires NO edge in 40 s, the host's-NIC refusal said exactly once with the
+# kernel's reason, and frames leaving (so the hold is this refusal's, not NOTHING_SENT's);
+# the control arm is the same bare veth, which must be bounced.
+test('reac_wake_holds_on_a_host_nic',
+  find_program('tests/wake-holds-on-a-host-nic.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 240)
+
 # --- whole-binary: the split box enrols at its DECLARED width (2026-09-17) ---------
 #
 # The live defect of that morning: an S-4000H-0832 declaring 8 in / 32 out and returning
@@ -826,6 +842,26 @@ test('reac_tap_sends_nothing',
   is_parallel : false,
   args : [courtship_probe, tap_probe],
   timeout : 120)
+
+# --- REAL NETLINK: the link-owner classifier reads the netdev as it is (#46) --------------
+#
+# The desk's trunk parent carries the management address and every REAC VLAN, and the
+# knock streamed at it and bounced it (2026-10-26-a-host-nic-is-never-bounced-or-streamed-at).
+# reac_link_owner says which interfaces are the host's from three rtnetlink dumps; this
+# drives its probe over a veth in a private namespace, changing one fact at a time: bare,
+# link-scope addresses only (still bare), an address, a VLAN child, a default route, a
+# missing name. The veth's own peer naming it in IFLA_LINK is the stacked case's control.
+link_owner_probe = executable('link-owner-probe',
+  ['tests/link_owner_probe.c', 'src/reac_link_owner.c'],
+  include_directories : src_inc,
+  install : false)
+
+test('reac_link_owner_reads_the_netdev',
+  find_program('tests/link-owner-reads-the-netdev.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [link_owner_probe],
+  timeout : 60)
 
 # --- whole-binary test: a vacant tap door frees its RX ring on teardown (audit M6) --------
 #

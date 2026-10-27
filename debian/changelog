@@ -1,3 +1,18 @@
+reac-pw (1.0.39) unstable; urgency=medium
+
+  * A NIC the host uses is never bounced and never streamed at (#46): a
+    wire carrying an address wider than link scope, a VLAN, macvlan or
+    ipvlan child stacked on it, a bridge or bond it is enslaved to, or a
+    default route out of it is the host's (reac_link_owner: three
+    rtnetlink dumps, unprivileged, at most once a second per wire; an
+    unreadable wire counts as the host's). A master on such a NIC refuses
+    HOST_NIC instead of cycling the link, and the knock sends its stream
+    rungs there as control knocks. The trade: a box that answers only the
+    stream, straight on such a NIC, is not found there; through its own
+    VLAN sub-interface it is a bare wire and is knocked on in full.
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Tue, 27 Oct 2026 12:41:50 +0000
+
 reac-pw (1.0.38) unstable; urgency=medium
 
   * libreac, libreac-transport and libreac-tests 1.9 are in range: the

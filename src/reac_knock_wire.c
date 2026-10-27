@@ -69,6 +69,11 @@ void reac_knock_wire_set_plan(struct reac_knock_wire *w, const struct reac_knock
 	w->rung_done = 0;
 }
 
+void reac_knock_wire_set_host(struct reac_knock_wire *w, int host)
+{
+	w->host = host ? 1 : 0;
+}
+
 static uint64_t slot_ns(const struct reac_knock_wire *w, uint64_t slot)
 {
 	return w->t0_ns + slot * 1000000000ULL / (uint64_t)w->fps;
@@ -174,10 +179,16 @@ static enum reac_knock_content plan_take(struct reac_knock_wire *w)
 		}
 	}
 	if (c == REAC_KNOCK_STREAM) {
-		if (w->stream_knocks >= REAC_KNOCK_WIRE_STREAM_KNOCKS)
+		if (w->host) {
+			/* THE HOST'S NIC IS NEVER STREAMED AT (#46): the rung goes out as the
+			 * bounded knock, and the cap is left alone for a wire that becomes bare. */
 			c = REAC_KNOCK_CONTROL;
-		else
+			w->stream_withheld++;
+		} else if (w->stream_knocks >= REAC_KNOCK_WIRE_STREAM_KNOCKS) {
+			c = REAC_KNOCK_CONTROL;
+		} else {
 			w->stream_knocks++;
+		}
 	}
 	return c;
 }
@@ -372,7 +383,8 @@ int reac_knock_wire_run(struct reac_knock_wire *w, uint64_t now_ns,
 enum reac_wake_act reac_knock_ladder_step(struct reac_knock_ladder *kl,
                                           const struct reac_knock_wire *w, uint64_t now_ns,
                                           uint64_t rx_frames, int carrier,
-                                          int siblings_served, struct reac_wake_obs *o)
+                                          int siblings_served, int host_nic,
+                                          struct reac_wake_obs *o)
 {
 	if (!kl->wake.opened_ns) {
 		reac_wake_init(&kl->wake, now_ns);
@@ -398,6 +410,7 @@ observe:
 	o->rx_box_frames = rx_frames - kl->frames0;
 	o->scene_pushes = w->pushes - kl->pushes0;
 	o->siblings_served = siblings_served;
+	o->host_nic = host_nic;
 	o->tx_frames = w->spell_sent;
 	return reac_wake_step(&kl->wake, now_ns, o);
 }
