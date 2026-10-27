@@ -29,6 +29,8 @@
 #ifndef REAC_SERVED_MARK_H
 #define REAC_SERVED_MARK_H
 
+#include <stdio.h>
+
 #define REAC_ALIAS_PREFIX  "reac-pw:"
 #define REAC_SERVED_ALIAS  "reac-pw:served"
 #define REAC_SERVED_MAX    32
@@ -53,6 +55,12 @@ struct reac_served_marks {
  * than a plain mark happened. Returns the verdict, or -errno when the alias could not be
  * read or written (the segment is served either way; only the marker is missing). */
 int reac_served_mark(struct reac_served_marks *m, const char *ifname);
+
+/* WHERE THOSE LINES GO. The daemon leaves it at standard error, and NULL puts it back
+ * there. A caller that may write nothing — the fuzz harness of this policy, which leaves
+ * the output of a run to its driver — points it at a stream of its own. What the policy
+ * decides, writes and returns is the same either way. */
+void reac_served_say_to(FILE *out);
 
 /* Remove every mark in `m` whose alias is still REAC_SERVED_ALIAS, and clear `m`. An
  * interface that is gone, or whose alias somebody changed since, is left alone. */
