@@ -67,7 +67,7 @@
 #define ALIAS_MAX      256
 /* contract: packaging/reac-pw-nm-unmanaged.sh:15 (the alias this daemon writes) and :66
  * (every alias starting `reac-pw:` is this daemon's mark); src/reac_served_mark.h:23-27
- * (a VLAN the host made, link kind `vlan`, is left alone) and :34 (32 marks kept) */
+ * (a VLAN the host made, link kind `vlan`, is left alone) and :36 (32 marks kept) */
 #define SERVED        "reac-pw:served"
 #define PREFIX        "reac-pw:"
 #define MARKS_MAX     32
@@ -133,6 +133,34 @@ static const char *text_of(struct fuzz_in *in, char **own)
 	size_t n = fuzz_take(in, fuzz_u16(in) % 320u, &p);
 	*own = fuzz_str(p, n);
 	return *own;
+}
+
+/* ---- A RUN WRITES NOTHING OF ITS OWN -------------------------------------------------- */
+
+/* The marking policy reports a mark it could not read or write, a VLAN the host made, and
+ * an interface carrying the host's own alias (src/reac_served_mark.c:55-58, 66-70, 82-83,
+ * 86-88). Those lines are the daemon's and they stay as they are; the harness must still
+ * write no byte of its own, because what a fuzz target writes is no part of what it
+ * checks, and the output of a run belongs to its driver. So the harness points the
+ * policy's stream (src/reac_served_mark.h:59-63) at a buffer in memory. The policy decides
+ * and formats exactly as it does in the daemon, and what the program writes — the driver's
+ * output, and the name each abort() prints — is unchanged.
+ * The buffer is fixed, and the run rewinds it: a message past its end is cut there, and
+ * nothing grows from one input to the next. */
+static char g_said[4096];
+static FILE *g_sink;
+
+static int mark_quietly(struct reac_served_marks *m, const char *ifname)
+{
+	if (!g_sink) {
+		g_sink = fmemopen(g_said, sizeof g_said, "w");
+		/* not a property: the harness's own allocation failed */
+		if (!g_sink)
+			abort();
+		reac_served_say_to(g_sink);
+	}
+	rewind(g_sink);
+	return reac_served_mark(m, ifname);
 }
 
 /* ---- the replies the input spells ----------------------------------------------------- */
@@ -473,16 +501,16 @@ static FUZZ_NOINLINE void check_requests(const struct nl_kernel *k, const struct
 	 * read an RTM_GETLINK of the interface's index, a write an RTM_NEWLINK asking for an
 	 * ACK with one IFLA_IFALIAS holding the alias, nothing for a mark the reply stopped,
 	 * and at exit a removal only of the marks still this daemon's.
-	 * contract: src/reac_link_alias.h:15-24, src/reac_served_mark.h:52-59
+	 * contract: src/reac_link_alias.h:15-24, src/reac_served_mark.h:54-57, 65-67
 	 * mutant: src/reac_link_alias.c:138 `NLM_F_REQUEST | NLM_F_ACK` -> `NLM_F_REQUEST`
 	 * input: mark-plain-nic
 	 * mutant: src/reac_link_alias.c:147 `RTA_ALIGN(a->rta_len)` -> `a->rta_len`
 	 * input: mark-plain-nic
 	 * mutant: src/reac_link_alias.c:117 `(int)idx` -> `(int)idx + 1`
 	 * input: read-served
-	 * mutant: src/reac_served_mark.c:89 `strcmp(alias, REAC_SERVED_ALIAS) != 0` -> `0`
+	 * mutant: src/reac_served_mark.c:102 `strcmp(alias, REAC_SERVED_ALIAS) != 0` -> `0`
 	 * input: unmark-after-host-renamed
-	 * mutant: src/reac_served_mark.c:51 `REAC_SERVED_ALIAS` -> `REAC_ALIAS_PREFIX`
+	 * mutant: src/reac_served_mark.c:64 `REAC_SERVED_ALIAS` -> `REAC_ALIAS_PREFIX`
 	 * input: mark-plain-nic */
 	if (!requests_are(k, m))
 		abort();
@@ -553,12 +581,12 @@ static FUZZ_NOINLINE void check_verdict(enum reac_served_verdict got,
 {
 	/* An alias the host set is left alone and one starting `reac-pw:` is this daemon's;
 	 * with no alias a VLAN the host made is left alone and anything else is marked.
-	 * contract: src/reac_served_mark.h:23-28, 43-44
-	 * mutant: src/reac_served_mark.c:16 `sizeof REAC_ALIAS_PREFIX - 1` -> `sizeof REAC_ALIAS_PREFIX`
+	 * contract: src/reac_served_mark.h:23-28, 45-46
+	 * mutant: src/reac_served_mark.c:29 `sizeof REAC_ALIAS_PREFIX - 1` -> `sizeof REAC_ALIAS_PREFIX`
 	 * input: decide-all
-	 * mutant: src/reac_served_mark.c:20 `strcmp(kind, "vlan") == 0` -> `strncmp(kind, "vlan", 3) == 0`
+	 * mutant: src/reac_served_mark.c:33 `strcmp(kind, "vlan") == 0` -> `strncmp(kind, "vlan", 3) == 0`
 	 * input: decide-all
-	 * mutant: src/reac_served_mark.c:15 `alias && alias[0]` -> `alias`
+	 * mutant: src/reac_served_mark.c:28 `alias && alias[0]` -> `alias`
 	 * input: decide-all */
 	if (got != want)
 		abort();
@@ -568,10 +596,10 @@ static FUZZ_NOINLINE void check_mark(int rc, int want)
 {
 	/* A mark answers its verdict, or the error of the read or the write that stopped it,
 	 * and -EINVAL with no marks or no name.
-	 * contract: src/reac_served_mark.h:52-55
-	 * mutant: src/reac_served_mark.c:58 `return rc;` -> `break;`
+	 * contract: src/reac_served_mark.h:54-57
+	 * mutant: src/reac_served_mark.c:71 `return rc;` -> `break;`
 	 * input: mark-write-refused
-	 * mutant: src/reac_served_mark.c:78 `return (int)v;` -> `return 0;`
+	 * mutant: src/reac_served_mark.c:91 `return (int)v;` -> `return 0;`
 	 * input: mark-minted-vlan */
 	if (!same_rc(rc, want))
 		abort();
@@ -581,14 +609,14 @@ static FUZZ_NOINLINE void check_marks(const struct reac_served_marks *got, const
 {
 	/* The marks kept are the interfaces this daemon marked, and those a run of its own
 	 * left marked, each once, at most 32; the unmark clears them all.
-	 * contract: src/reac_served_mark.h:46-50, 57-59
-	 * mutant: src/reac_served_mark.c:65 `strcmp(alias, REAC_SERVED_ALIAS) == 0` -> `1`
+	 * contract: src/reac_served_mark.h:48-52, 65-67
+	 * mutant: src/reac_served_mark.c:78 `strcmp(alias, REAC_SERVED_ALIAS) == 0` -> `1`
 	 * input: mark-minted-vlan
-	 * mutant: src/reac_served_mark.c:28 `strcmp(m->name[i], ifname) == 0` -> `0`
+	 * mutant: src/reac_served_mark.c:41 `strcmp(m->name[i], ifname) == 0` -> `0`
 	 * input: mark-twice
-	 * mutant: src/reac_served_mark.c:93 `memset(m, 0, sizeof *m);` -> ``
+	 * mutant: src/reac_served_mark.c:106 `memset(m, 0, sizeof *m);` -> ``
 	 * input: unmark-after-host-renamed
-	 * mutant: src/reac_served_mark.c:30 `m->n >= REAC_SERVED_MAX` -> `m->n > REAC_SERVED_MAX`
+	 * mutant: src/reac_served_mark.c:43 `m->n >= REAC_SERVED_MAX` -> `m->n > REAC_SERVED_MAX`
 	 * input: mark-forty */
 	if (!marks_are(got, m))
 		abort();
@@ -695,7 +723,7 @@ static void op_mark(struct fuzz_in *in, struct model *m, struct reac_served_mark
 	kernel(in);
 	model_begin(m);
 	int want = model_mark(m, name);
-	int rc = reac_served_mark(marks, name);
+	int rc = mark_quietly(marks, name);
 	check_socket(&g_nl);
 	check_mark(rc, want);
 	check_marks(marks, m);
@@ -728,7 +756,7 @@ static void op_refused(struct fuzz_in *in, struct model *m, struct reac_served_m
 {
 	uint8_t w = fuzz_u8(in);
 	model_begin(m);
-	int rc = reac_served_mark((w & 1) ? NULL : marks, (w & 2) ? "" : NULL);
+	int rc = mark_quietly((w & 1) ? NULL : marks, (w & 2) ? "" : NULL);
 	check_mark(rc, -EINVAL);
 	check_requests(&g_nl, m);
 }
