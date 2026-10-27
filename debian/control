@@ -8,12 +8,12 @@ Build-Depends: debhelper-compat (= 13),
  python3,
  libpipewire-0.3-dev (>= 0.3.65),
  libspa-0.2-dev,
- libreac-dev (>= 1.7.0),
- libreac-dev (<< 1.9~),
- libreac-transport-dev (>= 1.7.0),
- libreac-transport-dev (<< 1.9~),
+ libreac-dev (>= 1.9.0),
+ libreac-dev (<< 1.10~),
+ libreac-transport-dev (>= 1.9.0),
+ libreac-transport-dev (<< 1.10~),
  libreac-tests (>= 1.7.3~),
- libreac-tests (<< 1.9~)
+ libreac-tests (<< 1.10~)
 Standards-Version: 4.6.2
 Homepage: https://github.com/FreeREAC/reac-pw
 Rules-Requires-Root: no

@@ -1,3 +1,12 @@
+reac-pw (1.0.38) unstable; urgency=medium
+
+  * libreac, libreac-transport and libreac-tests 1.9 are in range: the
+    ceiling is the next minor (< 1.10). 1.0.37 pinned them below 1.9, so a
+    channel carrying libreac 1.9.0 could not install it. The floor is
+    unchanged.
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Tue, 27 Oct 2026 09:00:00 +0000
+
 reac-pw (1.0.37) unstable; urgency=medium
 
   * A silent wire is knocked on instead of driven: a master stays off a
