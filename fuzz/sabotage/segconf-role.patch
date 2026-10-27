@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_segconf.c:446 (a ';' after a blank no longer starts a comment, so `role = tap ; a mirror` is refused).
+Breaks the check of fuzz/fuzz_segconf.c:466 (a ';' after a blank no longer starts a comment, so `role = tap ; a mirror` is refused).
 Caught by the seed input "operator-file" of fuzz_segconf.
 
 diff --git a/src/reac_segconf.c b/src/reac_segconf.c
