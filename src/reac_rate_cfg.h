@@ -3,9 +3,8 @@
 
 /* reac_rate_cfg — the REAC pace: a CLOSED per-protocol list, DECLARED here;
  * drivability is a separate, OBSERVED fact REAC has exactly three rates by definition: 44100, 48000, 96000 Hz.
- * This module is the one place that list is spelled out for reac-pw today;
- * the shared cross-repo vocabulary table (a libreac header both sides pin
- * against) is the spec's own increment 2, not this one.
+ * The list, the refusal codes and the drivable masks are declared in libreac's
+ * <reac/reac_cfg.h>; this module is the decision over them.
  *
  * PURE decision core, no I/O, no PipeWire — same shape as reac_master and
  * reac_headamp_prop: unit-testable offline. Two callers:
@@ -51,31 +50,8 @@ struct spa_pod;
 #define REAC_RATE_STATE_APPLIED     REAC_CFG_RATE_STATE_APPLIED
 #define REAC_RATE_STATE_PENDING     REAC_CFG_RATE_STATE_PENDING
 
-/* One bit per closed-list rate. */
-#define REAC_RATE_BIT_44100  (1u << 0)
-#define REAC_RATE_BIT_48000  (1u << 1)
-#define REAC_RATE_BIT_96000  (1u << 2)
-#define REAC_RATE_ALL_BITS   (REAC_RATE_BIT_44100 | REAC_RATE_BIT_48000 | REAC_RATE_BIT_96000)
-
-/* Why a `reac.cfg.rate` assertion was refused. REFUSE_NONE doubles as the
- * published state once a refusal is superseded by an accepted rate. */
-enum reac_rate_refuse {
-	REAC_RATE_REFUSE_NONE = 0,
-	REAC_RATE_REFUSE_NOT_CLOSED,    /* not one of 44100 / 48000 / 96000           */
-	REAC_RATE_REFUSE_NOT_DRIVABLE,  /* in the closed list, outside this segment's */
-	REAC_RATE_REFUSE_ROLE_SLAVE,    /* a slave has no rate setting of its own     */
-	REAC_RATE_REFUSE_MALFORMED,     /* the prop value was not a usable number     */
-};
-
-/* The published code for each refusal, indexed by enum reac_rate_refuse — the table
- * reac_rate_refuse_code() returns from, so no code is typed in reac-pw. */
-#define REAC_RATE_REFUSE_CODES_INIT { \
-	[REAC_RATE_REFUSE_NONE]         = REAC_CFG_REFUSED_NONE,         \
-	[REAC_RATE_REFUSE_NOT_CLOSED]   = REAC_CFG_REFUSED_NOT_CLOSED,   \
-	[REAC_RATE_REFUSE_NOT_DRIVABLE] = REAC_CFG_REFUSED_NOT_DRIVABLE, \
-	[REAC_RATE_REFUSE_ROLE_SLAVE]   = REAC_CFG_REFUSED_ROLE_SLAVE,   \
-	[REAC_RATE_REFUSE_MALFORMED]    = REAC_CFG_REFUSED_MALFORMED,    \
-}
+/* The drivable-rate masks (REAC_RATE_BIT_*, REAC_RATE_ALL_BITS), enum reac_rate_refuse and
+ * REAC_RATE_REFUSE_CODES_INIT are libreac's, declared in <reac/reac_cfg.h> (libreac 1.9.0). */
 
 /* Short code for REAC_PROP_RATE_REFUSED; REAC_CFG_REFUSED_NONE when nothing is refused. */
 const char *reac_rate_refuse_code(enum reac_rate_refuse r);

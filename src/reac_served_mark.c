@@ -10,6 +10,19 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Where this module's lines go: NULL is standard error, which is no constant. */
+static FILE *g_say;
+
+void reac_served_say_to(FILE *out)
+{
+	g_say = out;
+}
+
+static FILE *say(void)
+{
+	return g_say ? g_say : stderr;
+}
+
 enum reac_served_verdict reac_served_decide(const char *kind, const char *alias)
 {
 	if (alias && alias[0]) {
@@ -39,7 +52,7 @@ int reac_served_mark(struct reac_served_marks *m, const char *ifname)
 	char kind[32], alias[256];
 	int rc = reac_link_alias_read(ifname, kind, sizeof kind, alias, sizeof alias);
 	if (rc != 0) {
-		reac_code_emit(stderr, "reac-pw", RC_E_NOT_MARKED,
+		reac_code_emit(say(), "reac-pw", RC_E_NOT_MARKED,
 		        "[%s] could not read the interface alias (errno %d) — not marked as a "
 		        "REAC interface, so the host's network manager is not told to leave it "
 		        "alone\n", ifname, -rc);
@@ -50,7 +63,7 @@ int reac_served_mark(struct reac_served_marks *m, const char *ifname)
 	case REAC_SERVED_MARK:
 		rc = reac_link_alias_write(ifname, REAC_SERVED_ALIAS);
 		if (rc != 0) {
-			reac_code_emit(stderr, "reac-pw", RC_E_NOT_MARKED,
+			reac_code_emit(say(), "reac-pw", RC_E_NOT_MARKED,
 			        "[%s] could not mark it '%s' (errno %d)%s — the "
 			        "host's network manager is not told to leave it alone\n",
 			        ifname, REAC_SERVED_ALIAS, -rc,
@@ -66,11 +79,11 @@ int reac_served_mark(struct reac_served_marks *m, const char *ifname)
 			remember(m, ifname);
 		break;
 	case REAC_SERVED_LEAVE_VLAN:
-		fprintf(stderr, "reac-pw: [%s] is a VLAN the host made — not marked; if a "
+		fprintf(say(), "reac-pw: [%s] is a VLAN the host made — not marked; if a "
 		        "network manager configures it, give it no addresses there\n", ifname);
 		break;
 	case REAC_SERVED_LEAVE_HOST:
-		fprintf(stderr, "reac-pw: [%s] carries the host's own alias '%s' — not marked; "
+		fprintf(say(), "reac-pw: [%s] carries the host's own alias '%s' — not marked; "
 		        "the host's network manager is not told to leave it alone\n",
 		        ifname, alias);
 		break;
