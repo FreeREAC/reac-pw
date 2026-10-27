@@ -15,8 +15,8 @@
  *             keys that depend on each other. A text is cut at its first NUL.
  *
  * The expectations come from the grammar the header and the reader's comments document,
- * read here line by line on the harness's own copy (src/reac_segconf.h:4-37, 46-109,
- * 146-158; src/reac_segconf.c:25-119, 269-296):
+ * read here line by line on the harness's own copy (src/reac_segconf.h:4-37, 46-115,
+ * 152-164, 227-229; src/reac_segconf.c:25-119, 269-303):
  *   - a line ends at '\n'; one of 512 bytes or more is refused whole, and one that
  *     opens a section ends the section before it; a '#' or ';' at the start or after a
  *     blank starts a comment; blanks are spaces, tabs and CRs;
@@ -28,7 +28,9 @@
  *   - `key = value`, the value without one pair of matching quotes, inside a section:
  *     role (auto|master|slave|tap|box, in any case), model (a token of the box-model
  *     table, in any case, folded), ignore (yes|true|1 or no|false|0, in any case for the
- *     words); anything else refused; the last file to say a key wins it, and names it;
+ *     words), knock (escalate|control|stream, in any case, kept as the plan's own
+ *     lower-case name); anything else refused; the last file to say a key wins it, and
+ *     names it;
  *   - once every file is read: a model on a segment that is not a box is refused and
  *     dropped, a box with no model is refused and falls back to auto;
  *   - every refusal is counted, the first REAC_SEGCONF_REFUSALS kept, each addressed
@@ -39,8 +41,8 @@
  * Properties, each an abort():
  *   - the segments are the names the sections opened, in order, and the overflow is the
  *     count of those past the bound;
- *   - each segment's role, model and ignore are the last ones its files gave it, after
- *     the cross-key rules;
+ *   - each segment's role, model, ignore and knock plan are the last ones its files gave
+ *     it, after the cross-key rules;
  *   - each answer names the file that gave it;
  *   - every refusal is counted and the first ones kept, each with its address;
  *   - a name no section opened has no answer;
@@ -74,13 +76,22 @@
 
 #define FILES_MAX     4
 
+/* THE KNOCK PLANS, written here from the plans the header documents (contract:
+ * src/reac_knock_wire.h:88-93, and :96 for the name matched without case), and the bound
+ * on the name the reader keeps (contract: src/reac_segconf.h:105, a plan name of 16
+ * bytes). They are not read from `reac_knock_plans` or `reac_knock_plan_find`: those are
+ * the code under test, and a wrong row in them must not move both sides of the check. */
+static const char *const PLANS[] = { "escalate", "control", "stream" };
+#define PLAN_LEN      16
+
 /* ---- the harness's reading of the grammar --------------------------------------------- */
 
 struct mseg {
 	char name[NAME_LEN];
 	enum reac_role_intent role;
-	int role_set, ignore, ignore_set, model_set;
+	int role_set, ignore, ignore_set, model_set, knock_set;
 	char model[24];
+	char knock[PLAN_LEN];
 	char role_file[LABEL_LEN], ignore_file[LABEL_LEN];
 	int gen;
 };
@@ -243,6 +254,15 @@ static void m_key(struct mconf *c, struct mseg *g, const char *s, const char *e,
 		g->ignore = b;
 		g->ignore_set = 1;
 		snprintf(g->ignore_file, sizeof g->ignore_file, "%s", c->reading);
+	} else if (ieq(k, kn, "knock")) {
+		size_t ln = fold(v, vn, low, PLAN_LEN);
+		for (size_t i = 0; i < sizeof PLANS / sizeof PLANS[0]; i++)
+			if (strlen(PLANS[i]) == ln && memcmp(PLANS[i], low, ln) == 0) {
+				memcpy(g->knock, low, ln + 1);
+				g->knock_set = 1;
+				return;
+			}
+		m_refuse(c, line);
 	} else {
 		m_refuse(c, line);
 	}
@@ -425,7 +445,7 @@ static FUZZ_NOINLINE void check_role(int got_set, enum reac_role_intent got,
 {
 	/* A segment's role is the last one its files pinned, a value of the vocabulary in any
 	 * case and without its quotes; a box that names no model falls back to no pin.
-	 * contract: src/reac_segconf.h:197-202, src/reac_segconf.c:271-316
+	 * contract: src/reac_segconf.h:203-208, src/reac_segconf.c:271-316
 	 * mutant: src/reac_segconf.c:238 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: role-in-capitals
 	 * mutant: src/reac_segconf.c:245 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
@@ -450,7 +470,7 @@ static FUZZ_NOINLINE void check_model(const char *got, const struct mseg *want)
 {
 	/* A segment's model is a token of the box-model table, folded to lower case, and
 	 * only on a segment whose role is box; on any other role it is dropped.
-	 * contract: src/reac_segconf.h:92-101, 215-219
+	 * contract: src/reac_segconf.h:92-101, 221-225
 	 * mutant: src/reac_segconf.c:318 `s->model_set && !is_box` -> `0`
 	 * input: model-on-a-tap
 	 * mutant: src/reac_segconf.c:269 `"%s", low` -> `"%s", val`
@@ -463,7 +483,7 @@ static FUZZ_NOINLINE void check_ignore(int got, const struct mseg *want)
 {
 	/* A segment is switched off when the last file to say `ignore` said yes, true or 1,
 	 * and on when it said no, false or 0.
-	 * contract: src/reac_segconf.h:89, 193-195
+	 * contract: src/reac_segconf.h:89, 199-201
 	 * mutant: src/reac_segconf.c:91 `!strcmp(v, "1")` -> `!strcmp(v, "0")`
 	 * input: ignore-words
 	 * mutant: src/reac_segconf.c:279 `cur->ignore = b;` -> `cur->ignore = 1;`
@@ -479,7 +499,7 @@ static FUZZ_NOINLINE void check_provenance(const char *role_file, const char *ig
 {
 	/* Each answer names the file that gave it, per key: the hand-written file or the
 	 * drop-in, and nothing when no file said that key.
-	 * contract: src/reac_segconf.h:102-107, 204-213
+	 * contract: src/reac_segconf.h:108-113, 210-219
 	 * mutant: src/reac_segconf.c:247 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
 	 * mutant: src/reac_segconf.c:281 `c->reading` -> `REAC_SEGCONF_FILE`
@@ -491,11 +511,28 @@ static FUZZ_NOINLINE void check_provenance(const char *role_file, const char *ig
 		abort();
 }
 
+static FUZZ_NOINLINE void check_knock(const char *got, const struct mseg *want)
+{
+	/* A segment's knock plan is the last plan its files named, in any case and without
+	 * its quotes, answered as the plan's own lower-case name; a segment no file gave one
+	 * has no plan, and a name of no plan is refused.
+	 * contract: src/reac_segconf.h:102-107 (the field), 227-229 (the answer),
+	 * src/reac_knock_wire.h:88-93 (the three plans), 95-96 (matched without case)
+	 * mutant: src/reac_segconf.c:297 `p->name` -> `val`
+	 * input: knock-in-capitals
+	 * mutant: src/reac_knock_wire.c:41 `strcasecmp(` -> `strcmp(`
+	 * input: knock-in-capitals
+	 * mutant: src/reac_segconf.c:574 `s && s->knock_set` -> `s != NULL`
+	 * input: knock-plans */
+	if (!same_text(got, want->knock_set ? want->knock : NULL))
+		abort();
+}
+
 static FUZZ_NOINLINE void check_refusals(const struct reac_segconf *c, const struct mconf *m)
 {
 	/* Every line the grammar cannot use is refused and counted, and the first ones are
 	 * kept.
-	 * contract: src/reac_segconf.h:30-34, 51-54, 126-128
+	 * contract: src/reac_segconf.h:30-34, 51-54, 132-134
 	 * mutant: src/reac_segconf.c:33 `c->refused++;` -> ``
 	 * input: refusals-many
 	 * mutant: src/reac_segconf.c:208 `!is_new && cur->seen_gen == c->gen` -> `0`
@@ -522,12 +559,13 @@ static FUZZ_NOINLINE void check_address(const char *got, const char *want)
 static FUZZ_NOINLINE void check_absent(const struct reac_segconf *c, const char *name)
 {
 	/* A name no section opened has no entry and no answer.
-	 * contract: src/reac_segconf.h:188-202 (the entry for `name`, or NULL; compared case
-	 * sensitively)
+	 * contract: src/reac_segconf.h:194-197 (the entry for `name`, or NULL; compared case
+	 * sensitively), 227-229 (the knock plan of a name with no entry)
 	 * mutant: src/reac_segconf.c:532 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
 	 * input: absent-probes */
 	if (reac_segconf_find(c, name) || reac_segconf_role(c, name, NULL) ||
-	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name))
+	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name) ||
+	    reac_segconf_knock(c, name))
 		abort();
 }
 
@@ -537,7 +575,7 @@ static FUZZ_NOINLINE void check_declared(int got, int want, const struct reac_de
 	/* The declared VLANs are the segments named `<parent>.<vid>` that are not switched
 	 * off, each (parent, vid) once, added after what the table held; a full table stops
 	 * the declaration at -1, and nothing is written past it.
-	 * contract: src/reac_segconf.h:221-228, src/reac_declared_vlan.h:26-38
+	 * contract: src/reac_segconf.h:231-238, src/reac_declared_vlan.h:26-38
 	 * mutant: src/reac_declared_vlan.c:46 `v > 4094` -> `v > 4095`
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:43 `!isdigit((unsigned char)*p)` -> `!isalnum((unsigned char)*p)`
@@ -570,7 +608,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	reac_segconf_init(c);
 
 	static char longl[121];
-	/* each parse returns the running number of segments (src/reac_segconf.h:150-154) */
+	/* each parse returns the running number of segments (src/reac_segconf.h:156-160) */
 	int returned = 1;
 	for (int f = 0; f < nfiles; f++) {
 		uint8_t lb = fuzz_u8(&in);
@@ -607,6 +645,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		check_ignore(reac_segconf_ignored(c, g->name), g);
 		check_provenance(reac_segconf_role_file(c, g->name),
 		                 reac_segconf_ignore_file(c, g->name), g);
+		check_knock(reac_segconf_knock(c, g->name), g);
 	}
 	check_refusals(c, m);
 	for (int i = 0; i < m->n_kept && i < c->n_refusals; i++)
