@@ -14,6 +14,7 @@
 #              both on a NIC it manages, and a REAC wire carries them too)
 #   addr       10.99.1.1/24: the host's
 #   stacked    a VLAN child: the host's
+#   enslaved   a bridge port (IFLA_MASTER on the NIC itself): the host's, as stacked
 #   route      a default route out of it, no address: the host's
 #   unread     a name that does not exist: unread, with ENODEV
 #
@@ -49,6 +50,12 @@ ip link add link lo0x name lo0x.11 type vlan id 11
 want stacked stacked
 ip link del lo0x.11
 want child-removed bare
+ip link add br0x type bridge
+ip link set lo0x master br0x
+want enslaved stacked
+ip link set lo0x nomaster
+want unenslaved bare
+ip link del br0x
 ip route add default dev lo0x
 want route route
 ip route del default dev lo0x
@@ -58,6 +65,6 @@ case "$got" in "unread "*"err=-19"*) echo "ok   unread: $got";; *) echo "FAIL un
 # and the peer, which names lo0x in its own IFLA_LINK, is bare too
 got=$("$PROBE" lo0y 2>&1)
 case "$got" in "bare "*) echo "ok   peer: $got";; *) echo "FAIL peer: got '$got'"; FAIL=1;; esac
-[ "$FAIL" = 0 ] && echo "PASS: bare, link-scope-only and the peer read bare; an address, a VLAN child and a default route each read as the host's; a missing name reads unread"
+[ "$FAIL" = 0 ] && echo "PASS: bare, link-scope-only and the peer read bare; an address, a VLAN child, a bridge enslaving it and a default route each read as the host's; a missing name reads unread"
 exit $FAIL
 INNER
