@@ -133,9 +133,9 @@ static FUZZ_NOINLINE void check_absent(int rc, int hz)
 	/* A Props write that carries no rate key (only volume, head-amp or nothing) is 0, and
 	 * the caller's variable is not written.
 	 * contract: src/reac_rate_cfg.h:111-113 (0 if the key is simply absent)
-	 * mutant: src/reac_rate_cfg.c:129 `return 0;` -> `return -1;`
+	 * mutant: src/reac_rate_cfg.c:124 `return 0;` -> `return -1;`
 	 * input: params-not-a-struct
-	 * mutant: src/reac_rate_cfg.c:147 `strcmp(k, REAC_CFG_PROP_RATE) != 0` -> `strncmp(k, REAC_CFG_PROP_RATE, 12) != 0`
+	 * mutant: src/reac_rate_cfg.c:142 `strcmp(k, REAC_CFG_PROP_RATE) != 0` -> `strncmp(k, REAC_CFG_PROP_RATE, 12) != 0`
 	 * input: near-keys */
 	if (rc != 0 || hz != 0x5a5a5a5a)
 		abort();
@@ -146,11 +146,11 @@ static FUZZ_NOINLINE void check_rate(int rc, int hz, int want)
 	/* A rate key with an Int, or a Float with a nearest integer an int holds, is 1 and
 	 * that rate, the first such key's.
 	 * contract: src/reac_rate_cfg.h:107-113 (accepted as Int or Float; 1 and *out_hz)
-	 * mutant: src/reac_rate_cfg.c:108 `*out = (int)i;` -> `*out = (int)i + 1;`
+	 * mutant: src/reac_rate_cfg.c:103 `*out = (int)i;` -> `*out = (int)i + 1;`
 	 * input: rate-48000
 	 * mutant: src/reac_float_near.h:31 `r--;` -> ``
 	 * input: rate-float-negative
-	 * mutant: src/reac_rate_cfg.c:145 `key = NULL;` -> ``
+	 * mutant: src/reac_rate_cfg.c:140 `key = NULL;` -> ``
 	 * input: rate-after-other-key */
 	if (rc != 1 || hz != want)
 		abort();
@@ -165,9 +165,9 @@ static FUZZ_NOINLINE void check_malformed(int rc, int hz)
 	 * Object pod), src/reac_float_near.h:8-10
 	 * mutant: src/reac_float_near.h:27 `d >= (double)lo &&` -> ``
 	 * input: rate-float-huge
-	 * mutant: src/reac_rate_cfg.c:117 `return -1;` -> `return 0;`
+	 * mutant: src/reac_rate_cfg.c:118 `return -1;` -> `return 0;`
 	 * input: rate-bool
-	 * mutant: src/reac_rate_cfg.c:122 `SPA_TYPE_OBJECT_Props` -> `SPA_TYPE_OBJECT_PropInfo`
+	 * mutant: src/reac_rate_cfg.c:117 `SPA_TYPE_OBJECT_Props` -> `SPA_TYPE_OBJECT_PropInfo`
 	 * input: not-props-rate */
 	if (rc != -1 || hz != 0x5a5a5a5a)
 		abort();
@@ -178,11 +178,11 @@ static FUZZ_NOINLINE void check_decide(enum reac_rate_refuse got, enum reac_rate
 	/* A slave is refused whatever it asks; then a rate off the closed list; then one
 	 * outside the drivable mask; every other rate is accepted.
 	 * contract: src/reac_rate_cfg.h:60-68, 100-105
-	 * mutant: src/reac_rate_cfg.c:92 `drivable_mask & reac_rate_bit(requested_hz)` -> `drivable_mask`
+	 * mutant: src/reac_rate_cfg.c:87 `drivable_mask & reac_rate_bit(requested_hz)` -> `drivable_mask`
 	 * input: rate-not-drivable
-	 * mutant: src/reac_rate_cfg.c:88 `role == REAC_ROLE_SLAVE` -> `0`
+	 * mutant: src/reac_rate_cfg.c:83 `role == REAC_ROLE_SLAVE` -> `0`
 	 * input: slave-asks-48000
-	 * mutant: src/reac_rate_cfg.c:31 `hz == REAC_SAMPLE_RATE_44K1 ||` -> ``
+	 * mutant: src/reac_rate_cfg.c:26 `hz == REAC_SAMPLE_RATE_44K1 ||` -> ``
 	 * input: rate-44100 */
 	if (got != want)
 		abort();
@@ -192,9 +192,9 @@ static FUZZ_NOINLINE void check_code(const char *got, enum reac_rate_refuse r)
 {
 	/* Each refusal publishes its own code from the shared vocabulary.
 	 * contract: src/reac_rate_cfg.h:70-81 (the code for each refusal)
-	 * mutant: src/reac_rate_cfg.c:20 `return "not_drivable";` -> `return "not_closed";`
+	 * mutant: src/reac_rate_cfg.c:21 `return codes[r];` -> `return codes[REAC_RATE_REFUSE_NONE];`
 	 * input: rate-not-drivable
-	 * mutant: src/reac_rate_cfg.c:21 `"role_slave"` -> `"none"`
+	 * mutant: src/reac_rate_cfg.c:21 `return codes[r];` -> `return codes[REAC_RATE_REFUSE_NOT_CLOSED];`
 	 * input: slave-asks-48000 */
 	if (strcmp(got, code_of(r)) != 0)
 		abort();
@@ -206,9 +206,9 @@ static FUZZ_NOINLINE void check_list(int hz, unsigned bit, int closed, unsigned 
 	 * exactly when it has a bit, and the best drivable rate is the highest whose bit the
 	 * mask sets, 0 for none.
 	 * contract: src/reac_rate_cfg.h:83-93
-	 * mutant: src/reac_rate_cfg.c:40 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
+	 * mutant: src/reac_rate_cfg.c:43 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
 	 * input: rate-96000
-	 * mutant: src/reac_rate_cfg.c:48 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
+	 * mutant: src/reac_rate_cfg.c:43 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
 	 * input: rate-not-drivable */
 	if (bit != bit_of(hz) || closed != (bit_of(hz) != 0) ||
 	    best != (mask & 4 ? 96000 : mask & 2 ? 48000 : mask & 1 ? 44100 : 0))
@@ -221,9 +221,9 @@ static FUZZ_NOINLINE void check_csv(const char *buf, size_t buflen, size_t len, 
 	 * length returned is the whole list's, and the buffer holds as much of it as fits
 	 * before its NUL.
 	 * contract: src/reac_rate_cfg.h:95-98 (ascending CSV; snprintf convention)
-	 * mutant: src/reac_rate_cfg.c:65 `len ? "," : ""` -> `""`
+	 * mutant: src/reac_rate_cfg.c:60 `len ? "," : ""` -> `""`
 	 * input: rate-not-drivable
-	 * mutant: src/reac_rate_cfg.c:75 `: buflen - 1;` -> `: buflen;`
+	 * mutant: src/reac_rate_cfg.c:70 `: buflen - 1;` -> `: buflen;`
 	 * input: rate-48000 */
 	if (!csv_holds(buf, buflen, len, mask))
 		abort();
