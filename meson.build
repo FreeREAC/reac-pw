@@ -175,6 +175,7 @@ reac_pw_src = [
   'src/reac_node_graph.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_knock_credit.c',
   'src/reac_box_row.c',
   'src/reac_lat.c',
   'src/reac_gain.c',
@@ -1401,6 +1402,13 @@ box_badge_test = executable('test_reac_box_badge',
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_badge', box_badge_test)
+
+# --- unit test: the master handed a knock's answer grants the JOIN it carried (#58) --
+knock_credit_test = executable('test_reac_knock_credit',
+  ['tests/test_reac_knock_credit.c', 'src/reac_knock_credit.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
+test('reac_knock_credit', knock_credit_test)
 
 # --- unit test: reac.box.reac_version, from an identity reply to the property --
 # The box answers two versions that look alike and are not -- the system firmware
