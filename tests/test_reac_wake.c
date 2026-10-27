@@ -12,8 +12,9 @@
  *
  * The other half is asserted as hard: a bounce breaks every segment on the device, so the
  * facts that forbid it (no carrier, a carrier we cannot read, a box already talking, a
- * push we never finished, a sibling segment being served, a ladder already spent) are each
- * pinned with the exact refusal the operator will read in the journal.
+ * push we never finished, a sibling segment being served, a NIC the host uses, a ladder
+ * already spent) are each pinned with the exact refusal the operator will read in the
+ * journal.
  */
 #include "reac_wake.h"
 
@@ -127,7 +128,19 @@ int main(void)
 		CHK(reac_wake_step(&w, late, &o) == REAC_WAKE_ACT_NONE);
 		CHK(w.refusal == REAC_WAKE_SIBLING_SERVED);
 
-		/* And the control for all five: unchanged, it bounces. A refusal test that
+		/* THE HOST'S NIC (#46): refused by name, and before the facts about our own
+		 * push, so a pinned master on the desk's trunk parent says this and nothing
+		 * else. With tx_frames = 0 beside it, this is still the refusal said. */
+		reac_wake_init(&w, t0);
+		o = base; o.host_nic = 1;
+		CHK(reac_wake_step(&w, late, &o) == REAC_WAKE_ACT_NONE);
+		CHK(w.refusal == REAC_WAKE_HOST_NIC);
+		reac_wake_init(&w, t0);
+		o = base; o.host_nic = 1; o.tx_frames = 0;
+		CHK(reac_wake_step(&w, late, &o) == REAC_WAKE_ACT_NONE);
+		CHK(w.refusal == REAC_WAKE_HOST_NIC);
+
+		/* And the control for all six: unchanged, it bounces. A refusal test that
 		 * cannot show the same call succeeding proves nothing about the refusal. */
 		reac_wake_init(&w, t0);
 		o = base;

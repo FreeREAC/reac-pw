@@ -59,6 +59,15 @@ enum reac_wake_act reac_wake_step(struct reac_wake *w, uint64_t now_ns,
 		w->refusal = REAC_WAKE_BOX_IS_TALKING;
 		return REAC_WAKE_ACT_NONE;
 	}
+	if (o->host_nic) {
+		/* THE HOST USES THIS INTERFACE. An edge here is a host network change: every
+		 * browser tab aborts every stream, the network manager re-runs its setup, and
+		 * a box behind the NIC is on a VLAN that an edge of the parent does not wake
+		 * as such. Read before the facts about our own push: whatever the push did,
+		 * this port is never cycled. */
+		w->refusal = REAC_WAKE_HOST_NIC;
+		return REAC_WAKE_ACT_NONE;
+	}
 	if (o->tx_frames == 0) {
 		/* NOTHING OF OURS IS REACHING THE WIRE. A box cannot have ignored a push it
 		 * never received, and a PHY edge would only make it flood at a master that
@@ -110,6 +119,9 @@ const char *reac_wake_refusal_text(enum reac_wake_refusal r)
 	case REAC_WAKE_NO_CARRIER:      return "there is no carrier to break";
 	case REAC_WAKE_CARRIER_UNKNOWN: return "the carrier could not be read";
 	case REAC_WAKE_BOX_IS_TALKING:  return "a box is transmitting";
+	case REAC_WAKE_HOST_NIC:        return "this interface is the host's, so its port is "
+	                                       "never cycled: a box behind it is reached through "
+	                                       "its VLAN";
 	case REAC_WAKE_NOTHING_SENT:    return "our own frames are not leaving the host — "
 	                                       "every send has failed, so no push has reached "
 	                                       "the wire";

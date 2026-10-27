@@ -50,7 +50,12 @@
  *      knock opens at once and the gaps start again from one cycle.
  *   G. THE KNOCK'S WAKE LADDER, with values: the edge falls on the first once-a-second step
  *      past the 12 s grace with three whole pushes behind it, across the knock's rests; a
- *      wire that carried any frame is refused the edge.
+ *      wire that carried any frame is refused the edge; a wire that is the host's NIC is
+ *      refused it by name (#46).
+ *   H. THE HOST'S NIC (#46): the same silent ten minutes as A on a NIC the kernel says is the
+ *      host's: ZERO FILLER frames, every stream rung withheld, the same control budget and
+ *      the same gaps; and stream_box on that NIC is never answered, which is the trade
+ *      (through its VLAN it is a bare wire and B2 holds there).
  */
 #include "reac_knock_wire.h"
 
@@ -594,7 +599,7 @@ static int arm_reset(uint64_t t0)
 }
 
 /* ---- G. THE KNOCK'S WAKE LADDER, once a second as main.c steps it ----------------------- */
-static int arm_ladder(uint64_t t0, uint64_t rx_per_s, enum reac_wake_act want,
+static int arm_ladder(uint64_t t0, uint64_t rx_per_s, int host, enum reac_wake_act want,
                       enum reac_wake_refusal refusal)
 {
 	struct daemon d;
@@ -612,7 +617,7 @@ static int arm_ladder(uint64_t t0, uint64_t rx_per_s, enum reac_wake_act want,
 			continue;
 		struct reac_wake_obs o;
 		const enum reac_wake_act a =
-			reac_knock_ladder_step(&kl, &d.kw, t, rx_per_s * ((t - t0) / SEC), 1, 0, &o);
+			reac_knock_ladder_step(&kl, &d.kw, t, rx_per_s * ((t - t0) / SEC), 1, 0, host, &o);
 		if (!ladder_open)
 			ladder_open = t;
 		last = kl.wake.refusal;
@@ -623,8 +628,8 @@ static int arm_ladder(uint64_t t0, uint64_t rx_per_s, enum reac_wake_act want,
 		/* across the rests the frames are counted from the spell: never NOTHING_SENT */
 		CHK(kl.wake.refusal != REAC_WAKE_NOTHING_SENT);
 	}
-	fprintf(stderr, "G: %llu box frames a second: ladder opened +%.3f s, %s at +%.3f s with %llu pushes "
-	        "(last refusal %d)\n", (unsigned long long)rx_per_s,
+	fprintf(stderr, "G: %llu box frames a second%s: ladder opened +%.3f s, %s at +%.3f s with %llu pushes "
+	        "(last refusal %d)\n", (unsigned long long)rx_per_s, host ? ", the host's NIC" : "",
 	        (double)(ladder_open - t0) / 1e9, bounced ? "EDGE" : "no edge",
 	        bounced ? (double)(bounced - t0) / 1e9 : -1.0, (unsigned long long)pushes_at,
 	        (int)last);
@@ -636,6 +641,55 @@ static int arm_ladder(uint64_t t0, uint64_t rx_per_s, enum reac_wake_act want,
 		CHK(!bounced);
 		CHK(last == refusal);
 	}
+	return 0;
+}
+
+/* ---- H. THE HOST'S NIC: no FILLER ever, the control budget and the gaps unchanged ------ */
+static int arm_host_nic(uint64_t t0)
+{
+	struct daemon d;
+	static struct wire w;
+	memset(&w, 0, sizeof w);
+	daemon_init(&d, t0, 0, NULL);
+	reac_knock_wire_set_host(&d.kw, 1);
+	w.since_ns = t0 + 300 * SEC;
+	run(&d, &w, t0, 600, 0, 0);
+	fprintf(stderr, "H: 600 s on a silent wire that is the host's NIC: %llu frames (%llu knock, "
+	        "%llu stream, %llu FILLER) in %d knocks, %llu stream rungs withheld\n",
+	        (unsigned long long)w.frames, (unsigned long long)w.knock_frames,
+	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open,
+	        (unsigned long long)d.kw.stream_withheld);
+	CHK(w.stream_frames == 0);
+	CHK(!d.served);
+	/* NOT ONE FILLER: the escalation's stream rungs went out as control knocks */
+	CHK(w.filler == 0);
+	CHK(d.kw.stream_withheld >= 1);
+	CHK(d.kw.stream_sent == 0);
+	/* the same backoff as A, so the host's NIC is knocked on no more often */
+	CHK(w.n_open >= 10);
+	for (int i = 1; i < w.n_open; i++) {
+		uint64_t want = cycle_ns << (i - 1);
+		if (want > REAC_KNOCK_WIRE_PERIOD_MAX_NS || i - 1 >= 16)
+			want = REAC_KNOCK_WIRE_PERIOD_MAX_NS;
+		CHK(near(w.open_ns[i] - w.open_ns[i - 1], want, 2 * MS));
+	}
+	/* every knock is one cycle's control frames and nothing more */
+	CHK(w.frames <= (uint64_t)w.n_open * (uint64_t)cycle_ctrl);
+	CHK(w.frames >= (uint64_t)w.n_open * (uint64_t)(cycle_ctrl - 1));
+	CHK(w.first == (uint64_t)w.n_open);
+	CHK(w.middle == (uint64_t)w.n_open * REAC_SCENE_CHUNKS);
+	/* THE TRADE, stated: a box that answers only the stream is not found on the host's NIC */
+	memset(&w, 0, sizeof w);
+	w.needs_filler = 1;
+	daemon_init(&d, t0, 0, NULL);
+	reac_knock_wire_set_host(&d.kw, 1);
+	run(&d, &w, t0, 60, 0, t0);
+	fprintf(stderr, "H: stream_box on the host's NIC, %s plan: %d knocks, %llu FILLER, "
+	        "answered=%d\n", REAC_KNOCK_PLAN_DEFAULT, w.n_open,
+	        (unsigned long long)w.filler, d.acts_hush);
+	CHK(w.filler == 0);
+	CHK(d.acts_hush == 0 && !d.served);
+	CHK(w.n_open >= 5);
 	return 0;
 }
 
@@ -654,14 +708,17 @@ int main(void)
 	failed += arm_pinned(t0);
 	failed += arm_box_powers_up(t0);
 	failed += arm_reset(t0);
-	failed += arm_ladder(t0, 0, REAC_WAKE_ACT_BOUNCE, REAC_WAKE_OK);
-	failed += arm_ladder(t0, 5, REAC_WAKE_ACT_NONE, REAC_WAKE_BOX_IS_TALKING);
+	failed += arm_ladder(t0, 0, 0, REAC_WAKE_ACT_BOUNCE, REAC_WAKE_OK);
+	failed += arm_ladder(t0, 5, 0, REAC_WAKE_ACT_NONE, REAC_WAKE_BOX_IS_TALKING);
+	failed += arm_ladder(t0, 0, 1, REAC_WAKE_ACT_NONE, REAC_WAKE_HOST_NIC);
+	failed += arm_host_nic(t0);
 	if (failed) {
-		fprintf(stderr, "FAIL: %d of 9 arms\n", failed);
+		fprintf(stderr, "FAIL: %d of 11 arms\n", failed);
 		return 1;
 	}
 	printf("OK: a silent wire is knocked on inside its derived budget, backs off to the "
 	       "ceiling and never streamed at; the first answer ends the knock and starts the "
-	       "stream; a trunk parent goes quiet; the ladder bounces on schedule\n");
+	       "stream; a trunk parent goes quiet; the ladder bounces on schedule and never on "
+	       "the host's NIC, which gets no stream knock either\n");
 	return 0;
 }

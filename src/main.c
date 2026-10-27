@@ -92,6 +92,7 @@
 #include <reac/reac_hunt.h>       /* which end of the pairing a heard segment takes */
 #include <reac/reac_knock.h>      /* waking a cold box on a wire nobody pinned */
 #include "reac_knock_wire.h"      /* ... with a bounded knock, never the stream (#40) */
+#include "reac_link_owner.h"      /* ... and no stream, no PHY edge, on the host's NIC (#46) */
 #include "reac_empty_master.h"    /* ... and a master that streams at nobody stops (#40) */
 #include <reac/reac_packet_socket.h>        /* the knock's deaf sender, through the one door */
 #include <reac/reac_tapwait.h>    /* how long an unplaced sighting holds the hunt off a wire */
@@ -850,12 +851,27 @@ struct autodetect_ctx {
 	uint64_t                up_at_ns;   /* the link is down until here (0 = no edge) */
 	int                     wake_open;  /* the ladder is open for this PROBING spell */
 	uint64_t                tx_seen;    /* the pacer's tx_frames at the last step */
+	enum reac_link_owner    owner;      /* the kernel's answer: is `ifname` the host's (#46) */
+	uint64_t                owner_read_ns;
 };
 
 /* Other segments served over the same physical port — a bounce takes them all down with
  * it. Defined after the listener table it walks; declared here because the wake step is
  * on this timer and the table is a page further down. */
 static int port_siblings_served(const char *ifname);
+
+/* IS THIS INTERFACE THE HOST'S (reac_link_owner.h, #46)? Three unprivileged rtnetlink dumps,
+ * at most once a second per wire: the fact changes on the host's own clock, not the
+ * ladder's, and both ladders and the knock read the same cached answer. */
+static enum reac_link_owner link_owner_cached(const char *ifname, enum reac_link_owner *owner,
+                                              uint64_t *read_ns, uint64_t now)
+{
+	if (*read_ns && now - *read_ns < 1000000000ULL)
+		return *owner;
+	*owner = reac_link_owner_read(ifname, NULL);
+	*read_ns = now;
+	return *owner;
+}
 
 /* THE SEGMENT IS READY, SAID ONCE PER BOX AND ONLY WHEN IT IS TRUE. This line is what an
  * operator reads as "the nodes are there"; the node is CONNECTING for a moment after it
@@ -928,6 +944,8 @@ static void wake_step(struct autodetect_ctx *c)
 	 * what else this daemon is serving over the same port. */
 	o.carrier = reac_link_carrier(c->ifname);
 	o.siblings_served = port_siblings_served(c->ifname);
+	o.host_nic = reac_link_owner_is_hosts(
+		link_owner_cached(c->ifname, &c->owner, &c->owner_read_ns, now));
 	/* And the one fact about US the engine reports cumulatively: frames that left the
 	 * host SINCE THE LAST STEP. 200 ms at any rate this daemon serves is hundreds of
 	 * frames; zero is a pacer whose every sendto() fails, or one that is not running. */
@@ -947,14 +965,18 @@ static void wake_step(struct autodetect_ctx *c)
 		/* SAID ONCE PER CHANGE OF FACT (spec §4). Until 2026-09-23 this arm was
 		 * silent, so a ladder holding on NOTHING_SENT for seven minutes read exactly
 		 * like one that had never been asked. */
-		if (reac_wake_refusal_to_say(&c->wake))
+		if (reac_wake_refusal_to_say(&c->wake)) {
+			char why[200] = "";
+			if (c->wake.refusal == REAC_WAKE_NOTHING_SENT)
+				snprintf(why, sizeof why, " — a PHY edge cannot wake a box that hears "
+				         "no master; read tx_errors on this segment's reac-pacer line "
+				         "and the root qdisc on this device");
+			else if (c->wake.refusal == REAC_WAKE_HOST_NIC)
+				snprintf(why, sizeof why, " (the kernel says it is %s)",
+				         reac_link_owner_text(c->owner));
 			fprintf(stderr, "reac-pw: %sthe wake ladder on '%s' holds: %s%s\n",
-			        c->tag, c->ifname, reac_wake_refusal_text(c->wake.refusal),
-			        c->wake.refusal == REAC_WAKE_NOTHING_SENT
-			            ? " — a PHY edge cannot wake a box that hears no master; "
-			              "read tx_errors on this segment's reac-pacer line and the "
-			              "root qdisc on this device"
-			            : "");
+			        c->tag, c->ifname, reac_wake_refusal_text(c->wake.refusal), why);
+		}
 		return;
 	case REAC_WAKE_ACT_BOUNCE:
 		fprintf(stderr, "reac-pw: %sthe box on '%s' has answered nothing through %llu "
@@ -2782,6 +2804,8 @@ struct sniffer {
 	int knock_ifindex;
 	int knock_tx_open;
 	struct spa_source *knock_timer;
+	enum reac_link_owner owner;  /* the kernel's answer: is this NIC the host's (#46) */
+	uint64_t owner_read_ns;
 	struct hearing *h;
 	/* WHEN THIS SNIFFER LAST HEARD A REAC FRAME (0 = never). The tap-authority wait in
 	 * hearing_hunt is measured from it, so that "something was heard here" can expire
@@ -4697,6 +4721,13 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 				fprintf(stderr, "reac-pw: [%s] no tagged REAC on this parent any more: "
 				        "LISTENING to it again as a wire of its own\n", sn->name);
 			if (ka == REAC_KNOCK_WIRE_ACT_KNOCK) {
+				/* THE HOST'S NIC GETS NO STREAM KNOCK (#46): the kernel is asked
+				 * before the first frame of the spell leaves, and once a second
+				 * after (hearing_knock_wake), so a stream rung never finds the
+				 * answer unread. */
+				const int hosts = reac_link_owner_is_hosts(
+					link_owner_cached(sn->name, &sn->owner, &sn->owner_read_ns, now));
+				reac_knock_wire_set_host(&sn->kw, hosts);
 				knock_start(sn);
 				if (sn->knock_tx_open)
 					fprintf(stderr, "reac-pw: [%s] nothing heard in %llu ms, so no master "
@@ -4706,7 +4737,7 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 					        "audio filler; a stream knock is that cycle whole, at most %u "
 					        "until something is heard; the period doubles while nothing "
 					        "answers, up to %llu s (spell #%u, %llu frames so far). The "
-					        "master stream starts only when a box answers\n", sn->name,
+					        "master stream starts only when a box answers%s\n", sn->name,
 					        (unsigned long long)(REAC_KNOCK_LISTEN_NS / 1000000ULL),
 					        sn->kw.plan ? sn->kw.plan->name : "?",
 					        sn->kw.plan ? sn->kw.plan->said : "?",
@@ -4714,7 +4745,9 @@ static void hearing_hunt(struct hearing *h, uint64_t now)
 					        sn->kw.fps > 0 ? (double)sn->kw.master.cycle_len / sn->kw.fps : 0.0,
 					        REAC_KNOCK_WIRE_STREAM_KNOCKS,
 					        (unsigned long long)(REAC_KNOCK_WIRE_PERIOD_MAX_NS / 1000000000ULL),
-					        sn->kw.knocks, (unsigned long long)was_sent);
+					        sn->kw.knocks, (unsigned long long)was_sent,
+					        hosts ? ". This interface is the host's, so no stream knock "
+					                "and no PHY edge go out on it" : "");
 			}
 		}
 
@@ -5233,15 +5266,21 @@ static void hearing_knock_wake(struct hearing *h, uint64_t now)
 		if (!kl || kl->up_at_ns)
 			continue;
 		struct reac_wake_obs o;
+		const int hosts = reac_link_owner_is_hosts(
+			link_owner_cached(sn->name, &sn->owner, &sn->owner_read_ns, now));
+		reac_knock_wire_set_host(&sn->kw, hosts);
 		const enum reac_wake_act act =
 			reac_knock_ladder_step(&kl->kl, &sn->kw, now, sn->frames,
 			                       reac_link_carrier(sn->name),
-			                       port_siblings_served(sn->name), &o);
+			                       port_siblings_served(sn->name), hosts, &o);
 		switch (act) {
 		case REAC_WAKE_ACT_NONE:
 			if (reac_wake_refusal_to_say(&kl->kl.wake))
-				fprintf(stderr, "reac-pw: [%s] the knock's wake ladder holds: %s\n",
-				        sn->name, reac_wake_refusal_text(kl->kl.wake.refusal));
+				fprintf(stderr, "reac-pw: [%s] the knock's wake ladder holds: %s%s%s%s\n",
+				        sn->name, reac_wake_refusal_text(kl->kl.wake.refusal),
+				        hosts ? " (the kernel says it is " : "",
+				        hosts ? reac_link_owner_text(sn->owner) : "",
+				        hosts ? ")" : "");
 			break;
 		case REAC_WAKE_ACT_BOUNCE:
 			fprintf(stderr, "reac-pw: [%s] nothing has answered %llu COMPLETE scene "
@@ -5503,11 +5542,17 @@ static void roster_collect(struct roster_ctx *rc)
 		if (sn->kw.state == REAC_KNOCK_WIRE_TRUNK) {
 			st = REAC_ROSTER_TRUNK;
 		} else if (sn->kw.state == REAC_KNOCK_WIRE_KNOCKING) {
+			/* WHAT THIS WIRE WAS MADE TO CARRY AND SUFFER (#46): the stream cycles and
+			 * the PHY edges are what a console on this host reads to name a network
+			 * change, and the host's NIC says it gets neither. */
+			const struct knock_ladder *kl = knock_ladder_of(&g_hear, nm, 0);
 			st = REAC_ROSTER_KNOCKING;
-			snprintf(said, sizeof said, "nothing heard: knock %llu of the %s plan, %llu frames "
-			         "sent, %llu of them stream",
+			snprintf(said, sizeof said, "nothing heard: knock %llu of %s, %llu frames "
+			         "(%llu stream), %u edges%s",
 			         (unsigned long long)sn->kw.cycles, sn->kw.plan ? sn->kw.plan->name : "?",
-			         (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.stream_sent);
+			         (unsigned long long)sn->kw.sent, (unsigned long long)sn->kw.stream_sent,
+			         kl ? kl->kl.wake.bounces : 0u,
+			         sn->kw.host ? "; the host's NIC: no stream, no edge" : "");
 		} else if (sn->kw.state == REAC_KNOCK_WIRE_ANSWERED) {
 			snprintf(said, sizeof said, "something answered the knock: listening to "
 			         "it before the master starts");

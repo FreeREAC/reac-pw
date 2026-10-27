@@ -190,6 +190,13 @@ A box straight on a NIC is found this way with nothing written in a file. A trun
 knocks untagged like any NIC until tagged REAC is heard on one of its VLANs; from then on
 it is not a segment, it stops knocking, and its VLAN sub-interfaces are the segments.
 
+A NIC the host itself uses is never bounced and never streamed at. The daemon reads from
+the kernel whether an interface carries an address of a scope wider than link, a netdev
+stacked on it (a VLAN sub-interface) or a default route; on such an interface a stream
+knock is sent as a control knock, and the wake ladder that takes a bare NIC down for a
+moment to wake a box that dropped refuses the edge and says why. A box behind that NIC
+is reached through its VLAN, which is a wire of its own and is knocked on in full.
+
 ### A box behind a trunk
 
 A VLAN's sub-interface is created when its tag is heard on the parent (a tagged frame of

@@ -63,6 +63,15 @@ Every plan is inside the same caps:
 - **The first evidence ends it.** A box's declaration, its JOIN, a desk: the knock stops and the
   master stream starts on that box, with its answer handed over. A box's presence flood (FILLER of
   unknown role) does not end it: that box is waiting to hear a master.
+- **The host's NIC gets no stream and no edge** (reac-pw#46,
+  2026-10-26-a-host-nic-is-never-bounced-or-streamed-at). An interface that carries an address of
+  a scope wider than link, a netdev stacked on it (a VLAN sub-interface, ours or the host's), or a
+  default route is the host's: the desk reaches its switch and its console through it, and a box
+  behind it is reached through its VLAN, never by cycling the parent. On such a NIC a STREAM rung
+  of the plan is sent as a CONTROL knock and does not count against the cap, and the knock's wake
+  ladder refuses the PHY edge by name (`HOST_NIC`). A bare NIC, the direct-cable case, is
+  unchanged. The fact is read from rtnetlink once a second; when it cannot be read the NIC is
+  treated as the host's.
 
 ## What a wire with nothing on it carries
 
@@ -78,10 +87,15 @@ Measured on the wire model (`tests/test_reac_knock_wire.c`, arm A, 96 kHz, defau
 | the old probe, for scale | 8000 frames a second, about 96 Mbit/s at 96 kHz, for ever |
 
 A switch with broadcast storm control at 1% of 100 Mbit/s (1 Mbit/s) sees both bursts above its
-threshold for the second they last; the backoff lowers the average, not the burst. The knock's
-wake ladder may make up to 2 PHY edges on a wire nothing answers (`REAC_WAKE_MAX_BOUNCES`), and
-each fresh link re-arms the stream cap: at most 9 stream cycles per daemon start on an empty
-wire, about 24 s of stream spread over several minutes.
+threshold for the second they last; the backoff lowers the average, not the burst. On a bare NIC
+the knock's wake ladder may make up to 2 PHY edges on a wire nothing answers
+(`REAC_WAKE_MAX_BOUNCES`), and each fresh link re-arms the stream cap: at most 9 stream cycles per
+daemon start on an empty wire, about 24 s of stream spread over several minutes.
+
+On the host's NIC (an address beyond link scope, a stacked netdev, a default route) none of that
+happens: control knocks only, 347 frames per knock at the same backoff, and no edge at all. Measured
+on the same wire model (arm H): 23 knocks and 7 981 frames in 600 s, 0 FILLER. The desk's trunk
+parent, which carries the management address and every REAC VLAN, is this case.
 
 ## A master whose box leaves
 
@@ -141,3 +155,6 @@ default.
   cadence a box locks to; step 2 answers it for the default plan.
 - Two boxes on two VLANs that were powered before the daemon started: with no tag heard and no
   sub-interface in the host's config, nothing finds them (README, "A box behind a trunk").
+- A box that answers only the stream, straight on a NIC the host also uses: the knock on that NIC
+  never streams, so it is not found there. Through its own VLAN sub-interface it is a bare wire
+  and is knocked on in full.
