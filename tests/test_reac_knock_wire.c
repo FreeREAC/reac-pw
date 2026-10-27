@@ -343,11 +343,25 @@ static int arm_silent_wire(uint64_t t0)
 {
 	struct daemon d;
 	static struct wire w;
+	/* THE DEFAULT PLAN FIRST (control, since 2026-10-27): ten minutes on a silent wire is
+	 * control knocks and NOT ONE FILLER — the bar the trunk's native VLAN is held to. */
 	memset(&w, 0, sizeof w);
 	daemon_init(&d, t0, 0, NULL);
 	w.since_ns = t0 + 300 * SEC;
 	run(&d, &w, t0, 600, 0, 0);
-	fprintf(stderr, "A: 600 s on a silent wire: %llu frames (%llu knock, %llu stream, %llu "
+	fprintf(stderr, "A0: 600 s on a silent wire, %s (default) plan: %llu frames (%llu knock, %llu "
+	        "FILLER) in %d knocks\n", REAC_KNOCK_PLAN_DEFAULT, (unsigned long long)w.frames,
+	        (unsigned long long)w.knock_frames, (unsigned long long)w.filler, w.n_open);
+	CHK(w.filler == 0);
+	CHK(w.stream_frames == 0);
+	CHK(!d.served);
+	CHK(w.frames <= (uint64_t)w.n_open * (uint64_t)cycle_ctrl);
+	/* THE ESCALATE PLAN, opted into: its stream rungs are capped. */
+	memset(&w, 0, sizeof w);
+	daemon_init(&d, t0, 0, "escalate");
+	w.since_ns = t0 + 300 * SEC;
+	run(&d, &w, t0, 600, 0, 0);
+	fprintf(stderr, "A: 600 s on a silent wire, escalate plan: %llu frames (%llu knock, %llu stream, %llu "
 	        "FILLER) in %d knocks; a cycle is %d slots, %d of them control (libreac's master)\n",
 	        (unsigned long long)w.frames, (unsigned long long)w.knock_frames,
 	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open,
@@ -429,13 +443,25 @@ static int arm_stream_box(uint64_t t0)
 	CHK(w.filler == 0);
 	CHK(d.acts_hush == 0 && !d.served);
 	CHK(w.n_open >= 5);
-	/* the default plan: answered on its first stream knock, the third */
+	/* THE DEFAULT PLAN NEVER SENDS A FILLER (2026-10-27): a box that answers only the
+	 * stream is not found by it, by design — the rig's boxes answer the control knock, and
+	 * a stream rung on a trunk's parent is a flood of its native VLAN. */
 	memset(&w, 0, sizeof w);
 	w.needs_filler = 1;
 	daemon_init(&d, t0, 0, NULL);
+	run(&d, &w, t0, 60, 0, t0);
+	fprintf(stderr, "B2: stream_box, %s (default) plan: %d knocks, %llu FILLER, answered=%d\n",
+	        REAC_KNOCK_PLAN_DEFAULT, w.n_open, (unsigned long long)w.filler, d.acts_hush);
+	CHK(strcmp(REAC_KNOCK_PLAN_DEFAULT, "control") == 0);
+	CHK(w.filler == 0);
+	CHK(d.acts_hush == 0 && !d.served);
+	/* the `escalate` plan, opted into: answered on its first stream knock, the third */
+	memset(&w, 0, sizeof w);
+	w.needs_filler = 1;
+	daemon_init(&d, t0, 0, "escalate");
 	run(&d, &w, t0, 20, 0, t0);
-	fprintf(stderr, "B2: stream_box, %s plan: answered at +%.3f s on knock %llu (%s), %llu "
-	        "knock frames (%llu FILLER); ENROLL %llu\n", REAC_KNOCK_PLAN_DEFAULT,
+	fprintf(stderr, "B2: stream_box, escalate plan: answered at +%.3f s on knock %llu (%s), %llu "
+	        "knock frames (%llu FILLER); ENROLL %llu\n",
 	        d.answered_ns ? (double)(d.answered_ns - t0) / 1e9 : -1.0,
 	        (unsigned long long)d.kw.answered_cycle,
 	        reac_knock_content_name(d.kw.answered_content),
@@ -650,11 +676,11 @@ static int arm_host_nic(uint64_t t0)
 	struct daemon d;
 	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0, "escalate");   /* the plan WITH stream rungs: they must be withheld */
 	reac_knock_wire_set_host(&d.kw, 1);
 	w.since_ns = t0 + 300 * SEC;
 	run(&d, &w, t0, 600, 0, 0);
-	fprintf(stderr, "H: 600 s on a silent wire that is the host's NIC: %llu frames (%llu knock, "
+	fprintf(stderr, "H: 600 s on a silent wire that is the host's NIC, escalate plan: %llu frames (%llu knock, "
 	        "%llu stream, %llu FILLER) in %d knocks, %llu stream rungs withheld\n",
 	        (unsigned long long)w.frames, (unsigned long long)w.knock_frames,
 	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open,

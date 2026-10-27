@@ -2302,8 +2302,12 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	/* THE KNOCK'S TRANSFER IS THIS MASTER'S TRANSFER (#58, reac_knock_credit.h): a box
 	 * that answered a whole push is granted on the JOIN it carried, not after a second
 	 * push of the same scene. */
-	if (cfg->n_knock_answer && cfg->knock_answer && cfg->knock_answer_len && cfg->knock_pushes > 0)
+	if (cfg->n_knock_answer && cfg->knock_answer && cfg->knock_answer_len && cfg->knock_pushes > 0) {
 		reac_knock_credit_transfer(&n->pacer.master);
+		fprintf(stderr, "reac-pw: [%s] the knock's %llu whole scene transfer(s) are credited to this "
+		        "master: PROBING -> GRANTING is taken on the carried CONFIG as it is ingested, not "
+		        "on a push timer of the master's own\n", cfg->ifname, (unsigned long long)cfg->knock_pushes);
+	}
 	for (int i = 0; i < cfg->n_knock_answer && cfg->knock_answer && cfg->knock_answer_len; i++)
 		reac_pacer_rx_ingest(&n->pacer, cfg->knock_answer[i], cfg->knock_answer_len[i]);
 

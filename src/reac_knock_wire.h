@@ -93,12 +93,22 @@ struct reac_knock_plan {
 	int n_rung;
 };
 
-/* THE PLANS, declared once (reac_knock_wire.c). `escalate` is the default: two bounded
- * control knocks, then one cycle of the stream a box was seen to answer. `control` never
- * sends a FILLER; `stream` sends the stream cycle on every knock, inside the same caps. */
+/* THE PLANS, declared once (reac_knock_wire.c). `control` is the default: bounded control
+ * knocks and never a FILLER. `escalate` is two control knocks, then one cycle of the stream
+ * a real box was once seen to answer; `stream` sends that cycle on every knock. All inside
+ * the same caps.
+ *
+ * WHY CONTROL, SINCE 2026-10-27. `escalate` shipped "until the rig check has run"
+ * (docs/KNOCK.md); it ran: an S-1608 and an S-4000S, cold and silent, each answered a
+ * CONTROL knock within a second (75 answers over a day's takes, 65 of them to knock 1, none
+ * to a stream knock), straight on a NIC and on a VLAN of a trunk. The stream rung woke
+ * nothing, and on the trunk's parent it went out UNTAGGED twice before a tag had named the
+ * parent a trunk: 21 556 frames at 8000 fps on the native VLAN each time, which is the flood
+ * the operator forbade (#31, #40). A box that answers only the stream is served by
+ * `knock = escalate`. */
 extern const struct reac_knock_plan reac_knock_plans[];
 extern const int reac_knock_n_plans;
-#define REAC_KNOCK_PLAN_DEFAULT "escalate"
+#define REAC_KNOCK_PLAN_DEFAULT "control"
 
 /* The plan called `name` (case-insensitive), or NULL. */
 const struct reac_knock_plan *reac_knock_plan_find(const char *name);

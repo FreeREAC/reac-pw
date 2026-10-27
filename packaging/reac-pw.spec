@@ -240,6 +240,11 @@ fi
   (the wire was proven masterless before the knock) and the master starts credited with the knock's
   transfer, so the carried JOIN takes the edge as it is ingested. Measured on both boxes: enrolled
   within a second of the answer, streaming for the whole take.
+- The default knock plan is `control`; `escalate` is opt-in (docs/KNOCK.md). Both box families on
+  the rig answered a control knock within a second, on a bare NIC and on a VLAN (75 answers over the
+  day's takes, 65 of them to knock 1, none to a stream knock). The escalate plan's stream knock
+  streamed a trunk parent before its first tagged frame had named it a trunk: 45 199
+  untagged REAC frames in 95 s onto the switch's native VLAN, waking nothing.
 
 * Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.39-1
 - A NIC the host uses is never bounced and never streamed at (#46): a wire carrying an address wider
