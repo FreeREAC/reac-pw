@@ -49,6 +49,12 @@ which properties it checks.
   The netlink harnesses rename the readers' socket calls to the harness's fake kernel
   (`fuzz/build.sh`), and `fuzz_segconf` drives the text parser, not the file loader.
   Inputs of 64 MiB or more are refused, as the OSS Verify driver refuses them.
+- **A run writes nothing of its own.** What a harness writes is no part of what it
+  checks, and the output of a run belongs to its driver. `fuzz_link` drives a policy that
+  reports a mark it could not write, and a netdev it left alone
+  (`src/reac_served_mark.c`): the harness points that policy's stream
+  (`reac_served_say_to`) at a buffer in memory, so it decides and formats exactly as it
+  does in the daemon and the run writes nothing.
 - **No harness links libreac**, only its headers. The box-model table the config reader
   and the pin look tokens up in is `fuzz/catalogue.c`, the rows of libreac 1.8.0;
   libreac's harnesses prove its own tables.

@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_link.c:524 (a text shorter than its buffer is ended at the buffer's last byte, not after the text).
+Breaks the check of fuzz/fuzz_link.c:552 (a text shorter than its buffer is ended at the buffer's last byte, not after the text).
 Caught by the seed input "read-served" of fuzz_link.
 
 diff --git a/src/reac_link_alias.c b/src/reac_link_alias.c
