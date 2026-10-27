@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_rate.c:156 (the rate is read from the role key, so a rate write is never read).
+Breaks the check of fuzz/fuzz_rate.c:155 (the rate is read from the role key, so a rate write is never read).
 Caught by the seed input "rate-48000" of fuzz_rate.
 
 diff --git a/src/reac_rate_cfg.c b/src/reac_rate_cfg.c

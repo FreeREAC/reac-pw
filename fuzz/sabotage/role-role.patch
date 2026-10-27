@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_role.c:92 (a write of 1 asks for the master).
+Breaks the check of fuzz/fuzz_role.c:88 (a write of 1 asks for the master).
 Caught by the seed input "role-slave-float" of fuzz_role.
 
 diff --git a/src/reac_role_cfg.c b/src/reac_role_cfg.c

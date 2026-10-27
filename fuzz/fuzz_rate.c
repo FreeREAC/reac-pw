@@ -13,8 +13,8 @@
  * The expectations come from the record fuzz/pod.h keeps of the object, and from the
  * header: the value of the first pair keyed "reac.cfg.rate" is the rate when it is an Int
  * or a Float with a nearest integer in an int's range, and malformed otherwise
- * (src/reac_rate_cfg.h:107-116); the closed list is 44100, 48000 and 96000 and a slave has
- * no rate of its own (src/reac_rate_cfg.h:60-68, 100-105).
+ * (src/reac_rate_cfg.h:83-92); the closed list is 44100, 48000 and 96000 and a slave has
+ * no rate of its own (src/reac_rate_cfg.h:59-60, 76-81).
  *
  * Properties, each an abort():
  *   - a write with no rate key is 0, and the caller's rate is left as it was;
@@ -32,15 +32,14 @@
 #include <string.h>
 
 #include "reac_rate_cfg.h"
+#include <reac/reac_cfg.h>
 
 #include "fuzz.h"
 #include "pod.h"
 
-/* contract: libreac 1.8.0 include/reac/reac_cfg.h:51 (the key) */
-#define RATE_KEY "reac.cfg.rate"
-/* contract: facts/reac_facts.h:1645-1651 (REAC_SAMPLE_RATE_48K, _96K, _44K1) */
+/* contract: facts/reac_facts.h:1644-1650 (REAC_SAMPLE_RATE_48K, _96K, _44K1) */
 static const int closed_list[3] = { 44100, 48000, 96000 };
-/* contract: src/reac_rate_cfg.h:55-57 (one bit per closed-list rate, 44100 first) */
+/* contract: libreac 1.9.0 include/reac/reac_cfg.h:107-112 (one bit per closed-list rate, 44100 first) */
 static unsigned bit_of(int hz)
 {
 	for (int i = 0; i < 3; i++)
@@ -49,7 +48,7 @@ static unsigned bit_of(int hz)
 	return 0;
 }
 
-/* contract: libreac 1.8.0 include/reac/reac_cfg.h:109-124 (the refusal codes) */
+/* contract: libreac 1.9.0 include/reac/reac_cfg.h:115-133 (the refusal codes) */
 static const char *code_of(enum reac_rate_refuse r)
 {
 	switch (r) {
@@ -69,7 +68,7 @@ static int expect_rate(const struct pod_props *pp, int null, int *hz)
 	int at = 0, v;
 	const char *k;
 	while (pp->params_struct && (v = pod_next_pair(pp, &at, &k)) >= 0) {
-		if (strcmp(k, RATE_KEY) != 0)
+		if (strcmp(k, REAC_CFG_RATE_PROP) != 0)
 			continue;
 		int32_t i;
 		float f;
@@ -132,7 +131,7 @@ static FUZZ_NOINLINE void check_absent(int rc, int hz)
 {
 	/* A Props write that carries no rate key (only volume, head-amp or nothing) is 0, and
 	 * the caller's variable is not written.
-	 * contract: src/reac_rate_cfg.h:111-113 (0 if the key is simply absent)
+	 * contract: src/reac_rate_cfg.h:88-89 (0 if the key is simply absent)
 	 * mutant: src/reac_rate_cfg.c:124 `return 0;` -> `return -1;`
 	 * input: params-not-a-struct
 	 * mutant: src/reac_rate_cfg.c:142 `strcmp(k, REAC_CFG_PROP_RATE) != 0` -> `strncmp(k, REAC_CFG_PROP_RATE, 12) != 0`
@@ -145,7 +144,7 @@ static FUZZ_NOINLINE void check_rate(int rc, int hz, int want)
 {
 	/* A rate key with an Int, or a Float with a nearest integer an int holds, is 1 and
 	 * that rate, the first such key's.
-	 * contract: src/reac_rate_cfg.h:107-113 (accepted as Int or Float; 1 and *out_hz)
+	 * contract: src/reac_rate_cfg.h:85-87 (accepted as Int or Float; 1 and *out_hz)
 	 * mutant: src/reac_rate_cfg.c:103 `*out = (int)i;` -> `*out = (int)i + 1;`
 	 * input: rate-48000
 	 * mutant: src/reac_float_near.h:31 `r--;` -> ``
@@ -161,7 +160,7 @@ static FUZZ_NOINLINE void check_malformed(int rc, int hz)
 	/* A rate key whose value is no number an int holds (a Bool, a String, NaN, an
 	 * infinity, a Float past int), or a pod that is not a Props object, is -1, and the
 	 * caller's variable is not written.
-	 * contract: src/reac_rate_cfg.h:113-115 (-1 if not readable as a number, or not an
+	 * contract: src/reac_rate_cfg.h:89-91 (-1 if not readable as a number, or not an
 	 * Object pod), src/reac_float_near.h:8-10
 	 * mutant: src/reac_float_near.h:27 `d >= (double)lo &&` -> ``
 	 * input: rate-float-huge
@@ -177,7 +176,7 @@ static FUZZ_NOINLINE void check_decide(enum reac_rate_refuse got, enum reac_rate
 {
 	/* A slave is refused whatever it asks; then a rate off the closed list; then one
 	 * outside the drivable mask; every other rate is accepted.
-	 * contract: src/reac_rate_cfg.h:60-68, 100-105
+	 * contract: src/reac_rate_cfg.h:59-60, 76-81, libreac 1.9.0 include/reac/reac_cfg.h:124-126
 	 * mutant: src/reac_rate_cfg.c:87 `drivable_mask & reac_rate_bit(requested_hz)` -> `drivable_mask`
 	 * input: rate-not-drivable
 	 * mutant: src/reac_rate_cfg.c:83 `role == REAC_ROLE_SLAVE` -> `0`
@@ -191,7 +190,7 @@ static FUZZ_NOINLINE void check_decide(enum reac_rate_refuse got, enum reac_rate
 static FUZZ_NOINLINE void check_code(const char *got, enum reac_rate_refuse r)
 {
 	/* Each refusal publishes its own code from the shared vocabulary.
-	 * contract: src/reac_rate_cfg.h:70-81 (the code for each refusal)
+	 * contract: src/reac_rate_cfg.h:56-57, libreac 1.9.0 include/reac/reac_cfg.h:145-153 (the code for each refusal)
 	 * mutant: src/reac_rate_cfg.c:21 `return codes[r];` -> `return codes[REAC_RATE_REFUSE_NONE];`
 	 * input: rate-not-drivable
 	 * mutant: src/reac_rate_cfg.c:21 `return codes[r];` -> `return codes[REAC_RATE_REFUSE_NOT_CLOSED];`
@@ -205,7 +204,7 @@ static FUZZ_NOINLINE void check_list(int hz, unsigned bit, int closed, unsigned 
 	/* A rate's bit is its place in the closed list and 0 off it, it is in the list
 	 * exactly when it has a bit, and the best drivable rate is the highest whose bit the
 	 * mask sets, 0 for none.
-	 * contract: src/reac_rate_cfg.h:83-93
+	 * contract: src/reac_rate_cfg.h:59-69
 	 * mutant: src/reac_rate_cfg.c:35 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
 	 * input: rate-96000
 	 * mutant: src/reac_rate_cfg.c:43 `REAC_RATE_BIT_96000` -> `REAC_RATE_BIT_48000`
@@ -220,7 +219,7 @@ static FUZZ_NOINLINE void check_csv(const char *buf, size_t buflen, size_t len, 
 	/* The drivable list is the drivable rates in ascending order, comma separated; the
 	 * length returned is the whole list's, and the buffer holds as much of it as fits
 	 * before its NUL.
-	 * contract: src/reac_rate_cfg.h:95-98 (ascending CSV; snprintf convention)
+	 * contract: src/reac_rate_cfg.h:71-74 (ascending CSV; snprintf convention)
 	 * mutant: src/reac_rate_cfg.c:60 `len ? "," : ""` -> `""`
 	 * input: rate-not-drivable
 	 * mutant: src/reac_rate_cfg.c:70 `: buflen - 1;` -> `: buflen;`
