@@ -545,6 +545,20 @@ grep -q "\[cold0\] segment up" "$LOG" && {
 $in_peer "$BIN" --live kbox0 --tx kbox0 --role slave --box-channels "$FACT_BOX_S1608_IN" --name kbox \
        --src-mac 00:40:ab:c4:80:43 >"$PEER" 2>&1 &
 KBOXPID=$!
+wait_for "\[cold0\] ANSWERED" 25 || {
+	echo "FAIL: a box spoke on the wire we were knocking on and the knock did not end"
+	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
+# AND THE MASTER STARTS ON THE ANSWER, NOT THREE SECONDS AFTER IT (#58). The knock went
+# out on a wire proven to carry nothing for the listen window, so the box that answered
+# is the master's cue, and the hunt's three-cadence window (anchored on the first
+# sighting) must not run on top of it. Measured on the rig 2026-10-27: with the window
+# running, the master's first frame left 3.0 s after the box's; a knocked S-4000S holds
+# 2 s and an S-1608 5 s before going quiet, and both were LOST on every cycle. Two
+# seconds of waiting here is red at 3 s and green at the next 200 ms poll.
+wait_for "\[cold0\] the wire carried nothing for .* ms before the knock and a box answered it; taking the wire as MASTER now" 2 || {
+	echo "FAIL: the box answered the knock and the master did not take the wire within 2 s"
+	echo "      (the hunt's three-cadence window is running on top of the knock's answer)"
+	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
 wait_for "reac-master: .* -> ESTABLISHED" 25 || {
 	echo "FAIL: driving a silent wire never established with the box that answered"
 	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
