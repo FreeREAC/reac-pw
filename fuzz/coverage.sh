@@ -38,7 +38,8 @@ funcs() {
 	segconf) echo src/reac_segconf.c src/reac_declared_vlan.c :: reac_segconf_init refuse trim \
 		strip_comment unquote parse_bool seg_get reac_segconf_parse_file cross_check \
 		reac_segconf_parse reac_segconf_find reac_segconf_ignored reac_segconf_role \
-		reac_segconf_role_file reac_segconf_ignore_file reac_segconf_model reac_segconf_declared \
+		reac_segconf_role_file reac_segconf_ignore_file reac_segconf_model \
+		reac_segconf_knock reac_segconf_declared \
 		name_ok reac_declared_vlan_split reac_declared_vlan_add ;;
 	pin) echo src/reac_box_pin.c :: reac_box_pin_parse ;;
 	headamp) echo src/reac_headamp_prop.c :: value_pod_to_byte param_name_to_id parse_key \

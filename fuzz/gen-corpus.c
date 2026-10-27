@@ -1014,6 +1014,19 @@ static void gen_segconf(void)
 	seg1("ignore-words", 8, "[segment a]\nignore = 1\n[segment b]\nignore = TRUE\n"
 	     "[segment c]\nignore = yes\nignore = no\n[segment d]\nignore = 0\n[segment e]\n"
 	     "ignore = maybe\n");
+	/* the knock plan: the three plans of src/reac_knock_wire.h:88-93, in any case and
+	 * without one pair of quotes, the last file to name one winning it; a segment with
+	 * no `knock` line; and names of no plan, which are refused */
+	seg1("knock-plans", 8, "[segment eth0]\nknock = control\n[segment eth1]\n"
+	     "role = tap\nknock = escalate\n[segment eth2]\nrole = slave\n");
+	{
+		const unsigned l[] = { 51, 0 };
+		const char *const t[] = { "[segment eth0]\nknock = \"STREAM\"\n",
+		                          "[segment eth0]\nknock = Control\n[segment eth1]\n" };
+		segc("knock-in-capitals", 8, 0, 2, l, t);
+	}
+	seg1("knock-refused", 8, "[segment eth0]\nknock = bogus\nknock =\n"
+	     "[segment eth1]\nknock = controlx\n");
 	{
 		const unsigned l[] = { 50, 99, 0 };
 		const char *const t[] = {
