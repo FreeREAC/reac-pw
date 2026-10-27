@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.40
+Version:        1.0.41
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -231,6 +231,15 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.41-1
+- The knock has one content (#61): the control frames of one hunting cycle, never the stream.
+  The `escalate` and `stream` plans and the `knock =` key are removed; a `knock =` line in the
+  conf is refused by name with the reason. No wire is streamed at before a box answered on it,
+  in any case: a plan that sent one cycle of the stream onto an unheard wire was a flood by
+  configuration (45 199 untagged frames in 95 s onto a switch's native VLAN, 2026-10-27).
+  The host's NIC keeps being refused the PHY edge; the knock on it is the same as anywhere.
+  The wire model's arms A, B2 and H hold every wire to zero FILLER in ten silent minutes.
+
 * Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.40-1
 - A box that answers the knock is granted on that answer (#58). 1.0.39 lost every real box on a
   bare NIC: the master started only three seconds after the box spoke (the hunt's slow-desk window

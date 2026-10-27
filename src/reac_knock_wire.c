@@ -6,49 +6,15 @@
 #include "reac_knock_wire.h"
 
 #include <string.h>
-#include <strings.h>
 
 #include <reac/reac_ctrlblk.h>  /* reac_ctrl_parse: which answer frames are kept */
 #include <reac/reac_encode.h>   /* reac_downstream_build */
 
-/* ---- THE PLANS. The one place a knock's content is decided; docs/KNOCK.md has why. ---- */
-static const struct reac_knock_rung plan_escalate[] = {
-	{ REAC_KNOCK_CONTROL, 2 },  /* the bounded knock, unproven on a real box            */
-	{ REAC_KNOCK_STREAM,  1 },  /* then one cycle of what a real box was seen to answer */
-};
-static const struct reac_knock_rung plan_control[] = {
-	{ REAC_KNOCK_CONTROL, 1 },
-};
-static const struct reac_knock_rung plan_stream[] = {
-	{ REAC_KNOCK_STREAM, 1 },
-};
 
-const struct reac_knock_plan reac_knock_plans[] = {
-	{ "escalate", "two control knocks, then one stream cycle",
-	  plan_escalate, (int)(sizeof plan_escalate / sizeof plan_escalate[0]) },
-	{ "control", "control knocks only, never a FILLER",
-	  plan_control, (int)(sizeof plan_control / sizeof plan_control[0]) },
-	{ "stream", "one stream cycle on every knock",
-	  plan_stream, (int)(sizeof plan_stream / sizeof plan_stream[0]) },
-};
-const int reac_knock_n_plans = (int)(sizeof reac_knock_plans / sizeof reac_knock_plans[0]);
-
-const struct reac_knock_plan *reac_knock_plan_find(const char *name)
+/* THE BACKOFF STARTS AGAIN: on init, and on the first frame after a silence. */
+static void backoff_reset(struct reac_knock_wire *w)
 {
-	if (!name)
-		return NULL;
-	for (int i = 0; i < reac_knock_n_plans; i++)
-		if (strcasecmp(reac_knock_plans[i].name, name) == 0)
-			return &reac_knock_plans[i];
-	return NULL;
-}
-
-static void plan_reset(struct reac_knock_wire *w)
-{
-	w->rung = 0;
-	w->rung_done = 0;
 	w->unanswered = 0;
-	w->stream_knocks = 0;
 }
 
 void reac_knock_wire_init(struct reac_knock_wire *w, const uint8_t src[6], int fps,
@@ -57,16 +23,8 @@ void reac_knock_wire_init(struct reac_knock_wire *w, const uint8_t src[6], int f
 	memset(w, 0, sizeof *w);
 	memcpy(w->src, src, 6);
 	w->fps = fps;
-	w->plan = reac_knock_plan_find(REAC_KNOCK_PLAN_DEFAULT);
 	w->state = REAC_KNOCK_WIRE_LISTENING;
 	reac_knock_init(&w->licence, now_ns);
-}
-
-void reac_knock_wire_set_plan(struct reac_knock_wire *w, const struct reac_knock_plan *plan)
-{
-	w->plan = plan ? plan : reac_knock_plan_find(REAC_KNOCK_PLAN_DEFAULT);
-	w->rung = 0;
-	w->rung_done = 0;
 }
 
 void reac_knock_wire_set_host(struct reac_knock_wire *w, int host)
@@ -147,10 +105,6 @@ static void knock_peek(struct reac_knock_wire *w)
 		w->due_ns = w->next_ns;
 		return;
 	}
-	if (w->content == REAC_KNOCK_STREAM) {
-		w->due_ns = slot_ns(w, w->slot);
-		return;
-	}
 	struct reac_master peek = w->master;
 	const uint64_t end = (uint64_t)w->master.cycle_len;
 	for (uint64_t s = w->slot; s < end; s++) {
@@ -164,39 +118,9 @@ static void knock_peek(struct reac_knock_wire *w)
 	w->due_ns = slot_ns(w, end);   /* the knock's end, where run() schedules the next */
 }
 
-/* The next knock's content: the plan's rung, the stream past its cap sent as control. */
-static enum reac_knock_content plan_take(struct reac_knock_wire *w)
-{
-	const struct reac_knock_plan *p = w->plan;
-	enum reac_knock_content c = REAC_KNOCK_CONTROL;
-	if (p && p->n_rung > 0) {
-		if (w->rung >= p->n_rung)
-			w->rung = 0;
-		c = p->rung[w->rung].content;
-		if (++w->rung_done >= p->rung[w->rung].knocks) {
-			w->rung_done = 0;
-			w->rung = (w->rung + 1) % p->n_rung;
-		}
-	}
-	if (c == REAC_KNOCK_STREAM) {
-		if (w->host) {
-			/* THE HOST'S NIC IS NEVER STREAMED AT (#46): the rung goes out as the
-			 * bounded knock, and the cap is left alone for a wire that becomes bare. */
-			c = REAC_KNOCK_CONTROL;
-			w->stream_withheld++;
-		} else if (w->stream_knocks >= REAC_KNOCK_WIRE_STREAM_KNOCKS) {
-			c = REAC_KNOCK_CONTROL;
-		} else {
-			w->stream_knocks++;
-		}
-	}
-	return c;
-}
-
 static void knock_open(struct reac_knock_wire *w, uint64_t at_ns)
 {
 	master_at_header(&w->master, w->src, w->fps);
-	w->content = plan_take(w);
 	w->resting = 0;
 	w->t0_ns = at_ns;
 	w->slot = 0;
@@ -231,7 +155,7 @@ enum reac_knock_wire_act reac_knock_wire_step(struct reac_knock_wire *w,
 		 * wire is listened to afresh, from this instant, like a wire that just came up. */
 		w->state = REAC_KNOCK_WIRE_LISTENING;
 		reac_knock_init(&w->licence, now_ns);
-		plan_reset(w);
+		backoff_reset(w);
 		return REAC_KNOCK_WIRE_ACT_UNTRUNK;
 	}
 	if (hunt && hunt->pinned)
@@ -260,14 +184,14 @@ enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64
 {
 	if (w->state == REAC_KNOCK_WIRE_TRUNK)
 		return REAC_KNOCK_WIRE_ACT_NONE;
-	/* SOMETHING CAME UP after a silence: the plan and the backoff start again, and a knock
-	 * that is resting opens now. Only the first frame after REAC_KNOCK_LISTEN_NS of nothing,
+	/* SOMETHING CAME UP after a silence: the backoff starts again, and a knock that is
+	 * resting opens now. Only the first frame after REAC_KNOCK_LISTEN_NS of nothing,
 	 * so a source that never stops cannot hold the backoff at its floor. */
 	const int after_silence = !w->last_heard_ns ||
 	                          now_ns - w->last_heard_ns >= REAC_KNOCK_LISTEN_NS;
 	w->last_heard_ns = now_ns;
 	if (after_silence) {
-		plan_reset(w);
+		backoff_reset(w);
 		if (w->state == REAC_KNOCK_WIRE_KNOCKING && w->resting) {
 			w->next_ns = now_ns;
 			w->due_ns = now_ns;
@@ -283,7 +207,6 @@ enum reac_knock_wire_act reac_knock_wire_heard(struct reac_knock_wire *w, uint64
 		w->due_ns = 0;
 		w->n_answer = 0;
 		w->answered_cycle = w->cycles;
-		w->answered_content = w->content;
 		if (frame && len >= 12)
 			memcpy(w->answer_src, frame + 6, 6);
 		act = REAC_KNOCK_WIRE_ACT_HUSH;
@@ -334,8 +257,8 @@ int reac_knock_wire_run(struct reac_knock_wire *w, uint64_t now_ns,
 		int idx;
 		enum reac_master_emit emit = reac_master_next(&w->master, &counter, &idx);
 		w->slot++;
-		/* THE FILLER IS THE STREAM: a control knock leaves it out, a stream knock sends it. */
-		if (emit == REAC_M_EMIT_FILLER && w->content == REAC_KNOCK_CONTROL)
+		/* THE FILLER IS THE STREAM, and the knock never sends it (#61). */
+		if (emit == REAC_M_EMIT_FILLER)
 			continue;
 		const int scene = emit == REAC_M_EMIT_SCENE_HEAD || emit == REAC_M_EMIT_SCENE_CHUNK ||
 		                  emit == REAC_M_EMIT_SCENE_TAIL;
@@ -357,8 +280,6 @@ int reac_knock_wire_run(struct reac_knock_wire *w, uint64_t now_ns,
 			w->sent++;
 			w->spell_sent++;
 			sent++;
-			if (w->content == REAC_KNOCK_STREAM)
-				w->stream_sent++;
 		}
 		if (!scene)
 			continue;
@@ -424,13 +345,4 @@ const char *reac_knock_wire_state_name(enum reac_knock_wire_state s)
 	case REAC_KNOCK_WIRE_TRUNK:     return "trunk";
 	}
 	return "listening";
-}
-
-const char *reac_knock_content_name(enum reac_knock_content c)
-{
-	switch (c) {
-	case REAC_KNOCK_CONTROL: return "control";
-	case REAC_KNOCK_STREAM:  return "stream";
-	}
-	return "control";
 }

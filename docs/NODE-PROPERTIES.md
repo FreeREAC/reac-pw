@@ -126,7 +126,7 @@ The first three states are a wire with no engine on it yet:
 | state | the wire | what goes out on it |
 |---|---|---|
 | `listening` | linked, and nothing has decided it: inside the 500 ms masterless observation, or heard but not yet classified | nothing |
-| `knocking` | no master on it and no box heard: the knock is out, by its declared plan ([KNOCK.md](KNOCK.md)); the status counts the frames sent, the stream cycles among them and the PHY edges made, and says when the wire is the host's | a control knock (one master cycle's 347 control frames, no audio filler) or, at most three times until something is heard, a stream knock (that cycle whole); one knock per period, doubling up to 30 s. On a NIC the host uses (an address beyond link scope, a stacked netdev, a default route): control knocks only, and no PHY edge |
+| `knocking` | no master on it and no box heard: the knock is out ([KNOCK.md](KNOCK.md)); the status counts the frames sent and the PHY edges made, and says when the wire is the host's | one master cycle's 347 control frames, no audio filler, never the stream; one knock per period, doubling up to 30 s. On a NIC the host uses (an address beyond link scope, a stacked netdev, a default route): no PHY edge |
 | `trunk` | a parent whose VLANs carry tagged REAC; its sub-interfaces are the segments, it is not one | nothing |
 
 `probing` is a master engine that has started and has not yet granted a box. Its status

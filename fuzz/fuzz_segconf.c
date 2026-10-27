@@ -28,9 +28,9 @@
  *   - `key = value`, the value without one pair of matching quotes, inside a section:
  *     role (auto|master|slave|tap|box, in any case), model (a token of the box-model
  *     table, in any case, folded), ignore (yes|true|1 or no|false|0, in any case for the
- *     words), knock (escalate|control|stream, in any case, kept as the plan's own
- *     lower-case name); anything else refused; the last file to say a key wins it, and
- *     names it;
+ *     words); a `knock` line is refused whatever its value (the knock takes no plan since
+ *     1.0.41, reac-pw#61), and so is any other key; the last file to say a key wins it,
+ *     and names it;
  *   - once every file is read: a model on a segment that is not a box is refused and
  *     dropped, a box with no model is refused and falls back to auto;
  *   - every refusal is counted, the first REAC_SEGCONF_REFUSALS kept, each addressed
@@ -41,8 +41,8 @@
  * Properties, each an abort():
  *   - the segments are the names the sections opened, in order, and the overflow is the
  *     count of those past the bound;
- *   - each segment's role, model, ignore and knock plan are the last ones its files gave
- *     it, after the cross-key rules;
+ *   - each segment's role, model and ignore are the last ones its files gave it, after
+ *     the cross-key rules;
  *   - each answer names the file that gave it;
  *   - every refusal is counted and the first ones kept, each with its address;
  *   - a name no section opened has no answer;
@@ -76,22 +76,13 @@
 
 #define FILES_MAX     4
 
-/* THE KNOCK PLANS, written here from the plans the header documents (contract:
- * src/reac_knock_wire.h:88-93, and :96 for the name matched without case), and the bound
- * on the name the reader keeps (contract: src/reac_segconf.h:105, a plan name of 16
- * bytes). They are not read from `reac_knock_plans` or `reac_knock_plan_find`: those are
- * the code under test, and a wrong row in them must not move both sides of the check. */
-static const char *const PLANS[] = { "escalate", "control", "stream" };
-#define PLAN_LEN      16
-
 /* ---- the harness's reading of the grammar --------------------------------------------- */
 
 struct mseg {
 	char name[NAME_LEN];
 	enum reac_role_intent role;
-	int role_set, ignore, ignore_set, model_set, knock_set;
+	int role_set, ignore, ignore_set, model_set;
 	char model[24];
-	char knock[PLAN_LEN];
 	char role_file[LABEL_LEN], ignore_file[LABEL_LEN];
 	int gen;
 };
@@ -101,6 +92,7 @@ struct mconf {
 	int n;
 	unsigned overflow, refused;
 	char kept[KEPT_MAX][LABEL_LEN + 16];   /* the address each kept refusal starts with */
+	int kept_knock[KEPT_MAX];              /* the kept refusal was a `knock` line */
 	int n_kept;
 	int gen;
 	char reading[LABEL_LEN];
@@ -255,13 +247,9 @@ static void m_key(struct mconf *c, struct mseg *g, const char *s, const char *e,
 		g->ignore_set = 1;
 		snprintf(g->ignore_file, sizeof g->ignore_file, "%s", c->reading);
 	} else if (ieq(k, kn, "knock")) {
-		size_t ln = fold(v, vn, low, PLAN_LEN);
-		for (size_t i = 0; i < sizeof PLANS / sizeof PLANS[0]; i++)
-			if (strlen(PLANS[i]) == ln && memcmp(PLANS[i], low, ln) == 0) {
-				memcpy(g->knock, low, ln + 1);
-				g->knock_set = 1;
-				return;
-			}
+		/* refused whatever the value: the knock takes no plan (reac-pw#61) */
+		if (c->n_kept < KEPT_MAX)
+			c->kept_knock[c->n_kept] = 1;
 		m_refuse(c, line);
 	} else {
 		m_refuse(c, line);
@@ -422,19 +410,19 @@ static FUZZ_NOINLINE void check_segments(const struct reac_segconf *c, const str
 	/* The segments are the names the sections opened, each once, in the order first
 	 * opened; a section past the bound is counted as overflow and opens nothing.
 	 * contract: src/reac_segconf.h:46-49, 85-89, src/reac_segconf.c:102-119, 155-157
-	 * mutant: src/reac_segconf.c:108 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
+	 * mutant: src/reac_segconf.c:107 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
 	 * input: names-differ-in-case
-	 * mutant: src/reac_segconf.c:111 `c->overflow++;` -> ``
+	 * mutant: src/reac_segconf.c:110 `c->overflow++;` -> ``
 	 * input: thirty-three-segments
-	 * mutant: src/reac_segconf.c:178 `strncasecmp(body, "segment", 7)` -> `strncmp(body, "segment", 7)`
+	 * mutant: src/reac_segconf.c:177 `strncasecmp(body, "segment", 7)` -> `strncmp(body, "segment", 7)`
 	 * input: keyword-in-capitals
-	 * mutant: src/reac_segconf.c:179 `body[7] != ' ' && body[7] != '\t'` -> `body[7] != ' '`
+	 * mutant: src/reac_segconf.c:178 `body[7] != ' ' && body[7] != '\t'` -> `body[7] != ' '`
 	 * input: tab-after-keyword
-	 * mutant: src/reac_segconf.c:169 `if (close[1])` -> `if (0)`
+	 * mutant: src/reac_segconf.c:168 `if (close[1])` -> `if (0)`
 	 * input: text-after-header
-	 * mutant: src/reac_segconf.c:305 `return c->n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:295 `return c->n;` -> `return 0;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:341 `return n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:331 `return n;` -> `return 0;`
 	 * input: operator-file */
 	if (!segments_are(c, m) || !returned)
 		abort();
@@ -446,21 +434,21 @@ static FUZZ_NOINLINE void check_role(int got_set, enum reac_role_intent got,
 	/* A segment's role is the last one its files pinned, a value of the vocabulary in any
 	 * case and without its quotes; a box that names no model falls back to no pin.
 	 * contract: src/reac_segconf.h:203-208, src/reac_segconf.c:271-316
-	 * mutant: src/reac_segconf.c:238 `(char)(*q - 'A' + 'a')` -> `*q`
+	 * mutant: src/reac_segconf.c:237 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: role-in-capitals
-	 * mutant: src/reac_segconf.c:245 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
+	 * mutant: src/reac_segconf.c:244 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:331 `s->role_set = 0;` -> ``
+	 * mutant: src/reac_segconf.c:321 `s->role_set = 0;` -> ``
 	 * input: box-without-model
-	 * mutant: src/reac_segconf.c:317 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
+	 * mutant: src/reac_segconf.c:307 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:224 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
+	 * mutant: src/reac_segconf.c:223 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:147 `cur = NULL;` -> ``
+	 * mutant: src/reac_segconf.c:146 `cur = NULL;` -> ``
 	 * input: long-header-line
-	 * mutant: src/reac_segconf.c:191 `strlen(name) >= IFNAMSIZ` -> `strlen(name) > IFNAMSIZ`
+	 * mutant: src/reac_segconf.c:190 `strlen(name) >= IFNAMSIZ` -> `strlen(name) > IFNAMSIZ`
 	 * input: name-sixteen
-	 * mutant: src/reac_segconf.c:256 `(char)(*q - 'A' + 'a')` -> `*q`
+	 * mutant: src/reac_segconf.c:255 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: model-in-capitals */
 	if (got_set != want->role_set || (got_set && got != want->role))
 		abort();
@@ -471,9 +459,9 @@ static FUZZ_NOINLINE void check_model(const char *got, const struct mseg *want)
 	/* A segment's model is a token of the box-model table, folded to lower case, and
 	 * only on a segment whose role is box; on any other role it is dropped.
 	 * contract: src/reac_segconf.h:92-101, 221-225
-	 * mutant: src/reac_segconf.c:318 `s->model_set && !is_box` -> `0`
+	 * mutant: src/reac_segconf.c:308 `s->model_set && !is_box` -> `0`
 	 * input: model-on-a-tap
-	 * mutant: src/reac_segconf.c:269 `"%s", low` -> `"%s", val`
+	 * mutant: src/reac_segconf.c:268 `"%s", low` -> `"%s", val`
 	 * input: model-in-capitals */
 	if (!same_text(got, want->model_set ? want->model : NULL))
 		abort();
@@ -484,11 +472,11 @@ static FUZZ_NOINLINE void check_ignore(int got, const struct mseg *want)
 	/* A segment is switched off when the last file to say `ignore` said yes, true or 1,
 	 * and on when it said no, false or 0.
 	 * contract: src/reac_segconf.h:89, 199-201
-	 * mutant: src/reac_segconf.c:91 `!strcmp(v, "1")` -> `!strcmp(v, "0")`
+	 * mutant: src/reac_segconf.c:90 `!strcmp(v, "1")` -> `!strcmp(v, "0")`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:279 `cur->ignore = b;` -> `cur->ignore = 1;`
+	 * mutant: src/reac_segconf.c:278 `cur->ignore = b;` -> `cur->ignore = 1;`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:540 `s && s->ignore` -> `s != NULL`
+	 * mutant: src/reac_segconf.c:530 `s && s->ignore` -> `s != NULL`
 	 * input: ignore-words */
 	if (got != want->ignore)
 		abort();
@@ -500,31 +488,26 @@ static FUZZ_NOINLINE void check_provenance(const char *role_file, const char *ig
 	/* Each answer names the file that gave it, per key: the hand-written file or the
 	 * drop-in, and nothing when no file said that key.
 	 * contract: src/reac_segconf.h:108-113, 210-219
-	 * mutant: src/reac_segconf.c:247 `c->reading` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:246 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
-	 * mutant: src/reac_segconf.c:281 `c->reading` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:280 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
-	 * mutant: src/reac_segconf.c:123 `label ? label : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:122 `label ? label : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides */
 	if (!same_text(role_file, want->role_set ? want->role_file : NULL) ||
 	    !same_text(ignore_file, want->ignore_set ? want->ignore_file : NULL))
 		abort();
 }
 
-static FUZZ_NOINLINE void check_knock(const char *got, const struct mseg *want)
+static FUZZ_NOINLINE void check_knock_refused(const char *got, int was_knock)
 {
-	/* A segment's knock plan is the last plan its files named, in any case and without
-	 * its quotes, answered as the plan's own lower-case name; a segment no file gave one
-	 * has no plan, and a name of no plan is refused.
-	 * contract: src/reac_segconf.h:102-107 (the field), 227-229 (the answer),
-	 * src/reac_knock_wire.h:88-93 (the three plans), 95-96 (matched without case)
-	 * mutant: src/reac_segconf.c:297 `p->name` -> `val`
-	 * input: knock-in-capitals
-	 * mutant: src/reac_knock_wire.c:41 `strcasecmp(` -> `strcmp(`
-	 * input: knock-in-capitals
-	 * mutant: src/reac_segconf.c:574 `s && s->knock_set` -> `s != NULL`
+	/* A `knock` line is refused by name with the reason, whatever its value: the knock
+	 * takes no plan since 1.0.41, and a word in a file must not be able to select the
+	 * stream (reac-pw#61). The refusal says so.
+	 * contract: src/reac_segconf.c (the `knock` branch: refused, with "takes no plan")
+	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
 	 * input: knock-plans */
-	if (!same_text(got, want->knock_set ? want->knock : NULL))
+	if (was_knock && !strstr(got, "takes no plan"))
 		abort();
 }
 
@@ -533,11 +516,11 @@ static FUZZ_NOINLINE void check_refusals(const struct reac_segconf *c, const str
 	/* Every line the grammar cannot use is refused and counted, and the first ones are
 	 * kept.
 	 * contract: src/reac_segconf.h:30-34, 51-54, 132-134
-	 * mutant: src/reac_segconf.c:33 `c->refused++;` -> ``
+	 * mutant: src/reac_segconf.c:32 `c->refused++;` -> ``
 	 * input: refusals-many
-	 * mutant: src/reac_segconf.c:208 `!is_new && cur->seen_gen == c->gen` -> `0`
+	 * mutant: src/reac_segconf.c:207 `!is_new && cur->seen_gen == c->gen` -> `0`
 	 * input: header-twice-in-one-file
-	 * mutant: src/reac_segconf.c:34 `c->n_refusals >= REAC_SEGCONF_REFUSALS` -> `c->n_refusals >= REAC_SEGCONF_REFUSALS - 1`
+	 * mutant: src/reac_segconf.c:33 `c->n_refusals >= REAC_SEGCONF_REFUSALS` -> `c->n_refusals >= REAC_SEGCONF_REFUSALS - 1`
 	 * input: refusals-many */
 	if (c->refused != m->refused || c->n_refusals != m->n_kept)
 		abort();
@@ -548,9 +531,9 @@ static FUZZ_NOINLINE void check_address(const char *got, const char *want)
 	/* A kept refusal starts with its address: the file and the line, or the file alone
 	 * for a rule that needed every file read.
 	 * contract: src/reac_segconf.c:37-41 (the file is part of the address)
-	 * mutant: src/reac_segconf.c:40 `where, line)` -> `where, line + 1)`
+	 * mutant: src/reac_segconf.c:39 `where, line)` -> `where, line + 1)`
 	 * input: refusals-many
-	 * mutant: src/reac_segconf.c:39 `c->reading[0] ? c->reading : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:38 `c->reading[0] ? c->reading : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-refusal */
 	if (strncmp(got, want, strlen(want)) != 0)
 		abort();
@@ -560,12 +543,11 @@ static FUZZ_NOINLINE void check_absent(const struct reac_segconf *c, const char 
 {
 	/* A name no section opened has no entry and no answer.
 	 * contract: src/reac_segconf.h:194-197 (the entry for `name`, or NULL; compared case
-	 * sensitively), 227-229 (the knock plan of a name with no entry)
-	 * mutant: src/reac_segconf.c:532 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
+	 * sensitively)
+	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
 	 * input: absent-probes */
 	if (reac_segconf_find(c, name) || reac_segconf_role(c, name, NULL) ||
-	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name) ||
-	    reac_segconf_knock(c, name))
+	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name))
 		abort();
 }
 
@@ -584,7 +566,7 @@ static FUZZ_NOINLINE void check_declared(int got, int want, const struct reac_de
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:73 `*n >= max` -> `*n > max`
 	 * input: vlans-full
-	 * mutant: src/reac_segconf.c:584 `if (c->seg[i].ignore)` -> `if (0)`
+	 * mutant: src/reac_segconf.c:568 `if (c->seg[i].ignore)` -> `if (0)`
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:58 `!name_ok(parent)` -> `0`
 	 * input: vlans */
@@ -645,11 +627,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		check_ignore(reac_segconf_ignored(c, g->name), g);
 		check_provenance(reac_segconf_role_file(c, g->name),
 		                 reac_segconf_ignore_file(c, g->name), g);
-		check_knock(reac_segconf_knock(c, g->name), g);
 	}
 	check_refusals(c, m);
-	for (int i = 0; i < m->n_kept && i < c->n_refusals; i++)
+	for (int i = 0; i < m->n_kept && i < c->n_refusals; i++) {
 		check_address(c->refusal[i], m->kept[i]);
+		check_knock_refused(c->refusal[i], m->kept_knock[i]);
+	}
 	/* names no section opened: each segment's with a byte more, and one never named */
 	for (int i = 0; i < m->n; i++) {
 		char probe[NAME_LEN + 2];
