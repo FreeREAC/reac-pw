@@ -548,17 +548,10 @@ KBOXPID=$!
 wait_for "\[cold0\] ANSWERED" 25 || {
 	echo "FAIL: a box spoke on the wire we were knocking on and the knock did not end"
 	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
-# AND THE MASTER STARTS ON THE ANSWER, NOT THREE SECONDS AFTER IT (#58). The knock went
-# out on a wire proven to carry nothing for the listen window, so the box that answered
-# is the master's cue, and the hunt's three-cadence window (anchored on the first
-# sighting) must not run on top of it. Measured on the rig 2026-10-27: with the window
-# running, the master's first frame left 3.0 s after the box's; a knocked S-4000S holds
-# 2 s and an S-1608 5 s before going quiet, and both were LOST on every cycle. Two
-# seconds of waiting here is red at 3 s and green at the next 200 ms poll.
-wait_for "\[cold0\] the wire carried nothing for .* ms before the knock and a box answered it; taking the wire as MASTER now" 2 || {
-	echo "FAIL: the box answered the knock and the master did not take the wire within 2 s"
-	echo "      (the hunt's three-cadence window is running on top of the knock's answer)"
-	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
+# (That the master starts ON the answer, within 2 s, is knock-answer-is-the-cue.sh's bar:
+# its far end is libreac's fake_box, linked and silent until pushed, which is the rig's
+# case. This peer is a reac-pw slave that transmits from its first frame, so the daemon
+# takes the wire by the box-spoke-first road and never prints the knock-answer line.)
 wait_for "reac-master: .* -> ESTABLISHED" 25 || {
 	echo "FAIL: driving a silent wire never established with the box that answered"
 	tail -20 "$LOG"; tail -5 "$PEER"; exit 1; }
