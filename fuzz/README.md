@@ -71,10 +71,10 @@ which properties it checks.
 - **The qdisc policy (`reac_qdisc_arm`, `_disarm`, `_release`)**: it acts on the answers
   of libreac-transport's etf calls, not on bytes. `fuzz_qdisc` links stand-ins for those
   calls only so the file links; it never calls the policy.
-- **The topology tap of `src/main.c`** (`topo_tap_read`): the frame it reads is classified
-  by libreac's `reac_topo_classify`; what reac-pw itself reads there is the ifindex and the
-  packet type of `struct sockaddr_ll` and the VLAN tag of the auxdata, all from the
-  kernel's own socket layer, in a static function of the daemon's main loop.
+- **The topology tap of `src/main.c`**: the daemon reads it through libreac's
+  `reac_topo_tap_read`, which holds the one read of the kernel's packet socket (the
+  ifindex and packet type of `struct sockaddr_ll`, the VLAN tag of the auxdata) and
+  classifies the frame with `reac_topo_classify`. reac-pw keeps no copy of that read.
 - **The PipeWire nodes** (`reac_sink_node.c`, `reac_source_node.c`, `reac_roster_node.c`):
   they hand the Props objects to the three Props readers above, which are fuzzed, and
   otherwise run against a live PipeWire graph.
