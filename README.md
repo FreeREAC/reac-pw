@@ -191,6 +191,27 @@ knock is sent as a control knock, and the wake ladder that takes a bare NIC down
 moment to wake a box that dropped refuses the edge and says why. A box behind that NIC
 is reached through its VLAN, which is a wire of its own and is knocked on in full.
 
+### Supported configurations
+
+Two, ruled on the rig on 2026-10-27, and both proven there the same day:
+
+- **An untagged NIC carries one REAC box.** A direct cable, or an access port of a switch: the
+  NIC is a bare wire, it is knocked untagged, and the one box on it answers. Other nodes with
+  IP addresses may share the wire (a camera, a router, a control surface on its own raw
+  protocol); a box ignores everything that is not REAC and so does the daemon. What may not
+  share it is a flood: a box's port is 100 Mbit/s and its stream fills it, so anything the
+  switch floods to every port (broadcast, unknown multicast) reaches the box's port too.
+- **A tagged NIC (a trunk) carries as many VLANs as needed, one box per VLAN, every box
+  tagged.** Each box sits on an access port of a VLAN the trunk carries; the daemon serves
+  each VLAN on its own sub-interface. A box on the trunk's native (untagged) VLAN is NOT
+  served: the daemon says `untagged REAC on a trunk's native VLAN is not served; give it a
+  tag`. Serving it would need the parent's receive path to tell untagged frames from VLAN
+  frames, which the kernel hides from an ordinary socket (reac-pw#60, closed by the ruling).
+
+Mixed layouts are refused by name, never guessed at. What the daemon still owes on a trunk
+is finding a VLAN whose only box is cold (reac-pw#65): today a VLAN is created when its tag
+is heard, and a silent box sends none (next section).
+
 ### A box behind a trunk
 
 A VLAN's sub-interface is created when its tag is heard on the parent (a tagged frame of
