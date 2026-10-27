@@ -283,9 +283,9 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			 * hunting cycle, never the stream. The plans this key once chose between
 			 * (`escalate`, `stream`) were a flood by configuration, and a word in a file
 			 * must not be able to select one; `control` is what every wire gets. */
-			refuse(c, lineno, "[segment %s] knock = '%s': the knock takes no plan since "
-			       "1.0.41 (one content, the control frames, never the stream); remove "
-			       "the line", cur_name, val);
+			refuse(c, lineno, "[segment %s] knock takes no plan since 1.0.41: the knock "
+			       "has one content, the control frames, never the stream; remove the "
+			       "line (it says '%.24s')", cur_name, val);
 			continue;
 		} else {
 			refuse(c, lineno, "[segment %s] has no key '%s' — role, model, ignore",

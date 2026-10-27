@@ -506,7 +506,9 @@ static FUZZ_NOINLINE void check_knock_refused(const char *got, int was_knock)
 	 * stream (reac-pw#61). The refusal says so.
 	 * contract: src/reac_segconf.c (the `knock` branch: refused, with "takes no plan")
 	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
-	 * input: knock-plans */
+	 * input: knock-plans
+	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
+	 * input: knock-long-value */
 	if (was_knock && !strstr(got, "takes no plan"))
 		abort();
 }
