@@ -651,6 +651,18 @@ test('reac_hearing_finds_a_segment',
 # on the push alone and the daemon must NOT bounce it. fake_box lives in the other repo, so
 # the path is a knob; without it the test SKIPS rather than passing while proving nothing.
 fake_box_path = get_option('fake_box')
+# --- whole-binary: the knock's answer is the master's cue, and is granted as handed over (#58)
+# libreac's fake_box is the far end: silent until a COMPLETE push, like the rig's boxes, and
+# started before the daemon. Three bars, each red on 1.0.39: the master takes the wire within
+# 2 s of ANSWERED (not after the hunt's 3 s window), the carried answer takes the edge as it is
+# ingested ("(rx CONFIG)", not a "(timer)" release after a second push), and it establishes.
+test('reac_knock_answer_is_the_cue',
+  find_program('tests/knock-answer-is-the-cue.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 120)
+
 test('reac_box_wakes_on_a_phy_edge',
   find_program('tests/box-wakes-on-a-phy-edge.sh'),
   suite : 'netns',
