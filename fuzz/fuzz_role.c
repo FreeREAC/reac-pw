@@ -11,8 +11,8 @@
  * The expectations come from the record fuzz/pod.h keeps of the object, and from the
  * header: the value of the first pair keyed "reac.cfg.role", an Int or a Float read as
  * its nearest integer, is 0 for the master and 1 for the slave, and anything else is
- * malformed (src/reac_role_cfg.h:109-119); the same role asserted is applied, a
- * different one pending (src/reac_role_cfg.h:97-107).
+ * malformed (src/reac_role_cfg.h:92-101); the same role asserted is applied, a
+ * different one pending (src/reac_role_cfg.h:80-90).
  *
  * Properties, each an abort():
  *   - a write with no role key is 0, and the caller's role is left as it was;
@@ -26,17 +26,13 @@
 #include <string.h>
 
 #include "reac_role_cfg.h"
+#include <reac/reac_cfg.h>
 
 #include "fuzz.h"
 #include "pod.h"
 
-/* contract: libreac 1.8.0 include/reac/reac_cfg.h:60-62 (the key; 0 master, 1 slave) */
-#define ROLE_KEY "reac.cfg.role"
-#define ROLE_FLAG_MASTER 0
-#define ROLE_FLAG_SLAVE 1
-/* contract: libreac 1.8.0 include/reac/reac_cfg.h:139-140 (the answers) */
-#define STATE_APPLIED "applied"
-#define STATE_PENDING "role_reestablish_pending"
+#define ROLE_FLAG_MASTER REAC_CFG_ROLE_MASTER
+#define ROLE_FLAG_SLAVE REAC_CFG_ROLE_SLAVE
 
 /* The sentinel the caller's role holds before the parse: neither role. */
 #define ROLE_UNSET ((enum reac_role)0x5a)
@@ -49,7 +45,7 @@ static int expect_role(const struct pod_props *pp, int null, enum reac_role *rol
 	int at = 0, v;
 	const char *k;
 	while (pp->params_struct && (v = pod_next_pair(pp, &at, &k)) >= 0) {
-		if (strcmp(k, ROLE_KEY) != 0)
+		if (strcmp(k, REAC_CFG_ROLE_PROP) != 0)
 			continue;
 		int32_t i;
 		float f;
@@ -70,7 +66,7 @@ static FUZZ_NOINLINE void check_absent(int rc, enum reac_role role)
 {
 	/* A Props write that carries no role key is 0, and the caller's variable is not
 	 * written.
-	 * contract: src/reac_role_cfg.h:114-116 (0 if the key is simply absent)
+	 * contract: src/reac_role_cfg.h:96-97 (0 if the key is simply absent)
 	 * mutant: src/reac_role_cfg.c:72 `return 0;` -> `return -1;`
 	 * input: params-not-a-struct
 	 * mutant: src/reac_role_cfg.c:90 `strcmp(k, REAC_CFG_PROP_ROLE) != 0` -> `strncmp(k, REAC_CFG_PROP_ROLE, 13) != 0`
@@ -83,7 +79,7 @@ static FUZZ_NOINLINE void check_role(int rc, enum reac_role role, enum reac_role
 {
 	/* 0 asks for the master and 1 for the slave, as an Int or as a Float whose nearest
 	 * integer it is; the first role key answers.
-	 * contract: src/reac_role_cfg.h:111-114 (exactly MASTER or SLAVE: 1 and *out_role)
+	 * contract: src/reac_role_cfg.h:94-97 (exactly MASTER or SLAVE: 1 and *out_role)
 	 * mutant: src/reac_role_cfg.c:98 `*out_role = REAC_ROLE_MASTER;` -> `*out_role = REAC_ROLE_SLAVE;`
 	 * input: role-master
 	 * mutant: src/reac_float_near.h:26 `(double)f + 0.5` -> `(double)(f + 0.5f)`
@@ -96,7 +92,7 @@ static FUZZ_NOINLINE void check_malformed(int rc, enum reac_role role)
 {
 	/* A role key whose value is neither 0 nor 1, or no number, or a pod that is not a
 	 * Props object, is -1, and the caller's variable is not written.
-	 * contract: src/reac_role_cfg.h:116-119 (-1 if not readable as a number or neither
+	 * contract: src/reac_role_cfg.h:98-101 (-1 if not readable as a number or neither
 	 * 0 nor 1, or not an Object pod)
 	 * mutant: src/reac_role_cfg.c:100 `default: return -1;` -> `default: return 1;`
 	 * input: role-two
@@ -113,19 +109,19 @@ static FUZZ_NOINLINE void check_answer(int changes, const char *state, enum reac
 {
 	/* The running role asserted again changes nothing and is applied; the other role is
 	 * a change, pending until the swap carries it.
-	 * contract: src/reac_role_cfg.h:97-107
+	 * contract: src/reac_role_cfg.h:80-90
 	 * mutant: src/reac_role_cfg.c:24 `current_role != requested_role` -> `1`
 	 * input: role-master
 	 * mutant: src/reac_role_cfg.c:36 `REAC_ROLE_STATE_APPLIED` -> `REAC_ROLE_STATE_REESTABLISH_PENDING`
 	 * input: role-master */
-	if (changes != (cur != req) || strcmp(state, cur != req ? STATE_PENDING : STATE_APPLIED) != 0)
+	if (changes != (cur != req) || strcmp(state, cur != req ? REAC_CFG_ROLE_STATE_PENDING : REAC_CFG_ROLE_STATE_APPLIED) != 0)
 		abort();
 }
 
 static FUZZ_NOINLINE void check_code(const char *none, const char *malformed)
 {
 	/* A refusal publishes its code from the shared vocabulary, and no refusal "none".
-	 * contract: src/reac_role_cfg.h:88-95, libreac 1.8.0 include/reac/reac_cfg.h:119-124
+	 * contract: src/reac_role_cfg.h:77-78, libreac 1.9.0 include/reac/reac_cfg.h:155-167
 	 * mutant: src/reac_role_cfg.c:19 `return codes[r];` -> `return codes[REAC_ROLE_REFUSE_NONE];`
 	 * input: role-two
 	 * mutant: src/reac_role_cfg.c:19 `return codes[r];` -> `return codes[REAC_ROLE_REFUSE_MALFORMED];`
