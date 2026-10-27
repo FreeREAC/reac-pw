@@ -235,6 +235,14 @@ fi
 - libreac, libreac-transport and libreac-tests 1.9 are in range: the ceiling is the next minor (< 1.10).
   1.0.37 pinned them below 1.9, so a channel carrying libreac 1.9.0 could not install it. The floor is
   unchanged.
+- A NIC the host uses is never bounced and never streamed at (#46): a wire carrying an address wider
+  than link scope, a VLAN, macvlan or ipvlan child stacked on it, a bridge or bond it is enslaved to,
+  or a default route out of it is the host's (reac_link_owner: three rtnetlink dumps, unprivileged, at
+  most once a second per wire; an unreadable wire counts as the host's). A master on such a NIC
+  refuses HOST_NIC instead of cycling the link, and the knock sends its stream rungs there as control
+  knocks. The trade: a box that answers only the stream, straight on such a NIC, is not found there;
+  through its own VLAN sub-interface it is a bare wire and is knocked on in full.
+- 1.0.37 was never published: this release carries its changes too.
 
 * Mon Oct 26 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.37-1
 - A silent wire is knocked on instead of driven: a master stays off a wire where no box has been
