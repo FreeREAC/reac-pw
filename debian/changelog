@@ -1,3 +1,27 @@
+reac-pw (1.0.40) unstable; urgency=medium
+
+  * A box that answers the knock is granted on that answer (#58). 1.0.39
+    lost every real box on a bare NIC: the master started only three
+    seconds after the box spoke (the hunt's slow-desk window ran on top of
+    the knock's answer) and then held the box's JOIN for a second push of
+    the scene the knock had already delivered, granting 0.7 s later; a
+    knocked S-4000S holds 2 s, an S-1608 5 s, and the S-1608 left 1.2 s
+    after ESTABLISHED on every cycle. Now the knock's answer is the
+    master's cue (the wire was proven masterless before the knock) and the
+    master starts credited with the knock's transfer, so the carried JOIN
+    takes the edge as it is ingested. Measured on both boxes: enrolled
+    within a second of the answer, streaming for the whole take.
+  * The default knock plan is `control`; `escalate` is opt-in (docs/KNOCK.md).
+    Both box families on the rig answered a control knock within a second,
+    on a bare NIC and on a VLAN (75 answers over the day's takes, 65 of
+    them to knock 1, none to a stream knock). The escalate plan's stream
+    knock streamed a trunk parent before its first tagged frame had named
+    it a trunk:
+    45 199 untagged REAC frames in 95 s onto the switch's native VLAN,
+    waking nothing.
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Tue, 27 Oct 2026 15:00:00 +0000
+
 reac-pw (1.0.39) unstable; urgency=medium
 
   * A NIC the host uses is never bounced and never streamed at (#46): a

@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.39',
+  version: '1.0.40',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -175,6 +175,7 @@ reac_pw_src = [
   'src/reac_node_graph.c',
   'src/reac_source_node.c',
   'src/reac_sink_node.c',
+  'src/reac_knock_credit.c',
   'src/reac_box_row.c',
   'src/reac_lat.c',
   'src/reac_gain.c',
@@ -650,6 +651,18 @@ test('reac_hearing_finds_a_segment',
 # on the push alone and the daemon must NOT bounce it. fake_box lives in the other repo, so
 # the path is a knob; without it the test SKIPS rather than passing while proving nothing.
 fake_box_path = get_option('fake_box')
+# --- whole-binary: the knock's answer is the master's cue, and is granted as handed over (#58)
+# libreac's fake_box is the far end: silent until a COMPLETE push, like the rig's boxes, and
+# started before the daemon. Three bars, each red on 1.0.39: the master takes the wire within
+# 2 s of ANSWERED (not after the hunt's 3 s window), the carried answer takes the edge as it is
+# ingested ("(rx CONFIG)", not a "(timer)" release after a second push), and it establishes.
+test('reac_knock_answer_is_the_cue',
+  find_program('tests/knock-answer-is-the-cue.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 120)
+
 test('reac_box_wakes_on_a_phy_edge',
   find_program('tests/box-wakes-on-a-phy-edge.sh'),
   suite : 'netns',
@@ -1281,7 +1294,7 @@ test('reac_lat', lat_test)
 # No socket, no RT privilege needed: tests the frame ring SPSC behaviour, the
 # per-rate slot period (125/250/272 us), and the master-stamp-on-egress path.
 pacer_test = executable('test_reac_pacer',
-  ['tests/test_reac_pacer.c', ],
+  ['tests/test_reac_pacer.c', 'src/reac_knock_credit.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_pacer', pacer_test)
@@ -1401,7 +1414,6 @@ box_badge_test = executable('test_reac_box_badge',
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_box_badge', box_badge_test)
-
 # --- unit test: reac.box.reac_version, from an identity reply to the property --
 # The box answers two versions that look alike and are not -- the system firmware
 # at DT1 addr 0x0000 and the REAC protocol version at 0x0600 (an M-200i displays
