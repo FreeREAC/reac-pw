@@ -24,8 +24,9 @@
  *     its VLAN, never by cycling the parent;
  *   - a default route goes out of it, in any table.
  *
- * On the host's NIC the daemon makes no PHY edge (reac_wake REAC_WAKE_HOST_NIC) and sends
- * no stream knock (reac_knock_wire). On a bare NIC, the direct-cable case, nothing changes.
+ * On the host's NIC the daemon makes no PHY edge (reac_wake REAC_WAKE_HOST_NIC); the knock
+ * on it is the same as on any wire (reac_knock_wire). On a bare NIC, the direct-cable case,
+ * nothing changes.
  * 2026-10-26-a-host-nic-is-never-bounced-or-streamed-at is the ruling.
  *
  * TWO HALVES. The verdict is PURE over three counts, so a test can pin every row; the

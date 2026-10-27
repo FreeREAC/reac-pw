@@ -1014,9 +1014,9 @@ static void gen_segconf(void)
 	seg1("ignore-words", 8, "[segment a]\nignore = 1\n[segment b]\nignore = TRUE\n"
 	     "[segment c]\nignore = yes\nignore = no\n[segment d]\nignore = 0\n[segment e]\n"
 	     "ignore = maybe\n");
-	/* the knock plan: the three plans of src/reac_knock_wire.h:88-93, in any case and
-	 * without one pair of quotes, the last file to name one winning it; a segment with
-	 * no `knock` line; and names of no plan, which are refused */
+	/* `knock` lines: the plan names 1.0.40 took, in any case and with quotes, and names
+	 * of no plan; every one is refused by name since 1.0.41 (reac-pw#61), kept so that
+	 * the refusal and its reason stay checked */
 	seg1("knock-plans", 8, "[segment eth0]\nknock = control\n[segment eth1]\n"
 	     "role = tap\nknock = escalate\n[segment eth2]\nrole = slave\n");
 	{

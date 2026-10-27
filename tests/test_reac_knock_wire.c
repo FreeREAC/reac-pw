@@ -21,24 +21,24 @@
  * capture of 2026-09-14): silent until a COMPLETE transfer (FIRST, 341 MIDDLE, LAST) reaches
  * it, an interrupted one ignored; it answers 8.4 ms after the LAST with its declaration, then
  * streams upstream filler. It ignores FILLER by construction, so it answers a control knock,
- * and that proves the knock's SEQUENCE and nothing about a real box. `stream_box` is the case
- * no record rules out (docs/KNOCK.md): the same box, but a transfer counts only if the master's
- * FILLER ran through it, as it does in every capture of a real box answering. It is what the
- * escalation exists for.
+ * as both of the rig's box families did on 2026-10-27 (docs/KNOCK.md). `stream_box` is the
+ * box no record shows: one that answers a transfer only if the master's FILLER ran through
+ * it. The knock never sends a FILLER (#61), so that box is never found by it, and this file
+ * states the trade rather than hiding it.
  *
  * WHAT GOES RED ON THE OLD PROBE. Before #40 the licence was handed to the hunt
  * (reac_hunt_silence_proven) and the stream went out at every slot of a wire nothing had been
  * heard on. Put that line back into reac_knock_wire_step and A, B and C fail on their stream
- * counts. Make reac_knock_wire_period_ns return one cycle and A fails on the gaps; drop the
- * stream cap and A fails on its FILLER count.
+ * counts. Make reac_knock_wire_period_ns return one cycle and A fails on the gaps; let the
+ * knock send its FILLER slots and A, B2 and H fail on their FILLER counts.
  *
- *   A. A SILENT WIRE, ten minutes: ZERO master-stream frames; exactly STREAM_KNOCKS stream
- *      cycles of FILLER; knock gaps of 1, 2, 4, 8 cycles, then the 30 s ceiling; once the cap
- *      is spent, at most one control cycle per 30 s on the wire.
+ *   A. A SILENT WIRE, ten minutes: ZERO master-stream frames and ZERO FILLER; knock gaps of
+ *      1, 2, 4, 8 cycles, then the 30 s ceiling; at most one control cycle per 30 s on the
+ *      wire once the ceiling is reached.
  *   B. A DIRECT NIC WITH fake_box: the first answer ends the knock, the stream starts only
  *      after it, and the master that starts reaches ENROLL.
- *   B2. A DIRECT NIC WITH stream_box: the `control` plan never gets an answer in a minute;
- *      the default plan gets it on its first stream knock, and the master reaches ENROLL.
+ *   B2. A DIRECT NIC WITH stream_box: never answered in a minute, and not one FILLER sent
+ *      for it: the trade, stated.
  *   C. A TRUNK PARENT: knocks untagged until tagged REAC is heard on its VLANs, then sends
  *      nothing, and the tag-stripped box frames its socket then hears neither answer a knock
  *      nor make it a segment.
@@ -53,9 +53,8 @@
  *      wire that carried any frame is refused the edge; a wire that is the host's NIC is
  *      refused it by name (#46).
  *   H. THE HOST'S NIC (#46): the same silent ten minutes as A on a NIC the kernel says is the
- *      host's: ZERO FILLER frames, every stream rung withheld, the same control budget and
- *      the same gaps; and stream_box on that NIC is never answered, which is the trade
- *      (through its VLAN it is a bare wire and B2 holds there).
+ *      host's: ZERO FILLER frames, the same control budget and the same gaps, the knock being
+ *      the same on either; and stream_box on that NIC is never answered either.
  */
 #include "reac_knock_wire.h"
 
@@ -224,14 +223,13 @@ struct daemon {
 	int granting_seen;              /* the master left PROBING forward at some slot */
 };
 
-static void daemon_init(struct daemon *d, uint64_t t0, int pinned, const char *plan)
+static void daemon_init(struct daemon *d, uint64_t t0, int pinned)
 {
 	memset(d, 0, sizeof *d);
 	reac_hunt_init(&d->hunt, OUR_MAC, t0);
 	if (pinned)
 		reac_hunt_pin(&d->hunt, REAC_ROLE_MASTER);
 	reac_knock_wire_init(&d->kw, OUR_MAC, FPS_96K, t0);
-	reac_knock_wire_set_plan(&d->kw, reac_knock_plan_find(plan));
 }
 
 static void apply(struct daemon *d, enum reac_knock_wire_act a, uint64_t now)
@@ -343,25 +341,13 @@ static int arm_silent_wire(uint64_t t0)
 {
 	struct daemon d;
 	static struct wire w;
-	/* THE DEFAULT PLAN FIRST (control, since 2026-10-27): ten minutes on a silent wire is
-	 * control knocks and NOT ONE FILLER — the bar the trunk's native VLAN is held to. */
+	/* Ten minutes on a silent wire is control knocks and NOT ONE FILLER: the bar every wire
+	 * is held to, the trunk's native VLAN among them (#61). */
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0);
 	w.since_ns = t0 + 300 * SEC;
 	run(&d, &w, t0, 600, 0, 0);
-	fprintf(stderr, "A0: 600 s on a silent wire, %s (default) plan: %llu frames (%llu knock, %llu "
-	        "FILLER) in %d knocks\n", REAC_KNOCK_PLAN_DEFAULT, (unsigned long long)w.frames,
-	        (unsigned long long)w.knock_frames, (unsigned long long)w.filler, w.n_open);
-	CHK(w.filler == 0);
-	CHK(w.stream_frames == 0);
-	CHK(!d.served);
-	CHK(w.frames <= (uint64_t)w.n_open * (uint64_t)cycle_ctrl);
-	/* THE ESCALATE PLAN, opted into: its stream rungs are capped. */
-	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, "escalate");
-	w.since_ns = t0 + 300 * SEC;
-	run(&d, &w, t0, 600, 0, 0);
-	fprintf(stderr, "A: 600 s on a silent wire, escalate plan: %llu frames (%llu knock, %llu stream, %llu "
+	fprintf(stderr, "A: 600 s on a silent wire: %llu frames (%llu knock, %llu stream, %llu "
 	        "FILLER) in %d knocks; a cycle is %d slots, %d of them control (libreac's master)\n",
 	        (unsigned long long)w.frames, (unsigned long long)w.knock_frames,
 	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open,
@@ -370,13 +356,15 @@ static int arm_silent_wire(uint64_t t0)
 	for (int i = 1; i < w.n_open; i++)
 		fprintf(stderr, " %.3f", (double)(w.open_ns[i] - w.open_ns[i - 1]) / 1e9);
 	fprintf(stderr, "\n");
+	CHK(w.filler == 0);
 	CHK(w.stream_frames == 0);
 	CHK(!d.served);
 	CHK(d.acts_knock == 1);
 	/* nothing before the masterless observation closed */
 	CHK(w.n_open > 0 && w.open_ns[0] >= t0 + REAC_KNOCK_LISTEN_NS);
-	/* THE ESCALATION IS BOUNDED: exactly the cap's stream cycles of FILLER in ten minutes */
-	CHK(w.filler == (uint64_t)REAC_KNOCK_WIRE_STREAM_KNOCKS * (uint64_t)(cycle_slots - cycle_ctrl));
+	/* every knock is one cycle's control frames and nothing more */
+	CHK(w.frames <= (uint64_t)w.n_open * (uint64_t)cycle_ctrl);
+	CHK(w.frames >= (uint64_t)w.n_open * (uint64_t)(cycle_ctrl - 1));
 	/* THE BACKOFF, with values: 1, 2, 4, 8 cycles, then the ceiling for good */
 	CHK(w.n_open >= 10);
 	for (int i = 1; i < w.n_open; i++) {
@@ -385,8 +373,8 @@ static int arm_silent_wire(uint64_t t0)
 			want = REAC_KNOCK_WIRE_PERIOD_MAX_NS;
 		CHK(near(w.open_ns[i] - w.open_ns[i - 1], want, 2 * MS));
 	}
-	/* AND ONCE THE CAP IS SPENT, the second five minutes carry control knocks only, at most
-	 * one per ceiling period: 10 or 11 of them, each at most one cycle's control frames */
+	/* AND AT THE CEILING, the second five minutes carry at most one knock per ceiling
+	 * period: 10 or 11 of them, each at most one cycle's control frames */
 	CHK(w.frames_since <= 11ULL * (uint64_t)cycle_ctrl);
 	CHK(w.frames_since >= 9ULL * (uint64_t)(cycle_ctrl - 1));
 	/* POSITIVE CONTROL: every knock is the sequence fake_box answers, a whole transfer */
@@ -404,13 +392,12 @@ static int arm_direct_nic(uint64_t t0)
 	struct daemon d;
 	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0);
 	run(&d, &w, t0, 12, 0, t0);
-	fprintf(stderr, "B: fake_box answered at +%.3f s on knock %llu (%s); knock %llu frames, "
+	fprintf(stderr, "B: fake_box answered at +%.3f s on knock %llu; knock %llu frames, "
 	        "stream %llu frames from +%.3f s; ENROLL %llu\n",
 	        d.answered_ns ? (double)(d.answered_ns - t0) / 1e9 : -1.0,
 	        (unsigned long long)d.kw.answered_cycle,
-	        reac_knock_content_name(d.kw.answered_content),
 	        (unsigned long long)w.knock_frames, (unsigned long long)w.stream_frames,
 	        w.first_stream_ns ? (double)(w.first_stream_ns - t0) / 1e9 : -1.0,
 	        (unsigned long long)w.enroll);
@@ -420,8 +407,8 @@ static int arm_direct_nic(uint64_t t0)
 	CHK(d.acts_knock == 1);
 	CHK(d.acts_hush == 1);
 	CHK(d.kw.state != REAC_KNOCK_WIRE_KNOCKING);
-	/* fake_box ignores FILLER, so the first control knock is enough for IT */
-	CHK(d.kw.answered_cycle == 1 && d.kw.answered_content == REAC_KNOCK_CONTROL);
+	/* fake_box ignores FILLER, so the first control knock is enough for it */
+	CHK(d.kw.answered_cycle == 1);
 	CHK(w.knock_frames <= (uint64_t)cycle_ctrl);
 	/* and the master that starts on the answer goes on to ENROLL the box */
 	CHK(w.enroll > 0);
@@ -433,51 +420,19 @@ static int arm_stream_box(uint64_t t0)
 {
 	struct daemon d;
 	static struct wire w;
-	/* the `control` plan: never a FILLER, so this box never answers */
+	/* THE KNOCK NEVER SENDS A FILLER (#61): a box that answers only the stream is not found
+	 * by it, by design. The rig's boxes answer the control knock, and a stream on a wire
+	 * nothing has answered on is a flood of it, the trunk's native VLAN first of all. */
 	memset(&w, 0, sizeof w);
 	w.needs_filler = 1;
-	daemon_init(&d, t0, 0, "control");
+	daemon_init(&d, t0, 0);
 	run(&d, &w, t0, 60, 0, t0);
-	fprintf(stderr, "B2: stream_box, control plan: %d knocks, %llu FILLER, answered=%d\n",
+	fprintf(stderr, "B2: stream_box: %d knocks, %llu FILLER, answered=%d\n",
 	        w.n_open, (unsigned long long)w.filler, d.acts_hush);
 	CHK(w.filler == 0);
+	CHK(w.stream_frames == 0);
 	CHK(d.acts_hush == 0 && !d.served);
 	CHK(w.n_open >= 5);
-	/* THE DEFAULT PLAN NEVER SENDS A FILLER (2026-10-27): a box that answers only the
-	 * stream is not found by it, by design — the rig's boxes answer the control knock, and
-	 * a stream rung on a trunk's parent is a flood of its native VLAN. */
-	memset(&w, 0, sizeof w);
-	w.needs_filler = 1;
-	daemon_init(&d, t0, 0, NULL);
-	run(&d, &w, t0, 60, 0, t0);
-	fprintf(stderr, "B2: stream_box, %s (default) plan: %d knocks, %llu FILLER, answered=%d\n",
-	        REAC_KNOCK_PLAN_DEFAULT, w.n_open, (unsigned long long)w.filler, d.acts_hush);
-	CHK(strcmp(REAC_KNOCK_PLAN_DEFAULT, "control") == 0);
-	CHK(w.filler == 0);
-	CHK(d.acts_hush == 0 && !d.served);
-	/* the `escalate` plan, opted into: answered on its first stream knock, the third */
-	memset(&w, 0, sizeof w);
-	w.needs_filler = 1;
-	daemon_init(&d, t0, 0, "escalate");
-	run(&d, &w, t0, 20, 0, t0);
-	fprintf(stderr, "B2: stream_box, escalate plan: answered at +%.3f s on knock %llu (%s), %llu "
-	        "knock frames (%llu FILLER); ENROLL %llu\n",
-	        d.answered_ns ? (double)(d.answered_ns - t0) / 1e9 : -1.0,
-	        (unsigned long long)d.kw.answered_cycle,
-	        reac_knock_content_name(d.kw.answered_content),
-	        (unsigned long long)w.knock_frames, (unsigned long long)w.filler,
-	        (unsigned long long)w.enroll);
-	CHK(d.acts_hush == 1 && d.served);
-	CHK(d.kw.answered_cycle == 3 && d.kw.answered_content == REAC_KNOCK_STREAM);
-	/* knock 3 opens one cycle and two after knocks 1 and 2, and the box answers its LAST:
-	 * the header-to-LAST span of libreac's master plus fake_box's 8.4 ms */
-	CHK(w.n_open >= 3);
-	CHK(near(w.open_ns[1] - w.open_ns[0], cycle_ns, 2 * MS));
-	CHK(near(w.open_ns[2] - w.open_ns[1], 2 * cycle_ns, 2 * MS));
-	CHK(near(d.answered_ns - w.open_ns[2],
-	         (uint64_t)transfer_slots * SEC / FPS_96K + COMMIT_DELAY_NS, 2 * MS));
-	CHK(w.first_stream_ns >= d.answered_ns);
-	CHK(w.enroll > 0);
 	return 0;
 }
 
@@ -487,7 +442,7 @@ static int arm_trunk_parent(uint64_t t0)
 	struct daemon d;
 	static struct wire w, w2;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0);
 	/* knocks untagged from +0.5 s; tagged REAC heard on a VLAN at +2 s; from +4 s its
 	 * socket hears a box's frames with the tag stripped */
 	run(&d, &w, t0, 2, 0, 0);
@@ -523,7 +478,7 @@ static int arm_pinned(uint64_t t0)
 	struct daemon d;
 	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 1, NULL);
+	daemon_init(&d, t0, 1);
 	run(&d, &w, t0, 3, 0, 0);
 	CHK(d.acts_knock == 0);
 	CHK(w.knock_frames == 0);
@@ -543,7 +498,7 @@ static int arm_box_powers_up(uint64_t t0)
 	struct daemon d;
 	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0);
 	run(&d, &w, t0, 4, 0, 0);               /* knocking, nothing on the wire */
 	CHK(d.acts_knock == 1 && !d.served);
 	const uint64_t knock0 = w.knock_frames, frames0 = w.frames;
@@ -595,7 +550,7 @@ static int arm_reset(uint64_t t0)
 	struct daemon d;
 	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, "control");
+	daemon_init(&d, t0, 0);
 	run(&d, &w, t0, 200, 0, 0);              /* backed off to the ceiling */
 	const int opens0 = w.n_open;
 	CHK(opens0 >= 2);
@@ -633,7 +588,7 @@ static int arm_ladder(uint64_t t0, uint64_t rx_per_s, int host, enum reac_wake_a
 	struct reac_knock_ladder kl;
 	memset(&w, 0, sizeof w);
 	memset(&kl, 0, sizeof kl);
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0);
 	uint64_t ladder_open = 0, bounced = 0, pushes_at = 0;
 	enum reac_wake_refusal last = REAC_WAKE_OK;
 	for (uint64_t t = t0; t < t0 + 40 * SEC && !bounced; t += MS) {
@@ -676,21 +631,19 @@ static int arm_host_nic(uint64_t t0)
 	struct daemon d;
 	static struct wire w;
 	memset(&w, 0, sizeof w);
-	daemon_init(&d, t0, 0, "escalate");   /* the plan WITH stream rungs: they must be withheld */
+	daemon_init(&d, t0, 0);
 	reac_knock_wire_set_host(&d.kw, 1);
 	w.since_ns = t0 + 300 * SEC;
 	run(&d, &w, t0, 600, 0, 0);
-	fprintf(stderr, "H: 600 s on a silent wire that is the host's NIC, escalate plan: %llu frames (%llu knock, "
-	        "%llu stream, %llu FILLER) in %d knocks, %llu stream rungs withheld\n",
+	fprintf(stderr, "H: 600 s on a silent wire that is the host's NIC: %llu frames (%llu knock, "
+	        "%llu stream, %llu FILLER) in %d knocks\n",
 	        (unsigned long long)w.frames, (unsigned long long)w.knock_frames,
-	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open,
-	        (unsigned long long)d.kw.stream_withheld);
+	        (unsigned long long)w.stream_frames, (unsigned long long)w.filler, w.n_open);
 	CHK(w.stream_frames == 0);
 	CHK(!d.served);
-	/* NOT ONE FILLER: the escalation's stream rungs went out as control knocks */
+	/* NOT ONE FILLER on the host's NIC: the knock is the same control-only knock as A's */
 	CHK(w.filler == 0);
-	CHK(d.kw.stream_withheld >= 1);
-	CHK(d.kw.stream_sent == 0);
+	CHK(d.kw.host == 1);
 	/* the same backoff as A, so the host's NIC is knocked on no more often */
 	CHK(w.n_open >= 10);
 	for (int i = 1; i < w.n_open; i++) {
@@ -704,15 +657,15 @@ static int arm_host_nic(uint64_t t0)
 	CHK(w.frames >= (uint64_t)w.n_open * (uint64_t)(cycle_ctrl - 1));
 	CHK(w.first == (uint64_t)w.n_open);
 	CHK(w.middle == (uint64_t)w.n_open * REAC_SCENE_CHUNKS);
-	/* THE TRADE, stated: a box that answers only the stream is not found on the host's NIC */
+	/* THE TRADE, stated here too: a box that answers only the stream is not found on the
+	 * host's NIC, as it is not found on any wire (B2) */
 	memset(&w, 0, sizeof w);
 	w.needs_filler = 1;
-	daemon_init(&d, t0, 0, NULL);
+	daemon_init(&d, t0, 0);
 	reac_knock_wire_set_host(&d.kw, 1);
 	run(&d, &w, t0, 60, 0, t0);
-	fprintf(stderr, "H: stream_box on the host's NIC, %s plan: %d knocks, %llu FILLER, "
-	        "answered=%d\n", REAC_KNOCK_PLAN_DEFAULT, w.n_open,
-	        (unsigned long long)w.filler, d.acts_hush);
+	fprintf(stderr, "H: stream_box on the host's NIC: %d knocks, %llu FILLER, answered=%d\n",
+	        w.n_open, (unsigned long long)w.filler, d.acts_hush);
 	CHK(w.filler == 0);
 	CHK(d.acts_hush == 0 && !d.served);
 	CHK(w.n_open >= 5);
@@ -742,9 +695,9 @@ int main(void)
 		fprintf(stderr, "FAIL: %d of 11 arms\n", failed);
 		return 1;
 	}
-	printf("OK: a silent wire is knocked on inside its derived budget, backs off to the "
-	       "ceiling and never streamed at; the first answer ends the knock and starts the "
-	       "stream; a trunk parent goes quiet; the ladder bounces on schedule and never on "
-	       "the host's NIC, which gets no stream knock either\n");
+	printf("OK: a silent wire is knocked on with control frames only, inside its derived "
+	       "budget, backs off to the ceiling and is never streamed at; the first answer ends "
+	       "the knock and starts the stream; a trunk parent goes quiet; the ladder bounces on "
+	       "schedule and never on the host's NIC\n");
 	return 0;
 }

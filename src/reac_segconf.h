@@ -99,12 +99,6 @@ struct reac_segconf_seg {
 	char model[REAC_SEGCONF_MODEL_LEN];
 	int  model_set;
 	char model_file[REAC_SEGCONF_FILE_LEN];
-	/* THE KNOCK PLAN a silent wire is knocked with (#40, reac_knock_wire.h): a name from
-	 * reac_knock_plans, refused by name otherwise. Unset is the default plan. It exists for
-	 * the rig check (docs/KNOCK.md); a rig that enrols needs none. */
-	char knock[16];
-	int  knock_set;
-	char knock_file[REAC_SEGCONF_FILE_LEN];
 	/* WHICH FILE ANSWERED, PER KEY — the provenance the amendment's §C requires, and the
 	 * thing that makes last-wins debuggable rather than merely defined. Per KEY and not
 	 * per section, because last-wins is per key: `ignore` from the operator's file and
@@ -224,9 +218,6 @@ const char *reac_segconf_ignore_file(const struct reac_segconf *c, const char *n
  * caller looks the row up rather than re-deriving a width from a name. */
 const char *reac_segconf_model(const struct reac_segconf *c, const char *name);
 
-/* THE KNOCK PLAN this segment names (`knock =`), or NULL for the default. The string is a
- * plan's own name from reac_knock_plans, so the caller looks the plan up by it. */
-const char *reac_segconf_knock(const struct reac_segconf *c, const char *name);
 
 /* Every VLAN segment this file DECLARES, appended to a reac_declared_vlan table: naming
  * `[segment <parent>.<vid>]` is the declaration. Since 2026-09-23 a declaration mints
