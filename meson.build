@@ -96,7 +96,11 @@ m_dep        = cc.find_library('m', required : false)
 # reac_box_facts.h (the family off the hw block, the derived name), the model catalogue
 # rename, the declared widths in discovery, the identity re-poll and the S-0808 name
 # reassembly. An older header does not compile.
-libreac_dep = dependency('libreac', version : '>=1.7.0', required : true)
+# >=1.9.0: enum reac_rate_refuse, enum reac_role_refuse, their REAC_*_REFUSE_CODES_INIT
+# tables, REAC_RATE_BIT_* / REAC_RATE_ALL_BITS and REAC_ROLE_STATE_APPLIED / _REESTABLISH_PENDING
+# are declared in <reac/reac_cfg.h> (FreeREAC/libreac#8); src/reac_rate_cfg.h and reac_role_cfg.h no
+# longer define them, so an older header does not compile.
+libreac_dep = dependency('libreac', version : '>=1.9.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
@@ -118,7 +122,7 @@ libreac_dep = dependency('libreac', version : '>=1.7.0', required : true)
 # behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
 # >=1.5.1 SINCE 1.0.27: struct reac_pacer grew with the 40-wide grant sweep (soname 6), and
 # this build allocates one.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.7.0', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.9.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
