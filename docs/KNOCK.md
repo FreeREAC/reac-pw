@@ -48,8 +48,8 @@ The plans are one table, `reac_knock_plans` in `src/reac_knock_wire.c`, chosen p
 
 | plan | knocks | use |
 |---|---|---|
-| `escalate` (default) | control, control, stream, then again | what ships until the rig check below has run |
-| `control` | control only, never a FILLER | the rig check's first question |
+| `control` (default) | control only, never a FILLER | what ships: both box families on the rig answer the control knock (2026-10-27, below) |
+| `escalate` | control, control, stream, then again | opt-in for a box family the rig check finds deaf to the control knock |
 | `stream` | a stream cycle on every knock | the rig check's control |
 
 Every plan is inside the same caps:
@@ -148,11 +148,27 @@ if every family passes it, the default plan can drop its stream knock in a follo
 family fails it, the default plan keeps the stream knock and the control-only plan is never the
 default.
 
+### What the rig answered (2026-10-27, reac-pw#58, 1.0.40)
+
+Step 1 passed for both families on the rig: an S-1608 (compact S-series) and an S-4000S-3212 (S-4000
+modular) each answered a **control knock** within a second of it, on a direct NIC and again on a
+VLAN sub-interface of a trunk. Over the day's takes (the 1.0.39 cycles included, where every
+enrolment was lost and knocked again) the journals hold 75 answers: 65 to knock 1, 9 to knock 2, 1 to
+knock 3, every one of them a control knock and none a stream knock.
+So `control` is the default from 1.0.40 and `escalate` is opt-in. What forced the change in the same
+release rather than a follow-up: with `escalate`, the daemon streams a wire it has not yet heard
+anything on, and a trunk parent is exactly such a wire until the first tagged frame arrives. On the
+rig that was 45 199 untagged REAC frames in 95 s onto the switch's native VLAN, waking nothing
+(the boxes sat behind access ports in VLANs 11 and 12). The control plan knocks the same parent
+with 347 frames per knock and the backoff above; the VLANs are found from the switch's own tagged
+traffic as before.
+
 ## Not verified
 
-- That any real box answers a control knock (the step 1 question).
+- That a box family other than the two on the rig (compact S-series, S-4000 modular) answers a
+  control knock; `knock = escalate` is the fallback for one that does not.
 - That a stream knock sent from the daemon's main loop timer, rather than the RT pacer, keeps the
-  cadence a box locks to; step 2 answers it for the default plan.
+  cadence a box locks to; no box on the rig has needed one.
 - Two boxes on two VLANs that were powered before the daemon started: with no tag heard and no
   sub-interface in the host's config, nothing finds them (README, "A box behind a trunk").
 - A box that answers only the stream, straight on a NIC the host also uses: the knock on that NIC
