@@ -1028,6 +1028,16 @@ static void gen_segconf(void)
 	seg1("knock-refused", 8, "[segment eth0]\nknock = bogus\nknock =\n"
 	     "[segment eth1]\nknock = controlx\n");
 	{
+		/* a value of 300 bytes: the refusal's reason must come before the value it
+		 * quotes, or the 200-byte refusal is all value (found by the fuzzer, #61) */
+		static char longk[400];
+		int n = snprintf(longk, sizeof longk, "[segment eth0]\nknock = ");
+		memset(longk + n, 'x', 300);
+		n += 300;
+		snprintf(longk + n, sizeof longk - (size_t)n, "\n");
+		seg1("knock-long-value", 8, longk);
+	}
+	{
 		const unsigned l[] = { 50, 99, 0 };
 		const char *const t[] = {
 			"[segment eth0]\nrole = master\n[segment eth1]\nignore = yes\n",
