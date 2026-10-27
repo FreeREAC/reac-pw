@@ -5,7 +5,6 @@
 
 #include <reac/reac_ctrlblk.h>   /* the box-model table: a model token is a ROW, never a width */
 
-#include "reac_knock_wire.h"     /* the knock plans: `knock =` names a row of their table */
 #include "reac_declared_vlan.h"
 
 #include <dirent.h>
@@ -280,25 +279,16 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			cur->ignore_set = 1;
 			snprintf(cur->ignore_file, sizeof cur->ignore_file, "%s", c->reading);
 		} else if (!strcasecmp(key, "knock")) {
-			/* WHAT A SILENT WIRE IS KNOCKED WITH (#40): a plan of reac_knock_wire's
-			 * table, looked up now so an unknown one is named at its line. It exists for
-			 * the rig check (docs/KNOCK.md), which changes it without a build. */
-			const struct reac_knock_plan *p = reac_knock_plan_find(val);
-			if (!p) {
-				char known[96];
-				size_t kn = 0;
-				for (int pi = 0; pi < reac_knock_n_plans && kn + 2 < sizeof known; pi++)
-					kn += (size_t)snprintf(known + kn, sizeof known - kn, "%s%s",
-					                       pi ? "|" : "", reac_knock_plans[pi].name);
-				refuse(c, lineno, "[segment %s] knock = '%s' is not one of %s",
-				       cur_name, val, known);
-				continue;
-			}
-			snprintf(cur->knock, sizeof cur->knock, "%s", p->name);
-			cur->knock_set = 1;
-			snprintf(cur->knock_file, sizeof cur->knock_file, "%s", c->reading);
+			/* THE KNOCK HAS ONE CONTENT (#61, 2026-10-27): the control frames of one
+			 * hunting cycle, never the stream. The plans this key once chose between
+			 * (`escalate`, `stream`) were a flood by configuration, and a word in a file
+			 * must not be able to select one; `control` is what every wire gets. */
+			refuse(c, lineno, "[segment %s] knock takes no plan since 1.0.41: the knock "
+			       "has one content, the control frames, never the stream; remove the "
+			       "line (it says '%.24s')", cur_name, val);
+			continue;
 		} else {
-			refuse(c, lineno, "[segment %s] has no key '%s' — role, model, ignore, knock",
+			refuse(c, lineno, "[segment %s] has no key '%s' — role, model, ignore",
 			       cur_name, key);
 		}
 	}
@@ -566,12 +556,6 @@ const char *reac_segconf_model(const struct reac_segconf *c, const char *name)
 {
 	const struct reac_segconf_seg *s = reac_segconf_find(c, name);
 	return s && s->model_set ? s->model : NULL;
-}
-
-const char *reac_segconf_knock(const struct reac_segconf *c, const char *name)
-{
-	const struct reac_segconf_seg *s = reac_segconf_find(c, name);
-	return s && s->knock_set ? s->knock : NULL;
 }
 
 int reac_segconf_declared(const struct reac_segconf *c, struct reac_declared_vlan *tab,
