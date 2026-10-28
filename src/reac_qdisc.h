@@ -81,7 +81,7 @@ int reac_qdisc_disarm(struct reac_qdisc *q, const char *ifname, const char *refu
  * VLAN un-minted) is not an error: there is no qdisc left to own. */
 void reac_qdisc_release(struct reac_qdisc *q);
 
-/* ---- what the qdisc DID, not what it is ----------------------------------- *
+/* ---- what the qdisc DID is libreac's to read -------------------------------- *
  *
  * THE ONE NUMBER THAT SAYS A FRAME DID NOT LEAVE. Under ETF the pacer thread only
  * has to be EARLY: it hands the kernel a launch time a lead ahead (2500 us by
@@ -98,26 +98,12 @@ void reac_qdisc_release(struct reac_qdisc *q);
  * the ETF backend and why the wake lateness is reported beside it as a separate,
  * budgeted number rather than as "late".
  *
- * WHY THE READ IS HERE AND NOT IN THE LIBRARY. libreac-transport's public door
- * (reac_etf_qdisc_state) answers WHICH qdisc is on a device — the question the
- * pacer asks at open. The counters are a different question, asked every health
- * window by the daemon that owns the qdisc, so the daemon reads them. Same
- * rtnetlink socket shape, one RTM_GETQDISC dump, no tc(8) and no subprocess.
- *
- * UNREADABLE IS NOT ZERO. A dump that could not be made returns -errno and leaves
- * `out` untouched; a health line then says so rather than printing a 0 that would
- * read as "nothing was dropped". */
-struct reac_qdisc_stats {
-	unsigned long long packets;     /* summed over every etf qdisc on the device */
-	unsigned long long bytes;
-	unsigned long long drops;       /* THE figure: frames sch_etf would not launch */
-	unsigned long long overlimits;
-	unsigned int       qdiscs;      /* how many etf qdiscs the sum covers (0 = none) */
-};
-
-/* Read `ifindex`'s etf qdisc counters. Returns 0 on a dump that completed (with
- * `qdiscs` 0 when the device carries no etf), or -errno. */
-int reac_qdisc_stats_read(int ifindex, struct reac_qdisc_stats *out);
+ * The read is reac_etf_qdisc_stats_read() and struct reac_etf_qdisc_stats, in
+ * <reac/transport/reac_etf_qdisc.h>: one RTM_GETQDISC dump, only `etf` qdiscs summed,
+ * UNREADABLE IS NOT ZERO (a dump that could not be made returns -errno and leaves the
+ * counters untouched, and the health line then says "n/a"). The daemon used to keep
+ * a copy of that walker here, on the argument that the counters are the daemon's
+ * question; ONE HOME retired it in 1.0.42, and libreac 1.10.0 fuzzes the one reader. */
 
 /* ---- the catch-up budget under ETF ---------------------------------------- *
  *

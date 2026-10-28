@@ -324,7 +324,7 @@ struct reac_sink_node {
 	/* Previous window's etf qdisc counters, so the line can report a RATE. `ok` is
 	 * 0 until a dump has succeeded once: an unreadable dump prints "n/a", never a 0
 	 * that would read as "nothing was dropped". */
-	struct reac_qdisc_stats health_qd;
+	struct reac_etf_qdisc_stats health_qd;
 	int health_qd_ok;
 };
 
@@ -1631,9 +1631,9 @@ static void sink_publish_health(struct reac_sink_node *n)
 	 * (tests/etf-late-is-the-wake.sh). */
 	char etf_line[224] = { 0 };
 	if (reac_pacer_backend(&n->pacer) == REAC_PACER_BACKEND_ETF) {
-		struct reac_qdisc_stats qd;
+		struct reac_etf_qdisc_stats qd;
 		int qrc = n->qdisc.ifindex > 0
-			? reac_qdisc_stats_read(n->qdisc.ifindex, &qd)
+			? reac_etf_qdisc_stats_read(n->qdisc.ifindex, &qd)
 			: -ENODEV;
 		char miss[32], qdrops[32];
 		if (qrc == 0 && qd.qdiscs > 0) {

@@ -14,7 +14,9 @@
  * 2. THE STATS READ SAYS UNREADABLE WHEN IT IS. A dump that completed and found no
  *    etf qdisc on the device answers 0 with qdiscs == 0; a call that could not ask
  *    answers -errno. Reporting 0 drops from a read that never happened is the
- *    absence-looks-like-silence failure this whole lane is about.
+ *    absence-looks-like-silence failure this whole lane is about. The read is
+ *    libreac's reac_etf_qdisc_stats_read since 1.0.42 (ONE HOME); this pins that the
+ *    health line's door still answers so, on this host.
  *
  * 3. THE RECORD OF WHAT THIS DAEMON INSTALLED IS THE VERDICT, AND IT SURVIVES A
  *    REMOVAL THAT FAILED (#109). Two defects of one shape: the sink node discarded
@@ -140,16 +142,17 @@ int main(void)
 	      "a zero rate cannot divide: floor at 1 slot, got %d",
 	      reac_qdisc_etf_catchup_slots(2500, 0));
 
-	/* Refusals by argument, not by guess. */
-	struct reac_qdisc_stats st;
-	CHECK(reac_qdisc_stats_read(0, &st) == -EINVAL, "ifindex 0 is refused");
-	CHECK(reac_qdisc_stats_read(1, NULL) == -EINVAL, "a NULL out is refused");
+	/* Refusals by argument, not by guess — libreac's door, the one the health line
+	 * reads through (ONE HOME, 1.0.42). */
+	struct reac_etf_qdisc_stats st;
+	CHECK(reac_etf_qdisc_stats_read(0, &st) == -EINVAL, "ifindex 0 is refused");
+	CHECK(reac_etf_qdisc_stats_read(1, NULL) == -EINVAL, "a NULL out is refused");
 
 	/* A DUMP THAT COMPLETES AND FINDS NOTHING IS NOT AN ERROR, and it is not a
 	 * silent zero either: `qdiscs` says the sum covers nothing. ifindex 0x7ffffffe
 	 * exists on no machine, so this is the "device carries no etf" answer. */
 	memset(&st, 0xAA, sizeof st);
-	int rc = reac_qdisc_stats_read(0x7ffffffe, &st);
+	int rc = reac_etf_qdisc_stats_read(0x7ffffffe, &st);
 	if (rc == 0) {
 		CHECK(st.qdiscs == 0, "a device with no etf qdisc reports qdiscs=0, got %u",
 		      st.qdiscs);

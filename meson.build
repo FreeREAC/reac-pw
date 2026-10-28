@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.41',
+  version: '1.0.42',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -100,7 +100,11 @@ m_dep        = cc.find_library('m', required : false)
 # tables, REAC_RATE_BIT_* / REAC_RATE_ALL_BITS and REAC_ROLE_STATE_APPLIED / _REESTABLISH_PENDING
 # are declared in <reac/reac_cfg.h> (FreeREAC/libreac#8); src/reac_rate_cfg.h and reac_role_cfg.h no
 # longer define them, so an older header does not compile.
-libreac_dep = dependency('libreac', version : '>=1.9.0', required : true)
+# >=1.10.0 SINCE 1.0.42: ONE HOME (libreac's 2026-09-29-shared-code-has-one-home). <reac/reac_code.h>
+# is the one code list (src/reac_code.h is gone; 1.10.0 is the first release declaring every token this
+# daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
+# copy is gone). An older header does not compile.
+libreac_dep = dependency('libreac', version : '>=1.10.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
@@ -122,7 +126,9 @@ libreac_dep = dependency('libreac', version : '>=1.9.0', required : true)
 # behaviour, not symbols, and the exact shape of failure these hand-raised floors exist for.
 # >=1.5.1 SINCE 1.0.27: struct reac_pacer grew with the 40-wide grant sweep (soname 6), and
 # this build allocates one.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.9.0', required : true)
+# >=1.10.0 SINCE 1.0.42: reac_etf_qdisc_stats_read's dump walker stops at the bytes recv() returned
+# (an unpadded last message no longer walks the stale buffer); the health line reads through it.
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.10.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
@@ -595,7 +601,8 @@ served_mark_test = executable('test_reac_served_mark',
   ['tests/test_reac_served_mark.c', 'src/reac_served_mark.c'],
   include_directories : src_inc,
   link_args : ['-Wl,--wrap=reac_link_alias_read',
-               '-Wl,--wrap=reac_link_alias_write'])
+               '-Wl,--wrap=reac_link_alias_write'],
+  dependencies : [libreac_dep])
 test('reac_served_mark', served_mark_test)
 
 # --- whole-binary test: under ETF, `late` is the THREAD'S WAKE, not the wire --
@@ -1910,20 +1917,22 @@ test('meson_headers_sit_above_their_test', python3,
           meson.current_source_dir() / 'meson.build'])
 
 # --- text: every declared reac_code is emitted, and bare refusals stay under a floor --
-# "We need the error codes and not only messages" (2026-09-17). Every token in
-# src/reac_code.h's REAC_CODE_LIST must be reachable through reac_code_emit somewhere in
-# src/*.c, and a REFUSED/FATAL/failed-shaped bare fprintf that still bypasses the helper
+# "We need the error codes and not only messages" (2026-09-17). Every token of the daemon's
+# share of libreac's <reac/reac_code.h> list (tests/reac-code-daemon-tokens.txt) must be
+# reachable through reac_code_emit somewhere in src/*.c, and no copy of what libreac declares
+# or does may appear in src/ (ONE HOME, 1.0.42), and a REFUSED/FATAL/failed-shaped bare fprintf that still bypasses the helper
 # is counted against a floor that may only fall (proportionate migration, spec §2) — a
 # change that adds a new one, or un-migrates one already counted, fails the build.
 test('reac_code_conformance', python3,
   args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
           meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'src' / 'reac_code.h'])
+          meson.current_source_dir() / 'tests' / 'reac-code-daemon-tokens.txt',
+          libreac_dep.get_variable(pkgconfig : 'includedir')])
 
 # --- text: every tests/*.sh grep/wait_for pattern maps to a producer, or is debt ------
 # "Let's be precise, let's organise tests to not depend on greps" (2026-09-17). Matches
 # every quoted grep/wait_for pattern in tests/*.sh against src/*.c's printf-family format
-# strings (conversions wildcarded) and src/reac_code.h's tokens; refuses a pattern with
+# strings (conversions wildcarded) and <reac/reac_code.h>'s tokens; refuses a pattern with
 # neither a producer nor a named line in tests/known-debt-grep-patterns.txt, which is
 # itself a ratchet (may only shrink). Sabotage-verified by injecting an unmapped pattern
 # into a scratch copy of tests/ and requiring it to be refused.
@@ -1931,7 +1940,8 @@ test('reac_asserted_lines_have_a_producer', python3,
   args : [meson.current_source_dir() / 'tests' / 'asserted-lines-have-a-producer.py',
           meson.current_source_dir() / 'tests',
           meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt'])
+          meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt',
+          libreac_dep.get_variable(pkgconfig : 'includedir')])
 
 # --- text: the public tree cites internal documents by slug; the README builds nothing --
 # Specs, notes, audits and rig files live in the private ops repository. A citation in

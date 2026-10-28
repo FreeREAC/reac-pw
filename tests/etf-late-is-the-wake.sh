@@ -22,7 +22,7 @@
 #   the daemon's own health line   the figure on trial
 #   the etf qdisc's drop counter   what the KERNEL says it refused to launch,
 #                                  read through the daemon's own door
-#                                  (reac_qdisc_stats_read), never `tc -s`
+#                                  (libreac's reac_etf_qdisc_stats_read), never `tc -s`
 #   the WIRE                       libreac's pace_hist over a tcpdump taken at the
 #                                  FAR END of the veth — the accused does not get
 #                                  to be the witness

@@ -83,7 +83,7 @@
 #include "reac_roster.h"          /* every segment as one node's props (amendment §B) */
 #include "reac_roster_node.h"     /* ...and the port-less node that carries them */
 #include "reac_link_budget.h"     /* what a master costs its physical port, and whether it fits */
-#include "reac_code.h"            /* the stable token vocabulary for refusals + status lines */
+#include <reac/reac_code.h>            /* the stable token vocabulary for refusals + status lines */
 #include "reac_knobs.h"           /* every env/conf knob, discovered AND PUBLISHED */
 #include <reac/reac_tunables.h>   /* the daemon SETS what libreac used to read via getenv */
 #include <reac/transport/reac_topo.h>       /* is this NIC a trunk, and which VLANs carry REAC */

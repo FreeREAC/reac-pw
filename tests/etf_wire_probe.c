@@ -114,7 +114,7 @@ static int do_count(const char *ifname, int secs)
 }
 
 /* stats <ifname> — what the etf qdisc DID: the drop counter the health line reports
- * as launch misses, read through the daemon's OWN door (reac_qdisc_stats_read), never
+ * as launch misses, read through libreac's door (reac_etf_qdisc_stats_read, ONE HOME 1.0.42), never
  * by scraping `tc -s qdisc show`. Same rule as the kind probe above: a formatting
  * change in iproute2 must not be able to decide a test. */
 static int do_stats(const char *ifname)
@@ -124,8 +124,8 @@ static int do_stats(const char *ifname)
 		printf("stats no-such-device %s\n", ifname);
 		return 3;
 	}
-	struct reac_qdisc_stats st;
-	int rc = reac_qdisc_stats_read((int)idx, &st);
+	struct reac_etf_qdisc_stats st;
+	int rc = reac_etf_qdisc_stats_read((int)idx, &st);
 	if (rc != 0) {
 		printf("stats unreadable errno=%d\n", -rc);
 		return 4;

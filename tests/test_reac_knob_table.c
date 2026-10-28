@@ -19,7 +19,7 @@
  *     (not presence), the last --set for a key wins, and an unknown key is refused. */
 
 #include "reac_knobs.h"
-#include "reac_code.h"
+#include <reac/reac_code.h>
 
 #include <reac/transport/reac_conf.h>
 
