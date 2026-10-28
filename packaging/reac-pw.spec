@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.41
+Version:        1.0.42
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -20,17 +20,19 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # with enrolled nodes). Against an older libreac the build dies at the #include; the floor is
 # raised anyway so the refusal arrives at configure time with a sentence somebody can read.
 # >=1.5.1 SINCE 1.0.27: the grant takes a box up to 40 channels wide (a 40 in / 0 out box).
-BuildRequires:  pkgconfig(libreac) >= 1.9.0
-BuildRequires:  pkgconfig(libreac) < 1.10
+# >=1.10.0 SINCE 1.0.42: ONE HOME — <reac/reac_code.h> is the one code list and
+# reac_etf_qdisc_stats_read the one counter read; the daemon's copies are gone.
+BuildRequires:  pkgconfig(libreac) >= 1.10.0
+BuildRequires:  pkgconfig(libreac) < 1.11
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.9.0
-BuildRequires:  pkgconfig(libreac-transport) < 1.10
+BuildRequires:  pkgconfig(libreac-transport) >= 1.10.0
+BuildRequires:  pkgconfig(libreac-transport) < 1.11
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
 # ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
 BuildRequires:  libreac-tests >= 1.7.3
-BuildRequires:  libreac-tests < 1.10
+BuildRequires:  libreac-tests < 1.11
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -41,10 +43,10 @@ Requires:       iproute
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.9.0
-Requires:       libreac < 1.10
-Requires:       libreac-transport >= 1.9.0
-Requires:       libreac-transport < 1.10
+Requires:       libreac >= 1.10.0
+Requires:       libreac < 1.11
+Requires:       libreac-transport >= 1.10.0
+Requires:       libreac-transport < 1.11
 %{?systemd_requires}
 
 %description
@@ -231,6 +233,17 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Wed Oct 28 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.42-1
+- ONE HOME (libreac's 2026-09-29-shared-code-has-one-home, #20 #21 #69): <reac/reac_code.h> is
+  the one refusal/status token list (src/reac_code.h is gone; the daemon's share of it is named
+  by enumerator in tests/reac-code-daemon-tokens.txt and every one must be emitted), and
+  libreac-transport's reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read
+  (src/reac_qdisc.c's copy is gone; the health line, the wire probe and the unit test read
+  through libreac's door). The conformance test refuses a code list, a reac_cfg.h value spelled
+  as a literal, a PACKET_AUXDATA read or an RTM_GETQDISC request in src/, each against a planted
+  copy. fuzz_qdisc keeps the catch-up budget only; libreac 1.10.0 fuzzes the one reader. Floors
+  move to libreac 1.10.0 (< 1.11).
+
 * Tue Oct 27 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.41-1
 - The knock has one content (#61): the control frames of one hunting cycle, never the stream.
   The `escalate` and `stream` plans and the `knock =` key are removed; a `knock =` line in the

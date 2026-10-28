@@ -4,7 +4,7 @@
 /* The served-interface mark. See reac_served_mark.h for why it is an alias. */
 #include "reac_served_mark.h"
 #include "reac_link_alias.h"
-#include "reac_code.h"
+#include <reac/reac_code.h>
 
 #include <errno.h>
 #include <stdio.h>

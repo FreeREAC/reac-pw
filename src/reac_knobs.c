@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 
 #include "reac_knobs.h"
-#include "reac_code.h"
+#include <reac/reac_code.h>
 
 #include <reac/reac_envflag.h>
 #include <reac/transport/reac_conf.h>

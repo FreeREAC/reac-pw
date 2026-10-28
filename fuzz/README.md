@@ -13,7 +13,7 @@ discovery) are libreac's to fuzz, and its harnesses do: no harness here drives t
 | `fuzz_headamp` | `src/reac_headamp_prop.c` | the `reac.headamp.<ch>.<param>` cells of a Props write |
 | `fuzz_rate` | `src/reac_rate_cfg.c` | the `reac.cfg.rate` Props write and the decision on it |
 | `fuzz_role` | `src/reac_role_cfg.c` | the `reac.cfg.role` Props write and its answer |
-| `fuzz_qdisc` | `src/reac_qdisc.c` (`reac_qdisc_stats_read`, `reac_qdisc_etf_catchup_slots`) | the RTM_GETQDISC dump of the etf counters |
+| `fuzz_qdisc` | `src/reac_qdisc.c` (`reac_qdisc_etf_catchup_slots`) | leads and frame rates for the catch-up budget |
 | `fuzz_link` | `src/reac_link_alias.c`, `src/reac_served_mark.c` | the RTM_GETLINK reply of an alias and link kind, the RTM_NEWLINK that writes one, and the marking policy over them |
 
 Each harness's header says how it reads its input, where its expectations come from and
@@ -70,7 +70,9 @@ which properties it checks.
   is a table lookup with no parse of its own.
 - **The qdisc policy (`reac_qdisc_arm`, `_disarm`, `_release`)**: it acts on the answers
   of libreac-transport's etf calls, not on bytes. `fuzz_qdisc` links stand-ins for those
-  calls only so the file links; it never calls the policy.
+  calls only so the file links; it never calls the policy. The etf counter read the file
+  used to carry is libreac's `reac_etf_qdisc_stats_read` since 1.0.42 (ONE HOME), fuzzed
+  there over a fake rtnetlink kernel; `fuzz_qdisc` keeps the catch-up budget.
 - **The topology tap of `src/main.c`**: the daemon reads it through libreac's
   `reac_topo_tap_read`, which holds the one read of the kernel's packet socket (the
   ifindex and packet type of `struct sockaddr_ll`, the VLAN tag of the auxdata) and
