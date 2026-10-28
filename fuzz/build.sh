@@ -42,16 +42,17 @@ segconf | pin) helpers="fuzz/catalogue.c" ;;
 *) helpers= ;;
 esac
 
-# THE NETLINK SOCKET IS THE HARNESS'S. The two readers of rtnetlink replies are compiled
-# with their socket calls renamed to the harness's fake kernel (fuzz/netlink.h), which
-# hands them the reply bytes of the input. Renaming at the compile is the way that works
+# THE NETLINK SOCKET IS THE HARNESS'S. The one reader of rtnetlink replies left here (the
+# link watch; the qdisc counters are libreac's since 1.0.42) is compiled with its socket
+# calls renamed to the harness's fake kernel (fuzz/netlink.h), which hands it the reply
+# bytes of the input. Renaming at the compile is the way that works
 # under every OSS Verify build (its docs/build-contract.md, "Functions that the
 # AddressSanitizer runtime wraps"); fortification would put libc's own inline recv back.
 NET="-U_FORTIFY_SOURCE -Dsocket=fuzz_socket -Dsend=fuzz_send -Drecv=fuzz_recv -Dclose=fuzz_close \
 -Dif_nametoindex=fuzz_if_nametoindex"
 own_flags() {
 	case $1 in
-	src/reac_qdisc.c | src/reac_link_alias.c) echo "$NET" ;;
+	src/reac_link_alias.c) echo "$NET" ;;
 	esac
 }
 

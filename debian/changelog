@@ -1,3 +1,19 @@
+reac-pw (1.0.42) unstable; urgency=medium
+
+  * ONE HOME (libreac's 2026-09-29-shared-code-has-one-home, #20 #21 #69):
+    <reac/reac_code.h> is the one refusal/status token list (src/reac_code.h
+    is gone; the daemon's share of it is named by enumerator in
+    tests/reac-code-daemon-tokens.txt and every one must be emitted), and
+    libreac-transport's reac_etf_qdisc_stats_read is the one RTM_GETQDISC
+    counter read (src/reac_qdisc.c's copy is gone; the health line, the wire
+    probe and the unit test read through libreac's door). The conformance
+    test refuses a code list, a reac_cfg.h value spelled as a literal, a
+    PACKET_AUXDATA read or an RTM_GETQDISC request in src/, each against a
+    planted copy. fuzz_qdisc keeps the catch-up budget only; libreac 1.10.0
+    fuzzes the one reader. Floors move to libreac 1.10.0 (< 1.11).
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Wed, 28 Oct 2026 03:00:00 +0000
+
 reac-pw (1.0.41) unstable; urgency=medium
 
   * The knock has one content (#61): the control frames of one hunting

@@ -4,8 +4,10 @@
 #
 # "We need the error codes and not only messages" (operator, 2026-09-17). Two checks:
 #
-#  1. Every token declared in src/reac_code.h's REAC_CODE_LIST is USED somewhere in
-#     src/*.c through reac_code_emit — a declared code nobody ever emits is exactly the
+#  1. Every token of the daemon's share of libreac's REAC_CODE_LIST (the enumerators
+#     named in tests/reac-code-daemon-tokens.txt) is USED somewhere in src/*.c through
+#     reac_code_emit, every token emitted is named there, and every name there is
+#     declared in <reac/reac_code.h> — a declared code nobody ever emits is exactly the
 #     kind of thing a conformance test exists to catch (an unreachable branch of a
 #     vocabulary that is supposed to be closed and complete).
 #  2. A FLOOR on how many refusal/failure-shaped `fprintf(stderr, "reac-pw: ...)` lines
@@ -14,7 +16,17 @@
 #     only fall. A change that adds a new bare refusal/failure line, or fails to migrate
 #     one that was already counted, pushes the count over the floor and fails the build.
 #
-# Run directly: `python3 tests/reac-code-conformance.py [src-dir] [reac_code.h]`.
+#  3. ONE HOME (libreac's 2026-09-29-shared-code-has-one-home, operator
+#     2026-09-29: "all the functions and code that can be shared, must be
+#     shared"). libreac's <reac/reac_code.h> is the only code list and <reac/reac_cfg.h>
+#     the only spelling of the cfg vocabulary; the tap read and the qdisc dump are
+#     libreac's. So: no src/ header carries an X list; no string literal in src/ equals a
+#     reac_cfg.h value (the "none" convention aside); no src/ file reads PACKET_AUXDATA,
+#     sends RTM_GETQDISC or applies the tap's tag rule. Each arm has a planted copy it
+#     must refuse.
+#
+# Run directly: `python3 tests/reac-code-conformance.py <src-dir> <daemon-tokens.txt>
+# <libreac include dir>` (meson passes the include dir libreac_dep resolved to).
 
 import os
 import re
@@ -45,9 +57,10 @@ TOKEN_DEF = re.compile(r'X\(\s*(RC_[A-Z_]+)\s*,\s*"([A-Z_]+)"\s*\)')
 
 def find_libreac(reac_pw_root):
     """The sibling libreac checkout, when present: LIBREAC_SRCDIR if set, else the
-    conventional sibling beside this repo. Recognized by shipping include/reac/reac_code.h — the
-    shared vocabulary header (2026-09-17-tunables-api-and-shared-refusal-codes) — not just by
-    existing:
+    conventional sibling beside this repo (tools/r1-build-test.sh's own convention
+    for the same lookup). Recognized by shipping include/reac/reac_code.h — the
+    shared vocabulary header (2026-09-17-tunables-api-and-shared-refusal-codes) —
+    not just by existing:
     an older libreac clone with no such header has nothing this scan can join.
     Returns None, silently, when neither is found: this ratchet must not require
     the sibling checkout to build or test reac-pw on its own."""
@@ -78,8 +91,92 @@ def statement_text(lines, start_idx, max_lines=8):
 
 
 def declared_tokens(code_h_path):
+    """Every token of libreac's one REAC_CODE_LIST."""
     text = code_h_path.read_text()
     return {name: token for name, token in TOKEN_DEF.findall(text)}
+
+
+def daemon_tokens(list_path):
+    """The enumerators tests/reac-code-daemon-tokens.txt names: the daemon's share."""
+    names = []
+    for line in list_path.read_text().splitlines():
+        line = line.split('#', 1)[0].strip()
+        if line:
+            names.append(line)
+    return names
+
+
+def strip_comments(text):
+    text = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
+    return re.sub(r'//[^\n]*', '', text)
+
+
+STRING_LIT = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+CFG_STRING_DEF = re.compile(r'^#define\s+([A-Z_0-9]+)\s+"([^"]*)"', re.M)
+LIBREAC_ONLY = [
+    (re.compile(r'\bPACKET_AUXDATA\b'), 'reads PACKET_AUXDATA: the tap read is reac_topo_tap_read()'),
+    (re.compile(r'\bRTM_GETQDISC\b'),
+     'dumps RTM_GETQDISC: the dump is reac_etf_qdisc_state() / reac_etf_qdisc_stats_read()'),
+    (re.compile(r'&\s*TP_STATUS_VLAN_VALID\b'),
+     'applies the tap\'s tag rule: reac_topo_tap_read() does'),
+]
+
+
+def one_home_offences(src_dir, cfg_h):
+    """Arm 3. Returns a list of 'file:line: why' strings."""
+    out = []
+    for path in sorted(src_dir.glob('*.h')):
+        local = strip_comments(path.read_text())
+        if TOKEN_DEF.search(local) or 'REAC_CODE_LIST' in local:
+            out.append(f'{path.name}: carries a code list of its own; the list is '
+                       f'libreac\'s <reac/reac_code.h> (append the code there)')
+    # A value reac_cfg.h gives to more than one name ("applied" is rate's and role's)
+    # is a word of the estate, like "none", and another family (reac.headamp.state)
+    # may use it too; a value with ONE name is that name's spelling and nobody else's.
+    defs = CFG_STRING_DEF.findall(cfg_h.read_text())
+    count = {}
+    for _, v in defs:
+        count[v] = count.get(v, 0) + 1
+    values = {v: n for n, v in defs if v not in ('', 'none') and count[v] == 1}
+    for path in sorted(src_dir.glob('*.[ch]')):
+        text = strip_comments(path.read_text())
+        for i, line in enumerate(text.splitlines(), 1):
+            for m in STRING_LIT.finditer(line):
+                if m.group(1) in values:
+                    out.append(f'{path.name}:{i}: "{m.group(1)}" is {values[m.group(1)]} '
+                               f'in <reac/reac_cfg.h>; name it, never spell it')
+            for rx, why in LIBREAC_ONLY:
+                if rx.search(line):
+                    out.append(f'{path.name}:{i}: {why}')
+    return out
+
+
+def planted_one_home(cfg_h):
+    """The detector must refuse each planted copy and pass the planted good tree;
+    otherwise a clean result is a broken search, not a clean tree."""
+    import tempfile
+    defs = CFG_STRING_DEF.findall(cfg_h.read_text())
+    vals = [v for _, v in defs]
+    val = next(v for v in vals if v not in ('', 'none') and vals.count(v) == 1)
+    good_code = '#include <reac/reac_code.h>\n'
+    cases = {
+        'good': (good_code, 'const char *k = REAC_CFG_RATE_PROP;\n', 0),
+        'list': ('#define REAC_CODE_LIST(X) X(RC_E_A, "E_A")\n', '', 1),
+        'literal': (good_code, f'const char *k = "{val}";\n', 1),
+        'auxdata': (good_code, 'int t = PACKET_AUXDATA;\n', 1),
+        'getqdisc': (good_code, 'int t = RTM_GETQDISC;\n', 1),
+        'tagrule': (good_code, 'int t = st & TP_STATUS_VLAN_VALID;\n', 1),
+    }
+    for name, (code, c, want) in cases.items():
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / 'x.h').write_text(code)
+            (d / 'x.c').write_text('/* "' + val + '" in a comment is prose */\n' + c)
+            got = len(one_home_offences(d, cfg_h))
+            if (got > 0) != bool(want):
+                return f'the one-home arm {"passed" if want else "refused"} its planted ' \
+                       f'{name} tree -- the arm is broken'
+    return None
 
 
 def used_tokens(src_files):
@@ -112,17 +209,42 @@ def bare_refusal_lines(src_files, start_pattern=FPRINTF_START):
 
 def main(argv):
     src_dir = Path(argv[1]) if len(argv) > 1 else Path('src')
-    code_h = Path(argv[2]) if len(argv) > 2 else src_dir / 'reac_code.h'
-
-    if not code_h.exists():
-        print(f'{code_h} not found -- the scan is broken, not the code', file=sys.stderr)
-        return 1
-
-    declared = declared_tokens(code_h)
-    if not declared:
-        print(f'found zero tokens in {code_h} -- the scan is broken, not the header',
+    daemon_list = Path(argv[2]) if len(argv) > 2 else Path('tests') / 'reac-code-daemon-tokens.txt'
+    inc = Path(argv[3]) if len(argv) > 3 else None
+    if inc is None or not (inc / 'reac' / 'reac_code.h').exists():
+        print(f'no <reac/reac_code.h> under {inc} -- the scan cannot read the one list',
               file=sys.stderr)
         return 1
+    lib_code_h = inc / 'reac' / 'reac_code.h'
+    cfg_h = inc / 'reac' / 'reac_cfg.h'
+
+    if not daemon_list.exists():
+        print(f'{daemon_list} not found -- the scan is broken, not the code', file=sys.stderr)
+        return 1
+
+    broken = planted_one_home(cfg_h)
+    if broken:
+        print(broken, file=sys.stderr)
+        return 1
+    offences = one_home_offences(src_dir, cfg_h)
+    if offences:
+        print(f'{len(offences)} copy/copies of what libreac declares or does:', file=sys.stderr)
+        for o in offences:
+            print(f'  {o}', file=sys.stderr)
+        return 1
+
+    one_list = declared_tokens(lib_code_h)
+    ours = daemon_tokens(daemon_list)
+    if not one_list or not ours:
+        print(f'found zero tokens in {lib_code_h} or {daemon_list} -- the scan is broken',
+              file=sys.stderr)
+        return 1
+    undeclared = sorted(set(ours) - set(one_list))
+    if undeclared:
+        print(f'{len(undeclared)} name(s) in {daemon_list.name} are not in libreac\'s list: '
+              f'{undeclared}', file=sys.stderr)
+        return 1
+    declared = {n: one_list[n] for n in ours}
 
     src_files = sorted(src_dir.glob('*.c'))
     if not src_files:
@@ -150,6 +272,11 @@ def main(argv):
     if unused:
         print(f'{len(unused)} declared code(s) are never emitted: {unused}', file=sys.stderr)
         return 1
+    unlisted = sorted(used_tokens(src_files) - set(ours))
+    if unlisted:
+        print(f'{len(unlisted)} code(s) emitted by src/ are not named in {daemon_list.name}: '
+              f'{unlisted}', file=sys.stderr)
+        return 1
 
     if len(hits) > FLOOR:
         print(f'{len(hits)} bare refusal/failure fprintf lines bypass reac_code_emit, '
@@ -158,7 +285,8 @@ def main(argv):
             print(f'  {h}', file=sys.stderr)
         return 1
 
-    print(f'OK: {len(declared)} codes all emitted at least once; '
+    print(f'OK: one home (no list, literal, tap read or qdisc dump copied); '
+          f'{len(declared)} codes all emitted at least once; '
           f'{len(hits)} bare refusal line(s) left (floor {FLOOR}){joined_note}.')
     return 0
 
