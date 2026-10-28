@@ -5,7 +5,7 @@
 
 #include "reac_roster_node.h"
 
-#include "reac_code.h"
+#include <reac/reac_code.h>
 
 #include <pipewire/pipewire.h>
 #include <pipewire/filter.h>

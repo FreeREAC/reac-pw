@@ -63,6 +63,32 @@ for n in 'libreac-dev' 'libreac-transport-dev' 'libreac-tests'; do
 done
 
 # --- no libreac source pin, in the tracked tree (the tarball case: the files that exist)
+# ONE FLOOR, ONE CEILING (2026-10-28). Every site names the same libreac range: meson.build's
+# two dependency() floors, the spec's BuildRequires and Requires, control's -dev Build-Depends;
+# the ceilings add libreac-tests (its floor is older on purpose). 1.0.42's first RPM raised the
+# BuildRequires to 1.10 and left `Requires: libreac < 1.10` in place -- bounded, so this gate
+# passed -- and dnf then downgraded libreac under the running daemon to satisfy it.
+FLOOR_RE='^(Build)?Requires: +(pkgconfig[(])?libreac(-transport)?[)]? +>='
+CEIL_RE='^(Build)?Requires: +(pkgconfig[(])?libreac[-a-z]*[)]? +<'
+ver() { grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
+[ "$(decl 'Requires:       libreac >= 1.9.0' "$FLOOR_RE" | sed 's/.*>=//' | ver)" = 1.9.0 ] \
+	|| { echo "FAIL: self-check: the floor pattern cannot read a planted Requires line" >&2; exit 1; }
+[ "$(decl 'Requires:       libreac-transport < 1.10' "$CEIL_RE" | sed 's/.*<//' | ver)" = 1.10 ] \
+	|| { echo "FAIL: self-check: the ceiling pattern cannot read a planted Requires line" >&2; exit 1; }
+floors=$( {
+	grep -oE "dependency\('libreac(-transport)?', version : '>= *[0-9.]+'" "$ROOT/meson.build" | sed "s/.*>=//" | grep -oE '[0-9.]+'
+	decl "$stext" "$FLOOR_RE" | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
+	decl "$ctext" '^ *libreac(-transport)?-dev [(]>=' | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
+} | sort -u)
+ceilings=$( {
+	decl "$stext" "$CEIL_RE" | while read -r l; do sed 's/.*<//' <<<"$l" | ver; done
+	decl "$ctext" '^ *libreac[-a-z]* [(]<<' | while read -r l; do sed 's/.*<<//' <<<"$l" | ver; done
+} | sort -u)
+[ "$(wc -l <<<"$floors")" = 1 ] && [ "$(wc -w <<<"$floors")" = 1 ] \
+	|| say "the libreac floor is not ONE value across meson.build, the spec and control: $(tr '\n' ' ' <<<"$floors")"
+[ "$(wc -l <<<"$ceilings")" = 1 ] && [ "$(wc -w <<<"$ceilings")" = 1 ] \
+	|| say "the libreac ceiling is not ONE value across the spec and control: $(tr '\n' ' ' <<<"$ceilings")"
+
 hits=$(cd "$ROOT" && {
 	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git ls-files; else find . -type f | sed 's,^\./,,'; fi
 } | grep -Ev '^(docs/|facts/)' | grep -v "^tests/$SELF$" | while read -r f; do
@@ -72,5 +98,5 @@ hits=$(cd "$ROOT" && {
 done)
 [ -z "$hits" ] || { say "libreac is pinned or fetched as source:"; echo "$hits" >&2; }
 
-[ "$fail" = 0 ] && echo "OK: libreac is bounded in spec and control and pinned nowhere"
+[ "$fail" = 0 ] && echo "OK: libreac is bounded in spec and control, one floor and one ceiling everywhere, pinned nowhere"
 exit "$fail"

@@ -5,5 +5,5 @@ pin 23
 headamp 114
 rate 102
 role 60
-qdisc 120
+qdisc 12
 link 180

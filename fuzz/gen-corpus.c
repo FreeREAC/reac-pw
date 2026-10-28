@@ -46,11 +46,6 @@ static void puts_(struct g *g, const char *s)
 		put8(g, (uint8_t)*s++);
 }
 
-static void putn(struct g *g, const void *p, size_t n)
-{
-	for (size_t i = 0; i < n; i++)
-		put8(g, ((const uint8_t *)p)[i]);
-}
 
 static int g_failed;
 
@@ -450,234 +445,57 @@ static void gen_role(void)
 
 /* ---- fuzz_qdisc: [reads] then per read [ifindex][flags][errno][end errno][chunks] -------- */
 
-static void qread(struct g *g, int ifindex, unsigned flags, unsigned nchunks)
+/* ---- qdisc: the catch-up budget, [u8 budgets][u16 lead][u8 fps selector]... ---- */
+static void qbudget(struct g *g, unsigned lead_us, unsigned fps_sel)
 {
-	put8(g, (unsigned)(uint8_t)ifindex);
-	put8(g, flags);
-	put8(g, 0);   /* ENOBUFS */
-	put8(g, 0);
-	put8(g, nchunks);
+	put16(g, lead_us);
+	put8(g, fps_sel);
 }
-
-/* a chunk of `n` messages spelled by msg_build */
-static void qchunk(struct g *g, unsigned n)
-{
-	put8(g, 0);
-	put8(g, n);
-}
-
-/* an etf (or `kind_attr`) qdisc of the device asked for (other: another) with `nattr`
- * attributes to follow */
-static void qmsg(struct g *g, int other, unsigned nattr)
-{
-	put8(g, 0);
-	put8(g, other ? 1 : 0);
-	put8(g, nattr);
-}
-
-static void qkind_etf(struct g *g)
-{
-	put8(g, 0);
-}
-
-/* TCA_STATS2 with a basic block and a queue block */
-static void qstats2(struct g *g, uint32_t bytes, uint32_t packets, uint32_t drops,
-                    uint32_t over)
-{
-	put8(g, 2);
-	put8(g, 2);
-	put8(g, 0); put32(g, bytes); put32(g, packets); put32(g, 0);
-	put8(g, 1); put32(g, 0); put32(g, drops); put32(g, over);
-}
-
-/* TCA_STATS, whole (3) or too short (4) */
-static void qstats1(struct g *g, unsigned a, uint32_t bytes, uint32_t packets, uint32_t drops,
-                    uint32_t over)
-{
-	put8(g, a);
-	put32(g, bytes); put32(g, packets); put32(g, drops); put32(g, over);
-}
-
-static void qdone(struct g *g)
-{
-	put8(g, 1);
-}
-
-static void qend(struct g *g, unsigned lead, unsigned fps)
-{
-	put16(g, lead);
-	put8(g, fps);
-}
-
 static void gen_qdisc(void)
 {
 	struct g g;
 
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 3);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 1000, 10, 2, 3);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 500, 5, 4, 1);
-	qdone(&g);
-	qend(&g, 2500, 0);
-	emit("qdisc", "two-etf-qdiscs", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 3);
-	qmsg(&g, 1, 2); qkind_etf(&g); qstats2(&g, 1000, 10, 2, 3);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 7, 1, 1, 1);
-	qdone(&g);
-	qend(&g, 400, 1);
-	emit("qdisc", "other-device", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 5);
-	qmsg(&g, 0, 2); put8(&g, 25); qstats2(&g, 1000, 10, 2, 3);    /* "etfx" */
-	qmsg(&g, 0, 2); put8(&g, 1); qstats2(&g, 1000, 10, 2, 3);     /* "fq_codel" */
-	qmsg(&g, 0, 2); put8(&g, 133); qstats2(&g, 1000, 10, 2, 3);   /* "etf", no NUL */
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 1, 1, 1, 1);
-	qdone(&g);
-	qend(&g, 2500, 4);
-	emit("qdisc", "other-kinds", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 2);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats1(&g, 4, 900, 9, 4, 6);
-	qdone(&g);
-	qend(&g, 2500, 1);
-	emit("qdisc", "stats1-short", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 2);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats1(&g, 3, 900, 9, 4, 6);
-	qdone(&g);
-	qend(&g, 2500, 5);
-	emit("qdisc", "stats1-only", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 2);
-	qdone(&g);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 1000, 10, 2, 3);
-	qend(&g, 2500, 0);
-	emit("qdisc", "done-then-more", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 1);
-	put8(&g, 2); put8(&g, 0);   /* an ACK: no dump at all */
-	qend(&g, 2500, 0);
-	emit("qdisc", "error-ack", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 1);
-	put8(&g, 2); put8(&g, 196);   /* -EPERM, cut after its code */
-	qend(&g, 2500, 0);
-	emit("qdisc", "error-short", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 1);
-	put8(&g, 2); put8(&g, 4);     /* a positive code */
-	qend(&g, 2500, 0);
-	emit("qdisc", "error-positive", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 1);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 1000, 10, 2, 3);
-	qend(&g, 2500, 0);
-	emit("qdisc", "replies-end", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 1, 0);
-	qend(&g, 2500, 0);
-	emit("qdisc", "socket-fails", &g);
-
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 2, 0);
-	qend(&g, 2500, 0);
-	emit("qdisc", "send-fails", &g);
-
+	/* the shipped lead at the two rig rates */
 	g.n = 0;
 	put8(&g, 2);
-	qread(&g, 0, 0, 0);
-	qread(&g, 5, 4, 0);
-	qend(&g, 100, 0);
-	emit("qdisc", "index-zero", &g);
+	qbudget(&g, 2500, 0);
+	qbudget(&g, 2500, 1);
+	emit("qdisc", "lead-2500-at-8000", &g);
 
-	/* two chunks, the DONE in the second; a raw chunk of a header too short */
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 9, 0, 3);
-	qchunk(&g, 1);
-	qmsg(&g, 0, 2); qkind_etf(&g); qstats2(&g, 1, 2, 3, 4);
-	put8(&g, 1); put16(&g, 7); putn(&g, "\x10\0\0\0\x24\0\0", 7);
-	qchunk(&g, 2);
-	qmsg(&g, 0, 1); qkind_etf(&g);
-	qdone(&g);
-	qend(&g, 65535, 4);
-	emit("qdisc", "multi-chunk", &g);
-
-	/* the last message of the reply is not padded */
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 1);
-	put8(&g, 6); put8(&g, 0); put8(&g, 1); qkind_etf(&g);
-	qend(&g, 2500, 0);
-	emit("qdisc", "unpadded-last", &g);
-
-	/* a kind attribute with no payload at all */
-	g.n = 0;
-	put8(&g, 1);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 2);
-	qmsg(&g, 0, 1);
-	for (unsigned a = 128; a < 256; a++)
-		if (a % 6 == 1 && (a >> 3) % 5 == 2) {
-			put8(&g, a);
-			break;
-		}
-	qdone(&g);
-	qend(&g, 2500, 0);
-	emit("qdisc", "kind-empty", &g);
-
-	/* a qdisc message too short for its tcmsg, another type, a header too short, an
-	 * unpadded last message */
+	/* a lead at and inside the qdisc's delta: no repayable debt, the floor of 1 */
 	g.n = 0;
 	put8(&g, 3);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 3);
-	put8(&g, 3);
-	put8(&g, 4);
-	put8(&g, 5);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 1);
-	put8(&g, 7);
-	qread(&g, 3, 0, 1);
-	qchunk(&g, 2);
-	qmsg(&g, 0, 1); qkind_etf(&g);
-	put8(&g, 6); put8(&g, 0); put8(&g, 1); qkind_etf(&g);
-	qend(&g, 3000, 3);
-	emit("qdisc", "malformed", &g);
+	qbudget(&g, 300, 0);
+	qbudget(&g, 50, 0);
+	qbudget(&g, 400, 1);
+	emit("qdisc", "lead-inside-delta", &g);
+
+	g.n = 0;
+	put8(&g, 1);
+	qbudget(&g, 2500, 2);
+	emit("qdisc", "no-rate", &g);
+
+	g.n = 0;
+	put8(&g, 1);
+	qbudget(&g, 2500, 3);
+	emit("qdisc", "negative-rate", &g);
+
+	/* the ceiling: the largest lead at the largest rate */
+	g.n = 0;
+	put8(&g, 2);
+	qbudget(&g, 65535, 5);
+	qbudget(&g, 65535, 4);
+	emit("qdisc", "lead-max-at-max-rate", &g);
+
+	/* a 96 kHz segment at the shipped lead, and no budget at all */
+	g.n = 0;
+	put8(&g, 1);
+	qbudget(&g, 2500, 4);
+	emit("qdisc", "lead-2500-at-96k", &g);
+
+	g.n = 0;
+	put8(&g, 0);
+	emit("qdisc", "no-budget", &g);
 }
 
 /* ---- fuzz_link: operations, each [op] then its fields and the kernel ------------------- */

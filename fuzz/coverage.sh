@@ -49,8 +49,7 @@ funcs() {
 		reac_rate_prop_parse ;;
 	role) echo src/reac_role_cfg.c :: reac_role_refuse_code reac_role_cfg_changes \
 		reac_role_cfg_apply_state value_pod_to_role_flag reac_role_prop_parse ;;
-	qdisc) echo src/reac_qdisc.c :: qd_take_stats2 qd_take_stats1 qd_take_qdisc \
-		reac_qdisc_stats_read reac_qdisc_etf_catchup_slots ;;
+	qdisc) echo src/reac_qdisc.c :: reac_qdisc_etf_catchup_slots ;;
 	link) echo src/reac_link_alias.c src/reac_served_mark.c :: copy_attr nl_talk \
 		reac_link_alias_read reac_link_alias_write reac_served_decide remember \
 		reac_served_mark reac_served_unmark_all ;;

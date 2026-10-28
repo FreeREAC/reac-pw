@@ -11,15 +11,9 @@
 #include <reac/transport/reac_etf_qdisc.h>
 
 #include <errno.h>
-#include <linux/gen_stats.h>
-#include <linux/netlink.h>
-#include <linux/pkt_sched.h>
-#include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 {
@@ -168,158 +162,13 @@ void reac_qdisc_release(struct reac_qdisc *q)
 	memset(q, 0, sizeof *q);
 }
 
-/* ---- the counters --------------------------------------------------------- *
+/* ---- the counters are libreac's ------------------------------------------- *
  *
- * One RTM_GETQDISC dump, the same shape libreac-transport's own probe uses, read
- * for its STATS rather than its kind. See reac_qdisc.h for why the daemon asks this
- * question and the library asks the other one.
- *
- * WE FILTER BY IFINDEX IN USERSPACE. tcm_ifindex in the request is honoured by
- * recent kernels and ignored by older ones, which answer with every device's
- * qdiscs; a reader that trusted the filter would count another interface's drops on
- * exactly the kernels where it matters least to notice. Cheap, and it cannot be
- * wrong.
- *
- * AND ONLY `etf` QDISCS ARE SUMMED. On a multiqueue NIC etf is attached per TX
- * queue under an `mq` root, so the total is over however many there are — but an
- * fq_codel that happens to share the device is somebody else's ledger and its drops
- * are not ours to report. */
-struct qd_sum {
-	int ifindex;
-	struct reac_qdisc_stats *out;
-};
-
-static void qd_take_stats2(const struct rtattr *rta, struct reac_qdisc_stats *o)
-{
-	int len = (int)RTA_PAYLOAD(rta);
-	for (const struct rtattr *a = RTA_DATA(rta); RTA_OK(a, len);
-	     a = RTA_NEXT(a, len)) {
-		if (a->rta_type == TCA_STATS_BASIC &&
-		    RTA_PAYLOAD(a) >= sizeof(struct gnet_stats_basic)) {
-			struct gnet_stats_basic b;
-			memcpy(&b, RTA_DATA(a), sizeof b);
-			o->bytes   += b.bytes;
-			o->packets += b.packets;
-		} else if (a->rta_type == TCA_STATS_QUEUE &&
-		           RTA_PAYLOAD(a) >= sizeof(struct gnet_stats_queue)) {
-			struct gnet_stats_queue q;
-			memcpy(&q, RTA_DATA(a), sizeof q);
-			o->drops      += q.drops;
-			o->overlimits += q.overlimits;
-		}
-	}
-}
-
-/* The pre-STATS2 attribute, kept because a kernel that answers only this one would
- * otherwise report a silent zero — the absence shape this whole lane is about. */
-static void qd_take_stats1(const struct rtattr *rta, struct reac_qdisc_stats *o)
-{
-	if (RTA_PAYLOAD(rta) < sizeof(struct tc_stats))
-		return;
-	struct tc_stats s;
-	memcpy(&s, RTA_DATA(rta), sizeof s);
-	o->bytes      += s.bytes;
-	o->packets    += s.packets;
-	o->drops      += s.drops;
-	o->overlimits += s.overlimits;
-}
-
-static void qd_take_qdisc(const struct nlmsghdr *nh, struct qd_sum *sum)
-{
-	if (nh->nlmsg_len < NLMSG_LENGTH(sizeof(struct tcmsg)))
-		return;
-	const struct tcmsg *tcm = NLMSG_DATA(nh);
-	if (tcm->tcm_ifindex != sum->ifindex)
-		return;
-
-	int len = (int)(nh->nlmsg_len - NLMSG_LENGTH(sizeof *tcm));
-	const struct rtattr *kind = NULL, *st2 = NULL, *st1 = NULL;
-	for (const struct rtattr *a = (const struct rtattr *)((const char *)tcm + NLMSG_ALIGN(sizeof *tcm));
-	     RTA_OK(a, len); a = RTA_NEXT(a, len)) {
-		if (a->rta_type == TCA_KIND)        kind = a;
-		else if (a->rta_type == TCA_STATS2) st2  = a;
-		else if (a->rta_type == TCA_STATS)  st1  = a;
-	}
-	if (!kind || RTA_PAYLOAD(kind) == 0)
-		return;
-	const char *name = RTA_DATA(kind);
-	if (strnlen(name, RTA_PAYLOAD(kind)) >= RTA_PAYLOAD(kind) || strcmp(name, "etf") != 0)
-		return;
-
-	sum->out->qdiscs++;
-	if (st2)
-		qd_take_stats2(st2, sum->out);
-	else if (st1)
-		qd_take_stats1(st1, sum->out);
-}
-
-int reac_qdisc_stats_read(int ifindex, struct reac_qdisc_stats *out)
-{
-	if (!out || ifindex <= 0)
-		return -EINVAL;
-
-	int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-	if (fd < 0)
-		return -errno;
-
-	struct {
-		struct nlmsghdr nh;
-		struct tcmsg    tcm;
-	} req;
-	memset(&req, 0, sizeof req);
-	req.nh.nlmsg_len   = NLMSG_LENGTH(sizeof req.tcm);
-	req.nh.nlmsg_type  = RTM_GETQDISC;
-	req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-	req.nh.nlmsg_seq   = 1;
-	req.tcm.tcm_family  = AF_UNSPEC;
-	req.tcm.tcm_ifindex = ifindex;
-
-	if (send(fd, &req, req.nh.nlmsg_len, 0) < 0) {
-		int e = -errno;
-		close(fd);
-		return e;
-	}
-
-	struct reac_qdisc_stats acc;
-	memset(&acc, 0, sizeof acc);
-	struct qd_sum sum = { .ifindex = ifindex, .out = &acc };
-
-	char buf[16384];
-	int done = 0, rc = 0;
-	while (!done) {
-		ssize_t n = recv(fd, buf, sizeof buf, 0);
-		if (n < 0) {
-			rc = -errno;
-			break;
-		}
-		if (n == 0)
-			break;
-		/* `n` stays signed: a last message whose length is not padded leaves it below
-		 * 0, and NLMSG_OK on an unsigned cast of that would read on past the reply. */
-		for (struct nlmsghdr *nh = (struct nlmsghdr *)buf;
-		     NLMSG_OK(nh, n); nh = NLMSG_NEXT(nh, n)) {
-			if (nh->nlmsg_type == NLMSG_DONE) { done = 1; break; }
-			if (nh->nlmsg_type == NLMSG_ERROR) {
-				const struct nlmsgerr *err = NLMSG_DATA(nh);
-				/* An error too short to hold its code is no answer: its code
-				 * would be read from past the message. */
-				if (nh->nlmsg_len < NLMSG_LENGTH(sizeof *err))
-					rc = -EIO;
-				else
-					rc = err->error ? err->error : -EIO;
-				done = 1;
-				break;
-			}
-			if (nh->nlmsg_type == RTM_NEWQDISC)
-				qd_take_qdisc(nh, &sum);
-		}
-	}
-	close(fd);
-	if (rc != 0)
-		return rc;
-	*out = acc;
-	return 0;
-}
+ * reac_etf_qdisc_stats_read (<reac/transport/reac_etf_qdisc.h>) is the one RTM_GETQDISC
+ * counter read; the health line calls it. This file used to carry a copy of that dump
+ * walker, which ONE HOME (libreac's 2026-09-29-shared-code-has-one-home) retired in
+ * 1.0.42: libreac 1.10.0 fuzzes the one reader, and tests/reac-code-conformance.py
+ * refuses an RTM_GETQDISC request built here. */
 
 int reac_qdisc_etf_catchup_slots(unsigned lead_us, int fps)
 {

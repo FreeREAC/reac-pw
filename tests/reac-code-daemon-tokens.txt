@@ -1,0 +1,28 @@
+# THE DAEMON'S SHARE OF THE ONE CODE LIST (ONE HOME, 1.0.42). libreac's <reac/reac_code.h>
+# declares every refusal/status token both libreac and this daemon print, in one list whose
+# order is fixed (a token is appended, never inserted). Which of those tokens are THIS
+# daemon's to emit is this daemon's knowledge, so it is named here, by enumerator and never by
+# the token string (libreac's tests/conformance-declared-once.sh refuses a token typed outside
+# its header). tests/reac-code-conformance.py requires every name here to be emitted by
+# src/*.c through reac_code_emit, every emitted name to be here, and every name to exist in
+# libreac's header -- so a code nobody emits any more is removed here on purpose, never left.
+# One enumerator per line; # starts a comment.
+RC_E_ENROLL_REFUSED
+RC_E_KNOCK_TX
+RC_E_LINK_BUDGET
+RC_E_NOT_MARKED
+RC_E_ORPHAN_PAIR
+RC_E_ROOT_REFUSED
+RC_E_ROSTER_NODE
+RC_E_ROSTER_REMOVE
+RC_E_SEGMENT_HELD
+RC_E_SIZING
+RC_E_UNKNOWN_KNOB
+RC_E_WAKE_EDGE
+RC_S_BUDGET_YIELDED
+RC_S_KNOB_SET
+RC_S_KNOB_SUMMARY
+RC_S_NO_OVERRIDES
+RC_S_SEGMENT_DROPPED
+RC_S_SEGMENT_HEARD
+RC_S_SEGMENT_UP

@@ -17,7 +17,7 @@
 # ratchet whose entry count may only fall (FLOOR below).
 #
 # Proportionate, not a rewrite: most patterns here stay prose, tracked as debt rather
-# than migrated to a src/reac_code.h token (spec
+# than migrated to a <reac/reac_code.h> token (spec
 # 2026-09-17-knobs-codes-and-test-ratchets §3). This script's job is only to make sure every one of them still
 # corresponds to something the daemon can actually say.
 
@@ -116,15 +116,16 @@ def extract_producers(src_dir):
 TOKEN_DEF = re.compile(r'X\(\s*RC_[A-Z_]+\s*,\s*"([A-Z_]+)"\s*\)')
 
 
-def extract_code_tokens(src_dir):
+def extract_code_tokens(code_h):
     """reac_code.h's tokens are never a string literal at their fprintf call site
     (the call passes the ENUM; reac_code_token() maps it to text at runtime), so a
     test pattern that matches on the bare token (e.g. 'E_ROOT_REFUSED') needs these
     added as their own one-word producers, or every such test would show as
-    unmapped despite reac_code_emit being the thing that prints it."""
-    code_h = src_dir / 'reac_code.h'
+    unmapped despite reac_code_emit being the thing that prints it. The header is
+    libreac's <reac/reac_code.h> (ONE HOME, 1.0.42); a missing one is a broken scan."""
     if not code_h.exists():
-        return []
+        print(f'{code_h} not found -- the scan is broken, not the tests', file=sys.stderr)
+        sys.exit(1)
     text = code_h.read_text()
     return [(code_h.name, 0, tok) for tok in TOKEN_DEF.findall(text)]
 
@@ -179,12 +180,13 @@ def main(argv):
     tests_dir = Path(argv[1]) if len(argv) > 1 else Path('tests')
     src_dir = Path(argv[2]) if len(argv) > 2 else Path('src')
     debt_path = Path(argv[3]) if len(argv) > 3 else tests_dir / 'known-debt-grep-patterns.txt'
+    inc = Path(argv[4]) if len(argv) > 4 else Path('/usr/include')
 
     patterns = extract_patterns(tests_dir)
     if not patterns:
         print('found zero test patterns -- the scan is broken, not the tests', file=sys.stderr)
         return 1
-    producers = extract_producers(src_dir) + extract_code_tokens(src_dir)
+    producers = extract_producers(src_dir) + extract_code_tokens(inc / 'reac' / 'reac_code.h')
     if not producers:
         print('found zero producer format strings -- the scan is broken, not the code',
               file=sys.stderr)
