@@ -765,6 +765,19 @@ static void gen_link(void)
 	lkernel(&g, 0, 1);
 	lerror(&g, 1);
 	emit("link", "reply-says-enodev", &g);
+
+	/* a mark whose reply carries nlmsgerr .error = INT_MIN, in the input's own bytes:
+	 * netlink(7) puts no floor under that field, and negating INT_MIN is undefined */
+	g.n = 0;
+	lmark(&g, 0);
+	lkernel(&g, 0, 1);
+	put8(&g, 1);                      /* the chunk is the input's own bytes */
+	put16(&g, 35);                    /* 1 + 35 = 36, the length of the chunk */
+	put32(&g, 36); put16(&g, 2); put16(&g, 0); put32(&g, 1); put32(&g, 0);
+	put32(&g, 0x80000000u);           /* struct nlmsgerr .error = INT_MIN */
+	for (int i = 0; i < 16; i++)
+		put8(&g, 0);              /* the request's header, as nlmsgerr carries it */
+	emit("link", "mark-error-int-min", &g);
 }
 
 /* ---- fuzz_segconf: [cap][flags][files] then per file [label][u16 len][text] ------------- */
