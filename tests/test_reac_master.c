@@ -656,12 +656,22 @@ int main(void)
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_BYE, BOX, NULL) == 1);
 	CHK(m.state == REAC_M_PROBING && m.drop_reason == REAC_M_DROP_BYE);
 
-	/* JOIN from a second MAC while established -> mac-change, re-grant the new */
+	/* A JOIN FROM A SECOND MAC WHILE ESTABLISHED IS REFUSED (libreac's peer binding: the box
+	 * that is bound decides, a host forging REAC frames does not). A box SWAP still works,
+	 * because the old box goes silent: the budget drains to PROBING and the next JOIN
+	 * courts the new one, re-granted as before. */
 	establish(&m, &cnt, BOX);
 	deliver_scene(&m, &cnt);
-	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);
+	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 0);
+	CHK(m.state == REAC_M_ESTABLISHED);
+	CHK(memcmp(m.box_mac, BOX, 6) == 0);         /* still the bound box */
+	for (int i = 0; i < m.link_check_reload; i++)
+		slot(&m, NULL, &cnt);                    /* the bound box falls silent */
+	CHK(m.state == REAC_M_PROBING);
+	deliver_scene(&m, &cnt);
+	reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN);   /* the next JOIN courts it */
+	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);   /* it declares */
 	CHK(m.state == REAC_M_GRANTING);
-	CHK(m.drop_reason == REAC_M_DROP_MAC_CHANGE);
 	CHK(memcmp(m.box_mac, BOX2, 6) == 0);        /* latched the new box */
 
 	/* ---- ENROLL->grant DWELL (grant_dwell): a real M-200 waits ~1.6 s between
@@ -674,7 +684,7 @@ int main(void)
 	 * here in the other direction: a reset-happy dwell would never complete
 	 * against a retrying box. A JOIN from a genuinely DIFFERENT box still
 	 * re-latches (new box, fresh window). BOX2 is already latched from the
-	 * mac-change re-grant above; m.grant_ticks == 0 fresh into this window. */
+	 * box-swap re-grant above; m.grant_ticks == 0 fresh into this window. */
 	CHK(m.grant_ticks == 0);
 	CHK(m.grant_dwell > 10 * REAC_M_GRANT_STRIDE);   /* the dwell dwarfs one retry grid */
 	for (int i = 0; i < 10 * REAC_M_GRANT_STRIDE; i++)   /* well inside the dwell */

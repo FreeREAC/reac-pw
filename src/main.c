@@ -74,6 +74,7 @@
 #include <reac/reac_link_state.h>
 #include <reac/reac_headamp_tx.h>  /* struct reac_headamp_setting */
 #include "reac_box_pin.h"     /* --box MODEL[:LABEL]: the fixed-installation pin */
+#include "reac_rx_bind.h"      /* which peer the slave side's receive gate is locked to */
 #include <reac/transport/reac_conf.h>     /* the LAYERED config lookup + which layer answered */
 #include <reac/reac_envflag.h>  /* one reading of a boolean knob, for every boolean knob */
 #include <reac/transport/reac_seglock.h>    /* one master per segment, across processes */
@@ -1252,6 +1253,10 @@ struct listener_cfg {
 	int tap;
 	uint8_t rival_mac[6];
 	int rival_mac_set;
+	/* The peer the receive gate is locked to from the first frame (reac_rx_bind.h): the
+	 * MAC the hunt named for the desk we slave to. */
+	uint8_t bind_mac[6];
+	int bind_mac_set;
 	const struct reac_box_model *pin_model;
 	const char *pin_label;
 	const char *box_pin_spec;
@@ -1271,6 +1276,7 @@ struct listener {
 
 	struct reac_ring ring;
 	struct reac_rx rx;
+	struct reac_rx_bind rx_bind;   /* which peer rx's gate answers to (slave side) */
 
 	struct reac_source_node *src;
 	struct reac_source_node_cfg src_cfg;
@@ -1558,6 +1564,7 @@ static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_la
  * tell its desk), which is true by construction — reac_slave's emit vocabulary
  * has no head-amp member — and asserted here so the property is re-checked on
  * the side the swap just moved to. */
+static uint64_t monotonic_ns(void);
 static void listener_publish_segment(struct listener *L)
 {
 	if (!L->src)
@@ -1621,6 +1628,15 @@ static void listener_publish_segment(struct listener *L)
 	 * the verdict itself was made from, and the only one there is. */
 	uint64_t master_mac48 = L->slave_open
 		? atomic_load_explicit(&L->slave.master_mac48, memory_order_relaxed) : 0;
+	/* THE GATE FOLLOWS WHAT THE ENGINE LEARNED, once it has held (reac_rx_bind.h): where
+	 * the hunt named nobody, or the desk behind the port changed. */
+	/* DOWNSTREAM ONLY: a join of a box on M receives upstream and is left as it was (the
+	 * note at bind_mac_set, where the hunt's MAC is carried). */
+	if (L->rx_started && L->cfg.role == REAC_ROLE_SLAVE &&
+	    L->cfg.rxcfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
+		reac_rx_bind_tick(&L->rx_bind, &L->rx, master_mac48,
+		                  atomic_load_explicit(&L->rx.frames_ok, memory_order_relaxed),
+		                  monotonic_ns());
 	if (master_mac48 == 0 && L->cfg.join_box_master && L->cfg.rival_mac_set)
 		master_mac48 = reac_mac48_pack(L->cfg.rival_mac);
 	reac_segment_answer_slave(&answer, heard, master_mac48,
@@ -2025,6 +2041,14 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 	 * points it at the box it granted. Without this a box master's audio never locks. */
 	if (c->join_box_master && c->rival_mac_set)
 		reac_rx_peer_reset(&L->rx, c->rival_mac, 1);
+	/* LOCK THE GATE TO THE PEER WE ARE A SLAVE OF, before the feeder thread exists, so no
+	 * frame from anyone else is ever decoded into this ring. A master binds its gate to its
+	 * box elsewhere (reac_sink_node.c); this is the other end. */
+	reac_rx_bind_init(&L->rx_bind);
+	if (c->bind_mac_set && c->role == REAC_ROLE_SLAVE &&
+	    c->rxcfg.accept == REAC_RX_ACCEPT_DOWNSTREAM)
+		reac_rx_bind_hint(&L->rx_bind, &L->rx, c->bind_mac);
+
 	fprintf(stderr, "reac-pw: %srecovered REAC rate = %d Hz (%d pps), rx stream = %s\n",
 	        c->tag, L->rx.sample_rate, L->rx.sample_rate / REAC_SAMPLES_PER_PKT,
 	        c->join_box_master ? "a box master's own broadcast (box-width)"
@@ -3680,6 +3704,23 @@ static void hearing_serve(struct hearing *h, const char *name, const struct reac
 		 * is what the rig measured. Joining IS taking the slave end; a `role` the
 		 * join contradicts would open the wrong engine and be silent about it. */
 		L->cfg.role = REAC_ROLE_SLAVE;
+	}
+	/* THE DESK WE SLAVE TO IS THE ONLY SOURCE THE RECEIVE GATE ANSWERS TO. The hunt only
+	 * names a rival once it has streamed (libreac's REAC_HUNT_RIVAL_*), so this MAC is not
+	 * one frame's word. Without it the downstream gate took any 1492 B broadcast and a
+	 * second host on the wire was decoded beside the desk.
+	 *
+	 * A BOX ON M IS NOT BOUND HERE, ON PURPOSE. Its join receives upstream, where an
+	 * unlocked gate refuses broadcast and a locked one takes the box's own broadcast
+	 * (reac_rx.c, gate_accepts): binding it would start decoding the box's presence flood
+	 * into the ring and move the segment's heard flag with it. Over the capture corpus that
+	 * is 63 327 frames in one recording. That is a behaviour change with its own rig check
+	 * (tools/rx-bind-replay.sh prints it as unbound), not part of this one. */
+	if (!L->cfg.tap && !L->cfg.door_only && hunt && hunt->verdict == REAC_HUNT_SLAVE &&
+	    hunt->arb.state == REAC_SEGMENT_FOREIGN && hunt->arb.have_mac &&
+	    hunt->arb.rival == REAC_RIVAL_DESK) {
+		L->cfg.bind_mac_set = 1;
+		memcpy(L->cfg.bind_mac, hunt->arb.mac, 6);
 	}
 	/* THE WIRE DECIDES WHEREVER THE FILE DID NOT. There is no FLOOR any more and no
 	 * layer to name when one is superseded: a role comes from reac-pw.conf's own
