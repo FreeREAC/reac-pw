@@ -166,6 +166,7 @@ reac_pw_src = [
   'src/main.c',
   'src/reac_knobs.c',
   'src/reac_box_pin.c',
+  'src/reac_rx_bind.c',
   'src/reac_watch.c',
   'src/reac_wake.c',
   'src/reac_knock_wire.c',
@@ -327,6 +328,16 @@ rx_gate_test = executable('test_reac_rx_gate',
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
+
+# --- unit test: the slave side's receive gate is locked to its desk -------------
+# The real feeder over a pcap where a second host broadcasts beside the desk, with the
+# lock applied by the two calls main.c makes (src/reac_rx_bind.c). Control arm: unlocked,
+# the forger is decoded.
+rx_bind_test = executable('test_reac_rx_bind',
+  ['tests/test_reac_rx_bind.c', 'src/reac_rx_bind.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
+test('reac_rx_bind', rx_bind_test)
 
 # --- job proof: the AUDIO a joined box master delivers ------------------------
 # A box on M broadcasts its own upstream geometry and we join it receive-only
@@ -1951,6 +1962,12 @@ test('reac_asserted_lines_have_a_producer', python3,
 # into a src/ comment and requiring it to be refused by file and line.
 test('reac_public_tree_cites_slugs', python3,
   args : [meson.current_source_dir() / 'tests' / 'public-tree-cites-slugs.py',
+          meson.current_source_dir()])
+
+# --- text: main.c locks the slave side's receive gate (src/reac_rx_bind.c) ----------------
+# The unit test proves the lock; this proves the daemon asks for it, before the feeder starts.
+test('reac_rx_bind_is_wired', python3,
+  args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
           meson.current_source_dir()])
 
 # --- text: the public tree carries no compiled Python and every source has its header -----
