@@ -5,7 +5,7 @@
 # NO PINS (FreeREAC/reac-pw#23): libreac is declared in the packaging and nowhere else.
 #
 # libreac, libreac-transport and libreac-tests (fake_box) are declared in packaging/reac-pw.spec
-# and debian/control as a floor AND a ceiling (the next minor), installed from the FreeMixer
+# and debian/control as a floor AND a ceiling (the next major; the soname guards the ABI inside it), installed from the FreeMixer
 # channel by `dnf builddep` / `apt-get build-dep`, and found by pkg-config. This fails when
 #   - a package the build or the tests need has a floor but no ceiling (or no floor), in the
 #     spec's BuildRequires, in its Requires, or in debian/control's Build-Depends;
@@ -70,7 +70,7 @@ done
 # passed -- and dnf then downgraded libreac under the running daemon to satisfy it.
 FLOOR_RE='^(Build)?Requires: +(pkgconfig[(])?libreac(-transport)?[)]? +>='
 CEIL_RE='^(Build)?Requires: +(pkgconfig[(])?libreac[-a-z]*[)]? +<'
-ver() { grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
+ver() { grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -1; }
 [ "$(decl 'Requires:       libreac >= 1.9.0' "$FLOOR_RE" | sed 's/.*>=//' | ver)" = 1.9.0 ] \
 	|| { echo "FAIL: self-check: the floor pattern cannot read a planted Requires line" >&2; exit 1; }
 [ "$(decl 'Requires:       libreac-transport < 1.10' "$CEIL_RE" | sed 's/.*<//' | ver)" = 1.10 ] \
