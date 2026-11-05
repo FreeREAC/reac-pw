@@ -13,11 +13,14 @@
  *   4. a minted VLAN (`reac-pw:minted`) is not re-marked and not unmarked by us;
  *   5. a mark an earlier run left behind is adopted and removed at exit;
  *   6. a mark somebody replaced after we wrote it is not removed at exit;
- *   7. a refused write (no CAP_NET_ADMIN) is reported and nothing is remembered. */
+ *   7. a refused write (no CAP_NET_ADMIN) is reported and nothing is remembered;
+ *   8. a code of INT_MIN, which a netlink reply may carry, is reported by its
+ *      magnitude: negating it is undefined behaviour. */
 #include "reac_served_mark.h"
 #include "reac_link_alias.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +35,7 @@ struct fake_if {
 static struct fake_if ifs[8];
 static int n_ifs;
 static int write_rc;
+static int read_rc;
 
 static struct fake_if *find(const char *name)
 {
@@ -67,6 +71,8 @@ int __wrap_reac_link_alias_read(const char *name, char *kind, size_t kind_n,
                                 char *alias, size_t alias_n)
 {
 	struct fake_if *f = find(name);
+	if (read_rc)
+		return read_rc;
 	if (!f)
 		return -ENODEV;
 	if (kind)
@@ -92,6 +98,26 @@ int __wrap_reac_link_alias_write(const char *name, const char *alias)
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
 	printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+/* One mark, with the lines it writes in `buf`. */
+static int mark_saying(struct reac_served_marks *m, const char *name, char *buf, size_t n)
+{
+	buf[0] = '\0';
+	FILE *to = tmpfile();
+	if (!to) {
+		fails++;
+		printf("FAIL: no temporary file\n");
+		return 0;
+	}
+	reac_served_say_to(to);
+	int rc = reac_served_mark(m, name);
+	fflush(to);
+	rewind(to);
+	buf[fread(buf, 1, n - 1, to)] = '\0';
+	reac_served_say_to(NULL);
+	fclose(to);
+	return rc;
+}
 
 int main(void)
 {
@@ -143,6 +169,24 @@ int main(void)
 	CHECK(reac_served_mark(&m, "nocap0") == -EPERM, "refused write is -EPERM");
 	CHECK(m.n == 0, "a refused mark is not remembered");
 	CHECK(get("nocap0")->alias[0] == '\0', "nothing written");
+
+	/* 8: a reply carrying INT_MIN. The message says the code's magnitude, and a
+	 * build that traps on signed overflow reaches the end of this file. */
+	add("intmin0", "", "");
+	write_rc = 0;
+	read_rc = INT_MIN;
+	char said[512];
+	CHECK(mark_saying(&m, "intmin0", said, sizeof said) == INT_MIN,
+	      "the reply's own code is answered");
+	CHECK(strstr(said, "errno 2147483648") != NULL,
+	      "a read code of INT_MIN is reported by its magnitude: %s", said);
+	read_rc = 0;
+	write_rc = INT_MIN;
+	CHECK(mark_saying(&m, "intmin0", said, sizeof said) == INT_MIN,
+	      "the write's own code is answered");
+	CHECK(strstr(said, "errno 2147483648") != NULL,
+	      "a write code of INT_MIN is reported by its magnitude: %s", said);
+	write_rc = 0;
 
 	if (fails)
 		return 1;

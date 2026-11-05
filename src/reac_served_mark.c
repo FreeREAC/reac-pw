@@ -53,9 +53,9 @@ int reac_served_mark(struct reac_served_marks *m, const char *ifname)
 	int rc = reac_link_alias_read(ifname, kind, sizeof kind, alias, sizeof alias);
 	if (rc != 0) {
 		reac_code_emit(say(), "reac-pw", RC_E_NOT_MARKED,
-		        "[%s] could not read the interface alias (errno %d) — not marked as a "
+		        "[%s] could not read the interface alias (errno %u) — not marked as a "
 		        "REAC interface, so the host's network manager is not told to leave it "
-		        "alone\n", ifname, -rc);
+		        "alone\n", ifname, 0u - (unsigned)rc);
 		return rc;
 	}
 	enum reac_served_verdict v = reac_served_decide(kind, alias);
@@ -64,9 +64,9 @@ int reac_served_mark(struct reac_served_marks *m, const char *ifname)
 		rc = reac_link_alias_write(ifname, REAC_SERVED_ALIAS);
 		if (rc != 0) {
 			reac_code_emit(say(), "reac-pw", RC_E_NOT_MARKED,
-			        "[%s] could not mark it '%s' (errno %d)%s — the "
+			        "[%s] could not mark it '%s' (errno %u)%s — the "
 			        "host's network manager is not told to leave it alone\n",
-			        ifname, REAC_SERVED_ALIAS, -rc,
+			        ifname, REAC_SERVED_ALIAS, 0u - (unsigned)rc,
 			        rc == -EPERM ? ": this daemon has no CAP_NET_ADMIN" : "");
 			return rc;
 		}
