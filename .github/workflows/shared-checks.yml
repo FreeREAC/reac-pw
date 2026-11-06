@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+name: shared-checks
+
+# The shared checks run from FreeMixer/.github and are not copied here: this repository keeps no copy of them and its
+# commit-msg hook is the shared stub, byte for byte (a missing hook is refused too).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  no-local-copies:
+    name: the shared checks are not copied here
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: FreeMixer/.github/.github/actions/no-local-copies@v1
