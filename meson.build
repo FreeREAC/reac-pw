@@ -323,17 +323,18 @@ test('reac_upstream', upstream_test)
 # --- unit test: the RX stream gate (downstream vs upstream accept) ------------
 # Runs the real feeder thread over a temp pcap that interleaves both streams
 # (synthetic 40-ch broadcast + the captured box return + a second box).
+# It also runs the slave side's lock to its desk through the same feeder
+# (tests/rx_bind_feeder.inc, src/reac_rx_bind.c): a forger beside the desk is decoded
+# unlocked (the control) and counted, not decoded, once the gate is locked.
 rx_gate_test = executable('test_reac_rx_gate',
-  ['tests/test_reac_rx_gate.c', 
-   ],
+  ['tests/test_reac_rx_gate.c', 'src/reac_rx_bind.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep, threads_dep, m_dep])
 test('reac_rx_gate', rx_gate_test)
 
 # --- unit test: the slave side's receive gate is locked to its desk -------------
-# The real feeder over a pcap where a second host broadcasts beside the desk, with the
-# lock applied by the two calls main.c makes (src/reac_rx_bind.c). Control arm: unlocked,
-# the forger is decoded.
+# The learned-MAC rule of the two calls main.c makes (src/reac_rx_bind.c); the feeder
+# arms (forger beside the desk, unlocked control) run in test_reac_rx_gate.
 rx_bind_test = executable('test_reac_rx_bind',
   ['tests/test_reac_rx_bind.c', 'src/reac_rx_bind.c'],
   include_directories : src_inc,

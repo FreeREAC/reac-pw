@@ -57,6 +57,8 @@ static void pcap_rec(FILE *f, const uint8_t *frame, uint32_t len)
 	fwrite(frame, len, 1, f);
 }
 
+#include "rx_bind_feeder.inc"   /* the slave side's lock to its desk, through this feeder */
+
 /* a well-formed synthetic 40-ch downstream broadcast frame */
 static void mk_downstream(uint8_t *out, uint16_t counter)
 {
@@ -293,12 +295,15 @@ int main(void)
 		unlink(opath);
 	}
 
+	rx_bind_feeder_arms();
+
 	if (fails) {
 		fprintf(stderr, "%d check(s) failed\n", fails);
 		return 1;
 	}
 	printf("OK: rx gate — downstream accept feeds only the 1492 B broadcast; upstream "
 	       "accept locks to the first box, decodes its braid into ch 0..15, silences "
-	       "the rest, gates out the downstream + a second box\n");
+	       "the rest, gates out the downstream + a second box; locked to the desk, a forger "
+	       "beside it is counted, not decoded (unlocked control decodes it)\n");
 	return 0;
 }
