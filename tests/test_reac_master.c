@@ -662,14 +662,26 @@ int main(void)
 	 * courts the new one, re-granted as before. */
 	establish(&m, &cnt, BOX);
 	deliver_scene(&m, &cnt);
+	CHK(reac_master_peer_accepts(&m, BOX, REAC_M_RX_BOX_JOIN) == 1);    /* the bound box: yes */
+	CHK(reac_master_peer_accepts(&m, BOX2, REAC_M_RX_BOX_JOIN) == 0);   /* another MAC: no */
 	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 0);
 	CHK(m.state == REAC_M_ESTABLISHED);
+	CHK(m.drop_reason != REAC_M_DROP_MAC_CHANGE);   /* no re-court happened */
 	CHK(memcmp(m.box_mac, BOX, 6) == 0);         /* still the bound box */
-	for (int i = 0; i < m.link_check_reload; i++)
-		slot(&m, NULL, &cnt);                    /* the bound box falls silent */
+	/* Nor does another MAC's BYE drop it. */
+	CHK(reac_master_rx(&m, REAC_M_RX_BOX_BYE, BOX2, NULL) == 0);
+	CHK(m.state == REAC_M_ESTABLISHED);
+	/* The bound box falls silent while the other MAC keeps sending heartbeats: they are
+	 * not the bound box's, so they do not reload its link budget, and it drains. */
+	for (int i = 0; i < m.link_check_reload; i++) {
+		CHK(reac_master_rx(&m, REAC_M_RX_BOX_HEARTBEAT, BOX2, NULL) == 0);
+		slot(&m, NULL, &cnt);
+	}
 	CHK(m.state == REAC_M_PROBING);
+	CHK(m.drop_reason == REAC_M_DROP_PEER_GONE);
+	CHK(reac_master_peer_accepts(&m, BOX2, REAC_M_RX_BOX_JOIN) == 1);   /* PROBING binds nothing */
 	deliver_scene(&m, &cnt);
-	reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN);   /* the next JOIN courts it */
+	CHK(reac_master_rx(&m, REAC_M_RX_BOX_JOIN, BOX2, ZONEA_JOIN) == 1);   /* the next JOIN courts it */
 	reac_master_set_box(&m, REAC_BOX_S1608_IN, REAC_BOX_S1608_OUT, S1608_BASE);   /* it declares */
 	CHK(m.state == REAC_M_GRANTING);
 	CHK(memcmp(m.box_mac, BOX2, 6) == 0);        /* latched the new box */

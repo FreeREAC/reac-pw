@@ -237,6 +237,38 @@ int main(void)
 	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(h.arb.rival == REAC_RIVAL_DESK);
 
+	/* ---- D1. ONE FRAME DECIDES NO ROLE (libreac 1.11). A rival counts only once the table
+	 * holds REAC_HUNT_RIVAL_FRAMES frames from it over REAC_HUNT_RIVAL_SPAN_NS; one desk
+	 * frame is heard (a new peer) and moves nothing, and once it has been quiet for
+	 * REAC_HUNT_RIVAL_QUIET_NS it holds nothing either. A pinned master is not taken off
+	 * the wire by one forged box-on-M frame. The streamed fixtures above are the control. */
+	{
+		struct reac_hunt h1;
+		reac_hunt_init(&h1, OURS, t0);
+		CHK(desk_headamp_once(&h1, DESK, t0) == 1);              /* heard: a new peer */
+		reac_hunt_step(&h1, t0 + SEC / 10);
+		CHK(h1.verdict == REAC_HUNT_HUNTING);                    /* not slave on one frame */
+		/* A box is on the wire beside that one frame. The desk frame never streamed and has
+		 * been quiet far longer than REAC_HUNT_RIVAL_QUIET_NS when the window closes, so it
+		 * holds nothing: the wire is a box and no master, and we drive it (as in B). */
+		CHK(box_heartbeat(&h1, t0 + SEC / 10) >= 0);
+		CHK(box_heartbeat(&h1, t0 + REAC_HUNT_WINDOW_NS) >= 0);
+		CHK(REAC_HUNT_WINDOW_NS > REAC_HUNT_RIVAL_QUIET_NS + SEC / 10);
+		reac_hunt_step(&h1, t0 + REAC_HUNT_WINDOW_NS);
+		CHK(h1.verdict == REAC_HUNT_MASTER);
+
+		reac_hunt_init(&h1, OURS, t0);
+		reac_hunt_pin(&h1, REAC_ROLE_MASTER);
+		CHK(reac_hunt_step(&h1, t0) == 1);                       /* driving on link */
+		CHK(h1.verdict == REAC_HUNT_MASTER);
+		CHK(box_on_m_once(&h1, t0 + SEC / 100) == 1);            /* one forged box-on-M frame */
+		reac_hunt_step(&h1, t0 + SEC / 50);
+		CHK(h1.verdict == REAC_HUNT_MASTER);                     /* the pin holds */
+		CHK(reac_hunt_role(&h1) == REAC_ROLE_MASTER);
+		reac_hunt_step(&h1, t0 + SEC / 100 + REAC_HUNT_RIVAL_QUIET_NS + SEC / 10);
+		CHK(h1.verdict == REAC_HUNT_MASTER);                     /* and once it is quiet */
+	}
+
 	/* ---- D0. A 40-WIDE MASTER THAT HAS NOT ANNOUNCED ITSELF is a desk or a 40-input box
 	 * on M, and nothing heard yet says which: the hunt waits (pending), and the desk's
 	 * cfea then joins it (ruling 2026-10-07: never "desk" by default). */

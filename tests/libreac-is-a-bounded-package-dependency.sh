@@ -70,7 +70,7 @@ done
 # passed -- and dnf then downgraded libreac under the running daemon to satisfy it.
 FLOOR_RE='^(Build)?Requires: +(pkgconfig[(])?libreac(-transport)?[)]? +>='
 CEIL_RE='^(Build)?Requires: +(pkgconfig[(])?libreac[-a-z]*[)]? +<'
-ver() { grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
+ver() { grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -1; }
 [ "$(decl 'Requires:       libreac >= 1.9.0' "$FLOOR_RE" | sed 's/.*>=//' | ver)" = 1.9.0 ] \
 	|| { echo "FAIL: self-check: the floor pattern cannot read a planted Requires line" >&2; exit 1; }
 [ "$(decl 'Requires:       libreac-transport < 1.10' "$CEIL_RE" | sed 's/.*<//' | ver)" = 1.10 ] \
@@ -88,6 +88,12 @@ ceilings=$( {
 	|| say "the libreac floor is not ONE value across meson.build, the spec and control: $(tr '\n' ' ' <<<"$floors")"
 [ "$(wc -l <<<"$ceilings")" = 1 ] && [ "$(wc -w <<<"$ceilings")" = 1 ] \
 	|| say "the libreac ceiling is not ONE value across the spec and control: $(tr '\n' ' ' <<<"$ceilings")"
+# THE CEILING IS THE FLOOR'S NEXT MINOR. A ceiling at the next major (< 2) takes in libreac
+# minors whose behaviour the tests have never seen (1.11 moved the master to peer binding,
+# while reac_master and reac_hunt still asserted the old behaviour).
+want_ceil=$(awk -F. '{ print $1 "." $2 + 1 }' <<<"$floors")
+[ "$ceilings" = "$want_ceil" ] \
+	|| say "the libreac ceiling $ceilings is not the floor's next minor $want_ceil (floor $floors)"
 
 hits=$(cd "$ROOT" && {
 	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git ls-files; else find . -type f | sed 's,^\./,,'; fi

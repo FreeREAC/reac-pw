@@ -1,3 +1,16 @@
+reac-pw (1.0.43) unstable; urgency=medium
+
+  * Built against libreac 1.11 (libreac.so.7, libreac7): libreac,
+    libreac-transport and libreac-tests are declared >= 1.11.0 << 1.12
+    (libreac-tests keeps its 1.7.3 floor).
+  * libreac 1.11's peer binding: test_reac_master asserts that a second
+    MAC's JOIN, BYE or heartbeat moves nothing while a box is established,
+    and that a box swap works once the old box drains to PROBING;
+    test_reac_hunt asserts that one frame decides no role.
+  * Slave side: the receive gate locks to the desk we slave to (#7).
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Fri, 06 Nov 2026 12:00:00 +0000
+
 reac-pw (1.0.42) unstable; urgency=medium
 
   * ONE HOME (libreac's 2026-09-29-shared-code-has-one-home, #20 #21 #69):

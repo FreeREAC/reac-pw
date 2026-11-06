@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.42',
+  version: '1.0.43',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -104,7 +104,8 @@ m_dep        = cc.find_library('m', required : false)
 # is the one code list (src/reac_code.h is gone; 1.10.0 is the first release declaring every token this
 # daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
 # copy is gone). An older header does not compile.
-libreac_dep = dependency('libreac', version : '>=1.10.0', required : true)
+# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the packages carry the ceiling.
+libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
@@ -128,7 +129,7 @@ libreac_dep = dependency('libreac', version : '>=1.10.0', required : true)
 # this build allocates one.
 # >=1.10.0 SINCE 1.0.42: reac_etf_qdisc_stats_read's dump walker stops at the bytes recv() returned
 # (an unpadded last message no longer walks the stale buffer); the health line reads through it.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.10.0', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.11.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
