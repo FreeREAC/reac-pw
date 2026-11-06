@@ -78,7 +78,7 @@ static int box_bye(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 
 /* A DESK: only a console emits head-amp records, and it emits them at the 40-channel
  * downstream width. Role master AND desk geometry, in one frame. */
-static int desk_headamp_only(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+static int desk_headamp_only_once(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 {
 	uint8_t f[2048];
 	size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1);
@@ -91,9 +91,9 @@ static int desk_headamp_only(struct reac_hunt *h, const uint8_t src[6], uint64_t
  * with 0x28 in its total_slots (libreac's own generator, from this MAC, on the 1492 B
  * downstream). A desk is a desk because it says 40 slots in a 40-wide broadcast (ruling
  * 2026-10-07), not because it sent a master-only record. */
-static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+static int desk_headamp_once(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 {
-	int r = desk_headamp_only(h, src, now);
+	int r = desk_headamp_only_once(h, src, now);
 	if (r < 0)
 		return r;
 	static struct reac_master m;
@@ -110,7 +110,7 @@ static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
 /* A STAGEBOX STRAPPED TO MASTER: the same master-only record, emitted at the box's OWN
  * width — measured 2026-08-30 as 1204 B on a wire where a desk had emitted 1492 B. The
  * frame claims master; the geometry says box; the geometry wins. */
-static int box_on_m(struct reac_hunt *h, uint64_t now)
+static int box_on_m_once(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
 	/* What the captured S-1608 on M broadcasts beside its audio: a channel map, at its
@@ -124,16 +124,50 @@ static int box_on_m(struct reac_hunt *h, uint64_t now)
 	return reac_hunt_observe(h, f, n, now, NULL);
 }
 
+
+/* A MASTER IS HEARD STREAMING, NOT ONCE. libreac's hunt takes a rival into account only after
+ * REAC_HUNT_RIVAL_FRAMES frames over REAC_HUNT_RIVAL_SPAN_NS (a real master fills every audio
+ * slot at wire cadence; one forged cfea is heard once), so the desk and box-on-M fixtures
+ * send the frame as a stream: ten copies, 3 ms apart, the first at `now`. Against a libreac
+ * without that bar the copies are the same sighting repeated and change nothing, so the
+ * fixture is right for both. Returns what the FIRST frame returned, OR the later ones'. */
+#define STREAM_COPIES 10
+#define STREAM_GAP_NS (3ULL * 1000000ULL)
+#define STREAMED(fn, ...) do { int r_ = fn##_once(h, __VA_ARGS__, now); \
+	for (int k_ = 1; k_ < STREAM_COPIES; k_++) { \
+		int c_ = fn##_once(h, __VA_ARGS__, now + (uint64_t)k_ * STREAM_GAP_NS); \
+		if (c_ < 0) return c_; r_ = r_ || c_; } \
+	return r_; } while (0)
+static int desk_headamp_only(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+{ STREAMED(desk_headamp_only, src); }
+static int desk_headamp(struct reac_hunt *h, const uint8_t src[6], uint64_t now)
+{ STREAMED(desk_headamp, src); }
+static int box_on_m(struct reac_hunt *h, uint64_t now)
+{ int r = box_on_m_once(h, now); for (int k = 1; k < STREAM_COPIES; k++) { int c = box_on_m_once(h, now + (uint64_t)k * STREAM_GAP_NS); if (c < 0) return c; r = r || c; } return r; }
+
 /* A RIVAL WITH NO READABLE GEOMETRY: a master-only record on a frame whose length matches
  * no legal `52 + n*36` chassis. Nobody has captured such a peer, which is exactly §4's
  * case — it is neither driven over nor joined. */
-static int rival_no_geometry(struct reac_hunt *h, uint64_t now)
+static int rival_no_geometry_once(struct reac_hunt *h, uint64_t now)
 {
 	uint8_t f[2048];
 	size_t n = reac_ctrl_build_headamp(f, BCAST, BOXM, 0x30, REACPW_S1608_HEADAMP_BASE, REAC_HEADAMP_PARAM_PHANTOM, 1);
 	if (n == 0)
 		return -2;
 	return reac_hunt_observe(h, f, 64, now, NULL);
+}
+
+/* Streamed like the others (see STREAMED): an unreadable rival that is really there keeps
+ * talking, and one frame of it is not evidence either way. */
+static int rival_no_geometry(struct reac_hunt *h, uint64_t now)
+{
+	int r = rival_no_geometry_once(h, now);
+	for (int k = 1; k < STREAM_COPIES; k++) {
+		int c = rival_no_geometry_once(h, now + (uint64_t)k * STREAM_GAP_NS);
+		if (c < 0) return c;
+		r = r || c;
+	}
+	return r;
 }
 
 int main(void)
@@ -202,6 +236,38 @@ int main(void)
 	CHK(reac_hunt_role(&h) == REAC_ROLE_SLAVE);
 	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
 	CHK(h.arb.rival == REAC_RIVAL_DESK);
+
+	/* ---- D1. ONE FRAME DECIDES NO ROLE (libreac 1.11). A rival counts only once the table
+	 * holds REAC_HUNT_RIVAL_FRAMES frames from it over REAC_HUNT_RIVAL_SPAN_NS; one desk
+	 * frame is heard (a new peer) and moves nothing, and once it has been quiet for
+	 * REAC_HUNT_RIVAL_QUIET_NS it holds nothing either. A pinned master is not taken off
+	 * the wire by one forged box-on-M frame. The streamed fixtures above are the control. */
+	{
+		struct reac_hunt h1;
+		reac_hunt_init(&h1, OURS, t0);
+		CHK(desk_headamp_once(&h1, DESK, t0) == 1);              /* heard: a new peer */
+		reac_hunt_step(&h1, t0 + SEC / 10);
+		CHK(h1.verdict == REAC_HUNT_HUNTING);                    /* not slave on one frame */
+		/* A box is on the wire beside that one frame. The desk frame never streamed and has
+		 * been quiet far longer than REAC_HUNT_RIVAL_QUIET_NS when the window closes, so it
+		 * holds nothing: the wire is a box and no master, and we drive it (as in B). */
+		CHK(box_heartbeat(&h1, t0 + SEC / 10) >= 0);
+		CHK(box_heartbeat(&h1, t0 + REAC_HUNT_WINDOW_NS) >= 0);
+		CHK(REAC_HUNT_WINDOW_NS > REAC_HUNT_RIVAL_QUIET_NS + SEC / 10);
+		reac_hunt_step(&h1, t0 + REAC_HUNT_WINDOW_NS);
+		CHK(h1.verdict == REAC_HUNT_MASTER);
+
+		reac_hunt_init(&h1, OURS, t0);
+		reac_hunt_pin(&h1, REAC_ROLE_MASTER);
+		CHK(reac_hunt_step(&h1, t0) == 1);                       /* driving on link */
+		CHK(h1.verdict == REAC_HUNT_MASTER);
+		CHK(box_on_m_once(&h1, t0 + SEC / 100) == 1);            /* one forged box-on-M frame */
+		reac_hunt_step(&h1, t0 + SEC / 50);
+		CHK(h1.verdict == REAC_HUNT_MASTER);                     /* the pin holds */
+		CHK(reac_hunt_role(&h1) == REAC_ROLE_MASTER);
+		reac_hunt_step(&h1, t0 + SEC / 100 + REAC_HUNT_RIVAL_QUIET_NS + SEC / 10);
+		CHK(h1.verdict == REAC_HUNT_MASTER);                     /* and once it is quiet */
+	}
 
 	/* ---- D0. A 40-WIDE MASTER THAT HAS NOT ANNOUNCED ITSELF is a desk or a 40-input box
 	 * on M, and nothing heard yet says which: the hunt waits (pending), and the desk's

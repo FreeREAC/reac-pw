@@ -41,7 +41,7 @@ jobs:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}
       dependencies: ''
-      requires: libreac6 libreac-transport7
+      requires: libreac7 libreac-transport7
     secrets:
       OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.OPENMIXER_PACKAGES_SIGNING_KEY }}
       RPM_GPG_KEY: ${{ secrets.RPM_GPG_KEY }}
