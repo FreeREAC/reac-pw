@@ -35,7 +35,10 @@ jobs:
       SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
 
+  # after the RPMs: a release is one wave. A red or skipped RPM job skips this one, so no DEB is published after a
+  # failed RPM.
   deb:
+    needs: rpm
     uses: FreeMixer/.github/.github/workflows/build-deb.yml@v1
     with:
       package-name: reac-pw

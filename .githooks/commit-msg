@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
+# The commit-msg hook of a FreeMixer repository: the checker is FreeMixer/.github's commit-message-check, read from a
+# checkout of it: FREEMIXER_DOTGITHUB, else the v1 clone ~/.cache/omx/freemixer-dotgithub (cloned on first use, fetched
+# at v1 again when its last fetch is over ten minutes old), else ../freemixer-dotgithub beside this repository. With
+# none the commit is refused and says why: a checker that cannot run is never a pass.
+# Enable once per clone: git config core.hooksPath .githooks
+url=${FREEMIXER_DOTGITHUB_URL:-https://github.com/FreeMixer/.github}
+c=$HOME/.cache/omx/freemixer-dotgithub
+d=${FREEMIXER_DOTGITHUB:-}
+if [ -z "$d" ]; then
+  if [ -d "$c/.git" ]; then
+    if [ -z "$(find "$c/.git/FETCH_HEAD" -mmin -10 2>/dev/null)" ]; then
+      { git -C "$c" fetch -q --depth 1 --force origin tag v1 && git -C "$c" checkout -q --detach v1; } 2>/dev/null ||
+        { touch "$c/.git/FETCH_HEAD"; echo "commit-msg: could not fetch v1 of $url; checking with the cached $(git -C "$c" rev-parse --short HEAD 2>/dev/null)" >&2; }
+    fi
+  else
+    { mkdir -p "$(dirname "$c")" && git clone -q --depth 1 --branch v1 "$url" "$c" 2>/dev/null; } || rm -rf "$c"
+  fi
+  [ -d "$c/.github" ] && d=$c
+fi
+[ -n "$d" ] || d=$(git rev-parse --show-toplevel)/../freemixer-dotgithub
+chk=$d/.github/actions/commit-message-check/commit-message-check.sh
+[ -x "$chk" ] || { echo "commit-msg: no commit-message checker at $chk (set FREEMIXER_DOTGITHUB, or let this hook clone $url at v1 into $c): commit refused" >&2; exit 1; }
+exec "$chk" --msg-file "$1"
