@@ -298,8 +298,9 @@ static void owe(struct model *m, const uint8_t *r, size_t len)
 {
 	if (m->n_req < NL_SENT_MAX) {
 		memcpy(m->req[m->n_req], r, len < NL_SENT_LEN ? len : NL_SENT_LEN);
-		m->req_len[m->n_req++] = len;
+		m->req_len[m->n_req] = len;
 	}
+	m->n_req++;   /* counted past the table too */
 }
 
 static size_t req_head(uint8_t *r, uint32_t len, uint16_t type, uint16_t flags, unsigned idx)
@@ -511,7 +512,9 @@ static FUZZ_NOINLINE void check_requests(const struct nl_kernel *k, const struct
 	 * mutant: src/reac_served_mark.c:102 `strcmp(alias, REAC_SERVED_ALIAS) != 0` -> `0`
 	 * input: unmark-after-host-renamed
 	 * mutant: src/reac_served_mark.c:64 `REAC_SERVED_ALIAS` -> `REAC_ALIAS_PREFIX`
-	 * input: mark-plain-nic */
+	 * input: mark-plain-nic
+	 * mutant: src/reac_served_mark.c:98 `i < m->n;` -> `i < m->n && i < 16;`
+	 * input: unmark-forty */
 	if (!requests_are(k, m))
 		abort();
 }
@@ -628,7 +631,7 @@ static int requests_are(const struct nl_kernel *k, const struct model *m)
 {
 	if (k->n_sent != m->n_req)
 		return 0;
-	for (int i = 0; i < m->n_req; i++)
+	for (int i = 0; i < m->n_req && i < NL_SENT_MAX; i++)
 		if (k->sent_len[i] != m->req_len[i] ||
 		    memcmp(k->sent[i], m->req[i], m->req_len[i] < NL_SENT_LEN ? m->req_len[i]
 		                                                             : NL_SENT_LEN) != 0)

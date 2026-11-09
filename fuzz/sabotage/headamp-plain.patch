@@ -1,4 +1,4 @@
-Breaks the check of fuzz/fuzz_headamp.c:308 (the plain parse hands on 0 in place of each value).
+Breaks the check of fuzz/fuzz_headamp.c:299 (the plain parse hands on 0 in place of each value).
 Caught by the seed input "sens-edges" of fuzz_headamp.
 
 diff --git a/src/reac_headamp_prop.c b/src/reac_headamp_prop.c

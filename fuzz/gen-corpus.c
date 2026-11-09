@@ -445,10 +445,10 @@ static void gen_role(void)
 
 /* ---- fuzz_qdisc: [reads] then per read [ifindex][flags][errno][end errno][chunks] -------- */
 
-/* ---- qdisc: the catch-up budget, [u8 budgets][u16 lead][u8 fps selector]... ---- */
+/* ---- qdisc: the catch-up budget, [u8 budgets][u32 lead][u8 fps selector]... ---- */
 static void qbudget(struct g *g, unsigned lead_us, unsigned fps_sel)
 {
-	put16(g, lead_us);
+	put32(g, lead_us);
 	put8(g, fps_sel);
 }
 static void gen_qdisc(void)
@@ -483,9 +483,15 @@ static void gen_qdisc(void)
 	/* the ceiling: the largest lead at the largest rate */
 	g.n = 0;
 	put8(&g, 2);
-	qbudget(&g, 65535, 5);
-	qbudget(&g, 65535, 4);
+	qbudget(&g, 0xffffffffu, 5);
+	qbudget(&g, 0xffffffffu, 4);
 	emit("qdisc", "lead-max-at-max-rate", &g);
+
+	/* a lead past what 16 bits hold, below the ceiling */
+	g.n = 0;
+	put8(&g, 1);
+	qbudget(&g, 100000, 0);
+	emit("qdisc", "lead-past-16-bits", &g);
 
 	/* a 96 kHz segment at the shipped lead, and no budget at all */
 	g.n = 0;
@@ -720,6 +726,10 @@ static void gen_link(void)
 		n++;
 	}
 	emit("link", "mark-forty", &g);
+	/* then the unmark: a read of each of the 32 marks kept, every one of them sent */
+	put8(&g, 3);
+	lkernel(&g, 0, 0);
+	emit("link", "unmark-forty", &g);
 
 	g.n = 0;
 	{
