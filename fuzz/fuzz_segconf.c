@@ -45,7 +45,7 @@
  *     the cross-key rules;
  *   - each answer names the file that gave it;
  *   - every refusal is counted and the first ones kept, each with its address;
- *   - a name no section opened has no answer;
+ *   - a name no section opened, longer, shorter or in another case, has no answer;
  *   - and the declared VLANs are those of the segments, each once, within the table. */
 #include <stddef.h>
 #include <stdint.h>
@@ -508,8 +508,10 @@ static FUZZ_NOINLINE void check_knock_refused(const char *got, int was_knock)
 	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
 	 * input: knock-plans
 	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
-	 * input: knock-long-value */
-	if (was_knock && !strstr(got, "takes no plan"))
+	 * input: knock-long-value
+	 * mutant: src/reac_segconf.c:286 `knock takes` -> `the key takes`
+	 * input: knock-plans */
+	if (was_knock && !strstr(got, "knock takes no plan"))
 		abort();
 }
 
@@ -543,14 +545,27 @@ static FUZZ_NOINLINE void check_address(const char *got, const char *want)
 
 static FUZZ_NOINLINE void check_absent(const struct reac_segconf *c, const char *name)
 {
-	/* A name no section opened has no entry and no answer.
+	/* A name no section opened has no entry and no answer: the whole name is compared,
+	 * byte for byte, so neither a longer name, nor a prefix, nor the same letters in
+	 * another case, nor the empty name finds a segment.
 	 * contract: src/reac_segconf.h:194-197 (the entry for `name`, or NULL; compared case
 	 * sensitively)
 	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
+	 * input: absent-probes
+	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, strlen(name)) == 0`
+	 * input: absent-probes
+	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
 	 * input: absent-probes */
 	if (reac_segconf_find(c, name) || reac_segconf_role(c, name, NULL) ||
 	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name))
 		abort();
+}
+
+/* Probe `name` when no section opened it. */
+static void probe_absent(const struct reac_segconf *c, const struct mconf *m, const char *name)
+{
+	if (!m_find(m, name, strlen(name)))
+		check_absent(c, name);
 }
 
 static FUZZ_NOINLINE void check_declared(int got, int want, const struct reac_declared_vlan *tab,
@@ -635,15 +650,25 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		check_address(c->refusal[i], m->kept[i]);
 		check_knock_refused(c->refusal[i], m->kept_knock[i]);
 	}
-	/* names no section opened: each segment's with a byte more, and one never named */
+	/* names no section opened: each segment's with a byte more, with its last byte cut,
+	 * and with the case of its letters turned; the empty name; and one never named */
 	for (int i = 0; i < m->n; i++) {
 		char probe[NAME_LEN + 2];
+		size_t len = strlen(m->seg[i].name);
 		snprintf(probe, sizeof probe, "%sx", m->seg[i].name);
-		if (!m_find(m, probe, strlen(probe)))
-			check_absent(c, probe);
+		probe_absent(c, m, probe);
+		memcpy(probe, m->seg[i].name, len - 1);
+		probe[len - 1] = '\0';
+		probe_absent(c, m, probe);
+		for (size_t k = 0; k <= len; k++) {
+			char ch = m->seg[i].name[k];
+			probe[k] = ch >= 'a' && ch <= 'z' ? (char)(ch - 'a' + 'A')
+			         : ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;
+		}
+		probe_absent(c, m, probe);
 	}
-	if (!m_find(m, "nosuch0", 7))
-		check_absent(c, "nosuch0");
+	probe_absent(c, m, "");
+	probe_absent(c, m, "nosuch0");
 
 	/* the declared VLANs, into a table of `cap` and one guard entry */
 	struct reac_declared_vlan *tab = calloc((size_t)cap + 1, sizeof *tab);

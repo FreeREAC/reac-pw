@@ -42,7 +42,9 @@
 #define NL_FD         7     /* the descriptor the fake socket() hands out */
 #define NL_CHUNKS     64
 #define NL_CHUNK_MAX  4096
-#define NL_SENT_MAX   16
+/* every request an operation can send is kept: an unmark of the 32 marks sends a read and
+ * a write for each, 64 in all; one past these is still counted, never dropped */
+#define NL_SENT_MAX   80
 #define NL_SENT_LEN   512
 
 struct nl_kernel {
@@ -99,8 +101,9 @@ ssize_t fuzz_send(int fd, const void *buf, size_t len, int flags)
 	if (g_nl.n_sent < NL_SENT_MAX) {
 		size_t n = len < NL_SENT_LEN ? len : NL_SENT_LEN;
 		memcpy(g_nl.sent[g_nl.n_sent], buf, n);
-		g_nl.sent_len[g_nl.n_sent++] = len;
+		g_nl.sent_len[g_nl.n_sent] = len;
 	}
+	g_nl.n_sent++;   /* counted past the table too, so a request too many is seen */
 	return (ssize_t)len;
 }
 

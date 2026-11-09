@@ -9,7 +9,8 @@
  * since 1.0.42 (ONE HOME); libreac's fuzz_qdisc drives it over a fake rtnetlink kernel,
  * and tests/reac-code-conformance.py refuses an RTM_GETQDISC request built here.
  *
- * Input:  [0] budgets, mod 8; then each budget [u16 lead_us][u8 fps selector].
+ * Input:  [0] budgets, mod 8; then each budget [u32 lead_us][u8 fps selector]: every lead
+ *         the function takes, not only those of 16 bits.
  *
  * Property, an abort(): the budget is the lead past the qdisc's delta, in slots at fps,
  * rounded down, at least 1 and at most 1000000; no frame rate is 1. */
@@ -81,7 +82,9 @@ static FUZZ_NOINLINE void check_slots(int got, unsigned lead_us, int fps)
 	 * mutant: src/reac_qdisc.c:175 `if (fps <= 0)` -> `if (0)`
 	 * input: negative-rate
 	 * mutant: src/reac_qdisc.c:185 `if (n > 1000000ull)` -> `if (0)`
-	 * input: lead-max-at-max-rate */
+	 * input: lead-max-at-max-rate
+	 * mutant: src/reac_qdisc.c:178 `unsigned usable` -> `unsigned short usable`
+	 * input: lead-past-16-bits */
 	if (got != slots_of(lead_us, fps))
 		abort();
 }
@@ -94,7 +97,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	int budgets = fuzz_u8(&in) % (BUDGETS_MAX + 1);
 	static const int fps[] = { 8000, 4000, 0, -1, 96000, 2147483647 };
 	for (int b = 0; b < budgets; b++) {
-		unsigned lead_us = fuzz_u16(&in);
+		unsigned lead_us = fuzz_u32(&in);
 		int f = fps[fuzz_u8(&in) % 6];
 		check_slots(reac_qdisc_etf_catchup_slots(lead_us, f), lead_us, f);
 	}
