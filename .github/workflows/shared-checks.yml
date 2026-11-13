@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 name: shared-checks
 
-# The shared checks run from FreeMixer/.github and are not copied here: this repository keeps no copy of them and its
+# The shared checks run from Open-Mixer/.github and are not copied here: this repository keeps no copy of them and its
 # commit-msg hook is the shared stub, byte for byte (a missing hook is refused too).
 
 on:
@@ -20,4 +20,4 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: FreeMixer/.github/.github/actions/no-local-copies@v1
+      - uses: Open-Mixer/.github/.github/actions/no-local-copies@openmixer-v1
