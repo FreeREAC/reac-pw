@@ -1979,3 +1979,11 @@ test('reac_rx_bind_is_wired', python3,
 test('public_hygiene', find_program('bash'),
   args : [meson.current_source_dir() / 'tools' / 'check-public-hygiene.sh',
           meson.current_source_dir()])
+
+# --- unit test: the omx-wire probe matches each frame in either order, a real loss alone is one --
+# tools/omx-wire-probe.py (the real-cable tier, tools/omx-wire.sh) reads one socket at each end of a cable in turn,
+# so an arrival is often read before its departure. Its first rehearsal called 14330 frames of a clean veth "dropped".
+# Class Direction is held to both orders, a reader that fell behind, a counter wrap and the one loss that is real.
+# No socket, no root, no wire: it never skips.
+test('omx_wire_probe_matches', python3,
+  args : [meson.current_source_dir() / 'tests' / 'omx-wire-probe-matches.py'])
