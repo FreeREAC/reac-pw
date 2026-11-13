@@ -11,7 +11,7 @@
 # fuzz-findings artifact.
 #
 # libreac IS THE PUBLISHED PACKAGE, as in test.yml: `dnf builddep packaging/reac-pw.spec`
-# installs its -devel packages from the FreeMixer channel, in the range the spec declares,
+# installs its -devel packages from the OpenMixer channel, in the range the spec declares,
 # and only their headers are used. No harness links libreac.
 
 name: fuzz
@@ -43,11 +43,11 @@ jobs:
 
       # the channel, then what the spec BuildRequires: the libreac, libreac-transport and
       # SPA headers, in the range the spec declares (it is declared there and nowhere else)
+      - name: Add the OpenMixer repository
+        uses: Open-Mixer/.github/.github/actions/add-openmixer@openmixer-v1
+
       - name: libreac and PipeWire headers, from the spec
-        run: |
-          dnf config-manager addrepo --setopt=retries=10 \
-            --from-repofile=https://freemixer.github.io/rpm/freemixer.repo
-          dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
+        run: dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
 
       # fuzz-records and fuzz-sabotage apply each patch with git and restore it with git
       - name: Let git work in the checkout
