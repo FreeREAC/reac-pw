@@ -1,12 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
-# The commit-msg hook of a FreeMixer repository: the checker is FreeMixer/.github's commit-message-check, read from a
+# The commit-msg hook of a FreeMixer repository: the checker is Open-Mixer/.github's commit-message-check, read from a
 # checkout of it: FREEMIXER_DOTGITHUB, else the v1 clone ~/.cache/omx/freemixer-dotgithub (cloned on first use, fetched
 # at v1 again when its last fetch is over ten minutes old), else ../freemixer-dotgithub beside this repository. With
 # none the commit is refused and says why: a checker that cannot run is never a pass.
 # Enable once per clone: git config core.hooksPath .githooks
-url=${FREEMIXER_DOTGITHUB_URL:-https://github.com/FreeMixer/.github}
+url=${FREEMIXER_DOTGITHUB_URL:-https://github.com/Open-Mixer/.github}
 c=$HOME/.cache/omx/freemixer-dotgithub
 d=${FREEMIXER_DOTGITHUB:-}
 if [ -z "$d" ]; then

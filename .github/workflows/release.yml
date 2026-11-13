@@ -1,8 +1,8 @@
 name: release
 
-# Packages through the shared release workflows of FreeMixer/.github. A tag v<version> that is the Version of
+# Packages through the shared release workflows of Open-Mixer/.github. A tag v<version> that is the Version of
 # packaging/reac-pw.spec builds signed RPMs (Fedora 44, x86_64 and
-# aarch64) and DEBs (Debian bookworm and trixie, amd64 and arm64), publishes them to the FreeMixer channel and
+# aarch64) and DEBs (Debian bookworm and trixie, amd64 and arm64), publishes them to the OpenMixer channel and
 # attaches them to the GitHub release, whose notes are the git log since the previous tag. Any other run, a pull request or a branch,
 # is a dry run: it builds and lints everything and publishes nothing.
 #
@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   rpm:
-    uses: FreeMixer/.github/.github/workflows/build-rpm.yml@v1
+    uses: Open-Mixer/.github/.github/workflows/build-rpm.yml@openmixer-v1
     with:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}
@@ -39,7 +39,7 @@ jobs:
   # failed RPM.
   deb:
     needs: rpm
-    uses: FreeMixer/.github/.github/workflows/build-deb.yml@v1
+    uses: Open-Mixer/.github/.github/workflows/build-deb.yml@openmixer-v1
     with:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}

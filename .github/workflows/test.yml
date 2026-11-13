@@ -20,7 +20,7 @@
 #
 # libreac IS THE PUBLISHED PACKAGE. `dnf builddep packaging/reac-pw.spec` installs libreac-devel,
 # libreac-transport-devel and libreac-tests (the far end several tests drive, fake_box) from the
-# FreeMixer channel at the floor and ceiling the spec declares; nothing of libreac is cloned or built here.
+# OpenMixer channel at the floor and ceiling the spec declares; nothing of libreac is cloned or built here.
 #
 # THE VERDICT is tools/ci-suite.sh's: any FAIL, AND any netns test that did not report OK.
 # This runner can run all of them, so a SKIP here is a test that did not run.
