@@ -1,14 +1,22 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
-# The commit-msg hook of a FreeMixer repository: the checker is Open-Mixer/.github's commit-message-check, read from a
-# checkout of it: FREEMIXER_DOTGITHUB, else the v1 clone ~/.cache/omx/freemixer-dotgithub (cloned on first use, fetched
+# The commit-msg hook of a OpenMixer repository: the checker is Open-Mixer/.github's commit-message-check, read from a
+# checkout of it: OPENMIXER_DOTGITHUB, else the v1 clone ~/.cache/omx/openmixer-dotgithub (cloned on first use, fetched
 # at v1 again when its last fetch is over ten minutes old), else ../freemixer-dotgithub beside this repository. With
 # none the commit is refused and says why: a checker that cannot run is never a pass.
 # Enable once per clone: git config core.hooksPath .githooks
-url=${FREEMIXER_DOTGITHUB_URL:-https://github.com/Open-Mixer/.github}
-c=$HOME/.cache/omx/freemixer-dotgithub
-d=${FREEMIXER_DOTGITHUB:-}
+# Transitional, one pass: the old FREEMIXER_ names are still read (the new name wins, the old one says so); the old
+# names are removed in a later pass.
+if [ -z "${OPENMIXER_DOTGITHUB_URL:-}" ] && [ -n "${FREEMIXER_DOTGITHUB_URL:-}" ]; then
+  echo "commit-msg: FREEMIXER_DOTGITHUB_URL is deprecated, use OPENMIXER_DOTGITHUB_URL" >&2; OPENMIXER_DOTGITHUB_URL=$FREEMIXER_DOTGITHUB_URL
+fi
+if [ -z "${OPENMIXER_DOTGITHUB:-}" ] && [ -n "${FREEMIXER_DOTGITHUB:-}" ]; then
+  echo "commit-msg: FREEMIXER_DOTGITHUB is deprecated, use OPENMIXER_DOTGITHUB" >&2; OPENMIXER_DOTGITHUB=$FREEMIXER_DOTGITHUB
+fi
+url=${OPENMIXER_DOTGITHUB_URL:-https://github.com/Open-Mixer/.github}
+c=$HOME/.cache/omx/openmixer-dotgithub
+d=${OPENMIXER_DOTGITHUB:-}
 if [ -z "$d" ]; then
   if [ -d "$c/.git" ]; then
     if [ -z "$(find "$c/.git/FETCH_HEAD" -mmin -10 2>/dev/null)" ]; then
@@ -22,5 +30,5 @@ if [ -z "$d" ]; then
 fi
 [ -n "$d" ] || d=$(git rev-parse --show-toplevel)/../freemixer-dotgithub
 chk=$d/.github/actions/commit-message-check/commit-message-check.sh
-[ -x "$chk" ] || { echo "commit-msg: no commit-message checker at $chk (set FREEMIXER_DOTGITHUB, or let this hook clone $url at v1 into $c): commit refused" >&2; exit 1; }
+[ -x "$chk" ] || { echo "commit-msg: no commit-message checker at $chk (set OPENMIXER_DOTGITHUB, or let this hook clone $url at v1 into $c): commit refused" >&2; exit 1; }
 exec "$chk" --msg-file "$1"
