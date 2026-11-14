@@ -8,7 +8,8 @@
 # whole-binary test SKIPPED there: the 1.0.26 release job read `Ok: 0 Fail: 0 Skipped: 30`
 # for the netns suite, and a startup crash would have passed every automated check.
 #
-# WHERE IT RUNS, AND WHY THERE. A fedora:44 container, the release's own target: its
+# WHERE IT RUNS, AND WHY THERE. A Fedora container of each release the RPMs are built for (the
+# shared build-rpm workflow's 44 and 45), the release's own targets: their
 # PipeWire and WirePlumber 0.5 are what the tests are written against
 # (box-master-slave-join.sh's WirePlumber drop-in is 0.5 syntax, and the runner's Ubuntu
 # ships 0.4). The container is --privileged because the tests mint unprivileged user, net,
@@ -45,9 +46,13 @@ env:
 
 jobs:
   suite:
-    name: meson test (unit + netns), fedora 44
+    name: meson test (unit + netns), fedora ${{ matrix.fedora }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [44, 45]
     steps:
       - uses: actions/checkout@v4
 
@@ -76,11 +81,11 @@ jobs:
           fi
           lsmod | grep -E '^(veth|dummy|8021q|sch_etf) '
 
-      - name: Run the suite in fedora:44
+      - name: Run the suite in fedora:${{ matrix.fedora }}
         run: |
           docker run --rm --privileged \
             -v "$GITHUB_WORKSPACE/..:/w" -w /w/"$(basename "$GITHUB_WORKSPACE")" \
-            fedora:44 bash -euxo pipefail -c '
+            fedora:${{ matrix.fedora }} bash -euxo pipefail -c '
               dnf install -y -q --setopt=install_weak_deps=False \
                 gcc make git meson ninja-build pkgconf-pkg-config python3 python3-pyyaml dnf5-plugins \
                 pipewire pipewire-devel pipewire-utils wireplumber \
@@ -109,7 +114,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: meson-testlogs
+          name: meson-testlogs-fc${{ matrix.fedora }}
           path: build-ci/meson-logs/
           if-no-files-found: warn
           retention-days: 14
