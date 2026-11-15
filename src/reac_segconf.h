@@ -40,8 +40,10 @@
 
 #include <net/if.h>   /* IFNAMSIZ */
 #include <stddef.h>
+#include <stdint.h>
 
 #include <reac/reac_role.h>
+#include <reac/transport/reac_topo.h>   /* the trunk bounds a declared list is held to */
 
 /* Segments the file may name. Two trunks' worth at reac_topo's own per-parent bound, the
  * same number reac_declared_vlan carries; past it the excess is REPORTED, never dropped in
@@ -108,6 +110,41 @@ struct reac_segconf_seg {
 	unsigned seen_gen;           /* the file-number this section was last opened in */
 };
 
+/* THE TRUNK'S VLANS, DECLARED ONCE (reac-pw#99, owner ruling 2026-11-15). A `[trunk <parent>]`
+ * section with `vlans = 11 12 13` says: this interface is a trunk and these are the VLANs
+ * its boxes sit on. Each `<parent>.<vid>` is MINTED at start, and again whenever the parent
+ * appears or its netdev goes, and knocked on like any wire — nothing tagged has to be heard
+ * first. That is the one door a COLD start has: a trunk parent finds its VLANs by hearing
+ * tagged frames, a cold box says nothing until a master speaks, and a box on an access port
+ * never hears an untagged knock, so with every box cold nothing tagged ever arrives and no
+ * VLAN is found (the 82599 bench, reac-pw#99). The console carries the list with the show
+ * and writes it through its drop-in, in these same words.
+ *
+ * THIS IS NOT THE 2026-09-15 SHAPE COMING BACK. That minted every `[segment <parent>.<vid>]`
+ * the file happened to name, and the names were a role projection's side effect that
+ * outlived its rig; the 2026-09-23 ruling ("we don't carry any VLANs if we don't detect
+ * VLANs") stands for `[segment]`, which still mints nothing (reac_declared_vlan.h). A trunk
+ * section is a different sentence: the operator naming the trunk and its VLAN ids, once, on
+ * purpose, and paying for the netdevs it asks for.
+ *
+ * `vlans` IS READ WHOLE OR REFUSED BY NAME: one id that is not 1..4094, one listed twice,
+ * or more than the per-trunk bound, refuses the line and keeps what an earlier file said. A
+ * later file's `vlans =` replaces the list (last wins per key, as every key here). A trunk
+ * section with no `vlans` line declares nothing and is refused by name once every file has
+ * been read. The bounds are reac_topo's own, because that table is where a trunk's VLANs
+ * end up: an operator cannot declare more than the daemon can serve, and is told so. */
+#define REAC_SEGCONF_TRUNKS     REAC_TOPO_MAX_PARENTS
+#define REAC_SEGCONF_TRUNK_VIDS REAC_TOPO_MAX_VLANS
+
+struct reac_segconf_trunk {
+	char     parent[IFNAMSIZ];
+	uint16_t vid[REAC_SEGCONF_TRUNK_VIDS];
+	int      n;                  /* ids in `vid`, in the order written; 0 until vlans_set */
+	int      vlans_set;          /* some file said `vlans =` for this trunk */
+	char     vlans_file[REAC_SEGCONF_FILE_LEN];   /* which file's list this is */
+	unsigned seen_gen;
+};
+
 /* What a file looked like when it was read, for reac_segconf_refresh. NANOSECOND mtime:
  * a seconds-resolution stamp cannot see a drop-in rewritten twice in one second, which is
  * exactly what a console writing its file does. */
@@ -121,6 +158,9 @@ struct reac_segconf_stamp {
 struct reac_segconf {
 	struct reac_segconf_seg seg[REAC_SEGCONF_MAX];
 	int n;
+	struct reac_segconf_trunk trunk[REAC_SEGCONF_TRUNKS];
+	int n_trunks;
+	unsigned trunks_overflow;    /* trunk sections past REAC_SEGCONF_TRUNKS */
 	int present;                 /* the file existed and was readable */
 	char path[512];              /* where we looked, printed whether or not it was there */
 	char refusal[REAC_SEGCONF_REFUSALS][REAC_SEGCONF_REFUSAL_LEN];
@@ -227,5 +267,19 @@ const char *reac_segconf_model(const struct reac_segconf *c, const char *name);
 struct reac_declared_vlan;
 int reac_segconf_declared(const struct reac_segconf *c, struct reac_declared_vlan *tab,
                           int max, int *n);
+
+/* THE TRUNK SECTION FOR `parent`, or NULL when no file opened one. The daemon prints the
+ * list and its file at start; a test reads it back. */
+const struct reac_segconf_trunk *reac_segconf_trunk_find(const struct reac_segconf *c,
+                                                         const char *parent);
+
+/* EVERY VLAN THE TRUNK SECTIONS DECLARE, appended to a reac_declared_vlan table in the
+ * order written: trunk by trunk, id by id, each (parent, vid) once. These are the ones the
+ * daemon MINTS COLD (reac-pw#99). A `<parent>.<vid>` some `[segment]` switched off with
+ * `ignore = yes` is left out: switching a segment off cannot create a netdev for it, and
+ * the two sections are one file. Returns how many NEW entries were added, or -1 if the
+ * table filled. */
+int reac_segconf_trunk_vlans(const struct reac_segconf *c, struct reac_declared_vlan *tab,
+                             int max, int *n);
 
 #endif /* REAC_SEGCONF_H */

@@ -926,6 +926,69 @@ static void gen_segconf(void)
 		                          "[segment eth0.3]\n" };
 		segc("vlans-full", 2, 1, 1, l, t);
 	}
+	/* THE TRUNK'S VLANS, DECLARED ONCE (reac-pw#99): the sections an operator writes, the
+	 * list's every refusal, the headers' every refusal, the bounds, a drop-in replacing the
+	 * list, and the cold table filling up */
+	seg1("trunk-list", 8,
+	     "[trunk enp131s0]\n"
+	     "vlans = 11 12, 13\t14   ; four boxes on four access ports\n"
+	     "[segment enp131s0.12]\n"
+	     "ignore = yes\n"
+	     "[TRUNK enp2s0]\n"
+	     "VLANS = \"21\"\n"
+	     "[trunk eth1]\n"
+	     "[segment eth2]\n"
+	     "vlans = 5\n"
+	     "role = tap\n");
+	seg1("trunk-ids", 8,
+	     "[trunk eth0]\n"
+	     "vlans = 11 4095\n"
+	     "vlans = 11 11\n"
+	     "vlans = 11 1a\n"
+	     "vlans =\n"
+	     "vlans = 00011\n"
+	     "vlans = 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17\n"
+	     "role = master\n"
+	     "[trunk eth3]\n"
+	     "vlans = 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16\n"
+	     "vlans = 4094, 1\n"
+	     "[trunk eth5]\n"
+	     "vlans = 0\n"
+	     "vlans = 7\n");
+	seg1("trunk-headers", 8,
+	     "[trunk]\n"
+	     "[trunk abcdefghijk]\n"
+	     "[trunk abcdefghij]\n"
+	     "vlans = 4094\n"
+	     "[trunk br@x]\n"
+	     "[trunk eth0]\n"
+	     "vlans = 1\n"
+	     "[trunk ETH0]\n"
+	     "vlans = 2\n"
+	     "[trunk eth0]\n"
+	     "vlans = 3\n"
+	     "[trunkx eth0]\n"
+	     "[trunk\teth4]\n"
+	     "vlans = 4\n"
+	     "[trunk eth0x]\n"
+	     "vlans = 5\n");
+	n = 0;
+	for (int i = 0; i < 9; i++)
+		n += (size_t)snprintf(big + n, sizeof big - n, "[trunk t%d]\nvlans = %d\n", i, i + 1);
+	seg1("trunk-nine", 8, big);
+	{
+		const unsigned l[] = { 50, 0 };
+		const char *const t[] = {
+			"[trunk eth0]\nvlans = 31\n[trunk eth9]\n[trunk eth7]\nvlans = 70\n",
+			"[trunk eth0]\nvlans = 11 12\n[segment eth0.12]\nignore = yes\n[trunk eth9]\nvlans = 9\n",
+		};
+		segc("trunk-overrides", 8, 0, 2, l, t);
+	}
+	{
+		const unsigned l[] = { 0 };
+		const char *const t[] = { "[trunk eth0]\nvlans = 1 2 3\n[segment eth0.2]\n" };
+		segc("trunk-full", 2, 1, 1, l, t);
+	}
 	seg1("empty", 0, "");
 	seg1("comments-only", 3, "# nothing\n; nothing\n   \n\t# indented\nx#y = 1\n");
 }

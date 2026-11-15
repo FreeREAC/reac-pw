@@ -14,6 +14,7 @@
  *
  * No filesystem except one file this test writes, no netlink, no PipeWire. */
 #include "reac_segconf.h"
+#include "reac_declared_vlan.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -365,6 +366,136 @@ int main(void)
 		      "a later file did not override the model");
 		CHECK(role_of(&b, "e0") == REAC_ROLE_INTENT_BOX,
 		      "the role a later file was silent about did not survive");
+	}
+
+	/* ---- THE TRUNK'S VLANS, DECLARED ONCE (reac-pw#99) ---------------------------- *
+	 * `[trunk <parent>]` / `vlans = ...` is the cold-start door: the ids a trunk carries,
+	 * named once, each minted whether or not anything tagged was heard. The grammar is
+	 * pinned here; the mint is the netns suite's (trunk-vlans-declared-cold.sh). */
+	{
+		struct reac_segconf b;
+		struct reac_declared_vlan tab[REAC_DECLARED_VLAN_MAX];
+		int nt = 0;
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b,
+			"[trunk enp131s0]\n"
+			"vlans = 11 12, 13\t14   ; four boxes on four access ports\n"
+			"[segment enp131s0.12]\n"
+			"ignore = yes\n"
+			"[TRUNK enp2s0]\n"
+			"VLANS = \"21\"\n");
+		CHECK(b.refused == 0, "a clean trunk file refused %u line(s): %s", b.refused,
+		      b.n_refusals ? b.refusal[0] : "");
+		CHECK(b.n_trunks == 2, "two trunks named, got %d", b.n_trunks);
+		const struct reac_segconf_trunk *t = reac_segconf_trunk_find(&b, "enp131s0");
+		CHECK(t && t->vlans_set && t->n == 4, "the list did not read as four ids");
+		CHECK(t && t->vid[0] == 11 && t->vid[1] == 12 && t->vid[2] == 13 && t->vid[3] == 14,
+		      "the ids did not read back in the order written");
+		CHECK(t && strcmp(t->vlans_file, "reac-pw.conf") == 0,
+		      "the list does not name the file it came from");
+		CHECK(reac_segconf_trunk_find(&b, "enp2s0") && reac_segconf_trunk_find(&b, "enp2s0")->vid[0] == 21,
+		      "the section keyword, the key or the quotes did not fold");
+		CHECK(reac_segconf_trunk_find(&b, "ENP131S0") == NULL,
+		      "trunk names matched case-INsensitively; the kernel does not");
+		CHECK(b.n == 1, "a [trunk] section opened a segment (%d)", b.n);
+		/* THE TABLE THE DAEMON MINTS FROM: every id of every trunk, in order, except the
+		 * one a [segment] switched off. */
+		int added = reac_segconf_trunk_vlans(&b, tab, REAC_DECLARED_VLAN_MAX, &nt);
+		CHECK(added == 4 && nt == 4, "expected 4 cold VLANs (12 is ignored), got %d/%d", added, nt);
+		CHECK(nt == 4 && tab[0].vid == 11 && tab[1].vid == 13 && tab[2].vid == 14 && tab[3].vid == 21,
+		      "the cold table is not 11 13 14 21 in that order");
+		CHECK(nt == 4 && strcmp(tab[0].parent, "enp131s0") == 0 && strcmp(tab[3].parent, "enp2s0") == 0,
+		      "the cold table lost a parent");
+		/* AND [segment <parent>.<vid>] STILL DECLARES NOTHING COLD: it is in the other
+		 * table (reac_segconf_declared) and only that one. */
+		int nd = 0;
+		struct reac_declared_vlan dtab[REAC_DECLARED_VLAN_MAX];
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[segment enp131s0.11]\nrole = tap\n");
+		CHECK(reac_segconf_trunk_vlans(&b, tab, REAC_DECLARED_VLAN_MAX, &(int){0}) == 0,
+		      "a [segment <parent>.<vid>] section put a VLAN in the COLD table");
+		CHECK(reac_segconf_declared(&b, dtab, REAC_DECLARED_VLAN_MAX, &nd) == 1 && nd == 1,
+		      "the [segment] declaration left the heard-and-pinned table");
+
+		/* EVERY REFUSAL NAMES ITS SUBJECT, AND A BAD LIST IS REFUSED WHOLE. Two files,
+		 * because only the first REAC_SEGCONF_REFUSALS are kept verbatim. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b,
+			"[trunk eth0]\n"
+			"vlans = 11 4095\n"          /* out of range: the whole line goes */
+			"vlans = 11 11\n"            /* twice */
+			"vlans = 11 1a\n"            /* not a number */
+			"vlans =\n"                  /* empty */
+			"role = master\n");          /* not a trunk key */
+		CHECK(refusal_names(&b, "4095"), "an out-of-range id was not named");
+		CHECK(refusal_names(&b, "listed twice"), "a duplicate id was not named");
+		CHECK(refusal_names(&b, "'1a' is not a VLAN id"), "a non-numeric id was not named");
+		CHECK(refusal_names(&b, "no VLAN id given"), "an empty list was not named");
+		CHECK(refusal_names(&b, "[trunk eth0] has no key 'role'"), "a role under a trunk was not refused by name");
+		CHECK(refusal_names(&b, "[trunk eth0] declares no VLAN"), "a trunk whose every list was refused was not named as declaring none");
+		CHECK(b.refused == 6, "six refusals expected, got %u", b.refused);
+		t = reac_segconf_trunk_find(&b, "eth0");
+		CHECK(t && !t->vlans_set, "a refused list set the trunk's vlans");
+		CHECK(reac_segconf_trunk_vlans(&b, tab, REAC_DECLARED_VLAN_MAX, &(int){0}) == 0,
+		      "a refused list minted something");
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b,
+			"[trunk]\n"                  /* names nothing */
+			"[trunk abcdefghijk]\n"      /* 11 bytes: `abcdefghijk.4094` cannot be a netdev */
+			"[trunk br@x]\n"             /* not a netdev name */
+			"[trunk eth1]\n"             /* no vlans at all */
+			"[segment eth2]\n"
+			"vlans = 5\n");              /* the key under the wrong section */
+		CHECK(refusal_names(&b, "[trunk] names no interface"), "a nameless trunk was not named");
+		CHECK(refusal_names(&b, "[trunk abcdefghijk] is too long"), "a parent too long for its VLANs was not named");
+		CHECK(refusal_names(&b, "[trunk br@x] is not a name a netdev can have"), "a parent no netdev can be named was not refused");
+		CHECK(refusal_names(&b, "[trunk eth1] declares no VLAN"), "a trunk with no list was not named once every file was read");
+		CHECK(refusal_names(&b, "[segment eth2] takes no 'vlans'"), "vlans under a segment was not refused by name");
+		CHECK(b.refused == 5, "five refusals expected, got %u", b.refused);
+		CHECK(b.n_trunks == 1, "a refused trunk header opened a trunk (%d)", b.n_trunks);
+		/* A list that fits for 11 and not for 1011 is a trap: the bound is the name's. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[trunk abcdefghij]\nvlans = 4094\n");
+		CHECK(b.refused == 0 && reac_segconf_trunk_find(&b, "abcdefghij"),
+		      "a 10-byte parent (abcdefghij.4094 is 15) was refused: %s", b.n_refusals ? b.refusal[0] : "");
+
+		/* LAST WINS PER KEY, across files: the console's drop-in replaces the list whole. */
+		reac_segconf_init(&b);
+		reac_segconf_parse_file(&b, "[trunk eth0]\nvlans = 11 12\n", "reac-pw.conf");
+		reac_segconf_parse_file(&b, "[trunk eth0]\nvlans = 31\n[trunk eth9]\n",
+		                        "reac-pw.conf.d/50-openmixer.conf");
+		reac_segconf_parse(&b, "");
+		t = reac_segconf_trunk_find(&b, "eth0");
+		CHECK(t && t->n == 1 && t->vid[0] == 31, "a later file did not replace the list whole");
+		CHECK(t && strcmp(t->vlans_file, "reac-pw.conf.d/50-openmixer.conf") == 0,
+		      "the list does not name the drop-in that gave it: %s", t ? t->vlans_file : "");
+		CHECK(refusal_names(&b, "[trunk eth9] declares no VLAN") && b.refused == 1,
+		      "a drop-in's empty trunk section was not the one refusal");
+		/* A repeated header is a typo within one file and an override across two. */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[trunk eth0]\nvlans = 1\n[trunk eth0]\nvlans = 2\n");
+		CHECK(refusal_names(&b, "[trunk eth0] appears more than once"), "a repeated trunk header was not named");
+		CHECK(reac_segconf_trunk_find(&b, "eth0")->vid[0] == 2, "the keys of a repeated header were not merged");
+
+		/* THE BOUNDS ARE reac_topo's AND ARE SAID: 17 ids on one trunk, 9 trunks. */
+		static char big[2048];
+		size_t bn = (size_t)snprintf(big, sizeof big, "[trunk eth0]\nvlans =");
+		for (int i = 1; i <= REAC_SEGCONF_TRUNK_VIDS + 1; i++)
+			bn += (size_t)snprintf(big + bn, sizeof big - bn, " %d", i);
+		bn += (size_t)snprintf(big + bn, sizeof big - bn, "\n");
+		for (int i = 1; i <= REAC_SEGCONF_TRUNKS; i++)
+			bn += (size_t)snprintf(big + bn, sizeof big - bn, "[trunk t%d]\nvlans = 1\n", i);
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, big);
+		CHECK(refusal_names(&b, "more than 16 VLANs"), "the per-trunk bound was hit and not named");
+		CHECK(b.trunks_overflow == 1 && refusal_names(&b, "past the 8-trunk bound"),
+		      "the trunk bound was hit and not named (overflow %u)", b.trunks_overflow);
+		/* and the COLD table's own bound: a full table stops at -1, nothing dropped in silence */
+		reac_segconf_init(&b);
+		reac_segconf_parse(&b, "[trunk eth0]\nvlans = 1 2 3\n");
+		nt = 0;
+		CHECK(reac_segconf_trunk_vlans(&b, tab, 2, &nt) == -1 && nt == 2,
+		      "a full cold table did not stop at -1 (nt %d)", nt);
 	}
 
 	/* ---- A LINE IS READ WHOLE OR REFUSED BY NAME -------------------------------- *

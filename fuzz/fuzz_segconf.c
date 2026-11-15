@@ -17,6 +17,14 @@
  * The expectations come from the grammar the header and the reader's comments document,
  * read here line by line on the harness's own copy (src/reac_segconf.h:4-37, 46-115,
  * 152-164, 227-229; src/reac_segconf.c:25-119, 269-303):
+ *   - `[trunk <parent>]` opens a trunk section (reac-pw#99; src/reac_segconf.h, THE TRUNK'S
+ *     VLANS): a name of 1..10 bytes of a netdev's alphabet (`<parent>.<vid>` must fit), past
+ *     REAC_SEGCONF_TRUNKS (8) trunks refused and counted as overflow, repeated in one file
+ *     refused and merged; its one key `vlans` is a list of ids separated by blanks or commas,
+ *     each 1..4 digits reading 1..4094, none twice, at most 16, read whole or refused whole
+ *     (an empty list too); any other key under it is refused; a trunk that no file gave a
+ *     list is refused once every file is read, before the segment rules; a later file's
+ *     list replaces the earlier one, and the list names its file;
  *   - a line ends at '\n'; one of 512 bytes or more is refused whole, and one that
  *     opens a section ends the section before it; a '#' or ';' at the start or after a
  *     blank starts a comment; blanks are spaces, tabs and CRs;
@@ -65,7 +73,7 @@
 #define KEPT_MAX      8
 #define LABEL_LEN     96
 #define BASE_FILE     "reac-pw.conf"
-/* contract: src/reac_segconf.c:135 (a line buffer of 512 bytes: 511 and a NUL) */
+/* contract: src/reac_segconf.c:211 (a line buffer of 512 bytes: 511 and a NUL) */
 #define LINE_MAX_     512
 /* contract: linux/if.h IFNAMSIZ (16) */
 #define NAME_LEN      16
@@ -75,6 +83,10 @@
 #define VLAN_CAP_MAX  40
 
 #define FILES_MAX     4
+/* contract: src/reac_segconf.h (REAC_SEGCONF_TRUNKS = REAC_TOPO_MAX_PARENTS, 8; REAC_SEGCONF_TRUNK_VIDS =
+ * REAC_TOPO_MAX_VLANS, 16), reac_topo.h:80-81 */
+#define TRUNKS_MAX    8
+#define TRUNK_VIDS    16
 
 /* ---- the harness's reading of the grammar --------------------------------------------- */
 
@@ -87,9 +99,20 @@ struct mseg {
 	int gen;
 };
 
+struct mtrunk {
+	char name[NAME_LEN];
+	unsigned vid[TRUNK_VIDS];
+	int n, vlans_set;
+	char vlans_file[LABEL_LEN];
+	int gen;
+};
+
 struct mconf {
 	struct mseg seg[SEGS_MAX];
 	int n;
+	struct mtrunk trunk[TRUNKS_MAX];
+	int n_trunks;
+	unsigned trunks_overflow;
 	unsigned overflow, refused;
 	char kept[KEPT_MAX][LABEL_LEN + 16];   /* the address each kept refusal starts with */
 	int kept_knock[KEPT_MAX];              /* the kept refusal was a `knock` line */
@@ -155,9 +178,34 @@ static struct mseg *m_find(struct mconf *c, const char *name, size_t n)
 	return NULL;
 }
 
-/* One header line [s, e), '[' first: the section it opens, or NULL. */
-static struct mseg *m_header(struct mconf *c, const char *s, const char *e, int line)
+/* The characters a netdev name the daemon hands to rtnetlink may hold.
+ * contract: src/reac_declared_vlan.c:16-19 (letters, digits, '.', '-', ':' and '_') */
+static int m_name_ok(const char *s, size_t n)
 {
+	for (size_t i = 0; i < n; i++) {
+		char ch = s[i];
+		int ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+		         ch == '.' || ch == '-' || ch == ':' || ch == '_';
+		if (!ok)
+			return 0;
+	}
+	return 1;
+}
+
+static struct mtrunk *m_find_trunk(struct mconf *c, const char *name, size_t n)
+{
+	for (int i = 0; i < c->n_trunks; i++)
+		if (strlen(c->trunk[i].name) == n && memcmp(c->trunk[i].name, name, n) == 0)
+			return &c->trunk[i];
+	return NULL;
+}
+
+/* One header line [s, e), '[' first: the segment it opens, or NULL; a trunk section is
+ * handed back in *curt. Every header line closes the section before it, refused or not. */
+static struct mseg *m_header(struct mconf *c, const char *s, const char *e, int line,
+                             struct mtrunk **curt)
+{
+	*curt = NULL;
 	const char *close = memchr(s, ']', (size_t)(e - s));
 	if (!close || close + 1 != e) {
 		m_refuse(c, line);   /* not closed, or text after the ']' */
@@ -165,6 +213,31 @@ static struct mseg *m_header(struct mconf *c, const char *s, const char *e, int 
 	}
 	const char *b = s + 1, *be = close;
 	strip(&b, &be);
+	if (be - b >= 5 && ieq(b, 5, "trunk") && (be - b == 5 || b[5] == ' ' || b[5] == '\t')) {
+		const char *nm = b + 5, *ne = be;
+		strip(&nm, &ne);
+		size_t n = (size_t)(ne - nm);
+		if (n == 0 || n + 5 >= NAME_LEN || !m_name_ok(nm, n)) {
+			m_refuse(c, line);   /* nameless, too long for `<parent>.<vid>`, or no netdev's name */
+			return NULL;
+		}
+		struct mtrunk *t = m_find_trunk(c, nm, n);
+		if (!t) {
+			if (c->n_trunks >= TRUNKS_MAX) {
+				c->trunks_overflow++;
+				m_refuse(c, line);
+				return NULL;
+			}
+			t = &c->trunk[c->n_trunks++];
+			memset(t, 0, sizeof *t);
+			memcpy(t->name, nm, n);
+		} else if (t->gen == c->gen) {
+			m_refuse(c, line);   /* repeated in this file: merged */
+		}
+		t->gen = c->gen;
+		*curt = t;
+		return NULL;
+	}
 	if (be - b < 8 || !ieq(b, 7, "segment") || (b[7] != ' ' && b[7] != '\t')) {
 		m_refuse(c, line);
 		return NULL;
@@ -193,11 +266,49 @@ static struct mseg *m_header(struct mconf *c, const char *s, const char *e, int 
 	return g;
 }
 
-/* One `key = value` line [s, e) of section g. */
-static void m_key(struct mconf *c, struct mseg *g, const char *s, const char *e, int line)
+/* `vlans = 11 12, 13`: ids separated by blanks or commas, 1..4 digits each reading 1..4094,
+ * none twice, at most TRUNK_VIDS, at least one. Returns the count or -1: refused whole.
+ * contract: src/reac_segconf.h (`vlans` IS READ WHOLE OR REFUSED BY NAME), src/reac_segconf.c
+ * (parse_vids) */
+static int m_vids(const char *v, size_t vn, unsigned *out)
+{
+	int n = 0;
+	size_t i = 0;
+	for (;;) {
+		while (i < vn && (v[i] == ' ' || v[i] == '\t' || v[i] == ','))
+			i++;
+		if (i >= vn)
+			break;
+		size_t t = i;
+		while (i < vn && v[i] != ' ' && v[i] != '\t' && v[i] != ',')
+			i++;
+		size_t len = i - t;
+		unsigned val = 0;
+		int digits = len >= 1 && len <= 4;
+		for (size_t q = t; q < i && digits; q++) {
+			if (v[q] < '0' || v[q] > '9')
+				digits = 0;
+			else
+				val = val * 10 + (unsigned)(v[q] - '0');
+		}
+		if (!digits || val < 1 || val > 4094)
+			return -1;
+		for (int d = 0; d < n; d++)
+			if (out[d] == val)
+				return -1;
+		if (n >= TRUNK_VIDS)
+			return -1;
+		out[n++] = val;
+	}
+	return n > 0 ? n : -1;
+}
+
+/* One `key = value` line [s, e) of section g, or of trunk section t. */
+static void m_key(struct mconf *c, struct mseg *g, struct mtrunk *t, const char *s, const char *e,
+                  int line)
 {
 	const char *eq = memchr(s, '=', (size_t)(e - s));
-	if (!eq || !g) {
+	if (!eq || (!g && !t)) {
 		m_refuse(c, line);
 		return;
 	}
@@ -210,6 +321,19 @@ static void m_key(struct mconf *c, struct mseg *g, const char *s, const char *e,
 	}
 	size_t kn = (size_t)(ke - k), vn = (size_t)(ve - v);
 	char low[64];
+	if (t) {
+		unsigned vids[TRUNK_VIDS];
+		int nv = ieq(k, kn, "vlans") ? m_vids(v, vn, vids) : -1;
+		if (nv < 0) {
+			m_refuse(c, line);   /* another key, or a list refused whole */
+			return;
+		}
+		memcpy(t->vid, vids, sizeof vids);
+		t->n = nv;
+		t->vlans_set = 1;
+		snprintf(t->vlans_file, sizeof t->vlans_file, "%s", c->reading);
+		return;
+	}
 	if (ieq(k, kn, "role")) {
 		static const char *const words[] = { "auto", "master", "slave", "tap", "box" };
 		static const enum reac_role_intent role[] = {
@@ -261,6 +385,7 @@ static void m_file(struct mconf *c, const char *text, const char *label)
 	snprintf(c->reading, sizeof c->reading, "%s", label ? label : BASE_FILE);
 	c->gen++;
 	struct mseg *cur = NULL;
+	struct mtrunk *curt = NULL;
 	int line = 0;
 	const char *p = text;
 	while (*p) {
@@ -273,7 +398,7 @@ static void m_file(struct mconf *c, const char *text, const char *label)
 			while (f < e && blank(*f))
 				f++;
 			if (f < e && *f == '[')
-				cur = NULL;
+				cur = NULL, curt = NULL;
 			m_refuse(c, line);
 			continue;
 		}
@@ -286,15 +411,18 @@ static void m_file(struct mconf *c, const char *text, const char *label)
 		if (s == e)
 			continue;
 		if (*s == '[')
-			cur = m_header(c, s, e, line);
+			cur = m_header(c, s, e, line, &curt);
 		else
-			m_key(c, cur, s, e, line);
+			m_key(c, cur, curt, s, e, line);
 	}
 }
 
-/* The rules that need every file read. */
+/* The rules that need every file read: the trunks first, then the segments. */
 static void m_cross(struct mconf *c)
 {
+	for (int i = 0; i < c->n_trunks; i++)
+		if (!c->trunk[i].vlans_set)
+			m_refuse(c, 0);
 	for (int i = 0; i < c->n; i++) {
 		struct mseg *g = &c->seg[i];
 		int box = g->role_set && g->role == REAC_ROLE_INTENT_BOX;
@@ -370,6 +498,37 @@ static int m_declared(const struct mconf *c, struct mvlan *tab, int cap, int *n)
 	return added;
 }
 
+/* What reac_segconf_trunk_vlans owes a table of `cap` holding `n` entries: every id of every
+ * trunk that has a list, in the order written, except a `<parent>.<vid>` some segment
+ * section switched off, each (parent, vid) once. */
+static int m_trunk_vlans(const struct mconf *c, struct mvlan *tab, int cap, int *n)
+{
+	int added = 0;
+	for (int i = 0; i < c->n_trunks; i++) {
+		const struct mtrunk *t = &c->trunk[i];
+		if (!t->vlans_set)
+			continue;
+		for (int k = 0; k < t->n; k++) {
+			char name[NAME_LEN + 8];
+			snprintf(name, sizeof name, "%s.%u", t->name, t->vid[k]);
+			const struct mseg *g = m_find((struct mconf *)c, name, strlen(name));
+			if (g && g->ignore)
+				continue;
+			int dup = 0;
+			for (int d = 0; d < *n; d++)
+				dup |= tab[d].vid == t->vid[k] && strcmp(tab[d].parent, t->name) == 0;
+			if (dup)
+				continue;
+			if (*n >= cap)
+				return -1;
+			snprintf(tab[*n].parent, sizeof tab[*n].parent, "%s", t->name);
+			tab[(*n)++].vid = t->vid[k];
+			added++;
+		}
+	}
+	return added;
+}
+
 /* The table the reader wrote against the one the model wrote, and the guard entry after
  * the capacity as the harness left it. */
 static int vlans_are(int got, int want, const struct reac_declared_vlan *tab, int n,
@@ -414,15 +573,15 @@ static FUZZ_NOINLINE void check_segments(const struct reac_segconf *c, const str
 	 * input: names-differ-in-case
 	 * mutant: src/reac_segconf.c:110 `c->overflow++;` -> ``
 	 * input: thirty-three-segments
-	 * mutant: src/reac_segconf.c:177 `strncasecmp(body, "segment", 7)` -> `strncmp(body, "segment", 7)`
+	 * mutant: src/reac_segconf.c:284 `strncasecmp(body, "segment", 7)` -> `strncmp(body, "segment", 7)`
 	 * input: keyword-in-capitals
-	 * mutant: src/reac_segconf.c:178 `body[7] != ' ' && body[7] != '\t'` -> `body[7] != ' '`
+	 * mutant: src/reac_segconf.c:285 `body[7] != ' ' && body[7] != '\t'` -> `body[7] != ' '`
 	 * input: tab-after-keyword
-	 * mutant: src/reac_segconf.c:168 `if (close[1])` -> `if (0)`
+	 * mutant: src/reac_segconf.c:239 `if (close[1])` -> `if (0)`
 	 * input: text-after-header
-	 * mutant: src/reac_segconf.c:295 `return c->n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:425 `return c->n;` -> `return 0;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:331 `return n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:468 `return n;` -> `return 0;`
 	 * input: operator-file */
 	if (!segments_are(c, m) || !returned)
 		abort();
@@ -434,21 +593,21 @@ static FUZZ_NOINLINE void check_role(int got_set, enum reac_role_intent got,
 	/* A segment's role is the last one its files pinned, a value of the vocabulary in any
 	 * case and without its quotes; a box that names no model falls back to no pin.
 	 * contract: src/reac_segconf.h:203-208, src/reac_segconf.c:271-316
-	 * mutant: src/reac_segconf.c:237 `(char)(*q - 'A' + 'a')` -> `*q`
+	 * mutant: src/reac_segconf.c:364 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: role-in-capitals
-	 * mutant: src/reac_segconf.c:244 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
+	 * mutant: src/reac_segconf.c:371 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:321 `s->role_set = 0;` -> ``
+	 * mutant: src/reac_segconf.c:458 `s->role_set = 0;` -> ``
 	 * input: box-without-model
-	 * mutant: src/reac_segconf.c:307 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
+	 * mutant: src/reac_segconf.c:444 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:223 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
+	 * mutant: src/reac_segconf.c:327 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:146 `cur = NULL;` -> ``
+	 * mutant: src/reac_segconf.c:215 `cur = NULL;` -> ``
 	 * input: long-header-line
-	 * mutant: src/reac_segconf.c:190 `strlen(name) >= IFNAMSIZ` -> `strlen(name) > IFNAMSIZ`
+	 * mutant: src/reac_segconf.c:295 `strlen(name) >= IFNAMSIZ` -> `strlen(name) > IFNAMSIZ`
 	 * input: name-sixteen
-	 * mutant: src/reac_segconf.c:255 `(char)(*q - 'A' + 'a')` -> `*q`
+	 * mutant: src/reac_segconf.c:382 `(char)(*q - 'A' + 'a')` -> `*q`
 	 * input: model-in-capitals */
 	if (got_set != want->role_set || (got_set && got != want->role))
 		abort();
@@ -459,9 +618,9 @@ static FUZZ_NOINLINE void check_model(const char *got, const struct mseg *want)
 	/* A segment's model is a token of the box-model table, folded to lower case, and
 	 * only on a segment whose role is box; on any other role it is dropped.
 	 * contract: src/reac_segconf.h:92-101, 221-225
-	 * mutant: src/reac_segconf.c:308 `s->model_set && !is_box` -> `0`
+	 * mutant: src/reac_segconf.c:445 `s->model_set && !is_box` -> `0`
 	 * input: model-on-a-tap
-	 * mutant: src/reac_segconf.c:268 `"%s", low` -> `"%s", val`
+	 * mutant: src/reac_segconf.c:395 `"%s", low` -> `"%s", val`
 	 * input: model-in-capitals */
 	if (!same_text(got, want->model_set ? want->model : NULL))
 		abort();
@@ -474,9 +633,9 @@ static FUZZ_NOINLINE void check_ignore(int got, const struct mseg *want)
 	 * contract: src/reac_segconf.h:89, 199-201
 	 * mutant: src/reac_segconf.c:90 `!strcmp(v, "1")` -> `!strcmp(v, "0")`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:278 `cur->ignore = b;` -> `cur->ignore = 1;`
+	 * mutant: src/reac_segconf.c:405 `cur->ignore = b;` -> `cur->ignore = 1;`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:530 `s && s->ignore` -> `s != NULL`
+	 * mutant: src/reac_segconf.c:667 `s && s->ignore` -> `s != NULL`
 	 * input: ignore-words */
 	if (got != want->ignore)
 		abort();
@@ -488,11 +647,11 @@ static FUZZ_NOINLINE void check_provenance(const char *role_file, const char *ig
 	/* Each answer names the file that gave it, per key: the hand-written file or the
 	 * drop-in, and nothing when no file said that key.
 	 * contract: src/reac_segconf.h:108-113, 210-219
-	 * mutant: src/reac_segconf.c:246 `c->reading` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:373 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
-	 * mutant: src/reac_segconf.c:280 `c->reading` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:407 `c->reading` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides
-	 * mutant: src/reac_segconf.c:122 `label ? label : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
+	 * mutant: src/reac_segconf.c:190 `label ? label : REAC_SEGCONF_FILE` -> `REAC_SEGCONF_FILE`
 	 * input: dropin-overrides */
 	if (!same_text(role_file, want->role_set ? want->role_file : NULL) ||
 	    !same_text(ignore_file, want->ignore_set ? want->ignore_file : NULL))
@@ -505,11 +664,11 @@ static FUZZ_NOINLINE void check_knock_refused(const char *got, int was_knock)
 	 * takes no plan since 1.0.41, and a word in a file must not be able to select the
 	 * stream (reac-pw#61). The refusal says so.
 	 * contract: src/reac_segconf.c (the `knock` branch: refused, with "takes no plan")
-	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
+	 * mutant: src/reac_segconf.c:413 `takes no plan` -> `takes a plan`
 	 * input: knock-plans
-	 * mutant: src/reac_segconf.c:286 `takes no plan` -> `takes a plan`
+	 * mutant: src/reac_segconf.c:413 `takes no plan` -> `takes a plan`
 	 * input: knock-long-value
-	 * mutant: src/reac_segconf.c:286 `knock takes` -> `the key takes`
+	 * mutant: src/reac_segconf.c:413 `knock takes` -> `the key takes`
 	 * input: knock-plans */
 	if (was_knock && !strstr(got, "knock takes no plan"))
 		abort();
@@ -522,7 +681,7 @@ static FUZZ_NOINLINE void check_refusals(const struct reac_segconf *c, const str
 	 * contract: src/reac_segconf.h:30-34, 51-54, 132-134
 	 * mutant: src/reac_segconf.c:32 `c->refused++;` -> ``
 	 * input: refusals-many
-	 * mutant: src/reac_segconf.c:207 `!is_new && cur->seen_gen == c->gen` -> `0`
+	 * mutant: src/reac_segconf.c:311 `!is_new && cur->seen_gen == c->gen` -> `0`
 	 * input: header-twice-in-one-file
 	 * mutant: src/reac_segconf.c:33 `c->n_refusals >= REAC_SEGCONF_REFUSALS` -> `c->n_refusals >= REAC_SEGCONF_REFUSALS - 1`
 	 * input: refusals-many */
@@ -550,11 +709,11 @@ static FUZZ_NOINLINE void check_absent(const struct reac_segconf *c, const char 
 	 * another case, nor the empty name finds a segment.
 	 * contract: src/reac_segconf.h:194-197 (the entry for `name`, or NULL; compared case
 	 * sensitively)
-	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
+	 * mutant: src/reac_segconf.c:659 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
 	 * input: absent-probes
-	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, strlen(name)) == 0`
+	 * mutant: src/reac_segconf.c:659 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, strlen(name)) == 0`
 	 * input: absent-probes
-	 * mutant: src/reac_segconf.c:522 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
+	 * mutant: src/reac_segconf.c:659 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
 	 * input: absent-probes */
 	if (reac_segconf_find(c, name) || reac_segconf_role(c, name, NULL) ||
 	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name))
@@ -583,10 +742,87 @@ static FUZZ_NOINLINE void check_declared(int got, int want, const struct reac_de
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:73 `*n >= max` -> `*n > max`
 	 * input: vlans-full
-	 * mutant: src/reac_segconf.c:568 `if (c->seg[i].ignore)` -> `if (0)`
+	 * mutant: src/reac_segconf.c:705 `if (c->seg[i].ignore)` -> `if (0)`
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:58 `!name_ok(parent)` -> `0`
 	 * input: vlans */
+	if (!vlans_are(got, want, tab, n, mt, mn, cap))
+		abort();
+}
+
+static FUZZ_NOINLINE void check_trunks(const struct reac_segconf *c, const struct mconf *m)
+{
+	int same = c->n_trunks == m->n_trunks && c->trunks_overflow == m->trunks_overflow;
+	for (int i = 0; same && i < m->n_trunks; i++)
+		same = strcmp(c->trunk[i].parent, m->trunk[i].name) == 0;
+	/* The trunks are the names the [trunk] sections opened, each once, in the order first
+	 * opened, compared byte for byte; a section past the bound is counted as overflow and
+	 * opens nothing; a name too long for `<parent>.<vid>`, or outside a netdev's alphabet,
+	 * opens nothing.
+	 * contract: src/reac_segconf.h (THE TRUNK'S VLANS; REAC_SEGCONF_TRUNKS), src/reac_segconf.c
+	 * (trunk_get, the [trunk] branch of reac_segconf_parse_file)
+	 * mutant: src/reac_segconf.c:127 `strcmp(c->trunk[i].parent, parent) == 0` -> `strcasecmp(c->trunk[i].parent, parent) == 0`
+	 * input: trunk-headers
+	 * mutant: src/reac_segconf.c:130 `c->trunks_overflow++;` -> ``
+	 * input: trunk-nine
+	 * mutant: src/reac_segconf.c:257 `strlen(name) + 5 >= IFNAMSIZ` -> `strlen(name) + 4 >= IFNAMSIZ`
+	 * input: trunk-headers
+	 * mutant: src/reac_segconf.c:263 `!reac_declared_vlan_parent_ok(name)` -> `0`
+	 * input: trunk-headers */
+	if (!same)
+		abort();
+}
+
+static FUZZ_NOINLINE void check_trunk_list(const struct reac_segconf_trunk *got,
+                                           const struct mtrunk *want)
+{
+	int same = got && got->vlans_set == want->vlans_set;
+	if (same && want->vlans_set)
+		same = got->n == want->n && strcmp(got->vlans_file, want->vlans_file) == 0;
+	for (int i = 0; same && want->vlans_set && i < want->n; i++)
+		same = got->vid[i] == want->vid[i];
+	/* A trunk's list is the last `vlans` line its files gave it that read whole: the ids in
+	 * the order written, and the file that gave them; a line with one id out of 1..4094 or
+	 * not 1..4 digits, one listed twice, or more than sixteen, gives nothing.
+	 * contract: src/reac_segconf.h (struct reac_segconf_trunk), src/reac_segconf.c (parse_vids,
+	 * the `vlans` key)
+	 * mutant: src/reac_segconf.c:165 `v > 4094` -> `v > 4095`
+	 * input: trunk-ids
+	 * mutant: src/reac_segconf.c:170 `out[i] == (uint16_t)v` -> `0`
+	 * input: trunk-ids
+	 * mutant: src/reac_segconf.c:174 `n >= REAC_SEGCONF_TRUNK_VIDS` -> `n > REAC_SEGCONF_TRUNK_VIDS`
+	 * input: trunk-ids
+	 * mutant: src/reac_segconf.c:158 `len > 0 && len <= 4` -> `len > 0`
+	 * input: trunk-ids
+	 * mutant: src/reac_segconf.c:345 `curt->n = nv;` -> `curt->n = 1;`
+	 * input: trunk-list
+	 * mutant: src/reac_segconf.c:347 `"%s", c->reading` -> `"%s", REAC_SEGCONF_FILE`
+	 * input: trunk-overrides */
+	if (!same)
+		abort();
+}
+
+static FUZZ_NOINLINE void check_trunk_absent(const struct reac_segconf *c, const char *name)
+{
+	/* A name no [trunk] section opened has no trunk: compared whole, byte for byte.
+	 * contract: src/reac_segconf.h (reac_segconf_trunk_find: the section, or NULL)
+	 * mutant: src/reac_segconf.c:725 `strcmp(c->trunk[i].parent, parent) == 0` -> `strncmp(c->trunk[i].parent, parent, 3) == 0`
+	 * input: trunk-headers */
+	if (reac_segconf_trunk_find(c, name))
+		abort();
+}
+
+static FUZZ_NOINLINE void check_trunk_vlans(int got, int want, const struct reac_declared_vlan *tab,
+                                            int n, const struct mvlan *mt, int mn, int cap)
+{
+	/* The cold table is every id of every trunk with a list, in the order written, each
+	 * (parent, vid) once, less the ones a [segment] switched off, added after what the
+	 * table held; a full table stops at -1 and nothing is written past it.
+	 * contract: src/reac_segconf.h (reac_segconf_trunk_vlans)
+	 * mutant: src/reac_segconf.c:743 `if (reac_segconf_ignored(c, name))` -> `if (0)`
+	 * input: trunk-list
+	 * mutant: src/reac_segconf.c:747 `return -1;` -> `return added;`
+	 * input: trunk-full */
 	if (!vlans_are(got, want, tab, n, mt, mn, cap))
 		abort();
 }
@@ -645,6 +881,26 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		check_provenance(reac_segconf_role_file(c, g->name),
 		                 reac_segconf_ignore_file(c, g->name), g);
 	}
+	/* THE TRUNKS BEFORE THE REFUSAL COUNT: a bug in the trunk grammar moves the refusals
+	 * too, and the check that names it is the trunk's own */
+	check_trunks(c, m);
+	for (int i = 0; i < m->n_trunks; i++) {
+		check_trunk_list(reac_segconf_trunk_find(c, m->trunk[i].name), &m->trunk[i]);
+		char probe[NAME_LEN + 2];
+		size_t len = strlen(m->trunk[i].name);
+		snprintf(probe, sizeof probe, "%sx", m->trunk[i].name);
+		if (!m_find_trunk(m, probe, strlen(probe)))
+			check_trunk_absent(c, probe);
+		for (size_t k = 0; k <= len; k++) {
+			char ch = m->trunk[i].name[k];
+			probe[k] = ch >= 'a' && ch <= 'z' ? (char)(ch - 'a' + 'A')
+			         : ch >= 'A' && ch <= 'Z' ? (char)(ch - 'A' + 'a') : ch;
+		}
+		if (!m_find_trunk(m, probe, strlen(probe)))
+			check_trunk_absent(c, probe);
+	}
+	check_trunk_absent(c, "");
+	check_trunk_absent(c, "nosuch0");
 	check_refusals(c, m);
 	for (int i = 0; i < m->n_kept && i < c->n_refusals; i++) {
 		check_address(c->refusal[i], m->kept[i]);
@@ -688,6 +944,22 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	int want = m_declared(m, mt, cap, &mn);
 	int got = reac_segconf_declared(c, tab, cap, &n);
 	check_declared(got, want, tab, n, mt, mn, cap);
+
+	/* the COLD table into the same capacity (the preload again, so a full table is reached
+	 * the same way) */
+	memset(tab, 0, (size_t)cap * sizeof *tab);
+	memset(mt, 0, (size_t)cap * sizeof *mt);
+	n = mn = 0;
+	if ((flags & 1) && cap > 0) {
+		snprintf(tab[0].parent, sizeof tab[0].parent, "enp1s0");
+		tab[0].vid = 33;
+		snprintf(mt[0].parent, sizeof mt[0].parent, "enp1s0");
+		mt[0].vid = 33;
+		n = mn = 1;
+	}
+	want = m_trunk_vlans(m, mt, cap, &mn);
+	got = reac_segconf_trunk_vlans(c, tab, cap, &n);
+	check_trunk_vlans(got, want, tab, n, mt, mn, cap);
 
 	free(mt);
 	free(tab);
