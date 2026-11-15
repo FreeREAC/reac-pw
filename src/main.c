@@ -4425,29 +4425,96 @@ static void declared_load(struct hearing *h)
 	        "declaration pins the segment's role when it is\n");
 }
 
+/* One cold VLAN let go — at exit, or withdrawn from the list while the daemon runs (`why`):
+ * what we minted we remove, what we adopted we leave exactly as found. */
+static void declared_release_one(struct declared_seg *ds, const char *why)
+{
+	if (!ds->cold || !ds->present)
+		return;
+	if (!ds->minted) {
+		fprintf(stderr, "reac-pw: [%s] left alone — %s, and the host made it, so it is "
+		        "not ours to remove\n", ds->name, why);
+		ds->present = 0;
+		return;
+	}
+	if (reac_vlan_delete(ds->name) == 0)
+		fprintf(stderr, "reac-pw: [%s] removed — %s and ours, so we take it away\n",
+		        ds->name, why);
+	else
+		fprintf(stderr, "reac-pw: [%s] was ours and cannot be removed: %s — it is left "
+		        "behind, and the next start re-owns it by its alias\n",
+		        ds->name, strerror(errno));
+	ds->minted = 0;
+	ds->present = 0;
+}
+
 /* The exit's half of the cold contract, beside reac_topo's. */
 static void declared_release_all(struct hearing *h)
 {
-	for (int i = 0; i < h->n_decl; i++) {
-		struct declared_seg *ds = &h->decl[i];
-		if (!ds->cold || !ds->present)
-			continue;
-		if (!ds->minted) {
-			fprintf(stderr, "reac-pw: [%s] left alone — declared on its trunk, and the "
-			        "host made it, so it is not ours to remove\n", ds->name);
-			ds->present = 0;
+	for (int i = 0; i < h->n_decl; i++)
+		declared_release_one(&h->decl[i], "declared on its trunk");
+}
+
+/* THE LEDGER FOLLOWS THE FILE, LIVE (review of reac-pw#100: the console never restarts the
+ * daemon). When reac_segconf_refresh has re-read the override file or a drop-in, the cold
+ * list is read again: an id added is minted on the next ensure, an id withdrawn is released
+ * — removed if we minted it, left alone if the host made it — and an entry that persists
+ * keeps its state. The [segment] names are re-read with it. Said per change, never per
+ * poll. */
+/* Does the file say something else than the ledger holds? The file is re-read by whichever
+ * reader asks first (a link event's role or ignore lookup, or the poll below), so the change
+ * is seen here by COMPARING the lists, never by who happened to notice the stat. */
+static int declared_differs(const struct hearing *h)
+{
+	struct reac_declared_vlan tab[REAC_DECLARED_VLAN_MAX];
+	int count = 0;
+	int n = reac_segconf_trunk_vlans(&g_segconf, tab, REAC_DECLARED_VLAN_MAX, &count);
+	const int n_cold = count;
+	if (n >= 0)
+		n = reac_segconf_declared(&g_segconf, tab, REAC_DECLARED_VLAN_MAX, &count);
+	if (n < 0)
+		count = REAC_DECLARED_VLAN_MAX;
+	if (count != h->n_decl || n_cold != h->n_cold)
+		return 1;
+	for (int i = 0; i < count; i++)
+		if (h->decl[i].d.vid != tab[i].vid || strcmp(h->decl[i].d.parent, tab[i].parent) != 0 ||
+		    h->decl[i].cold != (i < n_cold))
+			return 1;
+	return 0;
+}
+
+static void declared_reload(struct hearing *h)
+{
+	struct declared_seg old[REAC_DECLARED_VLAN_MAX];
+	const int n_old = h->n_decl;
+	memcpy(old, h->decl, sizeof old);
+	h->n_decl = 0;
+	h->n_cold = 0;
+	declared_load(h);
+	/* what persists keeps its state; what is gone, or no longer cold, is let go */
+	for (int i = 0; i < n_old; i++) {
+		struct declared_seg *o = &old[i];
+		const int k = declared_find(h, o->d.parent, o->d.vid);
+		if (k >= 0 && h->decl[k].cold && o->cold) {
+			h->decl[k].present = o->present;
+			h->decl[k].minted = o->minted;
+			h->decl[k].said_waiting = o->said_waiting;
+			h->decl[k].said_failed = o->said_failed;
 			continue;
 		}
-		if (reac_vlan_delete(ds->name) == 0)
-			fprintf(stderr, "reac-pw: [%s] removed — declared on its trunk and ours, so "
-			        "we take it away\n", ds->name);
-		else
-			fprintf(stderr, "reac-pw: [%s] was ours and cannot be removed: %s — it is "
-			        "left behind, and the next start re-owns it by its alias\n",
-			        ds->name, strerror(errno));
-		ds->minted = 0;
-		ds->present = 0;
+		if (o->cold)
+			declared_release_one(o, "withdrawn from its trunk's declared VLANs");
 	}
+	for (int k = 0; k < h->n_decl; k++)
+		if (h->decl[k].cold && !h->decl[k].present) {
+			int seen = 0;
+			for (int i = 0; i < n_old && !seen; i++)
+				seen = old[i].cold && old[i].d.vid == h->decl[k].d.vid &&
+				       strcmp(old[i].d.parent, h->decl[k].d.parent) == 0;
+			if (!seen)
+				fprintf(stderr, "reac-pw: [%s] added to trunk %s's declared VLANs — "
+				        "minted now\n", h->decl[k].name, h->decl[k].d.parent);
+		}
 }
 
 /* One ENSURE: adopt what is there, create what is not, and say which. */
@@ -5512,8 +5579,16 @@ static void hearing_poll(struct hearing *h)
 	hearing_yield(h, now);
 	reac_ifscan_tick(&h->scan, now);
 	/* THE COLD VLANS, once a second and after any link event, BEFORE the interface table
-	 * is applied so a netdev minted here is listened to on this very poll. */
-	if (h->n_cold && (h->decl_recheck || ++h->decl_polls % 5 == 0)) {
+	 * is applied so a netdev minted here is listened to on this very poll. Once a second
+	 * the override file and its drop-ins are stat'ed first (reac_segconf_refresh, a handful
+	 * of stats): a list the console rewrote is followed live, never on a restart. */
+	const int second = ++h->decl_polls % 5 == 0;
+	if (second) {
+		reac_segconf_refresh(&g_segconf);
+		if (declared_differs(h))
+			declared_reload(h);
+	}
+	if (h->n_cold && (h->decl_recheck || second)) {
 		h->decl_recheck = 0;
 		declared_ensure(h);
 	}

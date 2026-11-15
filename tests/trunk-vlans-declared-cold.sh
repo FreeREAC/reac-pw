@@ -31,6 +31,12 @@
 #      own log shows it spoke only after a complete push. trunkA.33 is knocked on, never
 #      answered, and still there when 11 is established: silence does not release a
 #      declared VLAN. A host-made trunkA.22 is served and never marked.
+#   a2. NO KNOCK STORM. The knocks a declared VLAN nobody answers has opened, read from the
+#      roster's own status line, stay within KNOCK.md's back-off over the window measured
+#      (2.695 s doubling to 30 s: at most 1 + the periods that fit).
+#   a3. LIVE (review of reac-pw#100: the console never restarts the daemon). The console's
+#      drop-in rewrites the list mid-run: 55 added is minted, 33 withdrawn is removed (ours),
+#      22 withdrawn is left alone (the host made it); 11 keeps its segment throughout.
 #   b. LATE PARENT. The daemon starts before trunkB exists (the NetworkManager race on a
 #      desk): it says so once, mints nothing, and mints trunkB.11 when trunkB appears.
 #   c. EXIT. What it minted is gone; what the host made is untouched.
@@ -52,7 +58,7 @@ SKIP=77
 SABOTAGE="${REACPW_TEST_SABOTAGE:-}"
 
 [ -n "$FAKE" ] && [ -x "$FAKE" ] || { echo "SKIP: no fake_box at '$FAKE' (libreac: make fake_box)"; exit $SKIP; }
-for t in unshare nsenter ip pipewire pw-cli; do
+for t in unshare nsenter ip pipewire pw-cli pw-dump python3; do
 	command -v $t >/dev/null 2>&1 || { echo "SKIP: no $t"; exit $SKIP; }
 done
 unshare -r -n -m -p -f --mount-proc --map-root-user true 2>/dev/null || {
@@ -109,6 +115,31 @@ wait_present() {   # wait_present <netdev> <secs>
 	done
 	return 1
 }
+wait_absent() {   # wait_absent <netdev> <secs>
+	for ((i = 0; i < $2 * 2; i++)); do
+		[ "$(netdev "$1" | awk '{print $1}')" = "absent" ] && return 0
+		sleep 0.5
+	done
+	return 1
+}
+# The roster's status of one segment, from the daemon's own node on the private graph (the
+# idiom of roster-node-lists-every-segment.sh): the knocks it has opened are in that sentence.
+roster_status() {   # roster_status <daemon pid> <segment name>
+	pw-dump 2>/dev/null | python3 -c '
+import json,sys
+pid=int(sys.argv[1]); name=sys.argv[2]
+d=json.load(sys.stdin)
+mine={o["id"] for o in d if o.get("type")=="PipeWire:Interface:Client"
+      and int(o["info"]["props"].get("application.process.id",-1))==pid}
+for o in d:
+    if o.get("type")!="PipeWire:Interface:Node": continue
+    p=o["info"]["props"]
+    if int(p.get("client.id",-1)) not in mine or str(p.get("reac.roster"))!="1": continue
+    for k,v in p.items():
+        if k.startswith("reac.roster.") and k.endswith(".name") and v==name:
+            print(p.get(k[:-len("name")]+"status","")); break
+' "$1" "$2"
+}
 
 # ---- 0. THE INSTRUMENT, in every direction it is about to be trusted in.
 ip link add ctrl0 type dummy 2>/dev/null || ip link add ctrl0 type veth peer name ctrl1
@@ -163,6 +194,7 @@ echo "a-before-33 $(netdev trunkA.33)"
 echo "a-before-44 $(netdev trunkA.44)"
 echo "a-box-spoke-before $(grep -ac 'sent' "$RT/box.log")"
 
+T0=$(date +%s)
 HOME="$CONF" REAC_DEBUG=1 "$BIN" >"$RT/a.log" 2>&1 &
 APID=$!
 sleep 1
@@ -194,6 +226,39 @@ echo "a-box-answered $(grep -ac 'commit report sent after a COMPLETE' "$RT/box.l
 echo "a-still-33 $(netdev trunkA.33)"
 echo "a-still-44 $(netdev trunkA.44)"
 grep -aE "\[trunkA(\.11|\.33)?\] (nothing heard|ANSWERED|taking the wire|tagged VLAN heard)|GRANTING ->" "$RT/a.log" | tr -d '\r' | sed 's/^/  a: /' | head -8
+
+# ---- a2. NO KNOCK STORM: the knocks trunkA.33 has opened, against the back-off over the
+# window since the daemon started (the window overstates: the knock opened later than that).
+# The box answers within two seconds, so the window is held open to twelve: by then the
+# back-off has opened the third knock (0, 2.695, 8.084 s) and not the fourth (18.862 s).
+while [ $(( $(date +%s) - T0 )) -lt 12 ]; do sleep 1; done
+W=$(( $(date +%s) - T0 ))
+echo "a-window-s $W"
+echo "a-roster-33 $(roster_status $APID trunkA.33)"
+
+# ---- a3. LIVE: the console's drop-in takes the list over, mid-run.
+mkdir -p "$CONF/.config/reac-pw/reac-pw.conf.d"
+cat > "$CONF/.config/reac-pw/reac-pw.conf.d/50-openmixer.conf" <<EOF
+[trunk trunkA]
+vlans = 11 22 55
+EOF
+wait_present trunkA.55 6 && wait_absent trunkA.33 6
+sleep 0.5
+echo "live1-55 $(netdev trunkA.55)"
+echo "live1-33 $(netdev trunkA.33)"
+echo "live1-22 $(netdev trunkA.22)"
+echo "live1-11 $(netdev trunkA.11)"
+cat > "$CONF/.config/reac-pw/reac-pw.conf.d/50-openmixer.conf" <<EOF
+[trunk trunkA]
+vlans = 11
+EOF
+wait_absent trunkA.55 6
+sleep 0.5
+echo "live2-55 $(netdev trunkA.55)"
+echo "live2-22 $(netdev trunkA.22)"
+echo "live2-11 $(netdev trunkA.11)"
+echo "live2-established $(grep -ac 'GRANTING -> ESTABLISHED' "$RT/a.log")"
+grep -aE "declared trunk \(reac-pw.conf.d|added to trunk|withdrawn from" "$RT/a.log" | tr -d '\r' | sed 's/^/  a: /' | head -8
 
 # ---- c. EXIT, arm a.
 kill -TERM $APID 2>/dev/null
@@ -291,6 +356,31 @@ mint_at=$(line a-order | sed -n 's/.*mint=\([^ ]*\).*/\1/p'); heard_at=$(line a-
 [ "$(st a-still-33)" = "present" ] || fail "trunkA.33 went away in silence while its sibling established — a declared VLAN outlives silence: $(line a-still-33)"
 [ "$(st a-still-44)" = "absent" ] || fail "trunkA.44 appeared later with nothing declaring it: $(line a-still-44)"
 
+# a2. NO KNOCK STORM. KNOCK.md: knock n+1 opens 2.695 s x 2^n after knock n, capped at 30 s,
+# so in W seconds at most 1 + (the periods whose running sum fits in W) knocks open.
+knocks=$(line a-roster-33 | sed -n 's/.*nothing heard: knock \([0-9]*\),.*/\1/p')
+[ -n "$knocks" ] || fail "the roster's status of trunkA.33 does not say how many knocks it opened: $(line a-roster-33)"
+allowed=$(awk -v w="$(st a-window-s)" 'BEGIN { n = 1; t = 0; p = 2.695; while (t + p <= w) { t += p; n++; p = (p * 2 > 30) ? 30 : p * 2 }; print n }')
+[ "$knocks" -le "$allowed" ] \
+	|| fail "trunkA.33 opened $knocks knocks in $(st a-window-s) s; the back-off allows at most $allowed — a knock storm"
+[ "$knocks" -ge 2 ] \
+	|| fail "trunkA.33 opened only $knocks knock(s) in $(st a-window-s) s: the back-off's second knock (2.695 s) never came, or the count is not counting"
+
+# a3. LIVE: the list rewritten by the console's drop-in is followed without a restart.
+[ "$(st live1-55)" = "present" ] && [ "$(alias_of live1-55)" = "reac-pw:minted" ] \
+	|| fail "VID 55 added to the drop-in's list mid-run was not minted: $(line live1-55)"
+[ "$(st live1-33)" = "absent" ] || fail "VID 33 withdrawn by the drop-in's list stayed minted: $(line live1-33)"
+[ "$(st live1-22)" = "present" ] && [ "$(alias_of live1-22)" = "none" ] \
+	|| fail "the host-made trunkA.22, listed by the drop-in, was marked or removed: $(line live1-22)"
+[ "$(st live1-11)" = "present" ] || fail "VID 11 kept through the rewrite went away: $(line live1-11)"
+[ "$(st live2-55)" = "absent" ] || fail "VID 55 withdrawn again stayed minted: $(line live2-55)"
+[ "$(st live2-22)" = "present" ] && [ "$(alias_of live2-22)" = "none" ] \
+	|| fail "the host-made trunkA.22 withdrawn from the list was removed or marked — it was never ours: $(line live2-22)"
+[ "$(st live2-11)" = "present" ] || fail "VID 11 went away on the second rewrite: $(line live2-11)"
+[ "$(st live2-established)" = "1" ] || fail "the rewrites re-established or dropped the box's segment ($(st live2-established) establishments)"
+echo "$OUT" | grep -aq 'a: .*withdrawn from its trunk' || fail "the daemon never said a withdrawn VLAN was let go"
+echo "$OUT" | grep -aq 'a: .*added to trunk trunkA' || fail "the daemon never said an added VLAN was minted"
+
 # b. THE LATE PARENT.
 [ "$(st b-before-parent)" = "absent" ] || fail "trunkB existed before its arm began"
 [ "$(st b-noparent-11)" = "absent" ] || fail "trunkB.11 was minted with no trunkB on the host: $(line b-noparent-11)"
@@ -301,7 +391,7 @@ mint_at=$(line a-order | sed -n 's/.*mint=\([^ ]*\).*/\1/p'); heard_at=$(line a-
 
 # c. THE EXIT. What it minted is gone; what the host made is untouched.
 [ "$(st a-after-11)" = "absent" ] || fail "the daemon exited and left trunkA.11 behind: $(line a-after-11)"
-[ "$(st a-after-33)" = "absent" ] || fail "the daemon exited and left trunkA.33 behind: $(line a-after-33)"
+[ "$(st a-after-33)" = "absent" ] || fail "trunkA.33 is back after the exit: $(line a-after-33)"
 [ "$(st a-after-22)" = "present" ] \
 	|| fail "the daemon removed a netdev the HOST created — it was never ours to take: $(line a-after-22)"
 [ "$(st b-after-11)" = "absent" ] || fail "the daemon exited and left trunkB.11 behind: $(line b-after-11)"
