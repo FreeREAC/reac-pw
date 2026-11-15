@@ -44,6 +44,8 @@ BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 # `ip` for reac-pw-nm-unmanaged (link up, link monitor).
 Requires:       iproute
+# phc2sys, for reac-pw-phc2sys@.service: the hardware launch needs it, audio does not.
+Recommends:     linuxptp
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
@@ -132,6 +134,10 @@ install -D -m0644 packaging/reac-pw.1 %{buildroot}%{_mandir}/man1/reac-pw.1
 install -D -m0755 packaging/reac-pw-nm-unmanaged.sh %{buildroot}%{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 install -D -m0644 packaging/reac-pw-nm-unmanaged.service %{buildroot}%{_unitdir}/reac-pw-nm-unmanaged.service
 install -D -m0644 packaging/90-reac-pw-nm-unmanaged.preset %{buildroot}%{_presetdir}/90-reac-pw-nm-unmanaged.preset
+# THE HARDWARE LAUNCH'S CLOCK (reac-pw#98): a template, enabled per NIC by whoever owns the
+# rig (`systemctl enable --now reac-pw-phc2sys@reac0`), never by a preset: only the operator
+# knows whether ptp4l (AES67) owns that NIC's PHC instead.
+install -D -m0644 packaging/reac-pw-phc2sys@.service %{buildroot}%{_unitdir}/reac-pw-phc2sys@.service
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -179,6 +185,7 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %dir %{_prefix}/lib/reac-pw
 %{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 %{_unitdir}/reac-pw-nm-unmanaged.service
+%{_unitdir}/reac-pw-phc2sys@.service
 %{_presetdir}/90-reac-pw-nm-unmanaged.preset
 # Generated at run time by reac-pw-nm-unmanaged; owned here so removing the package
 # removes it.

@@ -2,3 +2,4 @@ packaging/reac-pw.service usr/lib/systemd/user
 packaging/90-reac-pw.preset usr/lib/systemd/user-preset
 packaging/reac-pw-safe-enable.sh usr/lib/reac-pw
 packaging/reac-pw-nm-unmanaged.sh usr/lib/reac-pw
+packaging/reac-pw-phc2sys@.service usr/lib/systemd/system
