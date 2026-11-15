@@ -649,6 +649,19 @@ test('reac_etf_late_is_the_wake',
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 600)
 
+# --- whole-binary test: a veth is NOT a segment -------------------------------
+# THE NAMESPACE SUITES' SEGMENTS ARE VETHS, and a veth is not a REAC segment (#101, libreac's
+# reac_ifscan.h). Every test is run opted in; tests/virtual-is-not-a-segment.sh clears it to
+# prove the exclusion itself.
+add_test_setup('default', env : {'REAC_IFACES_ALLOW_VIRTUAL': '*'}, is_default : true)
+
+test('reac_virtual_is_not_a_segment',
+  find_program('tests/virtual-is-not-a-segment.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 120)
+
 # --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
 # drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
 # test_reac_ifscan pins the table; this drives the real binary on a veth pair
