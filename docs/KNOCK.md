@@ -159,9 +159,10 @@ before.
   control knock. One that does not is not found by the knock; there is no fallback that streams
   an unanswered wire, by law (reac-pw#61), so such a family would need a knock content of its own,
   proven on the rig first.
-- Two boxes on two VLANs that were powered before the daemon started: with no tag heard and no
-  sub-interface in the host's config, nothing finds them (README, "A box behind a trunk";
-  reac-pw#65 proposes served-VID memory and declared VLANs). A box on a trunk's native VLAN is
+- Two boxes on two VLANs that were powered before the daemon started send no tag for hearing
+  to find them by: the trunk's VLANs are declared once (`[trunk <parent>]` / `vlans = ...`,
+  reac-pw#99), each minted at start and knocked on exactly as above, so the cold box hears the
+  knock on its own VLAN (README, "A box behind a trunk"). A box on a trunk's native VLAN is
   outside the two supported configurations (README, "Supported configurations") and is refused
   by name, not knocked.
 - A box that answers only the stream, on any wire: the knock never streams, so it is not found.

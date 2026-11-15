@@ -63,11 +63,26 @@
 
 # NAMING A VLAN. `[segment <parent>.<vid>]` names a VLAN IF IT EXISTS: its role and ignore
 # apply when that VID is heard on the parent and the daemon creates the sub-interface. It
-# creates NOTHING by itself (ruling 2026-09-23). A cold box that came up before the daemon
-# sends no tag, so for it the sub-interface must be in the host's network config
-# (README, "A box behind a trunk"); a box that speaks, or powers up while the daemon runs,
-# names its VLAN by itself.
+# creates NOTHING by itself (ruling 2026-09-23); a box that speaks, or powers up while the
+# daemon runs, names its VLAN by itself.
 #[segment enp131s0.14]
+
+# ============================================================================
+# [trunk <interface>] — THE TRUNK'S VLANS, DECLARED ONCE (reac-pw#99, ruling 2026-11-15).
+# ============================================================================
+# A cold box that came up before the daemon sends no tag, so nothing can find its VLAN by
+# hearing; a box on an access port never hears the trunk's untagged knock. Naming the trunk
+# and its VLAN ids, once, is the door: each `<interface>.<vid>` is minted at start (and
+# again whenever the parent appears), marked reac-pw:minted, and knocked on like any wire,
+# so the cold box hears the knock on its own VLAN and answers it. Silence does not release
+# a declared VLAN; the exit removes exactly the ones the daemon minted. The one key is
+# `vlans`, ids separated by blanks or commas, each 1..4094, none twice, at most as many as
+# the daemon serves on one trunk; a line with one bad id is refused whole, by name. A
+# console carries this list with the show and writes it through its drop-in (below); by
+# hand it goes here. `[segment <interface>.<vid>]` beside it still pins the role or
+# switches that one VLAN off (an ignored VLAN is not minted).
+#[trunk enp131s0]
+#vlans = 11 12 13 14
 
 # ============================================================================
 # DROP-INS — ~/.config/reac-pw/reac-pw.conf.d/*.conf
