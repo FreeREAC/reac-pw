@@ -641,6 +641,9 @@ static void usage(const char *p)
 	  "  REAC_IFACES_ALLOW_WIRELESS=ifname[,ifname...]|*  autodetect: opt a wireless\n"
 	  "                NIC INTO the scan (default: every wireless NIC excluded — Wi-Fi's\n"
 	  "                jitter has no repacer here)\n"
+	  "  REAC_IFACES_ALLOW_VIRTUAL=ifname[,ifname...]|*  autodetect: opt a bridge, veth,\n"
+	  "                tun or other virtual interface INTO the scan (default: none — a REAC\n"
+	  "                segment is a physical NIC or a VLAN on one; the test suites opt in)\n"
 	  "  REACPW_NO_ENROLL=1  master role: suppress the pre-grant ENROLL for a box whose\n"
 	  "                width is already known (no real desk sends it to an S-1608). A\n"
 	  "                RIG-TEST SWITCH, not a new default — see docs/ENV-KNOBS.md.\n"
@@ -6068,6 +6071,11 @@ static void push_libreac_tunables(void)
 		tt.allow_wireless = v;   /* reac_transport_tunables_set copies it */
 	tt.debug = reac_knobs_resolve_flag("REAC_DEBUG", 0);
 	reac_transport_tunables_set(&tt);
+	/* A SEGMENT IS A PHYSICAL NIC OR A VLAN ON ONE (#101, libreac's reac_ifscan.h): a
+	 * bridge, veth, tun or container interface is not listened on unless named here
+	 * ("*" or a comma list). The namespace suites opt their veths in; a rig never should. */
+	reac_ifscan_set_allow_virtual(
+		reac_knobs_resolve("REAC_IFACES_ALLOW_VIRTUAL", v, sizeof v) != REAC_CONF_NONE ? v : NULL);
 }
 
 int main(int argc, char **argv)

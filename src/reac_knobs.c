@@ -52,6 +52,7 @@ const struct reac_knob g_reac_knobs[] = {
 	{ "REACPW_NO_ENROLL", 1, NULL },
 	{ "REACPW_EST_SCENE", 1, NULL },
 	{ "REAC_IFACES_ALLOW_WIRELESS", 1, NULL },
+	{ "REAC_IFACES_ALLOW_VIRTUAL", 1, NULL },
 	{ "REACPW_GUARD_FLOOR_FRAMES", 1, NULL },
 	{ "REACPW_NO_HEADAMP", 1, NULL },
 	/* WHAT THE PHYSICAL PORT ACTUALLY CARRIES, when sysfs cannot say or when the
