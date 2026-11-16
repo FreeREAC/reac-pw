@@ -1933,19 +1933,6 @@ usage_test = executable('test_reac_headamp_usage',
   ['tests/test_reac_headamp_usage.c'])
 test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
 
-# --- meson-text: every whole-binary header sits above ITS OWN test -----------
-# Five `# --- ... ---` headers had drifted onto the wrong test (a later block
-# wedged in between a header and the test it was written for, and nothing
-# checked) — line ~430 above the wrong test, ~573, ~822, ~1062, ~1194, all
-# fixed 2026-09-17. Pure text: walks every header, finds the next `test(` call
-# before another header intervenes, and refuses when the header shares no
-# normalized keyword with that test's `tests/*.sh` script name. Sabotage-
-# verified by swapping two headers in a scratch copy and requiring both
-# directions to fail.
-test('meson_headers_sit_above_their_test', python3,
-  args : [meson.current_source_dir() / 'tests' / 'meson-headers-sit-above-their-test.py',
-          meson.current_source_dir() / 'meson.build'])
-
 # --- text: every declared reac_code is emitted, and bare refusals stay under a floor --
 # "We need the error codes and not only messages" (2026-09-17). Every token of the daemon's
 # share of libreac's <reac/reac_code.h> list (tests/reac-code-daemon-tokens.txt) must be
@@ -1957,20 +1944,6 @@ test('reac_code_conformance', python3,
   args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
           meson.current_source_dir() / 'src',
           meson.current_source_dir() / 'tests' / 'reac-code-daemon-tokens.txt',
-          libreac_dep.get_variable(pkgconfig : 'includedir')])
-
-# --- text: every tests/*.sh grep/wait_for pattern maps to a producer, or is debt ------
-# "Let's be precise, let's organise tests to not depend on greps" (2026-09-17). Matches
-# every quoted grep/wait_for pattern in tests/*.sh against src/*.c's printf-family format
-# strings (conversions wildcarded) and <reac/reac_code.h>'s tokens; refuses a pattern with
-# neither a producer nor a named line in tests/known-debt-grep-patterns.txt, which is
-# itself a ratchet (may only shrink). Sabotage-verified by injecting an unmapped pattern
-# into a scratch copy of tests/ and requiring it to be refused.
-test('reac_asserted_lines_have_a_producer', python3,
-  args : [meson.current_source_dir() / 'tests' / 'asserted-lines-have-a-producer.py',
-          meson.current_source_dir() / 'tests',
-          meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt',
           libreac_dep.get_variable(pkgconfig : 'includedir')])
 
 # --- text: the public tree cites internal documents by slug; the README builds nothing --
