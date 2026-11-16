@@ -61,10 +61,10 @@ grep -qx "$PINNED" <<<"$want" || { echo "FAIL: the pinned $PINNED is not in src/
 
 # --- RPM: %files devel
 grep -Eq '^%package +devel' "$spec" || say "spec: no '%package devel'"
-files=$(awk '/^%files +devel/{on=1; next} /^%/{on=0} on' "$spec")
+files=$(awk '/^%files +devel/{on=1; next} /^%(files|post|pre|changelog|description|package)/{on=0} on' "$spec")
 [ -n "$files" ] || say "spec: no '%files devel' list"
 for h in $want; do
-	grep -Eq "^[^#]*include(dir)?/reac-pw/$h\$|^[^#]*/reac-pw/$h\$" <<<"$files" \
+	grep -Eq "^[^#]*/reac-pw/$h\$" <<<"$files" \
 		|| say "spec: %files devel does not list the header $h"
 done
 grep -Eq '^[^#]*/pkgconfig/reac-pw\.pc$' <<<"$files" || say "spec: %files devel does not list reac-pw.pc"
@@ -89,9 +89,17 @@ grep -q "reac-pw.pc\|pkgconfig.generate\|pkg.generate" "$mes" || say "meson.buil
 
 # --- floors only in the devel package's own dependencies
 dspec=$(awk '/^%package +devel/{on=1; next} /^%(description|files|prep|build|install|check|package)/{on=0} on' "$spec" | grep -E '^Requires:')
-dctl=$(awk '/^Package: reac-pw-dev$/{on=1; next} /^Package:/{on=0} on' "$ctl" | tr '\n' ' ' | sed -n 's/.*\(Depends:[^:]*\)\( [A-Z][A-Za-z-]*:.*\|$\)/\1/p')
-if grep -Eq '(<|<<|=|>) |[^>]= ' <<<"$(sed -E 's/>=|>>//g; s/<<?/LT/g' <<<"$dspec")"; then say "spec: a devel Requires is a pin or a cap: $dspec"; fi
-if grep -Eq '[(](<<|<|=)' <<<"$dctl"; then say "control: a reac-pw-dev Depends is a pin or a cap: $dctl"; fi
+# a Requires line may carry only a bare name or `name >= version`
+if grep -Ev '^Requires:[[:space:]]+[^[:space:]<=>]+([[:space:]]+>=[[:space:]]+[^[:space:]]+)?[[:space:]]*$' <<<"$dspec" | grep -q .; then
+	say "spec: a devel Requires is a pin or a cap: $dspec"
+fi
+dctl=$(awk '/^Package: reac-pw-dev$/{on=1; next} /^Package:/{on=0} on' "$ctl")
+if grep -Eq '[(][[:space:]]*(<<|<|=|>>)' <<<"$dctl"; then say "control: a reac-pw-dev Depends is a pin or a cap"; fi
+# positive control: the same patterns see a planted pin and a planted cap
+grep -Ev '^Requires:[[:space:]]+[^[:space:]<=>]+([[:space:]]+>=[[:space:]]+[^[:space:]]+)?[[:space:]]*$' <<<'Requires: libreac-devel = 1.11.0' | grep -q . \
+	|| { echo "FAIL: self-check: a planted Requires pin read as a floor" >&2; exit 1; }
+grep -Eq '[(][[:space:]]*(<<|<|=|>>)' <<<' libreac-dev (<< 1.12~)' \
+	|| { echo "FAIL: self-check: a planted Depends cap read as a floor" >&2; exit 1; }
 
 # --- optional: the built package's file list
 if [ -n "${RPM_DEVEL:-}" ]; then
