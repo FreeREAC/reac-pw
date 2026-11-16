@@ -2045,3 +2045,18 @@ source_own_test = executable('test_reac_source_node_own',
   include_directories : src_inc,
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
 test('reac_source_node_own', source_own_test)
+
+# --- unit test: main.c's per-segment decisions -- conf keys to listener, no daemon ---
+# tests/test_reac_main_own.c #includes src/main.c with main() renamed away, loads a real
+# reac-pw.conf from a temporary HOME and reads what one segment's keys did to its listener.
+main_own_src = []
+foreach f : reac_pw_src
+  if f != 'src/main.c'
+    main_own_src += f
+  endif
+endforeach
+main_own_test = executable('test_reac_main_own',
+  ['tests/test_reac_main_own.c'] + main_own_src,
+  include_directories : src_inc,
+  dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
+test('reac_main_own', main_own_test)
