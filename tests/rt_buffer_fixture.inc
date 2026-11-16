@@ -17,6 +17,11 @@ struct plane_spec {
 	int chunk_null;          /* chunk pointer absent */
 };
 
+/* What every plane of a good buffer carries (sink input), per plane: a level that
+ * names the plane, so a plane that came through can be told from one that did not. */
+#define FX_LEVEL(p) (0.25f * (float)((p) + 1))
+static uint32_t fx_alloc[5];
+
 static struct pw_buffer fx_pwb;
 static struct spa_buffer fx_sbuf;
 static int fx_queued;
@@ -34,6 +39,36 @@ int pw_stream_queue_buffer(struct pw_stream *s, struct pw_buffer *b)
 	return 0;
 }
 
+/* The node property the main loop publishes the counter under: the last value a
+ * pw_stream_update_properties call carried for it, and how many calls did. */
+static char fx_prop_val[32];
+static int fx_prop_calls;
+static char fx_drop_val[32];   /* the dropped-frames key, when a test publishes it */
+static int fx_drop_calls;
+
+int pw_stream_update_properties(struct pw_stream *s, const struct spa_dict *dict)
+{
+	(void)s;
+	const struct spa_dict_item *it;
+	spa_dict_for_each(it, dict)
+		if (strcmp(it->key, REACPW_PROP_HEALTH_RT_BAD_BUFFERS) == 0) {
+			snprintf(fx_prop_val, sizeof fx_prop_val, "%s", it->value);
+			fx_prop_calls++;
+		} else if (strcmp(it->key, "reac.health.rt-dropped-frames") == 0) {
+			snprintf(fx_drop_val, sizeof fx_drop_val, "%s", it->value);
+			fx_drop_calls++;
+		}
+	return 0;
+}
+
+/* The published value is `want` (and has been published, not guessed). */
+static int fx_published_is(uint32_t want)
+{
+	char w[32];
+	snprintf(w, sizeof w, "%u", want);
+	return fx_prop_calls > 0 && strcmp(fx_prop_val, w) == 0;
+}
+
 static void fx_build(uint32_t n_datas, const struct plane_spec *ps, uint64_t requested)
 {
 	memset(&fx_pwb, 0, sizeof fx_pwb);
@@ -45,6 +80,9 @@ static void fx_build(uint32_t n_datas, const struct plane_spec *ps, uint64_t req
 		d->type = SPA_DATA_MemPtr;
 		d->maxsize = ps[i].maxsize;
 		d->data = ps[i].data_null ? NULL : calloc(ps[i].alloc_floats, sizeof(float));
+		fx_alloc[i] = ps[i].data_null ? 0 : ps[i].alloc_floats;
+		for (uint32_t k = 0; d->data && k < ps[i].alloc_floats; k++)
+			((float *)d->data)[k] = FX_LEVEL(i);
 		d->chunk = ps[i].chunk_null ? NULL : calloc(1, sizeof(struct spa_chunk));
 		if (d->chunk)
 			d->chunk->size = ps[i].chunk_size;
@@ -121,15 +159,44 @@ static void fx_build_case(enum fx_case c, uint64_t requested)
 	}
 }
 
-/* Is the case a buffer the node must refuse? `sink` selects whose view it is. */
-static int fx_must_refuse(enum fx_case c, int sink)
+/* WHAT A NODE MUST DO WITH EACH CASE. `sink` selects whose view it is.
+ * A buffer with no planes array, or (sink) no chunk on plane 0, costs the whole
+ * cycle. Anything else costs only the planes that are bad: the others play. */
+static int fx_skip_whole(enum fx_case c, int sink)
 {
 	switch (c) {
-	case FX_GOOD_BUF:       return 0;
-	case FX_SHORT_CHUNK:    return sink;
-	case FX_EXTRA_NO_CHUNK: return !sink;
-	default:                return 1;
+	case FX_NO_PLANES: case FX_NULL_BUFFER: case FX_NULL_DATAS: return 1;
+	case FX_NO_CHUNK0: return sink;
+	default: return 0;
 	}
+}
+
+/* Is plane p (of the node's four) one the node must carry? */
+static int fx_plane_good(enum fx_case c, int p, int sink)
+{
+	if (fx_skip_whole(c, sink))
+		return 0;
+	switch (c) {
+	case FX_FEW_PLANES:  return p < 2;
+	case FX_NULL_DATA0:  return p != 0;
+	case FX_NULL_DATA1:  return p != 1;
+	case FX_SHORT_PLANE: return p != 1;
+	case FX_NO_CHUNK0:   return p != 0;     /* source only: sink skips whole */
+	case FX_NO_CHUNK1:   return p != 1;
+	case FX_SHORT_CHUNK: return sink ? p != 1 : 1;
+	default:             return 1;
+	}
+}
+
+/* Is the cycle counted as having met a bad buffer? */
+static int fx_counted(enum fx_case c, int sink)
+{
+	if (fx_skip_whole(c, sink))
+		return 1;
+	for (int p = 0; p < 4; p++)
+		if (!fx_plane_good(c, p, sink))
+			return 1;
+	return 0;
 }
 
 static int fx_case_by_name(const char *s)

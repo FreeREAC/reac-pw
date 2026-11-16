@@ -50,6 +50,8 @@ int main(int argc, char **argv)
 	memset(&p, 0, sizeof p);
 	p.clock.duration = FX_FLOATS;
 	n->position = &p;
+	n->stream = (struct pw_stream *)&p;   /* only ever handed to the stubs */
+	n->dropped_last = -1;
 
 	for (int i = 0; i < CYCLES; i++) {
 		fx_build_case(FX_GOOD_BUF, 0);
@@ -70,5 +72,30 @@ int main(int argc, char **argv)
 		fprintf(stderr, "FAIL: staged %u != took %u + dropped %u\n", staged, took, dropped);
 		return 1;
 	}
+	/* THE COUNTER IS PUBLISHED off the RT thread, and the published value MOVES. */
+	char want[32];
+	sink_publish_dropped_frames(n);
+	snprintf(want, sizeof want, "%u", dropped);
+	if (fx_drop_calls != 1 || strcmp(fx_drop_val, want) != 0) {
+		fprintf(stderr, "FAIL: published '%s' after %d calls, want %s\n", fx_drop_val,
+		        fx_drop_calls, want);
+		return 1;
+	}
+	sink_publish_dropped_frames(n);   /* unmoved: nothing stamped again */
+	if (fx_drop_calls != 1) {
+		fprintf(stderr, "FAIL: an unmoved counter was stamped again\n");
+		return 1;
+	}
+	fx_build_case(FX_GOOD_BUF, 0);
+	on_process(n);
+	uint32_t dropped2 = reac_sink_node_dropped_frames(n);
+	sink_publish_dropped_frames(n);
+	snprintf(want, sizeof want, "%u", dropped2);
+	if (dropped2 <= dropped || fx_drop_calls != 2 || strcmp(fx_drop_val, want) != 0) {
+		fprintf(stderr, "FAIL: dropped %u after another cycle (was %u), published '%s' after "
+		        "%d calls, want %s\n", dropped2, dropped, fx_drop_val, fx_drop_calls, want);
+		return 1;
+	}
+	printf("published %s\n", fx_drop_val);
 	return 0;
 }

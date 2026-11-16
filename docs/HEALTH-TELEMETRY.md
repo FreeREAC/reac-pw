@@ -30,6 +30,8 @@ else. The same window is also written to stderr as a `reac-health:` line.
 | `reac.health.qdisc-drops` | count, or `n/a` | **ETF only.** The same counter, cumulative, for differencing by hand. |
 | `reac.health.wake-late-us` | µs, or `n/a` | **ETF only.** An upper bound on the worst single WAKE lateness in the window (the debt in slots × the slot period). Harmless while it stays under the lead. |
 | `reac.health.wake-lead-us` | µs, or `n/a` | **ETF only.** The lead this segment is running — the budget the figure above is spent against, carried beside it so a consumer never has to know the default to read it. |
+| `reac.health.rt-bad-buffers` | count | Cumulative process cycles in which the stream buffer was not what the realtime callback needs: a missing plane, a plane with no data or chunk pointer, or a plane shorter than the cycle. A bad plane is silent and the other planes play; a buffer with no planes at all costs the cycle. Published on the playback node and on the capture node, each counting its own; stamped when it moves, `0` once at start. Anything above 0 is a fault report. |
+| `reac.health.rt-dropped-frames` | count | Cumulative audio frames (samples per channel) the realtime callback staged and the ring behind it refused: a short write into the slave's upstream ring, or a pacer submit that found its frame ring full (12 frames per refused packet). Published on the playback node only; stamped when it moves, `0` once at start. Anything above 0 is audio that was lost on the way to the wire. |
 
 The alarm to watch is `discard-fps > 0` — the only signal that audio is actually
 being lost. `drift-ppm` is the leading indicator: discards follow it

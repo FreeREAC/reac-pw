@@ -138,6 +138,9 @@ int reac_source_node_badge_stamped(const struct reac_source_node *n);
 /* Cycles the RT callback skipped because the stream buffer had too few planes, an absent
  * data or chunk pointer, or a plane shorter than the cycle (reac_rt_planes.h). */
 uint32_t reac_source_node_bad_buffers(const struct reac_source_node *n);
+/* Publish that count as the node property reac.health.rt-bad-buffers (main loop; stamps
+ * only when it moves). */
+void reac_source_node_publish_health(struct reac_source_node *n);
 
 /* THE JOINED BOX MASTER'S IDENTITY on this node (DESIGN.md 0.5.2). The publish_link door
  * above is the MASTER's: the sink computes those strings from its pacer's recognition and
