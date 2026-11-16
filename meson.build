@@ -784,19 +784,6 @@ test('door-without-outputs',
 # sniffer's discovery table at once. Two VLANs on one veth, the port's rate DECLARED
 # (REACPW_LINK_MBIT, since a veth reports 10 Gbit), and a negative arm in which the holder
 # has a box of its own and must keep the wire.
-# --- `--set KEY=VALUE` reaches the daemon at all (found by the lane above) ------------
-#
-# The knob resolver had a unit test; the FLAG had none, and it fell through the main flag
-# loop's final `else` into usage() — so every invocation carrying the flag --help documents
-# exited 2. The namespace is only how this holds CAP_NET_RAW past the preflight; it mints
-# no netdev and starts no PipeWire.
-test('set-flag-reaches-the-daemon',
-  find_program('tests/set-flag-reaches-the-daemon.sh'),
-  suite : 'netns',
-  is_parallel : false,
-  args : [reac_pw_exe],
-  timeout : 60)
-
 test('empty-master-yields-the-budget',
   find_program('tests/empty-master-yields-the-budget.sh'),
   suite : 'netns',
@@ -1184,33 +1171,33 @@ test('facts_drift',
   args : [files('tools/facts.py'), 'drift', reac_protocol_dir],
   timeout : 60)
 
-# --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
+# --- text: the PACKAGED shape, as the shipped unit and preset spell it ---------------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
-# (2026-09-02 §d) nothing is configured for it either — REAC_IFACES retired with the
-# per-interface files, so the daemon HEARS its segments. An `argc < 2` guard answered
-# usage before any of that was reached, and the packaged service could never start
-# (measured on the rig, 2026-08-31). Needs no NIC: it asserts help still works with
-# nothing configured, and that a bare `reac-pw` gets PAST argument handling.
+# (2026-09-02 §d) nothing is configured for it either, so the daemon HEARS its segments:
+# the unit carries no EnvironmentFile= (systemd cannot parse a per-segment key with a dot)
+# and the preset enables reac-pw.service. That the binary survives a bare run is
+# tests/cli-front-door.sh.
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
-  args : [reac_pw_exe,
-          meson.current_source_dir() / 'packaging' / 'reac-pw.service',
+  args : [meson.current_source_dir() / 'packaging' / 'reac-pw.service',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
-# --- whole-binary test: the daemon refuses to start as uid 0 (2026-09-18) -----
-# A root instance runs under a DIFFERENT systemd --user manager than the console
-# session's and binds the same abstract segment-lock socket — measured to win it
-# and lock the console user's own daemon out. `unshare -r` maps us to a fake root
-# inside a private user namespace; a positive control proves the normal uid is
-# NOT refused, before trusting that the fake-root run is.
-test('reac_refuses_root',
-  find_program('tests/refuses-root.sh'),
+# --- whole-binary test: the command line's front door --------------------------------
+# One script for what reac-pw does to the arguments it is given before it opens anything:
+# the daemon refuses to start as uid 0 (2026-09-18: a root instance runs under a DIFFERENT
+# systemd --user manager than the console session's and binds the same abstract
+# segment-lock socket, and was measured to win it) — `unshare -r` maps us to a fake root
+# inside a private user namespace, and a positive control proves the normal uid is NOT
+# refused; --help and the bare packaged shape get past argument handling; an unknown flag
+# is usage; and --set KEY=VALUE reaches the daemon (it fell into usage() for three days).
+test('reac_cli_front_door',
+  find_program('tests/cli-front-door.sh'),
   suite : 'netns',
   is_parallel : false,
   args : [reac_pw_exe],
-  timeout : 30)
+  timeout : 60)
 
 # The %posttrans auto-enable's DECISION (#104): exactly one real interactive user, or
 # nobody. loginctl/systemctl are mocked, so it needs no namespace, no daemon and no rpm --
