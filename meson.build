@@ -2014,3 +2014,19 @@ cli_test = executable('test_reac_cli',
   include_directories : src_inc,
   dependencies : [spa_dep, libreac_dep, libreac_transport_dep, m_dep])
 test('reac_cli', cli_test)
+
+# --- unit test: reac_sink_node -- the sink's own code, no PipeWire server -------
+# tests/test_reac_sink_node_own.c #includes src/reac_sink_node.c to reach its statics and
+# defines pw_stream_update_properties / _params itself, so what the node publishes lands
+# in a recorder. Everything else of reac-pw's sources it calls is linked in.
+sink_own_src = []
+foreach f : reac_pw_src
+  if f not in ['src/main.c', 'src/reac_sink_node.c']
+    sink_own_src += f
+  endif
+endforeach
+sink_own_test = executable('test_reac_sink_node_own',
+  ['tests/test_reac_sink_node_own.c'] + sink_own_src,
+  include_directories : src_inc,
+  dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
+test('reac_sink_node_own', sink_own_test)
