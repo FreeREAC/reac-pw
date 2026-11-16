@@ -62,6 +62,17 @@ for n in 'libreac-dev' 'libreac-transport-dev' 'libreac-tests'; do
 		|| say "control: Build-Depends $n lacks a floor (>=) or a ceiling (<<)"
 done
 
+# THE DEB RUNTIME (dep audit 2026-11-16): reac-pw's own Depends names libreac7 and libreac-transport7 with a floor
+# AND a ceiling beside ${shlibs:Depends}. shlibs gives a floor only, so without these the .deb installs under any
+# later libreac7 -- the ceiling the spec's Requires carries had no Debian twin.
+rdeps=$(awk '/^Package: reac-pw$/ { p = 1; next } /^Package:/ { p = 0 }
+	p && /^Depends:/ { d = 1; sub(/^Depends:/, ""); print; next } p && d && /^[ \t]/ { print; next } { d = 0 }' "$ctl" | tr ',' '\n')
+for n in 'libreac7' 'libreac-transport7'; do
+	[ -n "$(decl "$rdeps" "^ *$n [(]")" ] || { say "control: reac-pw's Depends names no $n range (\${shlibs} alone is a floor)"; continue; }
+	bounded "$(decl "$rdeps" "^ *$n [(]" | sed 's/(//')" "$n" '>=' '<<' \
+		|| say "control: reac-pw's Depends $n lacks a floor (>=) or a ceiling (<<)"
+done
+
 # --- no libreac source pin, in the tracked tree (the tarball case: the files that exist)
 # ONE FLOOR, ONE CEILING (2026-10-28). Every site names the same libreac range: meson.build's
 # two dependency() floors, the spec's BuildRequires and Requires, control's -dev Build-Depends;
@@ -79,10 +90,12 @@ floors=$( {
 	grep -oE "dependency\('libreac(-transport)?', version : '>= *[0-9.]+'" "$ROOT/meson.build" | sed "s/.*>=//" | grep -oE '[0-9.]+'
 	decl "$stext" "$FLOOR_RE" | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
 	decl "$ctext" '^ *libreac(-transport)?-dev [(]>=' | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
+	decl "$rdeps" '^ *libreac(-transport)?7 [(]>=' | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
 } | sort -u)
 ceilings=$( {
 	decl "$stext" "$CEIL_RE" | while read -r l; do sed 's/.*<//' <<<"$l" | ver; done
 	decl "$ctext" '^ *libreac[-a-z]* [(]<<' | while read -r l; do sed 's/.*<<//' <<<"$l" | ver; done
+	decl "$rdeps" '^ *libreac(-transport)?7 [(]<<' | while read -r l; do sed 's/.*<<//' <<<"$l" | ver; done
 } | sort -u)
 [ "$(wc -l <<<"$floors")" = 1 ] && [ "$(wc -w <<<"$floors")" = 1 ] \
 	|| say "the libreac floor is not ONE value across meson.build, the spec and control: $(tr '\n' ' ' <<<"$floors")"
