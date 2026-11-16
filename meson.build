@@ -30,7 +30,7 @@ m_dep        = cc.find_library('m', required : false)
 # --- libreac: RX/measure core, the installed package ----------------------
 # libreac-devel (RPM) / libreac-dev (deb) from the FreeMixer channel, found by pkg-config and
 # linked dynamically. The floor below is also written, with a ceiling, in packaging/reac-pw.spec
-# and debian/control (tests/libreac-is-a-bounded-package-dependency.sh keeps them so); nothing of
+# and debian/control (tests/libreac-is-a-floored-package-dependency.sh keeps them so); nothing of
 # libreac is fetched, cloned or bundled. The header is <reac/reac.h>.
 # >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
 # clean-len rule, the ENCODE side (since 0.4.0 — reac_braid_encode +
@@ -278,8 +278,12 @@ test('reac_rt_single_door',
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
 # libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
-test('libreac_is_a_bounded_package_dependency',
-  find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
+test('no_compat_leftovers',
+  find_program('tests/no-compat-leftovers.sh'),
+  timeout : 30)
+
+test('libreac_is_a_floored_package_dependency',
+  find_program('tests/libreac-is-a-floored-package-dependency.sh'),
   args : [meson.current_source_dir()])
 
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
