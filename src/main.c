@@ -162,11 +162,6 @@ static struct reac_roster g_roster;
 static struct reac_roster_node *g_roster_node;
 static int g_roster_said;   /* the "on the graph" line waits for the node's real id */
 
-/* Bounded, per 2026-08-20-reac-auto-spine ("a segment
- * beyond the bound is reported, never silently ignored") — this rig needs 2;
- * 8 is headroom for a bigger trunk without inviting an unbounded array. */
-#define REAC_PW_MAX_LISTENERS 8
-
 static struct pw_main_loop *g_loop;
 
 static void on_signal(void *data, int sig)
@@ -6175,236 +6170,36 @@ int main(int argc, char **argv)
 	 * These are the flags/variables main() always had; they describe ONE
 	 * segment (the first --live, or --pcap) and nothing else. Auto-spine's
 	 * extra segments never read them — see listener_cfg_from_conf. */
-	enum reac_conf_layer rate_layer = REAC_CONF_NONE;
-	struct reac_rx_cfg rxcfg = { .kind = REAC_RX_PCAP, .source = NULL, .forced_rate = 0,
-	                             .pcap_realtime = 1 };
-	const char *tx_if = NULL;
-	enum reac_role role = REAC_ROLE_MASTER;   /* default master: preserves current behaviour */
-	/* `--role tap` is not a value of `role` above — a tap presents no end of the
-	 * pairing — so it rides beside it, exactly as listener_cfg.tap does. */
-	int role_tap = 0;
-	uint8_t src_mac[6];
-	int src_mac_set = 0;
-	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
-	const struct reac_box_model *pin_model = NULL;  /* --box: pinned NODE geometry     */
-	const char *pin_label = NULL;                   /* --box: pinned node label        */
-	const char *box_pin_spec = NULL;      /* --box verbatim, for the wire-wins notice
-	                                       * that the wire disagreed with it (once) */
-	const char *inst_name = NULL;   /* --name: per-instance node suffix (one master/VLAN) */
-	/* --headamp CH:PARAM:VALUE (master role, repeatable): the per-channel head-amp
-	 * DMX table the master re-asserts to the box. At most one cell per
-	 * (channel,param); the table set() overwrites a repeat. */
-	struct reac_headamp_setting headamps[REAC_HEADAMP_MAX_CH * REAC_HEADAMP_NPARAMS];
-	int n_headamps = 0;
-	const struct reac_mixer_profile *mixer =
-		reac_mixer_profile_by_name("m200");   /* master: which desk name we log as */
-
-	/* auto-spine §5: EXTRA `--live` interfaces beyond the template's own (a
-	 * repeated flag, or a comma list in one flag). A stable copy is kept here
-	 * because the template's own iface below points at argv, which a later
-	 * reac_cli_split_list() call must not alias. */
-	char first_iface_buf[IFNAMSIZ + 1];
-	char extra_ifaces[REAC_PW_MAX_LISTENERS][IFNAMSIZ + 1];
-	int n_extra_ifaces = 0;
-	int have_live = 0;   /* was --live given at all (vs --pcap, vs neither) */
-
-	for (int i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "--pcap") && i + 1 < argc) {
-			rxcfg.kind = REAC_RX_PCAP; rxcfg.source = argv[++i];
-		} else if (!strcmp(argv[i], "--live") && i + 1 < argc) {
-			char toks[REAC_PW_MAX_LISTENERS][IFNAMSIZ + 1];
-			int nt = reac_cli_split_list(argv[++i], toks, REAC_PW_MAX_LISTENERS);
-			if (nt == 0) {
-				fprintf(stderr, "reac-pw: --live needs at least one interface name\n");
-				return 2;
-			}
-			rxcfg.kind = REAC_RX_LIVE;
-			int start = 0;
-			if (!have_live) {
-				/* The FIRST --live (of possibly several): the template's own
-				 * interface, byte-identical to today when it is the only one. */
-				snprintf(first_iface_buf, sizeof first_iface_buf, "%s", toks[0]);
-				rxcfg.source = first_iface_buf;
-				have_live = 1;
-				start = 1;
-			}
-			/* One slot of REAC_PW_MAX_LISTENERS is always the template's own
-			 * interface once this branch runs at all, so extras are bounded to
-			 * the rest — checked HERE, not left to the later array-assembly
-			 * copy to truncate silently (auto-spine: "a segment beyond the
-			 * bound is reported, never silently ignored"). */
-			for (int k = start; k < nt; k++) {
-				if (n_extra_ifaces >= REAC_PW_MAX_LISTENERS - 1) {
-					fprintf(stderr, "reac-pw: too many --live interfaces (max %d); "
-					        "'%s' is dropped\n", REAC_PW_MAX_LISTENERS, toks[k]);
-					continue;
-				}
-				snprintf(extra_ifaces[n_extra_ifaces++], sizeof extra_ifaces[0],
-				        "%s", toks[k]);
-			}
-		} else if (!strcmp(argv[i], "--rate") && i + 1 < argc) {
-			/* Validate before it reaches the ring depth (sample_rate/4): a
-			 * negative/garbage rate underflows to a huge depth, next_pow2
-			 * overflows to a 0-slot ring with mask 0xFFFFFFFF, and the first
-			 * write scribbles the heap. Accept only sane audio rates — the REAC
-			 * world is the 44.1k/48k/88.2k/96k families. */
-			int rate = atoi(argv[++i]);
-			/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz. A Roland desk
-			 * offers exactly these and drives the segment at the one chosen;
-			 * anything else is not a slower REAC, it is not REAC, and it would
-			 * need RE-PACING between the rig clock and the wire — which reac-pw
-			 * cannot do, having no TX resampler. This used to accept anything
-			 * from 8000 to 192000 and put it on the wire, a cadence no box can
-			 * follow, called configuration. */
-			if (!reac_rate_is_closed(rate)) {
-				fprintf(stderr, "reac-pw: illegal --rate '%s'. REAC runs at "
-				        REACPW_RATES_OR " Hz and nothing else; anything "
-				        "else needs re-pacing, which reac-pw cannot do.\n",
-				        argv[i]);
-				return 2;
-			}
-			rxcfg.forced_rate = rate;
-			rate_layer = REAC_CONF_ARGV;
-		} else if (!strcmp(argv[i], "--tx") && i + 1 < argc) {
-			tx_if = argv[++i];
-		} else if (!strcmp(argv[i], "--src-mac") && i + 1 < argc) {
-			if (reac_cli_parse_mac(argv[++i], src_mac) != 0) {
-				fprintf(stderr, "reac-pw: bad --src-mac '%s' (want aa:bb:cc:dd:ee:ff)\n",
-				        argv[i]);
-				return 2;
-			}
-			src_mac_set = 1;
-		} else if (!strcmp(argv[i], "--role") && i + 1 < argc) {
-			if (!strcmp(argv[++i], "tap")) {
-				role_tap = 1;
-			} else if (reac_role_parse(argv[i], &role) != 0) {
-				fprintf(stderr, "reac-pw: unknown --role '%s' (master|slave|tap)\n",
-				        argv[i]);
-				return 2;
-			} else {
-				role_tap = 0;
-			}
-		} else if (!strcmp(argv[i], "--mixer") && i + 1 < argc) {
-			/* Master role: which desk name reac-pw logs as. Does not set the
-			 * wire's pace-code byte; grants are box-defined, so a box locks to
-			 * any profile. */
-			mixer = reac_mixer_profile_by_name(argv[++i]);
-			if (!mixer) {
-				fprintf(stderr, "reac-pw: unknown --mixer '%s'; known:", argv[i]);
-				for (int k = 0; reac_mixer_profile_at(k); k++)
-					fprintf(stderr, " %s (%s)", reac_mixer_profile_at(k)->name,
-					        reac_mixer_profile_at(k)->display);
-				fprintf(stderr, "\n");
-				return 2;
-			}
-		} else if (!strcmp(argv[i], "--box-model") && i + 1 < argc) {
-			/* Slave role: pick a FIXED-matrix box model (the matrix is law when we
-			 * are a stagebox). Selects the config-announce block, the ASCII name
-			 * frame, and the width in one choice. */
-			const struct reac_box_model *m = reac_box_catalogue_by_token(argv[++i]);
-			if (!m) {
-				size_t n; const struct reac_box_model *t = reac_box_catalogue(&n);
-				fprintf(stderr, "reac-pw: unknown --box-model '%s'; known:", argv[i]);
-				for (size_t k = 0; k < n; k++)
-					fprintf(stderr, " %s (%s)", t[k].token, t[k].display);
-				fprintf(stderr, "\n");
-				return 2;
-			}
-			box_channels = m->in_ch;
-		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
-			box_channels = atoi(argv[++i]);
-			if (box_channels < REAC_BRAID_PAIR_CHANNELS || box_channels > REAC_MAX_CHANNELS ||
-			    box_channels % REAC_BRAID_PAIR_CHANNELS) {
-				fprintf(stderr, "reac-pw: --box-channels must be even, "
-				        REACPW_STR(REAC_BRAID_PAIR_CHANNELS) "..%d "
-				        "(e.g. " REACPW_STR(REAC_BOX_S0808_IN) " = S-0808, "
-				        REACPW_STR(REAC_BOX_S1608_IN) " = S-1608, "
-				        REACPW_STR(REAC_BOX_S4000S_3208_IN) " = S-4000S)\n", REAC_MAX_CHANNELS);
-				return 2;
-			}
-		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {
-			/* MASTER role: the operator's PIN for a FIXED INSTALLATION — the nodes
-			 * exist, named and sized, from boot rather than appearing when the box
-			 * powers up (operator, 2026-08-22: reac-pw is a daemon in its own right
-			 * and a permanent rig pins its patch; a console is the autodetect case,
-			 * and the two are complementary, not alternatives).
-			 *
-			 * IT PINS NODE GEOMETRY AND LABEL, AND NOTHING ELSE. This flag was retired
-			 * on 2026-08-05 because it also pre-fabricated a head-amp ENROLLMENT from
-			 * a guess, and a box granted slots it does not own "links, streams audio,
-			 * and silently ignores every head-amp record" (902bf39). That door stays
-			 * shut: reac_master_set_box remains fed only by what a box declares about
-			 * itself. The pin says what to CALL the ports and how many to make; the
-			 * wire says what is actually out there, and where they disagree the WIRE
-			 * WINS and says so once (reac_box_pin_notice, autodetect watcher above). */
-			const char *spec = argv[++i];
-			if (reac_box_pin_parse(spec, &pin_model, &pin_label) != 0) {
-				size_t nm; const struct reac_box_model *t = reac_box_catalogue(&nm);
-				fprintf(stderr, "reac-pw: unknown --box model '%s'; known:", spec);
-				for (size_t k = 0; k < nm; k++)
-					fprintf(stderr, " %s", t[k].token);
-				fprintf(stderr, "  (form: MODEL[:LABEL])\n");
-				return 2;
-			}
-			box_pin_spec = spec;
-		} else if (!strcmp(argv[i], "--name") && i + 1 < argc) {
-			inst_name = argv[++i];   /* per-instance PW node suffix (multi-master) */
-		} else if (!strcmp(argv[i], "--headamp") && i + 1 < argc) {
-			/* MASTER role: one per-channel head-amp cell the master re-asserts to
-			 * the box (declarative/DMX). Repeatable; the table dedups per cell. */
-			if (n_headamps >= (int)(sizeof headamps / sizeof headamps[0])) {
-				fprintf(stderr, "reac-pw: too many --headamp settings (max %d)\n",
-				        (int)(sizeof headamps / sizeof headamps[0]));
-				return 2;
-			}
-			if (reac_cli_parse_headamp(argv[++i], &headamps[n_headamps]) != 0) {
-				fprintf(stderr, "reac-pw: bad --headamp '%s' (want "
-				        "CH:phantom|pad|sens:VALUE; CH 0..%d wire channel; "
-				        "VALUE 0/1 for phantom|pad, 0..%d raw code for sens)\n",
-				        argv[i], REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX);
-				return 2;
-			}
-			n_headamps++;
-		} else if (!strcmp(argv[i], "--set") && i + 1 < argc) {
-			/* ALREADY RESOLVED, ABOVE. The knob pre-pass reads every --set before
-			 * a capability is touched, so all this arm owes is to step over the
-			 * KEY=VALUE it consumed. Without it the flag loop fell through to
-			 * `usage()` and the daemon EXITED 2 on the very flag --help documents:
-			 * `--set` was proven by a unit test that calls reac_knobs_set_argv()
-			 * and never ran the binary, so it had never once worked on a command
-			 * line (found 2026-09-20, by the first test that passed one). */
-			i++;
-		} else {
-			usage(argv[0]);
-			return 2;
-		}
+	struct reac_cli cli;   /* must outlive rxcfg: rxcfg.source can point into it */
+	int cli_rc = reac_cli_parse(argc, argv, &cli);
+	if (cli_rc == REAC_CLI_USAGE) {
+		usage(argv[0]);
+		return 2;
 	}
+	if (cli_rc != 0)
+		return cli_rc;
+	enum reac_conf_layer rate_layer = cli.rate_layer;
+	struct reac_rx_cfg rxcfg = cli.rxcfg;
+	const char *tx_if = cli.tx_if;
+	enum reac_role role = cli.role;
+	int role_tap = cli.role_tap;
+	const uint8_t *src_mac = cli.src_mac;
+	int src_mac_set = cli.src_mac_set;
+	int box_channels = cli.box_channels;
+	const struct reac_box_model *pin_model = cli.pin_model;
+	const char *pin_label = cli.pin_label;
+	const char *box_pin_spec = cli.box_pin_spec;
+	const char *inst_name = cli.inst_name;
+	const struct reac_headamp_setting *headamps = cli.headamps;
+	int n_headamps = cli.n_headamps;
+	const struct reac_mixer_profile *mixer = cli.mixer;
+	const char (*extra_ifaces)[IFNAMSIZ + 1] = (const char (*)[IFNAMSIZ + 1])cli.extra_ifaces;
+	int n_extra_ifaces = cli.n_extra_ifaces;
+	int have_live = cli.have_live;
 
 	/* Neither --pcap nor --live: the packaged-service shape. Nothing is read from
 	 * anywhere to decide which interfaces to serve — the daemon HEARS them. */
 	int hearing = rxcfg.source == NULL;
-	if (reac_role_validate(role, tx_if != NULL) != 0) {
-		fprintf(stderr, "reac-pw: --role slave needs --tx IFNAME (the REAC NIC for the "
-		                "upstream return + handshake)\n");
-		return 2;
-	}
-	/* --box declares the box a MASTER serves. As a SLAVE we ARE the box, and our own
-	 * width is a different fact with no wire to learn it from: --box-channels /
-	 * --box-model. Reject the mix rather than mislead about which one is in force. */
-	if (role == REAC_ROLE_SLAVE && pin_model) {
-		fprintf(stderr, "reac-pw: --box is a MASTER-role option (it pins the box this "
-		                "master serves); a SLAVE's own width is --box-channels or "
-		                "--box-model.\n");
-		return 2;
-	}
-	/* --headamp drives the box's preamps — only the MASTER commands them; as a slave
-	 * WE are the box and receive them (surfaced in the RX log). Reject the mix. */
-	if (role == REAC_ROLE_SLAVE && n_headamps > 0) {
-		fprintf(stderr, "reac-pw: --headamp is a master-role option (the master commands "
-		                "the box's preamps); a slave receives head-amp records, it does "
-		                "not send them\n");
-		return 2;
-	}
 
 	/* ---- assemble the listener array --------------------------------- */
 	struct listener listeners[REAC_PW_MAX_LISTENERS];

@@ -2010,7 +2010,7 @@ test('public_hygiene', find_program('bash'),
 # --- unit test: reac_cli -- the flag and conf-list parsers main() reads --------
 # --mac, the --live interface list and the --headamp cells were statics in main.c.
 cli_test = executable('test_reac_cli',
-  ['tests/test_reac_cli.c', 'src/reac_cli.c'],
+  ['tests/test_reac_cli.c', 'src/reac_cli.c', 'src/reac_box_pin.c', 'src/reac_rate_cfg.c'],
   include_directories : src_inc,
-  dependencies : [libreac_dep, libreac_transport_dep])
+  dependencies : [spa_dep, libreac_dep, libreac_transport_dep, m_dep])
 test('reac_cli', cli_test)

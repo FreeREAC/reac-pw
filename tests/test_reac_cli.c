@@ -17,6 +17,8 @@
 #include "reac_facts_pw.h"
 
 #include <reac/reac_ctrlblk.h>
+#include <reac/reac_master.h>
+#include <reac/transport/reac_slave.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -161,6 +163,249 @@ static int test_trailing_text_is_refused(void)
 	return 0;
 }
 
+/* ---- the whole command line: reac_cli_parse ---------------------------------- */
+
+/* Run reac_cli_parse over a space-separated line, with stderr captured into `err`. */
+static int parse_line(const char *line, struct reac_cli *c, char *err, size_t errsz)
+{
+	static char buf[512];
+	char *argv[40];
+	int argc = 0;
+	snprintf(buf, sizeof buf, "reac-pw %s", line);
+	for (char *t = strtok(buf, " "); t && argc < 39; t = strtok(NULL, " "))
+		argv[argc++] = t;
+	argv[argc] = NULL;
+
+	FILE *tf = tmpfile();
+	if (!tf)
+		return -99;
+	fflush(stderr);
+	int saved = dup(2);
+	dup2(fileno(tf), 2);
+	int rc = reac_cli_parse(argc, argv, c);
+	fflush(stderr);
+	dup2(saved, 2);
+	close(saved);
+	if (err && errsz) {
+		rewind(tf);
+		size_t got = fread(err, 1, errsz - 1, tf);
+		err[got] = '\0';
+	}
+	fclose(tf);
+	return rc;
+}
+
+static int test_defaults(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("", &c, err, sizeof err) == 0);
+	CHK(c.role == REAC_ROLE_MASTER && !c.role_tap);       /* default master */
+	CHK(c.rxcfg.source == NULL && c.rxcfg.kind == REAC_RX_PCAP);
+	CHK(c.rxcfg.forced_rate == 0 && c.rate_layer == REAC_CONF_NONE);
+	CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
+	CHK(c.mixer && !strcmp(c.mixer->name, "m200"));
+	CHK(!c.tx_if && !c.pin_model && !c.inst_name && !c.src_mac_set);
+	CHK(c.n_headamps == 0 && c.n_extra_ifaces == 0 && !c.have_live);
+	CHK(err[0] == '\0');
+	return 0;
+}
+
+static int test_live_interfaces(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--live eth0", &c, err, sizeof err) == 0);
+	CHK(c.have_live && c.rxcfg.kind == REAC_RX_LIVE && !strcmp(c.rxcfg.source, "eth0"));
+	CHK(c.n_extra_ifaces == 0);
+	/* The first interface is the template's own, a stable COPY, not a pointer into argv. */
+	CHK(c.rxcfg.source == c.first_iface_buf);
+
+	CHK(parse_line("--live eth0,eth1,eth2 --live eth3", &c, err, sizeof err) == 0);
+	CHK(!strcmp(c.rxcfg.source, "eth0") && c.n_extra_ifaces == 3);
+	CHK(!strcmp(c.extra_ifaces[0], "eth1") && !strcmp(c.extra_ifaces[1], "eth2") &&
+	    !strcmp(c.extra_ifaces[2], "eth3"));
+
+	CHK(parse_line("--live ,", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "--live needs at least one interface name"));
+
+	/* REAC_PW_MAX_LISTENERS - 1 extras fit; the next is dropped AND SAID. */
+	CHK(parse_line("--live a,b,c,d,e,f,g,h --live i", &c, err, sizeof err) == 0);
+	CHK(c.n_extra_ifaces == REAC_PW_MAX_LISTENERS - 1);
+	CHK(strstr(err, "too many --live interfaces") && strstr(err, "'i' is dropped"));
+	/* One list past the bound is cut by the splitter, with its own report. */
+	CHK(parse_line("--live a,b,c,d,e,f,g,h,i", &c, err, sizeof err) == 0);
+	CHK(c.n_extra_ifaces == REAC_PW_MAX_LISTENERS - 1);
+	CHK(strstr(err, "too many entries") && strstr(err, "'i' is dropped"));
+	CHK(parse_line("--live a,b,c,d,e,f,g,h", &c, err, sizeof err) == 0);
+	CHK(c.n_extra_ifaces == REAC_PW_MAX_LISTENERS - 1 && err[0] == '\0');
+
+	CHK(parse_line("--pcap some.pcap", &c, err, sizeof err) == 0);
+	CHK(c.rxcfg.kind == REAC_RX_PCAP && !strcmp(c.rxcfg.source, "some.pcap") && !c.have_live);
+	return 0;
+}
+
+/* Only the three paces REAC has are legal, and the layer says the command line decided. */
+static int test_rate(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--rate 44100", &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == 44100);
+	CHK(c.rate_layer == REAC_CONF_ARGV);
+	CHK(parse_line("--rate 48000", &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == 48000);
+	CHK(parse_line("--rate 96000", &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == 96000);
+	CHK(parse_line("--rate 88200", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "illegal --rate '88200'") && strstr(err, "re-pacing"));
+	CHK(parse_line("--rate 0", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line("--rate -48000", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line("--rate abc", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	return 0;
+}
+
+static int test_roles(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--role master", &c, err, sizeof err) == 0 && c.role == REAC_ROLE_MASTER);
+	CHK(parse_line("--role tap", &c, err, sizeof err) == 0 && c.role_tap == 1);
+	/* tap rides BESIDE role, and a later explicit role clears it. */
+	CHK(parse_line("--role tap --role master", &c, err, sizeof err) == 0 && !c.role_tap);
+	CHK(parse_line("--role weird", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "unknown --role 'weird' (master|slave|tap)"));
+
+	/* A slave is the box: it needs the NIC to answer on. */
+	CHK(parse_line("--role slave", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "--role slave needs --tx IFNAME"));
+	CHK(parse_line("--role slave --tx eth1", &c, err, sizeof err) == 0);
+	CHK(c.role == REAC_ROLE_SLAVE && !strcmp(c.tx_if, "eth1"));
+	return 0;
+}
+
+/* --box and --headamp are MASTER options; as a slave we ARE the box. */
+static int test_slave_refuses_master_options(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--role slave --tx eth1 --box s1608", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "--box is a MASTER-role option"));
+	CHK(parse_line("--role slave --tx eth1 --headamp 0:phantom:1", &c, err, sizeof err) ==
+	    REAC_CLI_REFUSED);
+	CHK(strstr(err, "--headamp is a master-role option"));
+	/* The same two are fine on a master, in either flag order. */
+	CHK(parse_line("--box s1608 --role master", &c, err, sizeof err) == 0 && c.pin_model);
+	CHK(parse_line("--headamp 0:phantom:1 --role master", &c, err, sizeof err) == 0 &&
+	    c.n_headamps == 1);
+	/* ...and the order does not let a slave through. */
+	CHK(parse_line("--box s1608 --role slave --tx eth1", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	return 0;
+}
+
+static int test_box_pin_and_names(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--box s1608:Drums", &c, err, sizeof err) == 0);
+	CHK(c.pin_model && !strcmp(c.pin_model->token, "s1608"));
+	CHK(c.pin_label && !strcmp(c.pin_label, "Drums"));
+	CHK(c.box_pin_spec && !strcmp(c.box_pin_spec, "s1608:Drums"));   /* verbatim */
+	CHK(parse_line("--box nosuch", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "unknown --box model 'nosuch'") && strstr(err, "s1608") &&
+	    strstr(err, "MODEL[:LABEL]"));
+
+	CHK(parse_line("--name stage-left", &c, err, sizeof err) == 0 &&
+	    !strcmp(c.inst_name, "stage-left"));
+	CHK(parse_line("--mixer m300", &c, err, sizeof err) == 0 && !strcmp(c.mixer->name, "m300"));
+	CHK(parse_line("--mixer nosuch", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "unknown --mixer 'nosuch'") && strstr(err, "m200"));
+	CHK(parse_line("--src-mac 02:11:22:33:44:55", &c, err, sizeof err) == 0 && c.src_mac_set);
+	CHK(c.src_mac[0] == 0x02 && c.src_mac[5] == 0x55);
+	CHK(parse_line("--src-mac nonsense", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "bad --src-mac 'nonsense'"));
+	return 0;
+}
+
+/* A slave's own width: a model token, or an even count within the braid. */
+static int test_slave_width(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--box-model s4000s", &c, err, sizeof err) == 0 && c.box_channels == 32);
+	CHK(parse_line("--box-model s0808", &c, err, sizeof err) == 0 && c.box_channels == 8);
+	CHK(parse_line("--box-model nosuch", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "unknown --box-model 'nosuch'") && strstr(err, "s4000s"));
+	CHK(parse_line("--box-channels 2", &c, err, sizeof err) == 0 && c.box_channels == 2);
+	CHK(parse_line("--box-channels 40", &c, err, sizeof err) == 0 && c.box_channels == 40);
+	CHK(parse_line("--box-channels 0", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line("--box-channels 7", &c, err, sizeof err) == REAC_CLI_REFUSED);   /* odd */
+	CHK(parse_line("--box-channels 42", &c, err, sizeof err) == REAC_CLI_REFUSED);  /* past 40 */
+	CHK(strstr(err, "--box-channels must be even"));
+	CHK(parse_line("--box-channels -8", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	return 0;
+}
+
+static int test_headamp_flag(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--headamp 1:phantom:1 --headamp 2:sens:20", &c, err, sizeof err) == 0);
+	CHK(c.n_headamps == 2 && c.headamps[0].ch == 1 && c.headamps[1].ch == 2 &&
+	    c.headamps[1].value == 20);
+	CHK(parse_line("--headamp 99:phantom:1", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "bad --headamp '99:phantom:1'"));
+
+	/* The table holds one slot per (channel, param); a flag past it is refused, not dropped. */
+	/* parse_line tokenises into at most 39 args: drive the bound with a real argv. */
+	char *argv[2 * REAC_CLI_MAX_HEADAMPS + 4];
+	int argc = 0;
+	argv[argc++] = "reac-pw";
+	for (int i = 0; i <= REAC_CLI_MAX_HEADAMPS; i++) {
+		argv[argc++] = "--headamp";
+		argv[argc++] = "0:pad:0";
+	}
+	argv[argc] = NULL;
+	FILE *tf = tmpfile();
+	CHK(tf != NULL);
+	fflush(stderr);
+	int saved = dup(2);
+	dup2(fileno(tf), 2);
+	int rc = reac_cli_parse(argc, argv, &c);
+	fflush(stderr);
+	dup2(saved, 2);
+	close(saved);
+	fclose(tf);
+	CHK(rc == REAC_CLI_REFUSED);
+	return 0;
+}
+
+/* --set is consumed by the knob pre-pass; the flag loop only steps over its KEY=VALUE.
+ * It once fell through to usage() and the daemon exited 2 on a flag --help documents. */
+static int test_set_is_stepped_over(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--set REACPW_X=1 --role master", &c, err, sizeof err) == 0);
+	CHK(c.role == REAC_ROLE_MASTER && err[0] == '\0');
+	CHK(parse_line("--live eth0 --set REACPW_X=1 --set REACPW_Y=2 --rate 48000", &c, err,
+	               sizeof err) == 0);
+	CHK(c.rxcfg.forced_rate == 48000 && !strcmp(c.rxcfg.source, "eth0"));
+	return 0;
+}
+
+/* Anything else is the CALLER's usage text, not a refusal message of ours. */
+static int test_unknown_flag_is_usage(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--nope", &c, err, sizeof err) == REAC_CLI_USAGE);
+	CHK(err[0] == '\0');
+	CHK(parse_line("positional", &c, err, sizeof err) == REAC_CLI_USAGE);
+	/* A value flag with no value falls to usage, never reads past argv. */
+	CHK(parse_line("--rate", &c, err, sizeof err) == REAC_CLI_USAGE);
+	CHK(parse_line("--live", &c, err, sizeof err) == REAC_CLI_USAGE);
+	CHK(parse_line("--role", &c, err, sizeof err) == REAC_CLI_USAGE);
+	return 0;
+}
+
 int main(void)
 {
 	int rc = 0;
@@ -171,6 +416,16 @@ int main(void)
 	rc |= test_headamp_refusal_leaves_the_setting();
 	rc |= test_headamp_list();
 	rc |= test_trailing_text_is_refused();
+	rc |= test_defaults();
+	rc |= test_live_interfaces();
+	rc |= test_rate();
+	rc |= test_roles();
+	rc |= test_slave_refuses_master_options();
+	rc |= test_box_pin_and_names();
+	rc |= test_slave_width();
+	rc |= test_headamp_flag();
+	rc |= test_set_is_stepped_over();
+	rc |= test_unknown_flag_is_usage();
 	if (rc == 0)
 		printf("test_reac_cli: ok\n");
 	return rc;
