@@ -673,6 +673,12 @@ test('reac_hearing_finds_a_segment',
 # on the push alone and the daemon must NOT bounce it. fake_box lives in the other repo, so
 # the path is a knob; without it the test SKIPS rather than passing while proving nothing.
 fake_box_path = get_option('fake_box')
+# --- a slave declares a catalogue row: --box-channels must name a width a row has -----
+test('box_channels_names_a_row',
+  find_program('tests/box-channels-names-a-row.sh'),
+  args : [reac_pw_exe],
+  timeout : 30)
+
 # --- whole-binary: the knock's answer is the master's cue, and is granted as handed over (#58)
 # libreac's fake_box is the far end: silent until a COMPLETE push, like the rig's boxes, and
 # started before the daemon. Three bars, each red on 1.0.39: the master takes the wire within
