@@ -1934,16 +1934,15 @@ usage_test = executable('test_reac_headamp_usage',
 test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
 
 # --- text: every declared reac_code is emitted, and bare refusals stay under a floor --
-# "We need the error codes and not only messages" (2026-09-17). Every token of the daemon's
-# share of libreac's <reac/reac_code.h> list (tests/reac-code-daemon-tokens.txt) must be
-# reachable through reac_code_emit somewhere in src/*.c, and no copy of what libreac declares
+# "We need the error codes and not only messages" (2026-09-17). The tokens the daemon emits
+# are read off src/*.c through reac_code_emit (libreac's <reac/reac_code.h> is the one list),
+# and no copy of what libreac declares
 # or does may appear in src/ (ONE HOME, 1.0.42), and a REFUSED/FATAL/failed-shaped bare fprintf that still bypasses the helper
 # is counted against a floor that may only fall (proportionate migration, spec §2) — a
 # change that adds a new one, or un-migrates one already counted, fails the build.
 test('reac_code_conformance', python3,
   args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
           meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'tests' / 'reac-code-daemon-tokens.txt',
           libreac_dep.get_variable(pkgconfig : 'includedir')])
 
 # --- text: the public tree cites internal documents by slug; the README builds nothing --

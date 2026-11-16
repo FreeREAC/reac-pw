@@ -4,11 +4,11 @@
 #
 # "We need the error codes and not only messages" (operator, 2026-09-17). Two checks:
 #
-#  1. Every token of the daemon's share of libreac's REAC_CODE_LIST (the enumerators
-#     named in tests/reac-code-daemon-tokens.txt) is USED somewhere in src/*.c through
-#     reac_code_emit, every token emitted is named there, and every name there is
-#     declared in <reac/reac_code.h> — a declared code nobody ever emits is exactly the
-#     kind of thing a conformance test exists to catch (an unreachable branch of a
+#  1. Every token this daemon emits through reac_code_emit is DERIVED from src/*.c (an
+#     enumerator libreac does not declare does not compile, so there is no hand list to
+#     keep in step), and with a libreac sibling checkout joined, every token of libreac's
+#     REAC_CODE_LIST is emitted somewhere — a declared code nobody ever emits is exactly
+#     the kind of thing a conformance test exists to catch (an unreachable branch of a
 #     vocabulary that is supposed to be closed and complete).
 #  2. A FLOOR on how many refusal/failure-shaped `fprintf(stderr, "reac-pw: ...)` lines
 #     still bypass reac_code_emit — migration here is proportionate (spec §2), not
@@ -25,8 +25,8 @@
 #     sends RTM_GETQDISC or applies the tap's tag rule. Each arm has a planted copy it
 #     must refuse.
 #
-# Run directly: `python3 tests/reac-code-conformance.py <src-dir> <daemon-tokens.txt>
-# <libreac include dir>` (meson passes the include dir libreac_dep resolved to).
+# Run directly: `python3 tests/reac-code-conformance.py <src-dir> <libreac include dir>`
+# (meson passes the include dir libreac_dep resolved to).
 
 import os
 import re
@@ -94,16 +94,6 @@ def declared_tokens(code_h_path):
     """Every token of libreac's one REAC_CODE_LIST."""
     text = code_h_path.read_text()
     return {name: token for name, token in TOKEN_DEF.findall(text)}
-
-
-def daemon_tokens(list_path):
-    """The enumerators tests/reac-code-daemon-tokens.txt names: the daemon's share."""
-    names = []
-    for line in list_path.read_text().splitlines():
-        line = line.split('#', 1)[0].strip()
-        if line:
-            names.append(line)
-    return names
 
 
 def strip_comments(text):
@@ -209,18 +199,13 @@ def bare_refusal_lines(src_files, start_pattern=FPRINTF_START):
 
 def main(argv):
     src_dir = Path(argv[1]) if len(argv) > 1 else Path('src')
-    daemon_list = Path(argv[2]) if len(argv) > 2 else Path('tests') / 'reac-code-daemon-tokens.txt'
-    inc = Path(argv[3]) if len(argv) > 3 else None
+    inc = Path(argv[2]) if len(argv) > 2 else None
     if inc is None or not (inc / 'reac' / 'reac_code.h').exists():
         print(f'no <reac/reac_code.h> under {inc} -- the scan cannot read the one list',
               file=sys.stderr)
         return 1
     lib_code_h = inc / 'reac' / 'reac_code.h'
     cfg_h = inc / 'reac' / 'reac_cfg.h'
-
-    if not daemon_list.exists():
-        print(f'{daemon_list} not found -- the scan is broken, not the code', file=sys.stderr)
-        return 1
 
     broken = planted_one_home(cfg_h)
     if broken:
@@ -234,17 +219,9 @@ def main(argv):
         return 1
 
     one_list = declared_tokens(lib_code_h)
-    ours = daemon_tokens(daemon_list)
-    if not one_list or not ours:
-        print(f'found zero tokens in {lib_code_h} or {daemon_list} -- the scan is broken',
-              file=sys.stderr)
+    if not one_list:
+        print(f'found zero tokens in {lib_code_h} -- the scan is broken', file=sys.stderr)
         return 1
-    undeclared = sorted(set(ours) - set(one_list))
-    if undeclared:
-        print(f'{len(undeclared)} name(s) in {daemon_list.name} are not in libreac\'s list: '
-              f'{undeclared}', file=sys.stderr)
-        return 1
-    declared = {n: one_list[n] for n in ours}
 
     src_files = sorted(src_dir.glob('*.c'))
     if not src_files:
@@ -252,6 +229,10 @@ def main(argv):
               file=sys.stderr)
         return 1
 
+    # What this daemon emits is read off its own source; a name libreac does not declare
+    # would not compile, so every one of these is in the one list.
+    ours = sorted(used_tokens(src_files))
+    declared = {n: one_list[n] for n in ours if n in one_list}
     all_src_files = list(src_files)
     hits = bare_refusal_lines(src_files, FPRINTF_START)
 
@@ -272,12 +253,6 @@ def main(argv):
     if unused:
         print(f'{len(unused)} declared code(s) are never emitted: {unused}', file=sys.stderr)
         return 1
-    unlisted = sorted(used_tokens(src_files) - set(ours))
-    if unlisted:
-        print(f'{len(unlisted)} code(s) emitted by src/ are not named in {daemon_list.name}: '
-              f'{unlisted}', file=sys.stderr)
-        return 1
-
     if len(hits) > FLOOR:
         print(f'{len(hits)} bare refusal/failure fprintf lines bypass reac_code_emit, '
               f'over the floor of {FLOOR}:', file=sys.stderr)
