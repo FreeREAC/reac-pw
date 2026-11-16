@@ -32,13 +32,50 @@
 #ifndef REAC_QDISC_H
 #define REAC_QDISC_H
 
+#include <stddef.h>
+
 /* What the daemon did to one device's qdisc, so the exit can undo exactly that. Zero
  * initialised means "we touched nothing", which is what every non-master path is. */
 struct reac_qdisc {
 	int  ifindex;     /* the device we installed on; 0 = none */
 	char ifname[16];  /* IFNAMSIZ, for the journal after the index may have gone */
 	int  installed;   /* 1 once the add was ACKed by the kernel */
+	int  offload;     /* 1 when what we installed is the HARDWARE form (mqprio + etf
+	                   * offload): the NIC launches. What the health line says is read
+	                   * back from the kernel (reac_qdisc_launch), never from this. */
 };
+
+/* ---- the hardware launch (reac-pw#98, libreac docs/ETF-PACING.md) ---------- *
+ *
+ * On a NIC with a PTP hardware clock and a launch-time engine (i210/i225/i226), the
+ * etf qdisc can hand each frame to the NIC with its launch time and the NIC sends it at
+ * that instant of ITS OWN CLOCK. Three conditions, all read, none assumed:
+ *
+ *   1. the device exposes a PHC (ETHTOOL_GET_TS_INFO phc_index >= 0) and stamps on
+ *      transmit;
+ *   2. that PHC carries CLOCK_TAI, within REAC_QDISC_PHC_ALIGN_NS: the NIC compares
+ *      the launch time (TAI) against the PHC, so a PHC nobody aligned holds every
+ *      frame for the wrong instant. ONE OWNER OF THE PHC: where ptp4l runs (AES67),
+ *      ptp4l owns it and phc2sys aligns the system clock to it; elsewhere reac-pw's
+ *      phc2sys unit aligns the PHC to CLOCK_TAI. Either way this reads the result;
+ *   3. the kernel accepts `etf ... offload` on the device's launch queue
+ *      (reac_etf_qdisc_install_offload, all or nothing).
+ *
+ * Any one missing: today's software ETF, and ONE line naming which condition failed. */
+#define REAC_QDISC_PHC_ALIGN_NS 1000000ll   /* 1 ms: an aligned PHC is tens of ns off,
+                                              * a free-running one seconds to years */
+
+/* Whether `ifname` can take the hardware form, and why not: 1 capable, 0 not (with
+ * `why` filled), and `*phc_off_ns` the PHC - CLOCK_TAI offset read (0 when no PHC). */
+int reac_qdisc_hw_capable(const char *ifname, long long *phc_off_ns, char *why, size_t cap);
+
+/* Remove every hardware form this daemon installed and still holds. Registered with
+ * atexit on the first install; callable directly (the test does). */
+void reac_qdisc_release_all(void);
+
+/* What launches this device's frames, read from the kernel: "hardware" (an etf with
+ * offload on), "software" (an etf without), "none" (no etf), "unreadable". */
+const char *reac_qdisc_launch(int ifindex);
 
 /* Make `ifname`'s qdisc match `want_etf`, and say what happened on stderr.
  *

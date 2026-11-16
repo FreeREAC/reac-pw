@@ -25,31 +25,35 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # >=1.11.0 SINCE 1.0.43: libreac's soname is libreac.so.7 (struct pcap_source grew), and the
 # master, hunt and rx bind to their peer (a second MAC's JOIN no longer re-courts an
 # established box); the tests assert that contract. The ceiling is the next minor.
-BuildRequires:  pkgconfig(libreac) >= 1.11.0
-BuildRequires:  pkgconfig(libreac) < 1.12
+# >=1.12.0 SINCE the hardware launch (reac-pw#98): the offload install and read, the pacer's
+# launch stamps, and the pacer socket's SO_PRIORITY that puts its frames on the launch queue.
+BuildRequires:  pkgconfig(libreac) >= 1.12.0
+BuildRequires:  pkgconfig(libreac) < 1.13
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.11.0
-BuildRequires:  pkgconfig(libreac-transport) < 1.12
+BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
+BuildRequires:  pkgconfig(libreac-transport) < 1.13
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
 # ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
 BuildRequires:  libreac-tests >= 1.7.3
-BuildRequires:  libreac-tests < 1.12
+BuildRequires:  libreac-tests < 1.13
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 # `ip` for reac-pw-nm-unmanaged (link up, link monitor).
 Requires:       iproute
+# phc2sys, for reac-pw-phc2sys@.service: the hardware launch needs it, audio does not.
+Recommends:     linuxptp
 # THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
 # is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.11.0
-Requires:       libreac < 1.12
-Requires:       libreac-transport >= 1.11.0
-Requires:       libreac-transport < 1.12
+Requires:       libreac >= 1.12.0
+Requires:       libreac < 1.13
+Requires:       libreac-transport >= 1.12.0
+Requires:       libreac-transport < 1.13
 %{?systemd_requires}
 
 %description
@@ -130,6 +134,10 @@ install -D -m0644 packaging/reac-pw.1 %{buildroot}%{_mandir}/man1/reac-pw.1
 install -D -m0755 packaging/reac-pw-nm-unmanaged.sh %{buildroot}%{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 install -D -m0644 packaging/reac-pw-nm-unmanaged.service %{buildroot}%{_unitdir}/reac-pw-nm-unmanaged.service
 install -D -m0644 packaging/90-reac-pw-nm-unmanaged.preset %{buildroot}%{_presetdir}/90-reac-pw-nm-unmanaged.preset
+# THE HARDWARE LAUNCH'S CLOCK (reac-pw#98): a template, enabled per NIC by whoever owns the
+# rig (`systemctl enable --now reac-pw-phc2sys@reac0`), never by a preset: only the operator
+# knows whether ptp4l (AES67) owns that NIC's PHC instead.
+install -D -m0644 packaging/reac-pw-phc2sys@.service %{buildroot}%{_unitdir}/reac-pw-phc2sys@.service
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -177,6 +185,7 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %dir %{_prefix}/lib/reac-pw
 %{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 %{_unitdir}/reac-pw-nm-unmanaged.service
+%{_unitdir}/reac-pw-phc2sys@.service
 %{_presetdir}/90-reac-pw-nm-unmanaged.preset
 # Generated at run time by reac-pw-nm-unmanaged; owned here so removing the package
 # removes it.
