@@ -280,7 +280,9 @@ rt_plane_objs_common = [
   'src/reac_link_budget.c', 'src/reac_declared_vlan.c', 'src/reac_segconf.c',
   'src/reac_roster.c', 'src/reac_roster_node.c',
 ]
-rt_plane_san = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+# Sanitized only on request (-Dsanitize_tests=true): the default build, and the package %check,
+# have no libasan/libubsan. The assertions on counters and samples hold either way.
+rt_plane_san = get_option('sanitize_tests') ? ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] : []
 rt_plane_cases = ['good', 'no-planes', 'few-planes', 'null-data0', 'null-data1',
                   'short-plane', 'no-chunk0', 'no-chunk1', 'null-buffer', 'null-datas',
                   'short-chunk', 'extra-no-chunk']
@@ -296,9 +298,9 @@ source_rt_planes = executable('test_reac_source_rt_planes',
   c_args : rt_plane_san, link_args : rt_plane_san,
   dependencies : rt_plane_deps)
 foreach c : rt_plane_cases
-  test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c],
+  test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c], suite : 'rt-planes',
     env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
-  test('reac_source_rt_planes_' + c, source_rt_planes, args : [c],
+  test('reac_source_rt_planes_' + c, source_rt_planes, args : [c], suite : 'rt-planes',
     env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
 endforeach
 
