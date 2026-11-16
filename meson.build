@@ -263,6 +263,44 @@ rt_test = executable('test_reac_rt',
   dependencies : [libreac_dep, libreac_transport_dep, m_dep])
 test('reac_rt', rt_test)
 
+# --- unit tests: the node process callbacks against a bad stream buffer -------
+# on_process (sink and source) runs on the realtime thread and used to trust the
+# buffer: plane count, data pointers, chunks, plane lengths. The tests include the
+# node's own source (the callbacks are static), stub the pw_stream pool with exactly
+# sized allocations and run one cycle per named case; with AddressSanitizer the first
+# stray byte is a report. Every other object is the daemon's own, minus main.
+rt_plane_objs_common = [
+  'src/reac_knobs.c', 'src/reac_box_pin.c', 'src/reac_rx_bind.c', 'src/reac_watch.c',
+  'src/reac_wake.c', 'src/reac_knock_wire.c', 'src/reac_link_owner.c',
+  'src/reac_empty_master.c', 'src/reac_node_recover.c', 'src/reac_headamp_prop.c',
+  'src/reac_headamp_state.c', 'src/reac_rate_cfg.c', 'src/reac_role_cfg.c',
+  'src/reac_sink_format.c', 'src/reac_node_ensure.c', 'src/reac_node_graph.c',
+  'src/reac_knock_credit.c', 'src/reac_box_row.c', 'src/reac_lat.c', 'src/reac_gain.c',
+  'src/reac_qdisc.c', 'src/reac_link_alias.c', 'src/reac_served_mark.c',
+  'src/reac_link_budget.c', 'src/reac_declared_vlan.c', 'src/reac_segconf.c',
+  'src/reac_roster.c', 'src/reac_roster_node.c',
+]
+rt_plane_san = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+rt_plane_cases = ['good', 'no-planes', 'few-planes', 'null-data0', 'null-data1',
+                  'short-plane', 'no-chunk0', 'no-chunk1']
+rt_plane_deps = [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep]
+sink_rt_planes = executable('test_reac_sink_rt_planes',
+  ['tests/test_reac_sink_rt_planes.c', 'src/reac_source_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+source_rt_planes = executable('test_reac_source_rt_planes',
+  ['tests/test_reac_source_rt_planes.c', 'src/reac_sink_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+foreach c : rt_plane_cases
+  test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c],
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+  test('reac_source_rt_planes_' + c, source_rt_planes, args : [c],
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+endforeach
+
 # --- source sweep: ONE DOOR TO SCHED_FIFO ------------------------------------
 # The ladder above only holds while reac_rt.c is the only place that changes a
 # thread's scheduling class; a third RT thread spelling its own literal would
