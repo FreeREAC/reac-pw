@@ -2030,3 +2030,18 @@ sink_own_test = executable('test_reac_sink_node_own',
   include_directories : src_inc,
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
 test('reac_sink_node_own', sink_own_test)
+
+# --- unit test: reac_source_node -- the capture node's own code, no PipeWire server ---
+# Same method as the sink's: the test #includes src/reac_source_node.c and defines the
+# pw_stream_* calls the node makes (update_properties, disconnect, connect) itself.
+source_own_src = []
+foreach f : reac_pw_src
+  if f not in ['src/main.c', 'src/reac_source_node.c']
+    source_own_src += f
+  endif
+endforeach
+source_own_test = executable('test_reac_source_node_own',
+  ['tests/test_reac_source_node_own.c'] + source_own_src,
+  include_directories : src_inc,
+  dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
+test('reac_source_node_own', source_own_test)
