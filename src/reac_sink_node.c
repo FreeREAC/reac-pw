@@ -31,6 +31,7 @@
 #include <reac/transport/reac_tx.h>
 #include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
+#include "reac_rt_planes.h"   /* what the RT callback may trust about a buffer */
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse */
 #include "reac_headamp_state.h"  /* the head-amp door's READ side: asserted + refusal */
@@ -305,6 +306,9 @@ struct reac_sink_node {
 	/* 0.5.6: the slave's upstream carrier. Non-NULL = no pacer, no socket; process()
 	 * writes planar PCM here and reac_slave puts it on the wire. */
 	struct reac_ring *upstream_ring;
+	/* Cycles on_process skipped because the stream buffer was not what it needs
+	 * (reac_rt_planes.h). RT increments, main reads (reac_sink_node_bad_buffers). */
+	_Atomic uint32_t rt_bad_buffers;
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -363,9 +367,22 @@ static void on_process(void *data)
 	if (!pwb)
 		return;                 /* nothing queued this cycle */
 	struct spa_buffer *sbuf = pwb->buffer;
+	/* A BUFFER THIS CALLBACK CANNOT TRUST costs the cycle, not a read past its end:
+	 * plane 0's chunk sizes the cycle, so it is looked at only once it is known to be
+	 * there, and every plane must then hold what plane 0 says. (reac_rt_planes.h) */
+	if (!reac_rt_buffer_has_planes(sbuf, n->channels) || sbuf->datas[0].chunk == NULL) {
+		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
+		pw_stream_queue_buffer(n->stream, pwb);
+		return;
+	}
 	uint32_t nframes = sbuf->datas[0].chunk->size / (uint32_t)sizeof(float);
 	if (nframes > position->clock.duration)
 		nframes = position->clock.duration;
+	if (!reac_rt_planes_ok(sbuf, n->channels, nframes * (uint32_t)sizeof(float), true, false)) {
+		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
+		pw_stream_queue_buffer(n->stream, pwb);
+		return;
+	}
 
 	/* Publish the graph quantum so the pacer's depth guard sizes its band off the
 	 * ACTUAL producer burst (up to one quantum of frames pushed per callback), not
@@ -2069,6 +2086,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 /* main's rate-reopen poll reads and CLEARS the pending accepted rate here; nonzero
  * means "re-open this segment at this Hz". Atomic-exchange so a second poll before
  * the re-open completes cannot act on it twice. */
+/* Cycles on_process skipped for a stream buffer it could not trust (reac_rt_planes.h).
+ * Any thread; the RT thread only ever increments it. */
+uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n)
+{
+	return n ? atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed) : 0;
+}
+
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n)
 {
 	return n ? atomic_exchange_explicit(&n->reopen_rate, 0, memory_order_relaxed) : 0;

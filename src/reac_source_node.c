@@ -5,6 +5,7 @@
 #include <reac/reac_link_state.h>
 #include "reac_node_ensure.h"  /* the shared same-box-or-rebuild decision */
 #include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
+#include "reac_rt_planes.h"   /* what the RT callback may trust about a buffer */
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
                                  * ("one wire, one rate" — see
                                  * reac_sink_format.h's revised SCOPE note) */
@@ -76,6 +77,9 @@ struct reac_source_node {
 	 * The flag is the whole handshake: RT writes the buffer only while it is 0 and then
 	 * sets it; main reads only while it is 1 and then clears it. */
 	_Atomic int log_pending;
+	/* Cycles on_process skipped because the stream buffer was not what it needs
+	 * (reac_rt_planes.h). RT increments, main reads (reac_source_node_bad_buffers). */
+	_Atomic uint32_t rt_bad_buffers;
 	char log_line[160];
 	float scratch[REAC_MAX_QUANTUM]; /* sink for absent planes; never read back */
 
@@ -166,6 +170,14 @@ static void on_process(void *data)
 	if (!pwb)
 		return;                 /* no buffer this cycle — leave the ring untouched */
 	struct spa_buffer *buf = pwb->buffer;
+	/* A BUFFER THIS CALLBACK CANNOT TRUST costs the cycle (the ring keeps its frames for
+	 * the next one), never a write past a plane. Plane 0 sizes the cycle, so it is
+	 * looked at only once it is known to be there. (reac_rt_planes.h) */
+	if (!reac_rt_buffer_has_planes(buf, n->channels) || buf->datas[0].chunk == NULL) {
+		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
+		pw_stream_queue_buffer(n->stream, pwb);
+		return;
+	}
 	/* How many frames the consumer wants, bounded by what the plane can hold. A
 	 * stream buffer is sized by the ADAPTER at OUR rate, so this is already the
 	 * REAC-pace frame count — PipeWire resamples it to the graph on the way out. */
@@ -175,6 +187,12 @@ static void on_process(void *data)
 		nframes = cap;
 	if (nframes > REAC_MAX_QUANTUM)
 		nframes = REAC_MAX_QUANTUM; /* never write past a plane/scratch buffer */
+	/* ...and every plane must hold that many by ITS OWN size, not plane 0's. */
+	if (!reac_rt_planes_ok(buf, n->channels, nframes * (uint32_t)sizeof(float), false, true)) {
+		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
+		pw_stream_queue_buffer(n->stream, pwb);
+		return;
+	}
 
 	/* The ring has ONE shared read cursor across all channels, so we must read
 	 * every channel each cycle or the planes desync. Unlinked ports (no buffer
@@ -251,6 +269,12 @@ static void on_process(void *data)
 		buf->datas[c].chunk->size = nframes * (uint32_t)sizeof(float);
 	}
 	pw_stream_queue_buffer(n->stream, pwb);
+}
+
+/* Cycles on_process skipped for a stream buffer it could not trust. Any thread. */
+uint32_t reac_source_node_bad_buffers(const struct reac_source_node *n)
+{
+	return n ? atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed) : 0;
 }
 
 /* PipeWire hands us the SPA_IO areas as the stream is configured. We stash the
