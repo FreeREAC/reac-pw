@@ -195,6 +195,7 @@ reac_pw_src = [
   'src/reac_segconf.c',
   'src/reac_roster.c',
   'src/reac_roster_node.c',
+  'src/reac_cli.c',
 ]
 
 # THE PROTOCOL'S NUMBERS COME FROM ONE DECLARATION (src/reac_facts_pw.h, tools/facts.py).
@@ -1999,3 +2000,17 @@ test('reac_rx_bind_is_wired', python3,
 test('public_hygiene', find_program('bash'),
   args : [meson.current_source_dir() / 'tools' / 'check-public-hygiene.sh',
           meson.current_source_dir()])
+
+# ============================================================================
+# reac-pw's OWN code, compiled without a running PipeWire or a wire
+# (lane reac-pw-tests-own; one block per seam, appended here so a sibling lane's
+# edits to the blocks above never touch these lines).
+# ============================================================================
+
+# --- unit test: reac_cli -- the flag and conf-list parsers main() reads --------
+# --mac, the --live interface list and the --headamp cells were statics in main.c.
+cli_test = executable('test_reac_cli',
+  ['tests/test_reac_cli.c', 'src/reac_cli.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_cli', cli_test)
