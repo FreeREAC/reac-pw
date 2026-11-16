@@ -39,6 +39,31 @@ int pw_stream_queue_buffer(struct pw_stream *s, struct pw_buffer *b)
 	return 0;
 }
 
+/* The node property the main loop publishes the counter under: the last value a
+ * pw_stream_update_properties call carried for it, and how many calls did. */
+static char fx_prop_val[32];
+static int fx_prop_calls;
+
+int pw_stream_update_properties(struct pw_stream *s, const struct spa_dict *dict)
+{
+	(void)s;
+	const struct spa_dict_item *it;
+	spa_dict_for_each(it, dict)
+		if (strcmp(it->key, REACPW_PROP_HEALTH_RT_BAD_BUFFERS) == 0) {
+			snprintf(fx_prop_val, sizeof fx_prop_val, "%s", it->value);
+			fx_prop_calls++;
+		}
+	return 0;
+}
+
+/* The published value is `want` (and has been published, not guessed). */
+static int fx_published_is(uint32_t want)
+{
+	char w[32];
+	snprintf(w, sizeof w, "%u", want);
+	return fx_prop_calls > 0 && strcmp(fx_prop_val, w) == 0;
+}
+
 static void fx_build(uint32_t n_datas, const struct plane_spec *ps, uint64_t requested)
 {
 	memset(&fx_pwb, 0, sizeof fx_pwb);

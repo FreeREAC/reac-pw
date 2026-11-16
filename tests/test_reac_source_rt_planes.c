@@ -37,6 +37,8 @@ int main(int argc, char **argv)
 	n->ring = &ring;
 	n->rx = rx;
 	n->channels = 4;
+	n->stream = (struct pw_stream *)n;   /* only ever handed to the stubs */
+	n->bad_buffers_last = -1;
 
 	fx_short_slack = 1;
 	fx_build_case(c, FX_FLOATS);
@@ -88,6 +90,25 @@ bad_plane:
 			        argv[1], p, fx_plane_good(c, p, 0) ? "good" : "bad");
 			return 1;
 		}
-	printf("ok %s: ring %u -> %u, bad buffers %u\n", argv[1], before, after, bad);
+	/* THE COUNTER IS PUBLISHED, off the RT thread, and the published value MOVES: a
+	 * second cycle of the same buffer moves it by the same step. */
+	reac_source_node_publish_health(n);
+	if (!fx_published_is(bad)) {
+		fprintf(stderr, "FAIL: %s: published '%s' after %d calls, want %u\n", argv[1],
+		        fx_prop_val, fx_prop_calls, bad);
+		return 1;
+	}
+	for (int k = 0; k < 4; k++)
+		reac_ring_write(&ring, blk, 64, 4);   /* the ring is full of audio again */
+	fx_build_case(c, FX_FLOATS);
+	on_process(n);
+	reac_source_node_publish_health(n);
+	if (!fx_published_is(2 * bad)) {
+		fprintf(stderr, "FAIL: %s: published '%s' after a second cycle, want %u\n", argv[1],
+		        fx_prop_val, 2 * bad);
+		return 1;
+	}
+	printf("ok %s: ring %u -> %u, bad buffers %u, published %s\n", argv[1], before, after, bad,
+	       fx_prop_val);
 	return 0;
 }

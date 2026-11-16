@@ -39,6 +39,8 @@ int main(int argc, char **argv)
 	memset(&pos, 0, sizeof pos);
 	pos.clock.duration = FX_FLOATS;
 	n->position = &pos;
+	n->stream = (struct pw_stream *)&pos;   /* only ever handed to the stubs */
+	n->bad_buffers_last = -1;
 
 	fx_build_case(c, 0);
 	on_process(n);
@@ -76,6 +78,23 @@ int main(int argc, char **argv)
 				}
 		}
 	}
-	printf("ok %s: ring frames %u, bad buffers %u\n", argv[1], got, bad);
+	/* THE COUNTER IS PUBLISHED, off the RT thread, and the published value MOVES: a
+	 * second cycle of the same buffer moves it by the same step. */
+	sink_publish_bad_buffers(n);
+	if (!fx_published_is(bad)) {
+		fprintf(stderr, "FAIL: %s: published '%s' after %d calls, want %u\n", argv[1],
+		        fx_prop_val, fx_prop_calls, bad);
+		return 1;
+	}
+	fx_build_case(c, 0);
+	on_process(n);
+	sink_publish_bad_buffers(n);
+	if (!fx_published_is(2 * bad)) {
+		fprintf(stderr, "FAIL: %s: published '%s' after a second cycle, want %u\n", argv[1],
+		        fx_prop_val, 2 * bad);
+		return 1;
+	}
+	printf("ok %s: ring frames %u, bad buffers %u, published %s\n", argv[1], got, bad,
+	       fx_prop_val);
 	return 0;
 }
