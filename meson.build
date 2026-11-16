@@ -267,15 +267,11 @@ test('reac_rt', rt_test)
 # --- source sweep: ONE DOOR TO SCHED_FIFO ------------------------------------
 # The ladder above only holds while reac_rt.c is the only place that changes a
 # thread's scheduling class; a third RT thread spelling its own literal would
-# reopen #31 with every unit test still green. The sweep proves it can see the
-# call in the file that legitimately has it before it reports absence anywhere.
-rt_single_door_args = [meson.current_source_dir()]
-if libreac_transport_srcdir != ''
-  rt_single_door_args += libreac_transport_srcdir
-endif
+# reopen #31 with every unit test still green. The sweep is over reac-pw's own src/;
+# that the door exists is libreac-transport's test, not a skip here.
 test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
-  args : rt_single_door_args)
+  args : [meson.current_source_dir()])
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
 # libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
