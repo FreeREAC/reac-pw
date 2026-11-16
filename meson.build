@@ -1945,26 +1945,19 @@ test('reac_code_conformance', python3,
           meson.current_source_dir() / 'src',
           libreac_dep.get_variable(pkgconfig : 'includedir')])
 
-# --- text: the public tree cites internal documents by slug; the README builds nothing --
-# Specs, notes, audits and rig files live in the private ops repository. A citation in
-# code, tests, packaging or the user docs is the bare slug, never a docs path or a dated
-# `.md` filename that resolves to nothing in a public checkout; README.md carries no build
-# command and BUILDING.md carries the build. Sabotage-verified by putting a spec path back
-# into a src/ comment and requiring it to be refused by file and line.
-test('reac_public_tree_cites_slugs', python3,
-  args : [meson.current_source_dir() / 'tests' / 'public-tree-cites-slugs.py',
-          meson.current_source_dir()])
-
 # --- text: main.c locks the slave side's receive gate (src/reac_rx_bind.c) ----------------
 # The unit test proves the lock; this proves the daemon asks for it, before the feeder starts.
 test('reac_rx_bind_is_wired', python3,
   args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
           meson.current_source_dir()])
 
-# --- text: the public tree carries no compiled Python and every source has its header -----
+# --- text: the public tree stays public-shaped ------------------------------------------
 # A tracked __pycache__/*.pyc embeds the build machine's paths, and a *.c *.h *.py *.sh with no
-# SPDX-License-Identifier + Copyright pair states no licence. tools/check-public-hygiene.sh
-# reads the git index and refuses both; it SKIPs (77) where there is no git checkout.
+# SPDX-License-Identifier + Copyright pair states no licence; Specs, notes, audits and rig files
+# live in the private ops repository, so a citation in code, tests, packaging or the user docs
+# is the bare slug, never a docs path or a dated `.md` filename; README.md carries no build
+# command and BUILDING.md carries the build. tools/check-public-hygiene.sh refuses all of it
+# (the tracked-file half reads the git index and is skipped where there is no git checkout).
 test('public_hygiene', find_program('bash'),
   args : [meson.current_source_dir() / 'tools' / 'check-public-hygiene.sh',
           meson.current_source_dir()])

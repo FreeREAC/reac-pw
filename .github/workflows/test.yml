@@ -51,9 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Public hygiene (no tracked .pyc, every source has its SPDX + Copyright header)
-        run: bash -o pipefail tools/check-public-hygiene.sh
-
       - name: reac-protocol ${{ env.REAC_PROTOCOL_REF }}
         run: |
           git init -q ../reac-protocol
