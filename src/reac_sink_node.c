@@ -534,14 +534,24 @@ static void on_process(void *data)
 				for (int c = 0; c < n->channels; c++)
 					memcpy(&blk[c * REAC_SAMPLES_PER_PKT], n->stage[c],
 					       REAC_SAMPLES_PER_PKT * sizeof(float));
-				reac_ring_write(n->upstream_ring, blk, REAC_SAMPLES_PER_PKT,
-				                (uint32_t)n->channels);
+				uint32_t took = reac_ring_write(n->upstream_ring, blk,
+				                                REAC_SAMPLES_PER_PKT,
+				                                (uint32_t)n->channels);
+				/* A full ring writes what fits and drops the newest rest. COUNT it:
+				 * a relaxed add, no log, no allocation (RT thread). */
+				if (took < REAC_SAMPLES_PER_PKT)
+					atomic_fetch_add_explicit(&n->rt_dropped_frames,
+					                          REAC_SAMPLES_PER_PKT - took,
+					                          memory_order_relaxed);
 			} else {
 				/* Encode audio + L2 header; counter/control are stamped by the
 				 * pacer. Counter 0 is a placeholder (overwritten on egress). */
 				reac_downstream_build(frame, planar, n->channels,
 				                      REAC_SAMPLES_PER_PKT, 0, n->src);
-				reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES);
+				if (!reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES))
+					atomic_fetch_add_explicit(&n->rt_dropped_frames,
+					                          REAC_SAMPLES_PER_PKT,
+					                          memory_order_relaxed);
 			}
 			n->staged = 0;
 		}
