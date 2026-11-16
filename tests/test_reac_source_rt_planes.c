@@ -53,16 +53,41 @@ int main(int argc, char **argv)
 	}
 	uint32_t after = reac_ring_readable(&ring);
 	uint32_t bad = reac_source_node_bad_buffers(n);
-	if (!fx_must_refuse(c, 0) && (after >= before || bad != 0)) {
-		fprintf(stderr, "FAIL: good buffer: ring %u -> %u, %u counted bad\n", before, after, bad);
+	int whole = fx_skip_whole(c, 0);
+	if (bad != (uint32_t)fx_counted(c, 0)) {
+		fprintf(stderr, "FAIL: %s: %u cycles counted bad, want %d\n", argv[1], bad,
+		        fx_counted(c, 0));
 		return 1;
 	}
-	/* A bad buffer costs the cycle: the ring keeps its frames, one cycle is counted. */
-	if (fx_must_refuse(c, 0) && (after != before || bad != 1)) {
-		fprintf(stderr, "FAIL: %s: ring %u -> %u (want unchanged), %u counted bad (want 1)\n",
-		        argv[1], before, after, bad);
+	if (whole ? after != before : after >= before) {
+		fprintf(stderr, "FAIL: %s: ring %u -> %u (a %s cycle)\n", argv[1], before, after,
+		        whole ? "skipped" : "played");
 		return 1;
 	}
+	/* Every plane the node can carry PLAYS (0.5 from the ring); a bad plane is left
+	 * as it was and its chunk, when there is one, says nothing in it. */
+	if (!whole)
+		for (int p = 0; p < 4 && (uint32_t)p < fx_sbuf.n_datas; p++) {
+			struct spa_data *d = &fx_sbuf.datas[p];
+			if (fx_plane_good(c, p, 0)) {
+				if (d->chunk->size != FX_FLOATS * 4)
+					goto bad_plane;
+				for (uint32_t k = 0; k < FX_FLOATS; k++)
+					if (((float *)d->data)[k] != 0.5f)
+						goto bad_plane;
+			} else {
+				if (d->chunk && d->chunk->size != 0)
+					goto bad_plane;
+				for (uint32_t k = 0; d->data && k < FX_SHORT_FLOATS; k++)
+					if (((float *)d->data)[k] != FX_LEVEL(p))
+						goto bad_plane;
+			}
+			continue;
+bad_plane:
+			fprintf(stderr, "FAIL: %s: plane %d did not come out as a %s plane must\n",
+			        argv[1], p, fx_plane_good(c, p, 0) ? "good" : "bad");
+			return 1;
+		}
 	printf("ok %s: ring %u -> %u, bad buffers %u\n", argv[1], before, after, bad);
 	return 0;
 }

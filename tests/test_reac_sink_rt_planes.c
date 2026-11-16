@@ -50,15 +50,31 @@ int main(int argc, char **argv)
 	}
 	uint32_t got = reac_ring_readable(&ring);
 	uint32_t bad = reac_sink_node_bad_buffers(n);
-	if (!fx_must_refuse(c, 1) && (got == 0 || bad != 0)) {
-		fprintf(stderr, "FAIL: good buffer: ring %u frames, %u counted bad\n", got, bad);
+	int whole = fx_skip_whole(c, 1);
+	if (bad != (uint32_t)fx_counted(c, 1)) {
+		fprintf(stderr, "FAIL: %s: %u cycles counted bad, want %d\n", argv[1], bad,
+		        fx_counted(c, 1));
 		return 1;
 	}
-	/* A bad buffer costs the cycle: nothing reaches the ring, one cycle is counted. */
-	if (fx_must_refuse(c, 1) && (got != 0 || bad != 1)) {
-		fprintf(stderr, "FAIL: %s: ring %u frames (want 0), %u counted bad (want 1)\n",
-		        argv[1], got, bad);
+	if (whole ? got != 0 : got == 0) {
+		fprintf(stderr, "FAIL: %s: ring holds %u frames (a %s cycle)\n", argv[1], got,
+		        whole ? "skipped" : "played");
 		return 1;
+	}
+	/* A bad plane is SILENT and every other plane PLAYS: read what reached the ring. */
+	if (!whole) {
+		static float out[4][4096];
+		float *dst[4] = { out[0], out[1], out[2], out[3] };
+		reac_ring_read_planar(&ring, dst, 4, got);
+		for (int p = 0; p < 4; p++) {
+			float want = fx_plane_good(c, p, 1) ? FX_LEVEL(p) : 0.0f;
+			for (uint32_t k = 0; k < got; k++)
+				if (out[p][k] != want) {
+					fprintf(stderr, "FAIL: %s: plane %d frame %u is %g, want %g\n",
+					        argv[1], p, k, out[p][k], want);
+					return 1;
+				}
+		}
 	}
 	printf("ok %s: ring frames %u, bad buffers %u\n", argv[1], got, bad);
 	return 0;
