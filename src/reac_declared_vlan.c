@@ -79,4 +79,7 @@ int reac_declared_vlan_add(struct reac_declared_vlan *tab, int max, int *n,
 	return 1;
 }
 
-
+int reac_declared_vlan_parent_ok(const char *parent)
+{
+	return name_ok(parent);
+}

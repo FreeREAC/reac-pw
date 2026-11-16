@@ -583,7 +583,9 @@ test('reac_segments_autodetect',
 #
 # "We don't carry any VLANs if we don't detect VLANs." Until 2026-09-23 a declared
 # `<parent>.<vid>` was minted at start; the desk paid three vacant tap doors per boot on a
-# parent that hears no tag. Now the real binary, in a private user+net+pid namespace, must
+# parent that hears no tag. (The cold door since #99 is a different sentence, `[trunk
+# <parent>]`, proven by reac_trunk_vlans_declared_cold below; this rule stands for
+# [segment].) Now the real binary, in a private user+net+pid namespace, must
 # mint NOTHING for two declared VIDs on a present parent in four seconds of silence, leave a
 # host-made sub-interface alone, mint the declared VID the moment libreac's fake box master
 # transmits inside it on the far end (the kernel tags every frame), report the declared role
@@ -701,6 +703,24 @@ test('reac_knock_answer_is_the_cue',
   is_parallel : false,
   args : [reac_pw_exe, fake_box_path],
   timeout : 120)
+
+# --- whole-binary: the trunk's VLANs, declared once, are minted COLD and knocked on (#99) ---
+# A trunk parent finds its VLANs by hearing tagged frames; a cold box says nothing until a
+# master speaks and a box on an access port never hears the parent's untagged knock, so with
+# every box cold nothing is ever found. The owner's ruling on #99 (2026-11-15): the trunk's
+# VLAN ids declared once, `[trunk <parent>]` / `vlans = ...`, each minted at start and
+# knocked on in full. The far end is libreac's fake_box behind a VLAN made mute (no IPv6
+# chatter to name it), started before the daemon: trunkA.11 and .33 exist, up and marked,
+# before any tagged frame; 11 is knocked, answered and established; 33 is knocked, never
+# answered, and stays; a VID nobody declared is not minted; a late parent is minted when it
+# appears; the exit removes exactly what was minted. REACPW_TEST_SABOTAGE=no-list drops the
+# list and turns the test red. Red on 224a73c (main before #99), with nothing tagged heard.
+test('reac_trunk_vlans_declared_cold',
+  find_program('tests/trunk-vlans-declared-cold.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe, fake_box_path],
+  timeout : 300)
 
 test('reac_box_wakes_on_a_phy_edge',
   find_program('tests/box-wakes-on-a-phy-edge.sh'),

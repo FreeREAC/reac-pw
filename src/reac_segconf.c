@@ -117,6 +117,74 @@ static struct reac_segconf_seg *seg_get(struct reac_segconf *c, const char *name
 	return s;
 }
 
+/* The trunk section for `parent`, creating it if the table has room; NULL when it is full,
+ * and the caller reports that rather than dropping the section in silence. */
+static struct reac_segconf_trunk *trunk_get(struct reac_segconf *c, const char *parent,
+                                            int *is_new)
+{
+	*is_new = 0;
+	for (int i = 0; i < c->n_trunks; i++)
+		if (strcmp(c->trunk[i].parent, parent) == 0)
+			return &c->trunk[i];
+	if (c->n_trunks >= REAC_SEGCONF_TRUNKS) {
+		c->trunks_overflow++;
+		return NULL;
+	}
+	struct reac_segconf_trunk *t = &c->trunk[c->n_trunks++];
+	memset(t, 0, sizeof *t);
+	snprintf(t->parent, sizeof t->parent, "%s", parent);
+	*is_new = 1;
+	return t;
+}
+
+/* `vlans = 11 12, 13`: ids separated by blanks or commas, each 1..4094, none twice, at most
+ * REAC_SEGCONF_TRUNK_VIDS. READ WHOLE OR REFUSED WHOLE: a list with one bad id in it is a
+ * list the operator did not mean, and serving the ids around the typo would mint a trunk
+ * half-way. Returns the count, or -1 with `why` naming the first thing wrong. */
+static int parse_vids(const char *val, uint16_t *out, char *why, size_t cap)
+{
+	int n = 0;
+	const char *p = val;
+	for (;;) {
+		while (*p == ' ' || *p == '\t' || *p == ',')
+			p++;
+		if (!*p)
+			break;
+		const char *tok = p;
+		while (*p && *p != ' ' && *p != '\t' && *p != ',')
+			p++;
+		size_t len = (size_t)(p - tok);
+		long v = 0;
+		int digits = len > 0 && len <= 4;
+		for (size_t i = 0; i < len && digits; i++) {
+			if (tok[i] < '0' || tok[i] > '9')
+				digits = 0;
+			else
+				v = v * 10 + (tok[i] - '0');
+		}
+		if (!digits || v < 1 || v > 4094) {
+			snprintf(why, cap, "'%.*s' is not a VLAN id (1..4094)", (int)len, tok);
+			return -1;
+		}
+		for (int i = 0; i < n; i++)
+			if (out[i] == (uint16_t)v) {
+				snprintf(why, cap, "%ld is listed twice", v);
+				return -1;
+			}
+		if (n >= REAC_SEGCONF_TRUNK_VIDS) {
+			snprintf(why, cap, "more than %d VLANs — the daemon serves at most that "
+			         "many on one trunk", REAC_SEGCONF_TRUNK_VIDS);
+			return -1;
+		}
+		out[n++] = (uint16_t)v;
+	}
+	if (n == 0) {
+		snprintf(why, cap, "no VLAN id given");
+		return -1;
+	}
+	return n;
+}
+
 int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char *label)
 {
 	snprintf(c->reading, sizeof c->reading, "%s", label ? label : REAC_SEGCONF_FILE);
@@ -124,6 +192,7 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 	if (!text)
 		return c->n;
 	struct reac_segconf_seg *cur = NULL;
+	struct reac_segconf_trunk *curt = NULL;   /* a [trunk] section; cur is then NULL */
 	char cur_name[IFNAMSIZ] = "";
 	const char *p = text;
 	int lineno = 0;
@@ -142,8 +211,9 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 		char buf[512];
 		if (len >= sizeof buf) {
 			size_t lead = strspn(at, " \t\r");
-			if (lead < len && at[lead] == '[')
-				cur = NULL;
+			if (lead < len && at[lead] == '[') {
+				cur = NULL; curt = NULL;
+			}
 			refuse(c, lineno, "line is longer than %zu bytes and was NOT read",
 			       sizeof buf - 1);
 			continue;
@@ -158,39 +228,73 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 
 		if (*line == '[') {
 			char *close = strchr(line, ']');
+			cur = NULL;
+			curt = NULL;
 			if (!close) {
 				refuse(c, lineno, "section is not closed: '%s'", line);
-				cur = NULL;
 				continue;
 			}
 			/* Nothing may follow the header: the line is trimmed, so anything after
 			 * its first ']' is text this grammar does not read. */
 			if (close[1]) {
 				refuse(c, lineno, "text after the closing ']' of '%s'", line);
-				cur = NULL;
 				continue;
 			}
 			*close = '\0';
 			char *body = trim(line + 1);
+			/* `[trunk <parent>]` (reac-pw#99): the interface named is a trunk, and
+			 * the `vlans` under it are minted cold. Same case rules as [segment]. */
+			if (strncasecmp(body, "trunk", 5) == 0 &&
+			    (body[5] == ' ' || body[5] == '\t' || body[5] == '\0')) {
+				char *name = trim(body + 5);
+				if (!*name) {
+					refuse(c, lineno, "[trunk] names no interface");
+					continue;
+				}
+				/* EVERY `<parent>.<vid>` HAS TO FIT IN AN INTERFACE NAME, a 4-digit
+				 * VID included: a truncated name is a different interface, and a
+				 * list that fits for 11 and not for 1011 is a trap. */
+				if (strlen(name) + 5 >= IFNAMSIZ) {
+					refuse(c, lineno, "[trunk %s] is too long for `%s.<vid>` to be "
+					       "an interface name (%d bytes at most)", name, name,
+					       IFNAMSIZ - 6);
+					continue;
+				}
+				if (!reac_declared_vlan_parent_ok(name)) {
+					refuse(c, lineno, "[trunk %s] is not a name a netdev can have "
+					       "(letters, digits, '.', '-', ':', '_')", name);
+					continue;
+				}
+				int is_new = 0;
+				curt = trunk_get(c, name, &is_new);
+				if (!curt) {
+					refuse(c, lineno, "[trunk %s] is past the %d-trunk bound and "
+					       "was NOT read", name, REAC_SEGCONF_TRUNKS);
+					continue;
+				}
+				if (!is_new && curt->seen_gen == c->gen)
+					refuse(c, lineno, "[trunk %s] appears more than once in this "
+					       "file; the keys are merged", name);
+				curt->seen_gen = c->gen;
+				snprintf(cur_name, sizeof cur_name, "%s", name);
+				continue;
+			}
 			/* `[segment <name>]`. The keyword is case-insensitive; the NAME is
 			 * not, because the kernel compares interface names byte for byte. */
 			if (strncasecmp(body, "segment", 7) != 0 ||
 			    (body[7] != ' ' && body[7] != '\t')) {
 				refuse(c, lineno, "unknown section [%s] — only [segment <name>] "
-				       "is understood", body);
-				cur = NULL;
+				       "and [trunk <name>] are understood", body);
 				continue;
 			}
 			char *name = trim(body + 7);
 			if (!*name) {
 				refuse(c, lineno, "[segment] names no segment");
-				cur = NULL;
 				continue;
 			}
 			if (strlen(name) >= IFNAMSIZ) {
 				refuse(c, lineno, "[segment %s] is longer than an interface name "
 				       "can be (%d)", name, IFNAMSIZ - 1);
-				cur = NULL;
 				continue;
 			}
 			int is_new = 0;
@@ -221,8 +325,31 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 		*eq = '\0';
 		char *key = trim(line);
 		char *val = unquote(trim(eq + 1));
+		if (curt) {
+			/* THE TRUNK SECTION HAS ONE KEY. A role or an ignore under it would be a
+			 * statement about the parent, which the wire decides (and a trunk parent
+			 * is never a segment); those words belong to [segment]. */
+			if (strcasecmp(key, "vlans") != 0) {
+				refuse(c, lineno, "[trunk %s] has no key '%s' — vlans", cur_name, key);
+				continue;
+			}
+			uint16_t vids[REAC_SEGCONF_TRUNK_VIDS];
+			char why[96];
+			int nv = parse_vids(val, vids, why, sizeof why);
+			if (nv < 0) {
+				refuse(c, lineno, "[trunk %s] vlans = '%.40s' is refused whole: %s",
+				       cur_name, val, why);
+				continue;
+			}
+			memcpy(curt->vid, vids, sizeof vids);
+			curt->n = nv;
+			curt->vlans_set = 1;
+			snprintf(curt->vlans_file, sizeof curt->vlans_file, "%s", c->reading);
+			continue;
+		}
 		if (!cur) {
-			refuse(c, lineno, "'%s' is outside any [segment <name>] section", key);
+			refuse(c, lineno, "'%s' is outside any [segment <name>] or [trunk <name>] "
+			       "section", key);
 			continue;
 		}
 		if (!strcasecmp(key, "role")) {
@@ -287,6 +414,9 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			       "has one content, the control frames, never the stream; remove the "
 			       "line (it says '%.24s')", cur_name, val);
 			continue;
+		} else if (!strcasecmp(key, "vlans")) {
+			refuse(c, lineno, "[segment %s] takes no 'vlans' — a trunk's VLANs are "
+			       "declared under [trunk <parent>]", cur_name);
 		} else {
 			refuse(c, lineno, "[segment %s] has no key '%s' — role, model, ignore",
 			       cur_name, key);
@@ -302,6 +432,13 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
  * wins per key). Both refusals name the segment, and neither is fatal. */
 static void cross_check(struct reac_segconf *c)
 {
+	/* A TRUNK SECTION WITH NO LIST DECLARES NOTHING, and is said so once every file has
+	 * been read: the list may come from a later drop-in (the console's). It stays in the
+	 * table so a second file's `vlans` lands on it. */
+	for (int i = 0; i < c->n_trunks; i++)
+		if (!c->trunk[i].vlans_set)
+			refuse(c, 0, "[trunk %s] declares no VLAN — the key is `vlans = <id> ...`; "
+			       "nothing is minted for it", c->trunk[i].parent);
 	for (int i = 0; i < c->n; i++) {
 		struct reac_segconf_seg *s = &c->seg[i];
 		int is_box = s->role_set && s->role == REAC_ROLE_INTENT_BOX;
@@ -575,6 +712,41 @@ int reac_segconf_declared(const struct reac_segconf *c, struct reac_declared_vla
 		if (r < 0)
 			return -1;
 		added += r;
+	}
+	return added;
+}
+
+const struct reac_segconf_trunk *reac_segconf_trunk_find(const struct reac_segconf *c,
+                                                         const char *parent)
+{
+	if (!c || !parent)
+		return NULL;
+	for (int i = 0; i < c->n_trunks; i++)
+		if (strcmp(c->trunk[i].parent, parent) == 0)
+			return &c->trunk[i];
+	return NULL;
+}
+
+int reac_segconf_trunk_vlans(const struct reac_segconf *c, struct reac_declared_vlan *tab,
+                             int max, int *n)
+{
+	if (!c)
+		return 0;
+	int added = 0;
+	for (int i = 0; i < c->n_trunks; i++) {
+		const struct reac_segconf_trunk *t = &c->trunk[i];
+		if (!t->vlans_set)
+			continue;
+		for (int k = 0; k < t->n; k++) {
+			char name[IFNAMSIZ + 8];
+			snprintf(name, sizeof name, "%s.%u", t->parent, (unsigned)t->vid[k]);
+			if (reac_segconf_ignored(c, name))
+				continue;   /* switching a segment off cannot create a netdev for it */
+			int r = reac_declared_vlan_add(tab, max, n, t->parent, t->vid[k]);
+			if (r < 0)
+				return -1;
+			added += r;
+		}
 	}
 	return added;
 }
