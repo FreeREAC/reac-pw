@@ -5,7 +5,7 @@
 # NO PINS (FreeREAC/reac-pw#23): libreac is declared in the packaging and nowhere else.
 #
 # libreac, libreac-transport and libreac-tests (fake_box) are declared in packaging/reac-pw.spec
-# and debian/control as a floor AND a ceiling (the next minor), installed from the FreeMixer
+# and debian/control as a floor AND a ceiling (the next major), installed from the FreeMixer
 # channel by `dnf builddep` / `apt-get build-dep`, and found by pkg-config. This fails when
 #   - a package the build or the tests need has a floor but no ceiling (or no floor), in the
 #     spec's BuildRequires, in its Requires, or in debian/control's Build-Depends;
@@ -88,12 +88,13 @@ ceilings=$( {
 	|| say "the libreac floor is not ONE value across meson.build, the spec and control: $(tr '\n' ' ' <<<"$floors")"
 [ "$(wc -l <<<"$ceilings")" = 1 ] && [ "$(wc -w <<<"$ceilings")" = 1 ] \
 	|| say "the libreac ceiling is not ONE value across the spec and control: $(tr '\n' ' ' <<<"$ceilings")"
-# THE CEILING IS THE FLOOR'S NEXT MINOR. A ceiling at the next major (< 2) takes in libreac
-# minors whose behaviour the tests have never seen (1.11 moved the master to peer binding,
-# while reac_master and reac_hunt still asserted the old behaviour).
-want_ceil=$(awk -F. '{ print $1 "." $2 + 1 }' <<<"$floors")
+# THE CEILING IS THE FLOOR'S NEXT MAJOR (ruling 2026-11-16T02:18Z, the rule from 1.0 on: R-107). libreac keeps its
+# soname (.7) across 1.x, so a 1.x minor installs under a reac-pw built against an earlier one; a minor ceiling made
+# every libreac minor a same-pass release with reac-pw (1.0.43's < 1.12 refused libreac 1.12.0 alone). A minor whose
+# behaviour moves is caught by the tests of the reac-pw that floors on it, not by a ceiling on every other one.
+want_ceil=$(awk -F. '{ print $1 + 1 }' <<<"$floors")
 [ "$ceilings" = "$want_ceil" ] \
-	|| say "the libreac ceiling $ceilings is not the floor's next minor $want_ceil (floor $floors)"
+	|| say "the libreac ceiling $ceilings is not the floor's next major $want_ceil (floor $floors)"
 
 hits=$(cd "$ROOT" && {
 	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git ls-files; else find . -type f | sed 's,^\./,,'; fi
