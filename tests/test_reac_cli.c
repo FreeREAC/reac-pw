@@ -406,6 +406,22 @@ static int test_unknown_flag_is_usage(void)
 	return 0;
 }
 
+/* A NUMBER IS ALL DIGITS. atoi() read the digits in front of the first non-digit and
+ * said nothing, so `--rate 48000abc` was the legal 48000 and `--box-channels 8x` was an
+ * 8-wide box: the typo ran the daemon at a value the operator did not type. */
+static int test_numbers_are_whole(void)
+{
+	struct reac_cli c;
+	char err[1024];
+	CHK(parse_line("--rate 48000abc", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "illegal --rate '48000abc'"));
+	CHK(parse_line("--rate 4800.0", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line("--box-channels 8x", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, "--box-channels must be even"));
+	CHK(parse_line("--box-channels 8.0", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	return 0;
+}
+
 int main(void)
 {
 	int rc = 0;
@@ -426,6 +442,7 @@ int main(void)
 	rc |= test_headamp_flag();
 	rc |= test_set_is_stepped_over();
 	rc |= test_unknown_flag_is_usage();
+	rc |= test_numbers_are_whole();
 	if (rc == 0)
 		printf("test_reac_cli: ok\n");
 	return rc;
