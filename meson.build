@@ -1202,6 +1202,13 @@ test('reac_packaged_shape',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
+# --- whole-binary test: a numeric knob that is not a number in range is refused at
+# start, by name, before the root refusal and the capability preflight.
+test('reac_numeric_knobs_refused',
+  find_program('tests/numeric-knobs-are-refused.sh'),
+  args : [reac_pw_exe],
+  timeout : 120)
+
 # --- whole-binary test: the daemon refuses to start as uid 0 (2026-09-18) -----
 # A root instance runs under a DIFFERENT systemd --user manager than the console
 # session's and binds the same abstract segment-lock socket — measured to win it
