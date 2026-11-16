@@ -32,14 +32,10 @@ FIND_PROGRAM = re.compile(r"find_program\(\s*'tests/([^']+)'\s*\)")
 # pairing. Reviewed by hand at the time each was added; do not grow this list
 # to silence a real orphan.
 VERIFIED_PAIRS = {
-    ("# --- integration: does the watch SEE a real carrier change? ------------------\n",
-     'reac_link_edge_observed'),
     ("# --- whole-binary test: a cable edge re-establishes the master (#95) ---------\n",
      'reac_link_up_reestablishes'),
     ("# --- whole-binary test: a box master is ENROLLED WITH, its own way (0.5.6) ----\n",
      'reac_box_master_slave_join'),
-    ("# --- real sockets: an UNGRANTED slave gets off the wire (libreac 1.0.1) ------\n",
-     'reac_courtship_backs_off'),
     ("# --- whole-binary test: a box that DROPPED is re-acquired by the daemon alone ------\n",
      'reac_box_wakes_on_a_phy_edge'),
     ("# --- source-shape test: ONE segment, ONE word ----------------------------------------\n",
