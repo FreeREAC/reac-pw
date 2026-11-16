@@ -1,3 +1,19 @@
+reac-pw (1.0.44) unstable; urgency=medium
+
+  * Built against libreac 1.12: libreac, libreac-transport and libreac-tests
+    are declared >= 1.12.0 << 1.13 (libreac-tests keeps its 1.7.3 floor).
+  * The hardware launch where the NIC can take it (#98): mqprio + etf
+    offload, read back and held for the daemon's life (igc resets the
+    adapter on every change), software ETF named when the NIC cannot; the
+    health line names what launches the frames; REACPW_LAUNCH_STAMPS
+    samples the NIC's TX stamps; reac-pw-phc2sys@.service keeps the PHC
+    on TAI.
+  * A REAC segment is a physical NIC or a VLAN on one (#101): a bridge,
+    veth, tun/tap or container interface is never listened on or knocked
+    on unless REAC_IFACES_ALLOW_VIRTUAL names it.
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Mon, 16 Nov 2026 12:00:00 +0000
+
 reac-pw (1.0.43) unstable; urgency=medium
 
   * Built against libreac 1.11 (libreac.so.7, libreac7): libreac,

@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.43
+Version:        1.0.44
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -245,6 +245,18 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Mon Nov 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
+- Built against libreac 1.12: libreac, libreac-transport and libreac-tests are
+  declared >= 1.12.0 < 1.13 (libreac-tests keeps its 1.7.3 floor).
+- The hardware launch where the NIC can take it (#98): mqprio + etf offload,
+  read back and held for the daemon's life (igc resets the adapter on every
+  change), software ETF named when the NIC cannot; the health line names what
+  launches the frames; REACPW_LAUNCH_STAMPS samples the NIC's TX stamps; and
+  reac-pw-phc2sys@.service keeps the PHC on TAI.
+- A REAC segment is a physical NIC or a VLAN on one (#101): a bridge, veth,
+  tun/tap or container interface is never listened on or knocked on unless
+  REAC_IFACES_ALLOW_VIRTUAL names it.
+
 * Fri Nov 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.43-1
 - Built against libreac 1.11 (libreac.so.7, libreac7): libreac, libreac-transport and
   libreac-tests are declared >= 1.11.0 < 1.12 (libreac-tests keeps its 1.7.3 floor).
