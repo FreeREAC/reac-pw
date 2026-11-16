@@ -4,6 +4,7 @@
 #include "reac_source_node.h"
 #include <reac/reac_link_state.h>
 #include "reac_node_ensure.h"  /* the shared same-box-or-rebuild decision */
+#include "reac_rate_match.h"   /* ppm -> resampler rate, shared bound */
 #include "reac_node_graph.h"   /* the shared is-it-on-the-graph reading */
 #include "reac_sink_format.h"  /* the shared Format pod builder + renegotiate decision
                                  * ("one wire, one rate" — see
@@ -87,6 +88,9 @@ struct reac_source_node {
 	 * a skipped cycle safe). MAIN-LOOP-only write; on_process (RT) reads it as
 	 * the first check, relaxed load. */
 	_Atomic int rate_reconnecting;
+	/* How many cycles the follower rate was clamped or refused (reac_rate_match.h).
+	 * RT writes, anyone reads; no logging on the RT path. */
+	_Atomic unsigned long long rate_clamped;
 
 	/* THE SLAVE ROLE'S ONLY DOOR. A slave has no reac-playback node — main.c's
 	 * listener_open builds reac_sink_node for the master branch alone — so this
@@ -239,7 +243,7 @@ static void on_process(void *data)
 	 * rate correction so the resampler chases the desk's TRUE rate. One rate_match
 	 * area is shared across the port group, so the first linked port carries it. */
 	int ppm_milli = atomic_load_explicit(&n->rx->ppm_error_milli, memory_order_relaxed);
-	double rate = 1.0 + (double)ppm_milli / 1e9; /* ppm*1000 -> fractional */
+	double rate = reac_rate_match_from_ppm_milli((double)ppm_milli, &n->rate_clamped);
 	if (n->rate_match)
 		n->rate_match->rate = rate;
 
@@ -251,6 +255,13 @@ static void on_process(void *data)
 		buf->datas[c].chunk->size = nframes * (uint32_t)sizeof(float);
 	}
 	pw_stream_queue_buffer(n->stream, pwb);
+}
+
+/* Cycles the follower rate was clamped or refused since the node was built. Any
+ * thread; relaxed load. Safe with a NULL node (0). */
+unsigned long long reac_source_node_rate_clamped(const struct reac_source_node *n)
+{
+	return n ? atomic_load_explicit(&n->rate_clamped, memory_order_relaxed) : 0;
 }
 
 /* PipeWire hands us the SPA_IO areas as the stream is configured. We stash the
@@ -359,6 +370,7 @@ struct reac_source_node *reac_source_node_new(struct pw_loop *loop,
 		n->debug = reac_conf_lookup("REAC_DEBUG", NULL, NULL, v, sizeof v) != REAC_CONF_NONE;
 	}
 	atomic_init(&n->rate_reconnecting, 0);
+	atomic_init(&n->rate_clamped, 0);
 
 	char rate_str[16];
 	snprintf(rate_str, sizeof rate_str, "1/%d", sample_rate);
