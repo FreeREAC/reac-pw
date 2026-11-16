@@ -208,9 +208,9 @@ Two, ruled on the rig on 2026-10-27, and both proven there the same day:
   tag`. Serving it would need the parent's receive path to tell untagged frames from VLAN
   frames, which the kernel hides from an ordinary socket (reac-pw#60, closed by the ruling).
 
-Mixed layouts are refused by name, never guessed at. What the daemon still owes on a trunk
-is finding a VLAN whose only box is cold (reac-pw#65): today a VLAN is created when its tag
-is heard, and a silent box sends none (next section).
+Mixed layouts are refused by name, never guessed at. A VLAN whose only box is cold sends no
+tag for the daemon to find it by, so a trunk's VLANs are declared once and minted cold
+(next section).
 
 ### A box behind a trunk
 
@@ -220,13 +220,29 @@ cold box that powers up, or whose switch port comes up, while the daemon runs: i
 presence flood is tagged on the trunk. A cold box that came up BEFORE the daemon and has
 been silent since sends nothing a trunk can carry, so nothing names its VLAN, and naming
 it as `[segment <nic>.<vid>]` in the conf does not create it either (that rule is the
-2026-09-23 ruling in `src/reac_declared_vlan.h`). For that box, the VLAN sub-interface
-must exist in the host's network config (`ip link add link <nic> name <nic>.<vid> type vlan
-id <vid>`, or a systemd-networkd `.netdev` as in [docs/fedora-network.md](docs/fedora-network.md));
-the daemon then knocks on it like any NIC. Two boxes on two VLANs through two switches
-therefore enrol with no file edited only when each one powers up while the daemon runs;
-otherwise each needs its VLAN in the host's network config. reac-pw#40 has the proposal
-for finding them without that.
+2026-09-23 ruling in `src/reac_declared_vlan.h`).
+
+For that box the trunk's VLANs are **declared once** (reac-pw#99, the owner's ruling of
+2026-11-15 for the fibre bench, where every box is cold behind the switch):
+
+```
+[trunk enp131s0]
+vlans = 11 12 13 14
+```
+
+Each `enp131s0.<vid>` is then minted at start, and again whenever the parent appears or
+the sub-interface goes, marked `reac-pw:minted`, and knocked on like any wire — bounded,
+backed off, never streamed at — so a box that has been silent since before the daemon
+started hears the knock on its own VLAN and answers it. Silence does not release a declared
+VLAN, and the exit removes exactly the ones the daemon minted; a sub-interface the host made
+is adopted and left as found. The list is a setting the console carries with the show and
+writes through its drop-in (`reac-pw.conf.d/50-openmixer.conf`) in these same words; by
+hand it goes in `reac-pw.conf`. An id that is not 1..4094, one listed twice, or more than
+the daemon serves on one trunk refuses the line by name and keeps what an earlier file said.
+Without a declaration the sub-interface can still be made in the host's network config
+(`ip link add link <nic> name <nic>.<vid> type vlan id <vid>`, or a systemd-networkd
+`.netdev` as in [docs/fedora-network.md](docs/fedora-network.md)), and the daemon knocks on
+it like any NIC.
 
 To override ONE segment — a switch mirror port, a recorder, a NIC to leave alone —
 write `~/.config/reac-pw/reac-pw.conf` by hand (`[segment IFNAME]` with `role =` or

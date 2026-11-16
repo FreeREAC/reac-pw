@@ -21,6 +21,14 @@
  * three roster rows, re-created after every drop of the parent
  * (reac-pw-boot-2026-09-23).
  *
+ * THE COLD DOOR SINCE 2026-11-15 IS A DIFFERENT SENTENCE (reac-pw#99). A `[trunk <parent>]`
+ * section with `vlans = ...` names the trunk and its ids on purpose, and THOSE are minted
+ * at start and knocked on (reac_segconf_trunk_vlans fills the same table; main.c's cold
+ * ledger owns them). A cold box on an access port never hears the parent's untagged knock
+ * and sends no tag, so hearing cannot find it; the explicit list can, and the operator who
+ * writes it pays for exactly the netdevs it asks for — never for a role projection's
+ * leftovers. The 2026-09-23 rule above stands for `[segment]`.
+ *
  * WHAT COUNTS AS A DECLARATION, SINCE 2026-09-16. A `[segment <parent>.<vid>]` section —
  * reac_segconf_declared is the one reader, and this module is the table it fills. Naming
  * the segment at all is the declaration; role and ignore are separate questions about it.
@@ -53,5 +61,11 @@ int reac_declared_vlan_split(const char *segment, char *parent, size_t cap, uint
  * -1 table full. `*n` is the live count and is advanced on an add. */
 int reac_declared_vlan_add(struct reac_declared_vlan *tab, int max, int *n,
                            const char *parent, uint16_t vid);
+
+/* Is `parent` a name this module would hand to rtnetlink as a trunk? The same narrow
+ * alphabet reac_declared_vlan_split holds a split parent to (letters, digits, dot, dash,
+ * colon, underscore), for a parent named whole in a `[trunk <parent>]` section
+ * (reac_segconf.h), so both doors refuse the same names. 1 yes, 0 no. */
+int reac_declared_vlan_parent_ok(const char *parent);
 
 #endif /* REAC_DECLARED_VLAN_H */

@@ -57,7 +57,9 @@ List every option and tunable.
 .TP
 .I ~/.config/reac-pw/reac-pw.conf
 The one hand-written override file: a \fB[segment IFNAME]\fR section per interface, with \fBrole =
-auto|master|slave|tap\fR and \fBignore = yes\fR. Without it every segment is decided from the wire.
+auto|master|slave|tap\fR and \fBignore = yes\fR; a \fB[trunk IFNAME]\fR section with \fBvlans = 11 12
+13\fR declares a trunk's VLANs once, each minted at start and knocked on, so boxes that are cold
+behind the switch enrol. Without it every segment is decided from the wire.
 .TP
 .I ~/.config/reac-pw/reac-pw.env
 Per-user settings, host-wide or per segment.
