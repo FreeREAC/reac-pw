@@ -1,5 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Pau Aliagas
 #
 # THE DEVEL PACKAGE CARRIES WHAT CONSUMERS PIN (FreeREAC/reac-pw#108). A consumer that pins one of
 # reac-pw's public facts headers (packaging/devel-headers.txt) finds it in the INSTALLED devel package
