@@ -266,6 +266,35 @@ static int test_defers_as_tap(void)
 	return 0;
 }
 
+/* A VALUE IS ALL OF ITS TEXT, in a conf key as on the command line. sscanf and atoi stop at
+ * the first character they cannot use and say nothing, so REAC_RATE=48000abc ran at 48000,
+ * REAC_BOX_CHANNELS=8x made an 8-wide box and REAC_SRC_MAC=<mac>zz was the clean address in
+ * front of the junk. */
+static int test_conf_values_are_whole(void)
+{
+	CHK(home_with_conf("") == 0);
+	clear_env();
+	struct listener_cfg c;
+	enum reac_conf_layer layer = REAC_CONF_NONE;
+
+	listener_cfg_from_conf(&c, "eth9", 1);
+	setenv("REAC_RATE_eth9", "48000abc", 1);
+	CHK(listener_resolve_rate(&c, &layer) == reac_rate_best_drivable(REAC_RATE_ALL_BITS));
+	CHK(layer == REAC_CONF_BUILTIN);                     /* skipped, not obeyed */
+	clear_env();
+
+	setenv("REAC_BOX_CHANNELS_eth9", "8x", 1);
+	listener_cfg_from_conf(&c, "eth9", 1);
+	CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
+	clear_env();
+
+	setenv("REAC_SRC_MAC_eth9", "02:aa:bb:cc:dd:eezz", 1);
+	listener_cfg_from_conf(&c, "eth9", 1);
+	CHK(!c.src_mac_set);
+	clear_env();
+	return 0;
+}
+
 int main(void)
 {
 	int rc = 0;
@@ -274,6 +303,7 @@ int main(void)
 	rc |= test_layered_keys();
 	rc |= test_rate_resolution();
 	rc |= test_defers_as_tap();
+	rc |= test_conf_values_are_whole();
 	home_remove();
 	if (rc == 0)
 		printf("test_reac_main_own: ok\n");
