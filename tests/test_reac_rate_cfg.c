@@ -364,7 +364,7 @@ static void bare_pacer_init(struct reac_pacer *p, int fps,
  * re-establish — no process restart, same struct reac_pacer throughout. */
 static int test_apply_rate_shape(void)
 {
-	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };
+	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .pace_code = REAC_PACE_CODE_96K };
 	struct reac_pacer p;
 	bare_pacer_init(&p, REAC_PKT_RATE_48K, &cfg);   /* 48 kHz */
 
@@ -389,7 +389,7 @@ static int test_apply_rate_shape(void)
 
 	/* The console cfg is NOT reset by a rate change — only establishment is
 	 * redone (the spec: "a change ... re-clocks the segment", nothing else). */
-	CHK(p.master.cfg.out_channels == 16 && p.master.cfg.console_field == 1);
+	CHK(p.master.cfg.out_channels == 16 && p.master.cfg.pace_code == 1);
 
 	struct establish_shape after;
 	CHK(run_establish(&p.master, &after) == 0);
@@ -455,8 +455,8 @@ static int test_narrow_mask_refuses_and_defaults_lower(void)
  * fps, period, FSM state and rate props byte-for-byte untouched. */
 static int test_two_segments_are_independent(void)
 {
-	struct reac_console_cfg cfg_a = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_48K };  /* m200 */
-	struct reac_console_cfg cfg_b = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };  /* m5000 */
+	struct reac_console_cfg cfg_a = { .out_channels = REAC_BOX_S1608_IN, .pace_code = REAC_PACE_CODE_48K };  /* m200 */
+	struct reac_console_cfg cfg_b = { .out_channels = REAC_BOX_S1608_IN, .pace_code = REAC_PACE_CODE_96K };  /* m5000 */
 	struct reac_pacer a, b;
 	bare_pacer_init(&a, REAC_PKT_RATE_48K, &cfg_a);   /* 48 kHz, like this rig's segment A */
 	bare_pacer_init(&b, REAC_PKT_RATE_48K, &cfg_b);   /* 48 kHz, like this rig's segment B */
@@ -475,7 +475,7 @@ static int test_two_segments_are_independent(void)
 	int b_rate_asserted  = atomic_load_explicit(&b.rate_asserted, memory_order_relaxed);
 	int b_reestablishing = atomic_load_explicit(&b.rate_reestablishing, memory_order_relaxed);
 	int b_out_channels   = b.master.cfg.out_channels;
-	int b_console_field  = b.master.cfg.console_field;
+	int b_pace_code  = b.master.cfg.pace_code;
 
 	/* The write door: reac_rate_cfg_decide (pure) then reac_pacer_apply_rate —
 	 * on_param_changed's own sequence — applied ONLY to segment A. */
@@ -494,7 +494,7 @@ static int test_two_segments_are_independent(void)
 	CHK(atomic_load_explicit(&b.rate_asserted, memory_order_relaxed) == b_rate_asserted);
 	CHK(atomic_load_explicit(&b.rate_reestablishing, memory_order_relaxed) == b_reestablishing);
 	CHK(b.master.cfg.out_channels == b_out_channels);
-	CHK(b.master.cfg.console_field == b_console_field);
+	CHK(b.master.cfg.pace_code == b_pace_code);
 
 	return 0;
 }
@@ -517,7 +517,7 @@ static int test_two_segments_are_independent(void)
  * touched the console. */
 static int test_link_edge_reestablishes_at_the_standing_rate(void)
 {
-	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = REAC_PACE_CODE_96K };
+	struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .pace_code = REAC_PACE_CODE_96K };
 	struct reac_pacer p;
 	bare_pacer_init(&p, REAC_PKT_RATE_48K, &cfg);   /* 48 kHz, asserted by nobody */
 

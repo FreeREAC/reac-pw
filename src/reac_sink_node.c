@@ -2148,7 +2148,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		.cpu = -1,        /* no pin by default (set on a dedicated rig host) */
 		.src_mac = n->src,
 		/* The master's OWN identity, and NO BOX (2026-08-05). The box comes from
-		 * the wire; console_field here is the --mixer profile's default pace
+		 * the wire; pace_code here is the --mixer profile's default pace
 		 * code (default m200, 48 kHz) — the pacer overwrites it from --rate
 		 * before it reaches the wire. This line used to read
 		 * REAC_CONSOLE_CFG_S1608, whose in_channels=16 was the real origin of
@@ -2156,7 +2156,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		 * box, reachable from no flag and visible in no log. */
 		.console = REAC_CONSOLE_CFG_IDLE,
 	};
-	pcfg.console.console_field = cfg->console_field;
+	pcfg.console.pace_code = cfg->pace_code;
 	pcfg.headamps = cfg->headamps;        /* master head-amp DMX table (may be NULL) */
 	pcfg.n_headamps = cfg->n_headamps;
 	pcfg.clock_follow = cfg->clock_follow;   /* #75; 0 = free-run exactly as before */

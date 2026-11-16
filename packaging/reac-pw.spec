@@ -26,11 +26,13 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # master, hunt and rx bind to their peer (a second MAC's JOIN no longer re-courts an
 # established box); the tests assert that contract. There is no ceiling: libreac's soname moves with every release, so the soname dependency
 # rpm generates from the link ties this build to the libreac it was built against.
-BuildRequires:  pkgconfig(libreac) >= 1.11.0
+# >=1.12.0 SINCE 1.0.44: the pace-code member is pace_code (it was console_field), the width-keyed
+# reac_ctrl_build_config_announce is gone, and so are the REAC_ROLE_STATE_* aliases.
+BuildRequires:  pkgconfig(libreac) >= 1.12.0
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.11.0
+BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
 # ships fake_box (libreac-tests 1.7.3)
 BuildRequires:  libreac-tests >= 1.7.3
@@ -44,8 +46,8 @@ Requires:       iproute
 # rpm generates libreac.so.<N>()(64bit) from the link, and libreac's soname moves with every
 # release, so this build runs against the libreac it was built against and no other: there is
 # no upper range to write down. The version floor is the first release whose behaviour is needed.
-Requires:       libreac >= 1.11.0
-Requires:       libreac-transport >= 1.11.0
+Requires:       libreac >= 1.12.0
+Requires:       libreac-transport >= 1.12.0
 %{?systemd_requires}
 
 %description

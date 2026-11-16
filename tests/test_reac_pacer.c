@@ -475,7 +475,7 @@ int main(void)
 		CHK(reac_pace_code(REAC_PKT_RATE_48K) == REAC_PACE_CODE_48K);   /* 48 kHz */
 		CHK(reac_pace_code(REAC_PKT_RATE_96K) == REAC_PACE_CODE_96K);   /* 96 kHz */
 		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = reac_pace_code(REAC_PKT_RATE_44K1) };
+		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .pace_code = reac_pace_code(REAC_PKT_RATE_44K1) };
 		struct reac_master m;
 		reac_master_init(&m, OUR, &cfg, REAC_PKT_RATE_44K1);
 		CHK(m.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_PACE_OFF] == REAC_PACE_CODE_44K1);     /* the byte a box paces by */

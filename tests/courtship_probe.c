@@ -113,7 +113,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 	struct reac_console_cfg ann_cfg = { .out_channels = REAC_BOX_S1608_OUT,   /* the idle width in
 	                                                          * force: nothing is
 	                                                          * enrolled, ever    */
-	                                    .console_field = reac_pace_code(fps) };
+	                                    .pace_code = reac_pace_code(fps) };
 	reac_master_init(&ann, SRC, &ann_cfg, fps);
 
 	int ifindex = 0;

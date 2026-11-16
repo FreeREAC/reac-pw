@@ -48,7 +48,7 @@ static uint64_t slot_ns(const struct reac_knock_wire *w, uint64_t slot)
 static void master_at_header(struct reac_master *m, const uint8_t src[6], int fps)
 {
 	struct reac_console_cfg c = REAC_CONSOLE_CFG_IDLE;
-	c.console_field = reac_pace_code(fps);
+	c.pace_code = reac_pace_code(fps);
 	reac_master_init(m, src, &c, fps);
 	for (int i = 0; i < m->cycle_len && m->cycle_pos != m->sub01_off; i++) {
 		uint16_t counter;

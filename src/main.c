@@ -2184,7 +2184,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		                              /* THE FAMILY, as configured. It does NOT come from the
 	                               * rate: the two are independent settings and each is
 	                               * obeyed as given (see reac_master.h). */
-	                              .console_field = c->mixer->console_field,
+	                              .pace_code = c->mixer->pace_code,
 		                              .inst = c->inst_name, .label = NULL,
 		                              .headamps = c->n_headamps ? c->headamps : NULL,
 		                              .n_headamps = c->n_headamps,
@@ -2485,7 +2485,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 						.channels = sink_ch,
 						.sample_rate = L->rx.sample_rate,
 						.src_mac = box_mac,
-						.console_field = c->mixer->console_field,
+						.pace_code = c->mixer->pace_code,
 						.inst = c->inst_name,
 						.label = bm ? bm->display : NULL,
 						.rate_match_off = -1,

@@ -18,7 +18,7 @@
  *             (…28 08 …00 d4).
  *   ALL     — every generated control block satisfies Sum(block[18..49])%256==0.
  *
- * The generator is parameterized on { out_channels, mac, console_field }; the
+ * The generator is parameterized on { out_channels, mac, pace_code }; the
  * generic path and this byte-exact test are the SAME code. */
 #include <reac/reac_master.h>
 #include <reac/reac_ctrl.h>

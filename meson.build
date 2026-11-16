@@ -105,7 +105,10 @@ m_dep        = cc.find_library('m', required : false)
 # daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
 # copy is gone). An older header does not compile.
 # >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the soname of every libreac release is its own, so the packages need no ceiling.
-libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
+# >=1.12.0 SINCE 1.0.44: struct reac_console_cfg and struct reac_mixer_profile call the pace-code member
+# pace_code (it was console_field), reac_ctrl_build_config_announce is gone (every announce is built from
+# a catalogue row) and the REAC_ROLE_STATE_* aliases are gone. An older header does not compile.
+libreac_dep = dependency('libreac', version : '>=1.12.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
@@ -129,7 +132,7 @@ libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 # this build allocates one.
 # >=1.10.0 SINCE 1.0.42: reac_etf_qdisc_stats_read's dump walker stops at the bytes recv() returned
 # (an unpadded last message no longer walks the stale buffer); the health line reads through it.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.11.0', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.12.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,

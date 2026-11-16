@@ -12,8 +12,8 @@
  *
  * The two properties this pins are equally load-bearing:
  *
- *   1. console_field 1 (96 kHz) emits `fe 01 00`.
- *   2. console_field 0 (48 kHz) is BYTE-IDENTICAL to before, and the two builds
+ *   1. pace_code 1 (96 kHz) emits `fe 01 00`.
+ *   2. pace_code 0 (48 kHz) is BYTE-IDENTICAL to before, and the two builds
  *      differ in EXACTLY the marker byte — one byte, in the one window that holds
  *      the marker, checksum aside. This is an addition to what we can say, not a
  *      change to what we already said: tests/test_reac_s1608.c pins the captured
@@ -54,8 +54,8 @@ int main(void)
 	struct reac_master vmix, ohrca;
 	struct reac_console_cfg cfg_v = REAC_CONSOLE_CFG_IDLE;
 	struct reac_console_cfg cfg_o = REAC_CONSOLE_CFG_IDLE;
-	cfg_v.console_field = 0;
-	cfg_o.console_field = 1;
+	cfg_v.pace_code = 0;
+	cfg_o.pace_code = 1;
 
 	reac_master_init(&vmix,  SRC, &cfg_v, FPS);
 	reac_master_init(&ohrca, SRC, &cfg_o, FPS);

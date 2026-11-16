@@ -90,7 +90,7 @@ static void derive_cycle(int fps)
 {
 	struct reac_master m;
 	struct reac_console_cfg c = REAC_CONSOLE_CFG_IDLE;
-	c.console_field = reac_pace_code(fps);
+	c.pace_code = reac_pace_code(fps);
 	reac_master_init(&m, OUR_MAC, &c, fps);
 	for (int i = 0; i < m.cycle_len && m.cycle_pos != m.sub01_off; i++) {
 		uint16_t counter;
@@ -266,7 +266,7 @@ static void daemon_hear(struct daemon *d, struct wire *w)
 static void daemon_serve(struct daemon *d, uint64_t now)
 {
 	struct reac_console_cfg c = REAC_CONSOLE_CFG_IDLE;
-	c.console_field = reac_pace_code(FPS_96K);
+	c.pace_code = reac_pace_code(FPS_96K);
 	reac_master_init(&d->eng, OUR_MAC, &c, FPS_96K);
 	d->handed = d->kw.n_answer;
 	for (int i = 0; i < d->kw.n_answer; i++) {

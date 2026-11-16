@@ -7,7 +7,7 @@
  * 16+i (same convention as reac_m200_golden.inc / reac_grant_golden.inc).
  * Within that: [0:11] fixed head; [11:17] MAC (idx CONF_MAC_IDX=11);
  * [17]=0x28 fixed 40-slot total; [18]=box INPUT width (idle default 0x08,
- * see reac_master.c's gen_cfea comment); [19]=console_field — the pace-code
+ * see reac_master.c's gen_cfea comment); [19]=pace_code — the pace-code
  * discriminator (48 kHz, M-200/M-300 = 0x00; 96 kHz, M-5000 = 0x01);
  * [20:22]=BE enrolled-box-count; [33]=cksum (Sum(block[18:50]) == 0 mod 256,
  * i.e. Sum(template[2:33]) == 0 mod 256).
@@ -20,7 +20,7 @@
  *           0x08, count 1) — an S-0808 instead.
  *
  * THE FINDING this pins: three real consoles (M-200, M-300, M-5000) differ
- * on the wire in the source MAC (the L2 identity), this cfea console_field
+ * on the wire in the source MAC (the L2 identity), this cfea pace_code
  * byte, the ENROLL console byte (same 0/1) — and, CORRECTED 2026-08-29, the
  * chanmap section marker's pace-code byte (`fe 01 00` on an M-5000, `fe 00 00`
  * on an M-200/M-300; measured across 5 captures, see test_reac_conformance.c).
@@ -35,11 +35,11 @@
  * desk 00:40:ab:c9:d8:5b) — confirming this table was derived from the same
  * generator model, not hand-rolled. m200/m5000 share the identical head/tail
  * shape by construction (gen_cfea is one function for all three profiles);
- * only the MAC bytes and the console_field byte (+ the resulting checksum)
+ * only the MAC bytes and the pace_code byte (+ the resulting checksum)
  * differ, exactly as the finding states. */
 struct conf_console {
 	const char *name;
-	uint8_t     console_field;
+	uint8_t     pace_code;
 	uint8_t     mac[6];
 	uint8_t     cfea_idle[34];
 	uint8_t     cfea_s1608[34];
