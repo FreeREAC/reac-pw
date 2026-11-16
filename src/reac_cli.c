@@ -14,9 +14,27 @@
 #include "reac_box_pin.h"
 #include "reac_rate_cfg.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Parse a decimal integer that is ALL of `s`: an optional sign and digits, nothing before
+ * or after, within int. Returns 0, or -1 (and *out untouched). atoi() read the digits in
+ * front of the first non-digit and said nothing about the rest. */
+int reac_cli_parse_int(const char *s, int *out)
+{
+	if (!s || !*s || (*s != '-' && (*s < '0' || *s > '9')))
+		return -1;
+	char *end = NULL;
+	errno = 0;
+	long v = strtol(s, &end, 10);
+	if (errno || *end || end == s || v < INT_MIN || v > INT_MAX)
+		return -1;
+	*out = (int)v;
+	return 0;
+}
 
 /* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input
  * (text after the sixth pair included). */
@@ -209,7 +227,9 @@ int reac_cli_parse(int argc, char **argv, struct reac_cli *c)
 			 * overflows to a 0-slot ring with mask 0xFFFFFFFF, and the first
 			 * write scribbles the heap. Accept only sane audio rates — the REAC
 			 * world is the 44.1k/48k/88.2k/96k families. */
-			int rate = atoi(argv[++i]);
+			int rate;
+			if (reac_cli_parse_int(argv[++i], &rate) != 0)
+				rate = 0;   /* not a number: the illegal-rate refusal below names it */
 			/* ONLY THREE PACES ARE LEGAL: 44.1, 48 and 96 kHz. A Roland desk
 			 * offers exactly these and drives the segment at the one chosen;
 			 * anything else is not a slower REAC, it is not REAC, and it would
@@ -273,7 +293,8 @@ int reac_cli_parse(int argc, char **argv, struct reac_cli *c)
 			}
 			box_channels = m->in_ch;
 		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
-			box_channels = atoi(argv[++i]);
+			if (reac_cli_parse_int(argv[++i], &box_channels) != 0)
+				box_channels = 0;   /* not a number: refused below like any odd width */
 			if (box_channels < REAC_BRAID_PAIR_CHANNELS || box_channels > REAC_MAX_CHANNELS ||
 			    box_channels % REAC_BRAID_PAIR_CHANNELS) {
 				fprintf(stderr, "reac-pw: --box-channels must be even, "

@@ -22,6 +22,7 @@
  * an unbounded array. The first --live plus the extras fit under it. */
 #define REAC_PW_MAX_LISTENERS 8
 
+int reac_cli_parse_int(const char *s, int *out);
 int reac_cli_parse_mac(const char *s, uint8_t out[6]);
 int reac_cli_split_list(const char *s, char out[][IFNAMSIZ + 1], int max);
 int reac_cli_parse_headamp(const char *s, struct reac_headamp_setting *out);

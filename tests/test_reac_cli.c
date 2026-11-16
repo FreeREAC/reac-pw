@@ -27,6 +27,25 @@
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
+static int test_int(void)
+{
+	int v = 77;
+	CHK(reac_cli_parse_int("48000", &v) == 0 && v == 48000);
+	CHK(reac_cli_parse_int("-8", &v) == 0 && v == -8);
+	CHK(reac_cli_parse_int("0", &v) == 0 && v == 0);
+	v = 77;
+	CHK(reac_cli_parse_int("", &v) == -1);
+	CHK(reac_cli_parse_int(NULL, &v) == -1);
+	CHK(reac_cli_parse_int("8x", &v) == -1);
+	CHK(reac_cli_parse_int(" 8", &v) == -1);
+	CHK(reac_cli_parse_int("8 ", &v) == -1);
+	CHK(reac_cli_parse_int("+8", &v) == -1);
+	CHK(reac_cli_parse_int("-", &v) == -1);
+	CHK(reac_cli_parse_int("99999999999", &v) == -1);   /* past int */
+	CHK(v == 77);                                       /* a refusal leaves it alone */
+	return 0;
+}
+
 static int test_mac(void)
 {
 	uint8_t m[6];
@@ -425,6 +444,7 @@ static int test_numbers_are_whole(void)
 int main(void)
 {
 	int rc = 0;
+	rc |= test_int();
 	rc |= test_mac();
 	rc |= test_split_list();
 	rc |= test_split_list_reports_overflow();
