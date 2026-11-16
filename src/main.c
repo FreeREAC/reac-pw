@@ -1360,10 +1360,7 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 	 * layered lookup as every other key, so `REAC_SRC_MAC_<segment>` answers for one
 	 * wire and a bare `REAC_SRC_MAC` is the floor. */
 	if (reac_conf_lookup("REAC_SRC_MAC", iface, NULL, v, sizeof v) != REAC_CONF_NONE) {
-		unsigned b[6];
-		if (sscanf(v, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
-			for (int i = 0; i < 6; i++)
-				c->src_mac[i] = (uint8_t)b[i];
+		if (reac_cli_parse_mac(v, c->src_mac) == 0) {
 			c->src_mac_set = 1;
 		} else {
 			fprintf(stderr, "reac-pw: [%s] ignoring malformed REAC_SRC_MAC='%s' "
@@ -1391,7 +1388,9 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 			        c->box_model ? c->box_model->in_ch : 0,
 			        c->box_model ? c->box_model->out_ch : 0);
 		} else if (bcl != REAC_CONF_NONE) {
-			int n = atoi(v);
+			int n;
+			if (reac_cli_parse_int(v, &n) != 0)
+				n = 0;   /* not a number: refused below */
 			if (n >= REAC_BOX_MIN_CHANNELS && n <= REAC_BOX_MAX_CHANNELS &&
 			    n % REAC_BRAID_PAIR_CHANNELS == 0)
 				c->box_channels = n;
@@ -1416,7 +1415,9 @@ static int listener_resolve_rate(const struct listener_cfg *c, enum reac_conf_la
 	const char *seg = (c->rxcfg.kind == REAC_RX_LIVE) ? c->rxcfg.source : NULL;
 	enum reac_conf_layer got = reac_conf_lookup("REAC_RATE", seg, NULL, v, sizeof v);
 	if (got != REAC_CONF_NONE) {
-		int r = atoi(v);
+		int r;
+		if (reac_cli_parse_int(v, &r) != 0)
+			r = 0;   /* not a number: refused below */
 		if (reac_rate_is_closed(r)) {
 			*out_layer = got;
 			return r;
