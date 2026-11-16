@@ -3,7 +3,7 @@ name: release
 # Packages through the shared release workflows of Open-Mixer/.github. A tag v<version> that is the Version of
 # packaging/reac-pw.spec builds signed RPMs (Fedora 44, x86_64 and
 # aarch64) and DEBs (Debian bookworm and trixie, amd64 and arm64), publishes them to the OpenMixer channel and
-# attaches them to the GitHub release, whose notes are the git log since the previous tag. Any other run, a pull request or a branch,
+# attaches them to the GitHub release, whose notes are the git log since the previous tag. Any other run, a dispatch on a branch,
 # is a dry run: it builds and lints everything and publishes nothing.
 #
 # libreac and libreac-transport are build dependencies and come from the channel, so a release of the libreac
@@ -12,8 +12,12 @@ name: release
 on:
   push:
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
+    inputs:
+      same_pass:
+        description: 'Packages other repositories release in the same pass, space separated: the channel-installability gate reports a range they fall outside of, instead of failing on it'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -26,6 +30,7 @@ jobs:
     with:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}
+      same-pass: ${{ inputs.same_pass || '' }}
       needs-mod-host: false
     secrets:
       OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.OPENMIXER_PACKAGES_SIGNING_KEY }}
@@ -43,6 +48,7 @@ jobs:
     with:
       package-name: reac-pw
       publish: ${{ github.ref_type == 'tag' }}
+      same-pass: ${{ inputs.same_pass || '' }}
       dependencies: ''
       requires: libreac7 libreac-transport7
     secrets:
