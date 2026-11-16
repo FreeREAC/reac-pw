@@ -17,7 +17,7 @@ channel described in the [README](README.md).
 
 `libreac-devel` and `libreac-transport-devel` are hard requirements, found by pkg-config; nothing of
 libreac is fetched or bundled. The version floors are the ones `meson.build` declares, and the spec
-and `debian/control` add the ceiling (the next minor).
+and `debian/control` add the ceiling (the next major: libreac keeps its soname across 1.x).
 
 ## Build and test
 

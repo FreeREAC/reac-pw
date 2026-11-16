@@ -24,20 +24,22 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # reac_etf_qdisc_stats_read the one counter read; the daemon's copies are gone.
 # >=1.11.0 SINCE 1.0.43: libreac's soname is libreac.so.7 (struct pcap_source grew), and the
 # master, hunt and rx bind to their peer (a second MAC's JOIN no longer re-courts an
-# established box); the tests assert that contract. The ceiling is the next minor.
+# established box); the tests assert that contract.
 # >=1.12.0 SINCE the hardware launch (reac-pw#98): the offload install and read, the pacer's
 # launch stamps, and the pacer socket's SO_PRIORITY that puts its frames on the launch queue.
+# THE CEILING IS THE NEXT MAJOR (< 2) SINCE 1.0.44 (ruling 2026-11-16, R-107): libreac keeps soname .7 across 1.x;
+# a minor ceiling made every libreac minor a same-pass release with reac-pw.
 BuildRequires:  pkgconfig(libreac) >= 1.12.0
-BuildRequires:  pkgconfig(libreac) < 1.13
+BuildRequires:  pkgconfig(libreac) < 2
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
-BuildRequires:  pkgconfig(libreac-transport) < 1.13
+BuildRequires:  pkgconfig(libreac-transport) < 2
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): first shipped in libreac-tests
 # 1.7.3; since 1.0.44 floored at the pass's own libreac like the libraries above, up to the same ceiling
 BuildRequires:  libreac-tests >= 1.12.0
-BuildRequires:  libreac-tests < 1.13
+BuildRequires:  libreac-tests < 2
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
@@ -51,9 +53,9 @@ Recommends:     linuxptp
 # at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
 # recounts, one soname later. The version floor has to be written down.
 Requires:       libreac >= 1.12.0
-Requires:       libreac < 1.13
+Requires:       libreac < 2
 Requires:       libreac-transport >= 1.12.0
-Requires:       libreac-transport < 1.13
+Requires:       libreac-transport < 2
 %{?systemd_requires}
 
 %description
@@ -247,7 +249,8 @@ fi
 %changelog
 * Mon Nov 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
 - Built against libreac 1.12: libreac, libreac-transport and libreac-tests are
-  declared >= 1.12.0 < 1.13 (libreac-tests too, which had kept a 1.7.3 floor).
+  declared >= 1.12.0 < 2 (libreac-tests too, which had kept a 1.7.3 floor): the
+  ceiling is the next major, since libreac keeps soname .7 across 1.x.
 - The hardware launch where the NIC can take it (#98): mqprio + etf offload,
   read back and held for the daemon's life (igc resets the adapter on every
   change), software ETF named when the NIC cannot; the health line names what
