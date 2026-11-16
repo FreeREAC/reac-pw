@@ -6,12 +6,15 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input. */
+/* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input
+ * (text after the sixth pair included). */
 int reac_cli_parse_mac(const char *s, uint8_t out[6])
 {
 	unsigned b[6];
-	if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x",
-	           &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6)
+	int used = 0;
+	/* %n counts the bytes consumed: anything left over is not a MAC. */
+	if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x%n",
+	           &b[0], &b[1], &b[2], &b[3], &b[4], &b[5], &used) != 6 || s[used])
 		return -1;
 	for (int i = 0; i < 6; i++)
 		out[i] = (uint8_t)b[i];
@@ -61,7 +64,8 @@ int reac_cli_parse_headamp(const char *s, struct reac_headamp_setting *out)
 {
 	unsigned ch, val;
 	char pstr[16];
-	if (sscanf(s, "%u:%15[^:]:%u", &ch, pstr, &val) != 3)
+	int used = 0;
+	if (sscanf(s, "%u:%15[^:]:%u%n", &ch, pstr, &val, &used) != 3 || s[used])
 		return -1;
 	uint8_t param;
 	if (!strcmp(pstr, "phantom"))
