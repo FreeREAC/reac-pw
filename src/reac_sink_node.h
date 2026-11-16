@@ -60,7 +60,7 @@ struct reac_sink_cfg {
 	int sample_rate;      /* fixed pps authority: 44100/48000/96000 */
 	const uint8_t *src_mac;   /* stable Roland-OUI src MAC for the virtual box */
 	const uint8_t *master_mac;/* unicast destination once linked */
-	uint8_t console_field;    /* the impersonated mixer profile's default pace
+	uint8_t pace_code;    /* the impersonated mixer profile's default pace
 	                           * code (0 = 48 kHz, 1 = 96 kHz); the pacer
 	                           * overwrites cfea[19] + ENROLL from --rate before
 	                           * either reaches the wire (see reac_pace_code,

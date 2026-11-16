@@ -74,7 +74,7 @@ int main(void)
 	for (size_t c = 0; c < sizeof CONF_CONSOLES / sizeof CONF_CONSOLES[0]; c++) {
 		const struct conf_console *cc = &CONF_CONSOLES[c];
 		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_OUT,
-		                                .console_field = cc->console_field };
+		                                .pace_code = cc->pace_code };
 		struct reac_master m;
 	reacpw_libreac_row first_scene_chunk;
 	int first_scene_chunk_set = 0;
@@ -84,7 +84,7 @@ int main(void)
 		build_and_stamp(&m, f, REAC_M_EMIT_ANNOUNCE, 0);
 		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF, cc->cfea_idle, REAC_TYPED_BLOCK_LEN) == 0);        /* full byte-equality incl cksum */
 		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_TOTAL_SLOTS_OFF] == REAC_MAX_CHANNELS);   /* the slot total */
-		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_PACE_OFF] == cc->console_field);               /* the pace-code discriminator */
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ANNOUNCE_PACE_OFF] == cc->pace_code);               /* the pace-code discriminator */
 		CHK(memcmp(f + REAC_TYPED_BLOCK_OFF + CONF_MAC_IDX, cc->mac, REAC_ETH_ADDR_BYTES) == 0); /* identity == the L2 source (never a cloned desk MAC) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
@@ -105,7 +105,7 @@ int main(void)
 		build_and_stamp(&m, f, REAC_M_EMIT_ENROLL, 0);
 		CHK(REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_PAGE_0103 &&
 		    REACPW_BE16(f + REAC_CTRL_BLOCK_OFF + REAC_HDR_LEN_OFF) == REAC_LEN_SUB_ENROLL_GROUP_MAP);
-		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ENROLL_PACE_OFF] == cc->console_field);                /* ENROLL_BLK[8] (reac_master.c's
+		CHK(f[REAC_CTRL_BLOCK_OFF + REAC_ENROLL_PACE_OFF] == cc->pace_code);                /* ENROLL_BLK[8] (reac_master.c's
 		                                                      * REAC_ENROLL_CONSOLE_IDX, private) */
 		CHK(reac_ctrl_checksum_verify(f) == 0);
 
@@ -138,7 +138,7 @@ int main(void)
 				if (got[i] == want[i])
 					continue;
 				/* Only a 96 kHz profile may differ, and only here. */
-				CHK(cc->console_field == 0x01);
+				CHK(cc->pace_code == 0x01);
 				int is_marker_family = 0;
 				for (int sl = 0; sl < REAC_CHANMAP_RECS_PER_FRAME; sl++)
 					if (i == 7 + sl * 3 + 1 && want[7 + sl * 3] == 0xfe)
@@ -153,7 +153,7 @@ int main(void)
 		}
 		/* The marker is REACHED — a generator that stopped emitting it would
 		 * otherwise satisfy every arm above vacuously. */
-		CHK(cc->console_field == 0x01 ? marker_slots > 0 : marker_slots == 0);
+		CHK(cc->pace_code == 0x01 ? marker_slots > 0 : marker_slots == 0);
 
 		/* ---- (b) console-INDEPENDENT scene push: the body is the DESK's, not the
 		 * console profile's, so every step is identical across all profiles. A
@@ -218,7 +218,7 @@ int main(void)
 	}
 
 	printf("OK: conformance -- m200/m300/m5000 cfea+ENROLL identity bytes byte-exact "
-	       "(console_field 0x00/0x00/0x01, MAC per profile), shared chanmap/probe/grant "
+	       "(pace_code 0x00/0x00/0x01, MAC per profile), shared chanmap/probe/grant "
 	       "templates byte-identical to the M-200/M-300 goldens across every profile\n");
 	return 0;
 }

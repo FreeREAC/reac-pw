@@ -29,8 +29,8 @@ m_dep        = cc.find_library('m', required : false)
 
 # --- libreac: RX/measure core, the installed package ----------------------
 # libreac-devel (RPM) / libreac-dev (deb) from the FreeMixer channel, found by pkg-config and
-# linked dynamically. The floor below is also written, with a ceiling, in packaging/reac-pw.spec
-# and debian/control (tests/libreac-is-a-bounded-package-dependency.sh keeps them so); nothing of
+# linked dynamically. The floor below is also written, with no ceiling, in packaging/reac-pw.spec
+# and debian/control (tests/libreac-is-a-floored-package-dependency.sh keeps them so); nothing of
 # libreac is fetched, cloned or bundled. The header is <reac/reac.h>.
 # >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
 # clean-len rule, the ENCODE side (since 0.4.0 — reac_braid_encode +
@@ -97,15 +97,18 @@ m_dep        = cc.find_library('m', required : false)
 # rename, the declared widths in discovery, the identity re-poll and the S-0808 name
 # reassembly. An older header does not compile.
 # >=1.9.0: enum reac_rate_refuse, enum reac_role_refuse, their REAC_*_REFUSE_CODES_INIT
-# tables, REAC_RATE_BIT_* / REAC_RATE_ALL_BITS and REAC_ROLE_STATE_APPLIED / _REESTABLISH_PENDING
+# tables, REAC_RATE_BIT_* / REAC_RATE_ALL_BITS and REAC_CFG_ROLE_STATE_APPLIED / _PENDING
 # are declared in <reac/reac_cfg.h> (FreeREAC/libreac#8); src/reac_rate_cfg.h and reac_role_cfg.h no
 # longer define them, so an older header does not compile.
 # >=1.10.0 SINCE 1.0.42: ONE HOME (libreac's 2026-09-29-shared-code-has-one-home). <reac/reac_code.h>
 # is the one code list (src/reac_code.h is gone; 1.10.0 is the first release declaring every token this
 # daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
 # copy is gone). An older header does not compile.
-# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the packages carry the ceiling.
-libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
+# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the soname of every libreac release is its own, so the packages need no ceiling.
+# >=1.12.0 SINCE 1.0.44: struct reac_console_cfg and struct reac_mixer_profile call the pace-code member
+# pace_code (it was console_field), reac_ctrl_build_config_announce is gone (every announce is built from
+# a catalogue row) and the REAC_ROLE_STATE_* aliases are gone. An older header does not compile.
+libreac_dep = dependency('libreac', version : '>=1.12.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
 # SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used to be
@@ -129,7 +132,7 @@ libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 # this build allocates one.
 # >=1.10.0 SINCE 1.0.42: reac_etf_qdisc_stats_read's dump walker stops at the bytes recv() returned
 # (an unpadded last message no longer walks the stale buffer); the health line reads through it.
-libreac_transport_dep = dependency('libreac-transport', version : '>=1.11.0', required : true)
+libreac_transport_dep = dependency('libreac-transport', version : '>=1.12.0', required : true)
 
 # A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
 # door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
@@ -276,10 +279,18 @@ test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
   args : rt_single_door_args)
 
+# --- no compatibility leftover is back: nothing is kept for an older install, config or unit
+# (tests/no-compat-leftovers.sh)
+test('no_compat_leftovers',
+  find_program('tests/no-compat-leftovers.sh'),
+  timeout : 30)
+
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
-# libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
-test('libreac_is_a_bounded_package_dependency',
-  find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
+# libreac is declared in the spec and debian/control as a floor, with no ceiling, and nowhere else
+# (a floored package dependency).
+
+test('libreac_is_a_floored_package_dependency',
+  find_program('tests/libreac-is-a-floored-package-dependency.sh'),
   args : [meson.current_source_dir()])
 
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
@@ -673,6 +684,14 @@ test('reac_hearing_finds_a_segment',
 # on the push alone and the daemon must NOT bounce it. fake_box lives in the other repo, so
 # the path is a knob; without it the test SKIPS rather than passing while proving nothing.
 fake_box_path = get_option('fake_box')
+# --- a slave declares a catalogue row: --box-channels must name a width a row has -----
+test('box_channels_names_a_row',
+  find_program('tests/box-channels-names-a-row.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 30)
+
 # --- whole-binary: the knock's answer is the master's cue, and is granted as handed over (#58)
 # libreac's fake_box is the far end: silent until a COMPLETE push, like the rig's boxes, and
 # started before the daemon. Three bars, each red on 1.0.39: the master takes the wire within

@@ -113,7 +113,7 @@ static int run_master(const char *iface, const uint8_t slave_mac[6], int fps, do
 	struct reac_console_cfg ann_cfg = { .out_channels = REAC_BOX_S1608_OUT,   /* the idle width in
 	                                                          * force: nothing is
 	                                                          * enrolled, ever    */
-	                                    .console_field = reac_pace_code(fps) };
+	                                    .pace_code = reac_pace_code(fps) };
 	reac_master_init(&ann, SRC, &ann_cfg, fps);
 
 	int ifindex = 0;
@@ -246,7 +246,7 @@ static int run_slave(const char *iface, const uint8_t mac[6], int rate, double s
 	struct reac_slave_cfg cfg;
 	memset(&cfg, 0, sizeof cfg);
 	cfg.ifname = iface;
-	cfg.box_channels = REAC_BOX_S1608_IN;     /* the S-1608 geometry of the capture */
+	cfg.model = reac_box_catalogue_by_width(REAC_BOX_S1608_IN);   /* the S-1608 row of the capture */
 	cfg.sample_rate = rate;
 	cfg.src_mac = mac;
 	cfg.tag = "[probe] ";

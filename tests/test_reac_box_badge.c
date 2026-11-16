@@ -160,7 +160,7 @@ int main(void)
 	 * PEER'S, and this is the assertion the defect would have failed: reading
 	 * p.src here gives our own NIC, which is what a consumer keying a Roland
 	 * registry matched against and missed. */
-	bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 3, REAC_BOX_S1608_IN);
+	bn = reac_ctrl_build_as(bf, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, OUR, BOX, 3, NULL, 0);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "00:40:ab:c4:80:3b") == 0);
@@ -200,7 +200,7 @@ int main(void)
 		while (p.master.state != REAC_M_GRANTING && guard++ < 4L * p.master.cycle_len)
 			(void)reac_master_next(&p.master, &c, &ix);
 	}
-	bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 6, REAC_BOX_S1608_IN);
+	bn = reac_ctrl_build_as(bf, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, OUR, BOX2, 6, NULL, 0);
 	reac_pacer_rx_ingest(&p, bf, bn);
 	publish(&p, &f);
 	CHK(strcmp(fake_get(&f, REAC_PROP_BOX_MAC), "00:40:ab:09:09:09") == 0);

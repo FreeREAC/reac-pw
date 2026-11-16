@@ -82,7 +82,6 @@ were weak before this review and are now fixed. None takes its expected value fr
 | `fuzz_segconf.c:467` | A model is a token of the box table, folded to lower case, and only on a box. | The same reading; tokens from libreac's table (fuzz/catalogue.c). | reac_segconf.c:308 on model-on-a-tap; reac_segconf.c:268 on model-in-capitals | OK |
 | `fuzz_segconf.c:482` | `ignore` is the last yes/true/1 or no/false/0. | The same reading. | reac_segconf.c:90 on ignore-words; reac_segconf.c:278 on ignore-words; reac_segconf.c:530 on ignore-words | OK |
 | `fuzz_segconf.c:499` | Each role and ignore answer names the file that gave it, or nothing. | The labels the harness handed to each parse. | reac_segconf.c:246 on dropin-overrides; reac_segconf.c:280 on dropin-overrides; reac_segconf.c:122 on dropin-overrides | OK |
-| `fuzz_segconf.c:515` | A `knock` line is refused by name, with the reason `knock takes no plan`. | The documented refusal (reac-pw#61), as a literal. | reac_segconf.c:286 on knock-plans; reac_segconf.c:286 on knock-long-value; reac_segconf.c:286 on knock-plans | OK (was WEAK: checked the reason only, not the key; see Findings) |
 | `fuzz_segconf.c:530` | Every unusable line is counted, and the first 8 kept. | The same reading, counting each refusal. | reac_segconf.c:32 on refusals-many; reac_segconf.c:207 on header-twice-in-one-file; reac_segconf.c:33 on refusals-many | OK |
 | `fuzz_segconf.c:543` | A kept refusal starts with `<file>:<line>: `, or `<file>: ` for a cross-key rule. | The labels and line numbers the harness counted. | reac_segconf.c:39 on refusals-many; reac_segconf.c:38 on dropin-refusal | OK |
 | `fuzz_segconf.c:561` | A name no section opened finds nothing: longer, shorter, in another case, or empty. | The harness's own list of opened names. | reac_segconf.c:522 on absent-probes; reac_segconf.c:522 on absent-probes; reac_segconf.c:522 on absent-probes | OK (was WEAK: probed only longer names; see Findings) |
@@ -116,9 +115,6 @@ the old check let through and the new one catches.
    `reac_headamp_prop_parse_result`. The first calls the second, so a bug in the shared code
    broke both sides alike. The plain parse is now compared with the harness's own expectation,
    and its cells are checked for range and overrun like the other parse's.
-3. `fuzz_segconf.c:515` looked for `takes no plan` anywhere in the refusal, while its comment
-   says the line is refused by name. It now looks for `knock takes no plan`; the mutant
-   `knock takes` -> `the key takes` (src/reac_segconf.c:286) is caught on `knock-plans`.
 4. `fuzz_segconf.c:561` probed only names one byte longer than a segment and one unknown name.
    `strcmp` -> `strncmp(..., strlen(name))` or `strcasecmp` in `reac_segconf_find`
    (src/reac_segconf.c:522) answered for a prefix or another case and stayed unseen. The probes

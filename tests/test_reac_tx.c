@@ -380,7 +380,7 @@ int main(void)
 	 * Because the trailer above is not a real field, the downstream frame stays
 	 * REAC_FRAME_BYTES for every mixer profile and every rate: only the pacer's
 	 * fps and the pace-code bytes (cfea[19]/ENROLL[8], already wired through
-	 * reac_master's console_field) change between a 48 kHz (M-200/M-300) and a
+	 * reac_master's pace_code) change between a 48 kHz (M-200/M-300) and a
 	 * 96 kHz (M-5000) emission. Pin that here so a future change cannot
 	 * silently reintroduce a fabricated 1494-byte emit. */
 	CHK(reac_downstream_build(frame, planar, REAC_MAX_CHANNELS, REAC_SAMPLES_PER_PKT,

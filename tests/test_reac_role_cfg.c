@@ -51,18 +51,18 @@ static int test_changes_and_apply_state(void)
 	CHK(reac_role_cfg_changes(REAC_ROLE_MASTER, REAC_ROLE_MASTER) == 0);
 	CHK(reac_role_cfg_changes(REAC_ROLE_SLAVE, REAC_ROLE_SLAVE) == 0);
 	CHK(strcmp(reac_role_cfg_apply_state(REAC_ROLE_MASTER, REAC_ROLE_MASTER),
-	          REAC_ROLE_STATE_APPLIED) == 0);
+	          REAC_CFG_ROLE_STATE_APPLIED) == 0);
 	CHK(strcmp(reac_role_cfg_apply_state(REAC_ROLE_SLAVE, REAC_ROLE_SLAVE),
-	          REAC_ROLE_STATE_APPLIED) == 0);
+	          REAC_CFG_ROLE_STATE_APPLIED) == 0);
 
 	/* A role CHANGE, either direction: accepted as well-formed, but the
 	 * cross-engine swap never runs — the honest answer, never "applied". */
 	CHK(reac_role_cfg_changes(REAC_ROLE_MASTER, REAC_ROLE_SLAVE) != 0);
 	CHK(reac_role_cfg_changes(REAC_ROLE_SLAVE, REAC_ROLE_MASTER) != 0);
 	CHK(strcmp(reac_role_cfg_apply_state(REAC_ROLE_MASTER, REAC_ROLE_SLAVE),
-	          REAC_ROLE_STATE_REESTABLISH_PENDING) == 0);
+	          REAC_CFG_ROLE_STATE_PENDING) == 0);
 	CHK(strcmp(reac_role_cfg_apply_state(REAC_ROLE_SLAVE, REAC_ROLE_MASTER),
-	          REAC_ROLE_STATE_REESTABLISH_PENDING) == 0);
+	          REAC_CFG_ROLE_STATE_PENDING) == 0);
 
 	/* Idempotent: asserting the SAME role twice in a row answers "applied"
 	 * both times, not "applied" then something else the second time. */

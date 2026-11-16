@@ -49,24 +49,24 @@ static int test_answer_table(void)
 	 * last asked for. */
 	reac_role_swap_init(&s, REAC_ROLE_MASTER);
 	CHK(s.engine_up == 0);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_REESTABLISH_PENDING);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_HUNTING, REAC_ROLE_STATE_REESTABLISH_PENDING);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_CFG_ROLE_STATE_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_HUNTING, REAC_CFG_ROLE_STATE_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
 
 	/* The asked-for engine is up and performing: applied, and only here. */
 	reac_role_swap_opened(&s, REAC_ROLE_MASTER);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_APPLIED);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_CFG_ROLE_STATE_APPLIED);
 	/* Up but not yet performing: hunting, never applied. */
 	CHK_STATE(&s, REAC_ROLE_ENGINE_HUNTING, REAC_ROLE_STATE_HUNTING);
 	/* An engine that reports itself down while the record says up is still a
 	 * segment carrying nothing — pending, not a stale applied. */
-	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
 
 	/* The WRONG engine is up: the swap is owed, so no reading of that engine
 	 * may answer applied — it is doing a job nobody asked for. */
 	CHK(reac_role_swap_request(&s, REAC_ROLE_SLAVE) != 0);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_REESTABLISH_PENDING);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_HUNTING, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_CFG_ROLE_STATE_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_HUNTING, REAC_CFG_ROLE_STATE_PENDING);
 	return 0;
 }
 
@@ -83,7 +83,7 @@ static int test_same_role_is_a_no_op(void)
 	CHK(reac_role_swap_request(&s, REAC_ROLE_MASTER) == 0);
 	CHK(s.running == REAC_ROLE_MASTER);
 	CHK(s.engine_up == 1);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_APPLIED);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_CFG_ROLE_STATE_APPLIED);
 
 	/* Same, from the slave side, and a slave's no-op does not promote it out of
 	 * the hunt: the assertion changed nothing, so neither does the answer. */
@@ -134,34 +134,34 @@ static int test_round_trip_master_slave_master(void)
 	reac_role_swap_init(&s, REAC_ROLE_MASTER);
 	reac_role_swap_opened(&s, REAC_ROLE_MASTER);
 	CHK_STATE(&s, reac_role_engine_of_master(s.engine_up, REAC_M_ESTABLISHED),
-	          REAC_ROLE_STATE_APPLIED);
+	          REAC_CFG_ROLE_STATE_APPLIED);
 
 	/* 1. The console asks for the recorder end. Accepted, swap owed. */
 	CHK(reac_role_swap_request(&s, REAC_ROLE_SLAVE) != 0);
 	CHK_STATE(&s, reac_role_engine_of_master(s.engine_up, REAC_M_ESTABLISHED),
-	          REAC_ROLE_STATE_REESTABLISH_PENDING);
+	          REAC_CFG_ROLE_STATE_PENDING);
 
 	/* 2. The master engine goes down — socket, pacer thread and segment lock
 	 *    with it. Nothing owns the segment. */
 	reac_role_swap_closed(&s);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
 
 	/* 3. The slave engine comes up on a quiet wire: hunting, and it says so. */
 	reac_role_swap_opened(&s, REAC_ROLE_SLAVE);
 	CHK_STATE(&s, reac_role_engine_of_slave(s.engine_up, 0), REAC_ROLE_STATE_HUNTING);
 
 	/* 4. A desk enrols it: NOW the role is performed. */
-	CHK_STATE(&s, reac_role_engine_of_slave(s.engine_up, 1), REAC_ROLE_STATE_APPLIED);
+	CHK_STATE(&s, reac_role_engine_of_slave(s.engine_up, 1), REAC_CFG_ROLE_STATE_APPLIED);
 
 	/* 5. And back again — the operator takes the wire back. */
 	CHK(reac_role_swap_request(&s, REAC_ROLE_MASTER) != 0);
 	CHK_STATE(&s, reac_role_engine_of_slave(s.engine_up, 1),
-	          REAC_ROLE_STATE_REESTABLISH_PENDING);
+	          REAC_CFG_ROLE_STATE_PENDING);
 	reac_role_swap_closed(&s);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
 	reac_role_swap_opened(&s, REAC_ROLE_MASTER);
 	CHK_STATE(&s, reac_role_engine_of_master(s.engine_up, REAC_M_PROBING),
-	          REAC_ROLE_STATE_APPLIED);
+	          REAC_CFG_ROLE_STATE_APPLIED);
 	return 0;
 }
 
@@ -177,8 +177,8 @@ static int test_failed_reopen_never_settles(void)
 	/* listener_open refused (no CAP_NET_RAW for the slave socket, say): nothing
 	 * is opened, so nothing calls _opened, and the answer stays pending for as
 	 * long as that is the truth. */
-	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
-	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
+	CHK_STATE(&s, REAC_ROLE_ENGINE_PERFORMING, REAC_CFG_ROLE_STATE_PENDING);
 	return 0;
 }
 
@@ -194,7 +194,7 @@ static int test_two_assertions_settle_against_the_live_engine(void)
 	 * so nothing is owed and the answer is the fact again. */
 	CHK(reac_role_swap_request(&s, REAC_ROLE_MASTER) == 0);
 	CHK_STATE(&s, reac_role_engine_of_master(s.engine_up, REAC_M_PROBING),
-	          REAC_ROLE_STATE_APPLIED);
+	          REAC_CFG_ROLE_STATE_APPLIED);
 	return 0;
 }
 
@@ -476,7 +476,7 @@ static int test_the_segment_answers_in_both_roles(void)
 	 * here is that the segment is NAMED, by the same function both nodes call. */
 	reac_role_swap_init(&sw, REAC_ROLE_MASTER);
 	reac_role_swap_opened(&sw, REAC_ROLE_MASTER);
-	CHK_STATE(&sw, REAC_ROLE_ENGINE_PERFORMING, REAC_ROLE_STATE_APPLIED);
+	CHK_STATE(&sw, REAC_ROLE_ENGINE_PERFORMING, REAC_CFG_ROLE_STATE_APPLIED);
 	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
 
 	/* -> RECORDER. The sink is destroyed, so the identity and the answer move to
@@ -484,7 +484,7 @@ static int test_the_segment_answers_in_both_roles(void)
 	 * keyed on it addresses the same segment across the swap. */
 	CHK(reac_role_swap_request(&sw, REAC_ROLE_SLAVE) != 0);
 	reac_role_swap_closed(&sw);
-	CHK_STATE(&sw, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&sw, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
 	reac_role_swap_opened(&sw, REAC_ROLE_SLAVE);
 	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
 
@@ -496,7 +496,7 @@ static int test_the_segment_answers_in_both_roles(void)
 	/* A desk arrives and enrols us: applied, and the aggregate names the desk. */
 	reac_segment_answer_slave(&a, 1, reac_mac48_pack((const uint8_t[]){
 		0x00, 0x40, 0xab, 0x11, 0x22, 0x33 }), REAC_SAMPLE_RATE_96K, REAC_MAX_CHANNELS);
-	CHK_STATE(&sw, reac_role_engine_of_slave(1, 1), REAC_ROLE_STATE_APPLIED);
+	CHK_STATE(&sw, reac_role_engine_of_slave(1, 1), REAC_CFG_ROLE_STATE_APPLIED);
 	CHK(strcmp(a.master_state, "foreign") == 0);
 	CHK(strcmp(a.rival_kind, "desk") == 0);
 
@@ -505,9 +505,9 @@ static int test_the_segment_answers_in_both_roles(void)
 	 * as a master under the same name. */
 	CHK(reac_role_swap_request(&sw, REAC_ROLE_MASTER) != 0);
 	reac_role_swap_closed(&sw);
-	CHK_STATE(&sw, REAC_ROLE_ENGINE_DOWN, REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK_STATE(&sw, REAC_ROLE_ENGINE_DOWN, REAC_CFG_ROLE_STATE_PENDING);
 	reac_role_swap_opened(&sw, REAC_ROLE_MASTER);
-	CHK_STATE(&sw, reac_role_engine_of_master(1, REAC_M_PROBING), REAC_ROLE_STATE_APPLIED);
+	CHK_STATE(&sw, reac_role_engine_of_master(1, REAC_M_PROBING), REAC_CFG_ROLE_STATE_APPLIED);
 	CHK(strcmp(reac_segment_name(inst), "enp131s0") == 0);
 
 	/* Head-amp went with the role, not with the node it used to hang off. */

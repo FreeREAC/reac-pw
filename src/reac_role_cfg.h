@@ -30,7 +30,7 @@
  * reac_role_cfg_apply_state below is therefore the answer for a caller with NO
  * segment record behind it (a unit harness): a same-role assertion is already
  * the fact and reads `applied`, a role-CHANGING one reads
- * REAC_ROLE_STATE_REESTABLISH_PENDING and stays there, because nothing in this
+ * REAC_CFG_ROLE_STATE_PENDING and stays there, because nothing in this
  * module moves it further. Never a silent no-op, never a fake success.
  *
  * WHAT REMAINS UNPROVEN, on either side of that split: that a real Roland box
@@ -65,8 +65,8 @@ struct spa_pod;
 #define REAC_PROP_ROLE                      REAC_ROLE_PROP             /* the RUNNING role */
 #define REAC_PROP_ROLE_STATE                REAC_CFG_ROLE_STATE_PROP
 #define REAC_PROP_ROLE_REFUSED              REAC_CFG_ROLE_REFUSED_PROP
-/* REAC_ROLE_STATE_APPLIED (a same-role assertion is genuinely, immediately true) and
- * REAC_ROLE_STATE_REESTABLISH_PENDING (the answer while the cross-engine swap is owed or in
+/* REAC_CFG_ROLE_STATE_APPLIED (a same-role assertion is genuinely, immediately true) and
+ * REAC_CFG_ROLE_STATE_PENDING (the answer while the cross-engine swap is owed or in
  * flight, moved on by reac_role_swap_state only when the NEW engine is performing its role)
  * are libreac's, declared in <reac/reac_cfg.h> (libreac 1.9.0). */
 #define REAC_ROLE_STATE_TAP                 REAC_CFG_ROLE_STATE_TAP

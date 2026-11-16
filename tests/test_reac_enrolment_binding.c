@@ -31,7 +31,7 @@
 #include <reac/reac_knock.h>
 #include <reac/reac_tapwait.h>
 #include <reac/reac_hunt.h>   /* REAC_HUNT_WINDOW_NS — the bar the tap-wait must still use */
-#include <reac/reac.h>        /* LIBREAC_VERSION_AT_LEAST — the floor, stated in code */
+#include <reac/reac.h>        /* the library header */
 
 #include <stdio.h>
 
@@ -39,10 +39,6 @@
 
 #define MS  1000000ULL
 #define SEC 1000000000ULL
-
-#if !LIBREAC_VERSION_AT_LEAST(1, 4, 0)
-#error "reac-pw 1.0.23 needs libreac >= 1.4.0: reac_knock.h and reac_tapwait.h live there now"
-#endif
 
 int main(void)
 {

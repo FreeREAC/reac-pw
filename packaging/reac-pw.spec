@@ -24,32 +24,30 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # reac_etf_qdisc_stats_read the one counter read; the daemon's copies are gone.
 # >=1.11.0 SINCE 1.0.43: libreac's soname is libreac.so.7 (struct pcap_source grew), and the
 # master, hunt and rx bind to their peer (a second MAC's JOIN no longer re-courts an
-# established box); the tests assert that contract. The ceiling is the next minor.
-BuildRequires:  pkgconfig(libreac) >= 1.11.0
-BuildRequires:  pkgconfig(libreac) < 1.12
+# established box); the tests assert that contract. There is no ceiling: libreac's soname moves with every release, so the soname dependency
+# rpm generates from the link ties this build to the libreac it was built against.
+# >=1.12.0 SINCE 1.0.44: the pace-code member is pace_code (it was console_field), the width-keyed
+# reac_ctrl_build_config_announce is gone, and so are the REAC_ROLE_STATE_* aliases.
+BuildRequires:  pkgconfig(libreac) >= 1.12.0
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.11.0
-BuildRequires:  pkgconfig(libreac-transport) < 1.12
+BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
 # fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
+# ships fake_box (libreac-tests 1.7.3)
 BuildRequires:  libreac-tests >= 1.7.3
-BuildRequires:  libreac-tests < 1.12
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 # `ip` for reac-pw-nm-unmanaged (link up, link monitor).
 Requires:       iproute
-# THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
-# is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
-# at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
-# recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.11.0
-Requires:       libreac < 1.12
-Requires:       libreac-transport >= 1.11.0
-Requires:       libreac-transport < 1.12
+# THE SONAME TIES THE INSTALL TO ITS LIBRARY, and the floor says which behaviour is needed.
+# rpm generates libreac.so.<N>()(64bit) from the link, and libreac's soname moves with every
+# release, so this build runs against the libreac it was built against and no other: there is
+# no upper range to write down. The version floor is the first release whose behaviour is needed.
+Requires:       libreac >= 1.12.0
+Requires:       libreac-transport >= 1.12.0
 %{?systemd_requires}
 
 %description
@@ -199,9 +197,6 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 # This package enables the unit for NOBODY, ever, from a scriptlet. The operator runs,
 # once, as the console user (README.md, docs/install/services.md):
 #   systemctl --user enable --now reac-pw
-# Clean up any global enablement a <=1.0.18 reac-pw left behind on THIS host already --
-# harmless (a no-op, exit suppressed) if none exists.
-systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 
 %posttrans
 # THE SAFE AUTO-ENABLE (#104). %%post above enables the unit for nobody, because a

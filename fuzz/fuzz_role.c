@@ -112,7 +112,7 @@ static FUZZ_NOINLINE void check_answer(int changes, const char *state, enum reac
 	 * contract: src/reac_role_cfg.h:80-90
 	 * mutant: src/reac_role_cfg.c:24 `current_role != requested_role` -> `1`
 	 * input: role-master
-	 * mutant: src/reac_role_cfg.c:36 `REAC_ROLE_STATE_APPLIED` -> `REAC_ROLE_STATE_REESTABLISH_PENDING`
+	 * mutant: src/reac_role_cfg.c:36 `REAC_CFG_ROLE_STATE_APPLIED` -> `REAC_CFG_ROLE_STATE_PENDING`
 	 * input: role-master */
 	if (changes != (cur != req) || strcmp(state, cur != req ? REAC_CFG_ROLE_STATE_PENDING : REAC_CFG_ROLE_STATE_APPLIED) != 0)
 		abort();

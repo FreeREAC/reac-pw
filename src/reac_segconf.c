@@ -405,15 +405,6 @@ int reac_segconf_parse_file(struct reac_segconf *c, const char *text, const char
 			cur->ignore = b;
 			cur->ignore_set = 1;
 			snprintf(cur->ignore_file, sizeof cur->ignore_file, "%s", c->reading);
-		} else if (!strcasecmp(key, "knock")) {
-			/* THE KNOCK HAS ONE CONTENT (#61, 2026-10-27): the control frames of one
-			 * hunting cycle, never the stream. The plans this key once chose between
-			 * (`escalate`, `stream`) were a flood by configuration, and a word in a file
-			 * must not be able to select one; `control` is what every wire gets. */
-			refuse(c, lineno, "[segment %s] knock takes no plan since 1.0.41: the knock "
-			       "has one content, the control frames, never the stream; remove the "
-			       "line (it says '%.24s')", cur_name, val);
-			continue;
 		} else if (!strcasecmp(key, "vlans")) {
 			refuse(c, lineno, "[segment %s] takes no 'vlans' — a trunk's VLANs are "
 			       "declared under [trunk <parent>]", cur_name);

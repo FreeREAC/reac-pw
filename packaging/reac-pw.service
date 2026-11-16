@@ -4,17 +4,12 @@ Documentation=https://github.com/FreeREAC/reac-aes67
 After=pipewire.service
 Wants=pipewire.service
 
-# ONE MASTER PER SEGMENT IS REAC LAW, and two masters on one wire go mute. Any
-# hand-run or per-NIC unit must be stopped and DISABLED before this one starts;
-# an enabled leftover is a second master waiting for the next login.
-Conflicts=reac-pw-master.service
-
 [Service]
 Type=simple
 # ONE daemon, N listeners and nothing names an interface: this unit passes NO interface, NO --rate and
 # NO --headamp — the daemon hears its segments on every linked Ethernet
 # interface, and every setting comes from the one conf reac_conf.h reads,
-# %h/.config/reac-pw/reac-pw.env (host-wide REAC_MIXER/REAC_RATE/REAC_ROLE,
+# %h/.config/reac-pw/reac-pw.env (host-wide REAC_MIXER/REAC_RATE,
 # and per-segment REAC_<KEY>_<segment> above them); packaging/reac-pw.env.example is
 # the commented worked example for this rig's own two segments. This unit needs
 # HOME, so it is a USER unit — a bare system unit with no HOME cannot find either
