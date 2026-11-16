@@ -2003,6 +2003,11 @@ test('reac_rx_bind_is_wired', python3,
   args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
           meson.current_source_dir()])
 
+# --- text: main.c screens the host's own addresses before the hunt (src/reac_own_macs.c) -----
+test('reac_own_macs_is_wired', python3,
+  args : [meson.current_source_dir() / 'tests' / 'own-macs-are-wired.py',
+          meson.current_source_dir()])
+
 # --- text: the public tree carries no compiled Python and every source has its header -----
 # A tracked __pycache__/*.pyc embeds the build machine's paths, and a *.c *.h *.py *.sh with no
 # SPDX-License-Identifier + Copyright pair states no licence. tools/check-public-hygiene.sh
