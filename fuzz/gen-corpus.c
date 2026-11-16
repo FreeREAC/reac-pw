@@ -989,6 +989,10 @@ static void gen_segconf(void)
 		const char *const t[] = { "[trunk eth0]\nvlans = 1 2 3\n[segment eth0.2]\n" };
 		segc("trunk-full", 2, 1, 1, l, t);
 	}
+	/* the CI crash of 2026-11-16 (fuzz-findings segconf-crash-e7e15674cd7b): a trunk named after the harness's own
+	 * absent-name probe, which read a trunk the file had declared; kept as the fuzzer wrote it, the bytes outside
+	 * ASCII included */
+	seg1("trunk-nosuch0", 8, " = 'slb]an= 4\n[trunk nosuch0]\nvl\x9fns =?ve'\r\np31s0= '\x8dl\xa0ve' \r\n");
 	seg1("empty", 0, "");
 	seg1("comments-only", 3, "# nothing\n; nothing\n   \n\t# indented\nx#y = 1\n");
 }

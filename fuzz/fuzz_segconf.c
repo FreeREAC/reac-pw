@@ -899,8 +899,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		if (!m_find_trunk(m, probe, strlen(probe)))
 			check_trunk_absent(c, probe);
 	}
-	check_trunk_absent(c, "");
-	check_trunk_absent(c, "nosuch0");
+	/* THE PROBE ASKS THE MODEL FIRST, as probe_absent does for a segment: the fuzzer wrote `[trunk nosuch0]`
+	 * (fuzz/corpus/segconf/trunk-nosuch0, the CI crash of 2026-11-16) and the probe read a trunk it had declared */
+	for (const char *nm = ""; nm; nm = nm[0] ? NULL : "nosuch0")
+		if (!m_find_trunk(m, nm, strlen(nm)))
+			check_trunk_absent(c, nm);
 	check_refusals(c, m);
 	for (int i = 0; i < m->n_kept && i < c->n_refusals; i++) {
 		check_address(c->refusal[i], m->kept[i]);
