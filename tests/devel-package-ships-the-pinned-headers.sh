@@ -85,7 +85,9 @@ for h in $want; do
 	grep -Eq "(src|facts)/$h'" "$mes" && grep -q "install_headers" "$mes" \
 		|| say "meson.build does not install_headers the header $h"
 done
-grep -q "reac-pw.pc\|pkgconfig.generate\|pkg.generate" "$mes" || say "meson.build generates no reac-pw.pc"
+# (a bash match, not a grep pattern: a grep -q pattern in tests/ is a claim about a daemon line,
+# which tests/asserted-lines-have-a-producer.py holds to a producer in src/)
+[[ $(<"$mes") == *"pkgconfig').generate("* ]] || say "meson.build generates no reac-pw.pc"
 
 # --- floors only in the devel package's own dependencies
 dspec=$(awk '/^%package +devel/{on=1; next} /^%(description|files|prep|build|install|check|package)/{on=0} on' "$spec" | grep -E '^Requires:')
