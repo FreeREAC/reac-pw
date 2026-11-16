@@ -1,7 +1,8 @@
 reac-pw (1.0.44) unstable; urgency=medium
 
   * Built against libreac 1.12: libreac, libreac-transport and libreac-tests
-    are declared >= 1.12.0 << 1.13 (libreac-tests keeps its 1.7.3 floor).
+    are declared >= 1.12.0 << 1.13 (libreac-tests too, which had kept a
+    1.7.3 floor).
   * The hardware launch where the NIC can take it (#98): mqprio + etf
     offload, read back and held for the daemon's life (igc resets the
     adapter on every change), software ETF named when the NIC cannot; the

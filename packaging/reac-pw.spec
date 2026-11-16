@@ -34,9 +34,9 @@ BuildRequires:  pkgconfig(libreac) < 1.13
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
 BuildRequires:  pkgconfig(libreac-transport) < 1.13
-# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
-BuildRequires:  libreac-tests >= 1.7.3
+# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): first shipped in libreac-tests
+# 1.7.3; since 1.0.44 floored at the pass's own libreac like the libraries above, up to the same ceiling
+BuildRequires:  libreac-tests >= 1.12.0
 BuildRequires:  libreac-tests < 1.13
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
@@ -247,7 +247,7 @@ fi
 %changelog
 * Mon Nov 16 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
 - Built against libreac 1.12: libreac, libreac-transport and libreac-tests are
-  declared >= 1.12.0 < 1.13 (libreac-tests keeps its 1.7.3 floor).
+  declared >= 1.12.0 < 1.13 (libreac-tests too, which had kept a 1.7.3 floor).
 - The hardware launch where the NIC can take it (#98): mqprio + etf offload,
   read back and held for the daemon's life (igc resets the adapter on every
   change), software ETF named when the NIC cannot; the health line names what
