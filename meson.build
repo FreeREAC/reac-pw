@@ -97,7 +97,7 @@ m_dep        = cc.find_library('m', required : false)
 # rename, the declared widths in discovery, the identity re-poll and the S-0808 name
 # reassembly. An older header does not compile.
 # >=1.9.0: enum reac_rate_refuse, enum reac_role_refuse, their REAC_*_REFUSE_CODES_INIT
-# tables, REAC_RATE_BIT_* / REAC_RATE_ALL_BITS and REAC_ROLE_STATE_APPLIED / _REESTABLISH_PENDING
+# tables, REAC_RATE_BIT_* / REAC_RATE_ALL_BITS and REAC_CFG_ROLE_STATE_APPLIED / _PENDING
 # are declared in <reac/reac_cfg.h> (FreeREAC/libreac#8); src/reac_rate_cfg.h and reac_role_cfg.h no
 # longer define them, so an older header does not compile.
 # >=1.10.0 SINCE 1.0.42: ONE HOME (libreac's 2026-09-29-shared-code-has-one-home). <reac/reac_code.h>

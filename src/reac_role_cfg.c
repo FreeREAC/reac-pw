@@ -32,8 +32,8 @@ const char *reac_role_cfg_apply_state(enum reac_role current_role,
 	 * (this header's HONESTY note) never runs here, so the answer says so
 	 * instead of claiming a swap that never happened. */
 	return reac_role_cfg_changes(current_role, requested_role)
-		? REAC_ROLE_STATE_REESTABLISH_PENDING
-		: REAC_ROLE_STATE_APPLIED;
+		? REAC_CFG_ROLE_STATE_PENDING
+		: REAC_CFG_ROLE_STATE_APPLIED;
 }
 
 /* Coerce a scalar value pod to a plain int, accepting the two encodings a

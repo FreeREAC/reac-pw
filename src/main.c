@@ -152,6 +152,20 @@ static int box_master_outputs(int width, const char *tag)
 	return width;
 }
 
+/* The captured catalogue row whose input width is `width`, or NULL when no captured row has
+ * it. Unlike reac_box_catalogue_by_width it never answers with the S-1608 for a width it
+ * does not know: a width nothing declares is refused where it is read, not given another
+ * box's declaration. */
+static const struct reac_box_model *box_row_for_width(int width)
+{
+	size_t n = 0;
+	const struct reac_box_model *t = reac_box_catalogue(&n);
+	for (size_t i = 0; t && i < n; i++)
+		if (t[i].origin == REAC_BOX_CAPTURED && t[i].in_ch == width)
+			return &t[i];
+	return NULL;
+}
+
 static struct reac_segconf g_segconf;
 
 /* THE DAEMON'S OWN ROW ON THE GRAPH (spec amendment 2026-09-16 third, §B). One node, no
@@ -1210,6 +1224,11 @@ struct listener_cfg {
 	uint8_t src_mac[6];
 	int src_mac_set;
 	int box_channels;                   /* SLAVE role: our own input width */
+	/* THE CATALOGUE ROW A SLAVE DECLARES, resolved from the width (or the model) the
+	 * operator named, once, where it is read: --box-channels and REAC_BOX_CHANNELS name a
+	 * width a captured row has or are refused, --box-model is the row itself. The pacer's
+	 * slave is handed this row and never a bare channel count. */
+	const struct reac_box_model *slave_row;
 	/* THE ROW WE PRESENT AS, when this segment is pinned `role = box`
 	 * (2026-09-17-the-daemon-can-be-a-box). NULL on every other
 	 * role. It is the ONE source for what we declare: the enrolment frames, the
@@ -1355,6 +1374,7 @@ static void listener_cfg_defaults(struct listener_cfg *c)
 	c->role = REAC_ROLE_MASTER;
 	c->mixer = reac_mixer_profile_by_name("m200");
 	c->box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;
+	c->slave_row = box_row_for_width(REAC_SLAVE_BOX_CHANNELS_DEFAULT);
 	/* A desk's downstream until the wire says otherwise: it is what every slave segment
 	 * received before a box could master one, and it is what the RX gate accepts. */
 	c->wire_channels = REAC_MAX_CHANNELS;
@@ -1508,9 +1528,10 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 		} else if (bcl != REAC_CONF_NONE) {
 			int n = atoi(v);
 			if (n >= REAC_BOX_MIN_CHANNELS && n <= REAC_BOX_MAX_CHANNELS &&
-			    n % REAC_BRAID_PAIR_CHANNELS == 0)
+			    n % REAC_BRAID_PAIR_CHANNELS == 0 && box_row_for_width(n)) {
 				c->box_channels = n;
-			else
+				c->slave_row = box_row_for_width(n);
+			} else
 				fprintf(stderr, "reac-pw: [%s] ignoring invalid "
 				        "REAC_BOX_CHANNELS='%s'\n", iface, v);
 		}
@@ -2409,10 +2430,11 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		    reac_conf_lookup("REACPW_BOX_MASTER_PRESILENCE_MS", NULL, NULL, v_presil,
 		                     sizeof v_presil) != REAC_CONF_NONE ? atoi(v_presil) : 0;
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
-		                                /* THE ROW WE DECLARE (box role); NULL on every
-		                                 * other slave, where the width keys the
-		                                 * captured matrix as it always has. */
-		                                .model = c->box_model,
+		                                /* THE ROW WE DECLARE: the box role's, else the
+		                                 * one the operator's width or model named. A box
+		                                 * on M sends its own widths and no row. */
+		                                .model = c->join_box_master ? c->box_model
+		                                         : c->box_model ? c->box_model : c->slave_row,
 		                                .box_channels = up_ch,
 		                                .sample_rate = L->rx.sample_rate,
 		                                .src_mac = box_mac,
@@ -6296,6 +6318,7 @@ int main(int argc, char **argv)
 	uint8_t src_mac[6];
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
+	const struct reac_box_model *box_row = box_row_for_width(REAC_SLAVE_BOX_CHANNELS_DEFAULT);  /* its row */
 	const struct reac_box_model *pin_model = NULL;  /* --box: pinned NODE geometry     */
 	const char *pin_label = NULL;                   /* --box: pinned node label        */
 	const char *box_pin_spec = NULL;      /* --box verbatim, for the wire-wins notice
@@ -6421,15 +6444,18 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			box_channels = m->in_ch;
+			box_row = m;
 		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
 			box_channels = atoi(argv[++i]);
+			box_row = box_row_for_width(box_channels);
 			if (box_channels < REAC_BRAID_PAIR_CHANNELS || box_channels > REAC_MAX_CHANNELS ||
-			    box_channels % REAC_BRAID_PAIR_CHANNELS) {
+			    box_channels % REAC_BRAID_PAIR_CHANNELS || !box_row) {
 				fprintf(stderr, "reac-pw: --box-channels must be even, "
 				        REACPW_STR(REAC_BRAID_PAIR_CHANNELS) "..%d "
 				        "(e.g. " REACPW_STR(REAC_BOX_S0808_IN) " = S-0808, "
 				        REACPW_STR(REAC_BOX_S1608_IN) " = S-1608, "
-				        REACPW_STR(REAC_BOX_S4000S_3208_IN) " = S-4000S)\n", REAC_MAX_CHANNELS);
+				        REACPW_STR(REAC_BOX_S4000S_3208_IN) " = S-4000S; the width must be one a "
+				        "catalogue row has)\n", REAC_MAX_CHANNELS);
 				return 2;
 			}
 		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {
@@ -6537,6 +6563,7 @@ int main(int argc, char **argv)
 		memcpy(c->src_mac, src_mac, 6);
 		c->src_mac_set = src_mac_set;
 		c->box_channels = box_channels;
+		c->slave_row = box_row;
 		c->pin_model = pin_model;
 		c->pin_label = pin_label;
 		c->box_pin_spec = box_pin_spec;
@@ -6566,6 +6593,7 @@ int main(int argc, char **argv)
 				memcpy(c->src_mac, src_mac, 6);
 				c->src_mac_set = src_mac_set;
 				c->box_channels = box_channels;
+				c->slave_row = box_row;
 				c->pin_model = pin_model;
 				c->pin_label = pin_label;
 				c->box_pin_spec = box_pin_spec;

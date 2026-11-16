@@ -856,7 +856,7 @@ static void sink_door_assert(struct reac_sink_node *n, const struct spa_pod *par
 	 * "applied"; asserting the other role is accepted as well-formed but the
 	 * cross-engine swap it would take (tear down this master engine, bring
 	 * up a slave one) is not performed here — see reac_role_cfg.h's HONESTY
-	 * note for why, and REAC_ROLE_STATE_REESTABLISH_PENDING for the answer
+	 * note for why, and REAC_CFG_ROLE_STATE_PENDING for the answer
 	 * that says so instead of a fake "applied". */
 	enum reac_role req_role;
 	int role_parsed = reac_role_prop_parse(param, &req_role);
@@ -2125,7 +2125,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * role_state_last NULL, which no REAC_ROLE_STATE_* string pointer is, and
 	 * -1 is not a valid enum reac_role_refuse) so sink_publish_role_props's
 	 * first call always publishes rather than reading a coincidental match. */
-	n->role_state = REAC_ROLE_STATE_APPLIED;
+	n->role_state = REAC_CFG_ROLE_STATE_APPLIED;
 	n->role_refused = REAC_ROLE_REFUSE_NONE;
 	n->role_refused_last = (enum reac_role_refuse)-1;
 

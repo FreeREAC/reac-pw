@@ -192,8 +192,7 @@ static void box_tick(struct wire *w)
 	if (!w->box)
 		return;
 	if (w->commit_at && w->now >= w->commit_at && w->n_rx < 4) {
-		w->rx_len[w->n_rx] = reac_ctrl_build_config_announce(w->rx[w->n_rx], OUR_MAC, BOX_MAC,
-		                                                     w->box_counter++, 32);
+		w->rx_len[w->n_rx] = reac_ctrl_build_as(w->rx[w->n_rx], reac_box_catalogue_by_width(32), REAC_BOX_BLOCK_CONFIG, OUR_MAC, BOX_MAC, w->box_counter++, NULL, 0);
 		w->n_rx++;
 		w->committed = 1;
 		w->commit_at = 0;

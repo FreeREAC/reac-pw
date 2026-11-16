@@ -148,7 +148,7 @@ int main(void)
 	 * dug back out of the length by hand — or every box that declares itself filed as
 	 * a rival master. */
 	struct reac_ctrl_parsed p;
-	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, REAC_BOX_S0808_IN);   /* 8 in_ch = the S-0808 row */
+	n = reac_ctrl_build_as(f, reac_box_catalogue_by_width(REAC_BOX_S0808_IN), REAC_BOX_BLOCK_CONFIG, MASTER, BOX, 0x12, NULL, 0);   /* 8 in_ch = the S-0808 row */
 	CHK(n > 0);
 	CHK(reac_ctrl_parse(f, n, &p) == REAC_CTRL_CONFIG_ANNOUNCE);
 	CHK(p.link == REAC_LINK_CTRL && p.opcode == REAC_SUB_0103_COMMIT_REPORT_84);   /* the 0x84 family */
@@ -160,7 +160,7 @@ int main(void)
 
 	/* A config-announce no catalogue entry matches is still read as declared: a cell
 	 * code nobody captured is not placed, and the box is not defaulted to S-1608. */
-	n = reac_ctrl_build_config_announce(f, MASTER, BOX, 0x12, REAC_BOX_S0808_IN);
+	n = reac_ctrl_build_as(f, reac_box_catalogue_by_width(REAC_BOX_S0808_IN), REAC_BOX_BLOCK_CONFIG, MASTER, BOX, 0x12, NULL, 0);
 	f[30] ^= 0xff;                                       /* perturb inside the block */
 	reac_ctrl_checksum_apply(f);                         /* keep it a VALID frame */
 	CHK(reac_disco_classify(f, n, OURS, &s) == 0);
