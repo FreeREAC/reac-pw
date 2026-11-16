@@ -59,9 +59,11 @@ static void fx_build(uint32_t n_datas, const struct plane_spec *ps, uint64_t req
 
 /* The named cases. Each is one process() cycle on one defective (or good) buffer. */
 enum fx_case { FX_GOOD_BUF, FX_NO_PLANES, FX_FEW_PLANES, FX_NULL_DATA0, FX_NULL_DATA1,
-               FX_SHORT_PLANE, FX_NO_CHUNK0, FX_NO_CHUNK1, FX_N_CASES };
+               FX_SHORT_PLANE, FX_NO_CHUNK0, FX_NO_CHUNK1, FX_NULL_BUFFER, FX_NULL_DATAS,
+               FX_SHORT_CHUNK, FX_EXTRA_NO_CHUNK, FX_N_CASES };
 static const char *const fx_names[FX_N_CASES] = {
-	"good", "no-planes", "few-planes", "null-data0", "null-data1", "short-plane", "no-chunk0", "no-chunk1"
+	"good", "no-planes", "few-planes", "null-data0", "null-data1", "short-plane", "no-chunk0", "no-chunk1",
+	"null-buffer", "null-datas", "short-chunk", "extra-no-chunk"
 };
 
 /* The short plane's real allocation. The sink test leaves it EXACT, so a read past
@@ -76,7 +78,7 @@ static int fx_short_slack;
 
 static int fx_short_plane_clean(void)
 {
-	if (!fx_short_slack || fx_sbuf.n_datas < 2)
+	if (!fx_short_slack || fx_sbuf.n_datas < 2 || !fx_sbuf.datas)
 		return 1;
 	const uint32_t *p = (const uint32_t *)fx_sbuf.datas[1].data;
 	for (uint32_t i = FX_SHORT_FLOATS; i < FX_SHORT_FLOATS + FX_SLACK_FLOATS; i++)
@@ -88,7 +90,7 @@ static int fx_short_plane_clean(void)
 /* Builds the case's buffer for a node of four channels. */
 static void fx_build_case(enum fx_case c, uint64_t requested)
 {
-	struct plane_spec g[4] = { FX_GOOD, FX_GOOD, FX_GOOD, FX_GOOD };
+	struct plane_spec g[5] = { FX_GOOD, FX_GOOD, FX_GOOD, FX_GOOD, FX_GOOD };
 	switch (c) {
 	case FX_GOOD_BUF:   fx_build(4, g, requested); break;
 	case FX_NO_PLANES:  fx_build(0, g, requested); break;
@@ -107,7 +109,26 @@ static void fx_build_case(enum fx_case c, uint64_t requested)
 		break;
 	case FX_NO_CHUNK0:  g[0].chunk_null = 1; fx_build(4, g, requested); break;
 	case FX_NO_CHUNK1:  g[1].chunk_null = 1; fx_build(4, g, requested); break;
+	case FX_NULL_BUFFER: fx_build(4, g, requested); fx_pwb.buffer = NULL; break;
+	case FX_NULL_DATAS:  fx_build(4, g, requested); fx_sbuf.datas = NULL; break;
+	/* plane 1 holds everything but its chunk says only 64 samples are valid: a
+	 * bad INPUT plane (sink), a perfectly good OUTPUT plane (source) */
+	case FX_SHORT_CHUNK: g[1].chunk_size = FX_SHORT_FLOATS * 4; fx_build(4, g, requested); break;
+	/* a fifth plane beyond the node's four channels, with no chunk: the source
+	 * stamps every plane's chunk, the sink never looks at it */
+	case FX_EXTRA_NO_CHUNK: g[4].chunk_null = 1; fx_build(5, g, requested); break;
 	default: break;
+	}
+}
+
+/* Is the case a buffer the node must refuse? `sink` selects whose view it is. */
+static int fx_must_refuse(enum fx_case c, int sink)
+{
+	switch (c) {
+	case FX_GOOD_BUF:       return 0;
+	case FX_SHORT_CHUNK:    return sink;
+	case FX_EXTRA_NO_CHUNK: return !sink;
+	default:                return 1;
 	}
 }
 

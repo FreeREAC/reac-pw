@@ -172,8 +172,9 @@ static void on_process(void *data)
 	struct spa_buffer *buf = pwb->buffer;
 	/* A BUFFER THIS CALLBACK CANNOT TRUST costs the cycle (the ring keeps its frames for
 	 * the next one), never a write past a plane. Plane 0 sizes the cycle, so it is
-	 * looked at only once it is known to be there. (reac_rt_planes.h) */
-	if (!reac_rt_buffer_has_planes(buf, n->channels) || buf->datas[0].chunk == NULL) {
+	 * looked at only once the planes are known to be there; its chunk is checked with
+	 * every other plane's below. (reac_rt_planes.h) */
+	if (!reac_rt_buffer_has_planes(buf, n->channels)) {
 		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
 		pw_stream_queue_buffer(n->stream, pwb);
 		return;

@@ -53,12 +53,12 @@ int main(int argc, char **argv)
 	}
 	uint32_t after = reac_ring_readable(&ring);
 	uint32_t bad = reac_source_node_bad_buffers(n);
-	if (c == FX_GOOD_BUF && (after >= before || bad != 0)) {
+	if (!fx_must_refuse(c, 0) && (after >= before || bad != 0)) {
 		fprintf(stderr, "FAIL: good buffer: ring %u -> %u, %u counted bad\n", before, after, bad);
 		return 1;
 	}
 	/* A bad buffer costs the cycle: the ring keeps its frames, one cycle is counted. */
-	if (c != FX_GOOD_BUF && (after != before || bad != 1)) {
+	if (fx_must_refuse(c, 0) && (after != before || bad != 1)) {
 		fprintf(stderr, "FAIL: %s: ring %u -> %u (want unchanged), %u counted bad (want 1)\n",
 		        argv[1], before, after, bad);
 		return 1;

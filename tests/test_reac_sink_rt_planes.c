@@ -50,12 +50,12 @@ int main(int argc, char **argv)
 	}
 	uint32_t got = reac_ring_readable(&ring);
 	uint32_t bad = reac_sink_node_bad_buffers(n);
-	if (c == FX_GOOD_BUF && (got == 0 || bad != 0)) {
+	if (!fx_must_refuse(c, 1) && (got == 0 || bad != 0)) {
 		fprintf(stderr, "FAIL: good buffer: ring %u frames, %u counted bad\n", got, bad);
 		return 1;
 	}
 	/* A bad buffer costs the cycle: nothing reaches the ring, one cycle is counted. */
-	if (c != FX_GOOD_BUF && (got != 0 || bad != 1)) {
+	if (fx_must_refuse(c, 1) && (got != 0 || bad != 1)) {
 		fprintf(stderr, "FAIL: %s: ring %u frames (want 0), %u counted bad (want 1)\n",
 		        argv[1], got, bad);
 		return 1;

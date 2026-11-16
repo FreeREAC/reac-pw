@@ -282,7 +282,8 @@ rt_plane_objs_common = [
 ]
 rt_plane_san = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
 rt_plane_cases = ['good', 'no-planes', 'few-planes', 'null-data0', 'null-data1',
-                  'short-plane', 'no-chunk0', 'no-chunk1']
+                  'short-plane', 'no-chunk0', 'no-chunk1', 'null-buffer', 'null-datas',
+                  'short-chunk', 'extra-no-chunk']
 rt_plane_deps = [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep]
 sink_rt_planes = executable('test_reac_sink_rt_planes',
   ['tests/test_reac_sink_rt_planes.c', 'src/reac_source_node.c'] + rt_plane_objs_common,
