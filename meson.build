@@ -195,6 +195,7 @@ reac_pw_src = [
   'src/reac_segconf.c',
   'src/reac_roster.c',
   'src/reac_roster_node.c',
+  'src/reac_own_macs.c',
 ]
 
 # THE PROTOCOL'S NUMBERS COME FROM ONE DECLARATION (src/reac_facts_pw.h, tools/facts.py).
@@ -1584,6 +1585,16 @@ link_budget_test = executable('test_reac_link_budget',
   dependencies : [libreac_dep])
 test('reac_link_budget', link_budget_test)
 
+# --- unit test: no address of this host is ever a rival (#8) -------------------
+# A mirrored port hands the sniffer our own master frames from another interface of this
+# host. The host's interface table is a scripted netdir; the control stream, with the
+# screen out of the path, must read as a foreign desk.
+own_macs_test = executable('test_reac_own_macs',
+  ['tests/test_reac_own_macs.c', 'src/reac_own_macs.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep, libreac_transport_dep])
+test('reac_own_macs', own_macs_test)
+
 # --- dev-only: the auto-role detection against REAL captured frames -----------
 # tests/test_reac_hunt.c drives the four outcomes from the libreac builders; this replays
 # reac-captures pcaps and requires the verdict, the rival KIND, its WIDTH and its MAC to
@@ -1990,6 +2001,11 @@ test('reac_public_tree_cites_slugs', python3,
 # The unit test proves the lock; this proves the daemon asks for it, before the feeder starts.
 test('reac_rx_bind_is_wired', python3,
   args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
+          meson.current_source_dir()])
+
+# --- text: main.c screens the host's own addresses before the hunt (src/reac_own_macs.c) -----
+test('reac_own_macs_is_wired', python3,
+  args : [meson.current_source_dir() / 'tests' / 'own-macs-are-wired.py',
           meson.current_source_dir()])
 
 # --- text: the public tree carries no compiled Python and every source has its header -----

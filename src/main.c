@@ -94,6 +94,7 @@
 #include <reac/reac_knock.h>      /* waking a cold box on a wire nobody pinned */
 #include "reac_knock_wire.h"      /* ... with a bounded knock, never the stream (#40) */
 #include "reac_link_owner.h"      /* ... and no stream, no PHY edge, on the host's NIC (#46) */
+#include "reac_own_macs.h"        /* no address of this host is ever a rival (#8) */
 #include "reac_empty_master.h"    /* ... and a master that streams at nobody stops (#40) */
 #include <reac/reac_packet_socket.h>        /* the knock's deaf sender, through the one door */
 #include <reac/reac_tapwait.h>    /* how long an unplaced sighting holds the hunt off a wire */
@@ -2814,6 +2815,7 @@ struct sniffer {
 	struct reac_capture cap;
 	struct spa_source *io;
 	uint8_t mac[6];             /* the NIC's own address: our echo, if any, is not a sighting */
+	int own_said;               /* "our own frames heard" said once on this interface */
 	unsigned long frames;       /* 0x8819 frames read, whether or not they classified */
 	/* WHICH END OF THE PAIRING THIS SEGMENT WILL TAKE (reac_hunt.h). The sniffer is
 	 * where the evidence arrives, so the hunt lives here and dies with it: a segment
@@ -2989,6 +2991,7 @@ struct hearing {
 };
 
 static struct hearing g_hear;
+static struct reac_own_macs g_own_macs;
 
 
 /* Counted from the RUNNING engines, never from the roster: a segment that is configured
@@ -3298,6 +3301,15 @@ static void sniffer_drain(struct sniffer *sn)
 		if (n <= 0)
 			break;
 		sn->frames++;
+		/* A MIRRORED PORT HANDS US OUR OWN MASTER FRAMES from another interface of this
+		 * host (#8): not a sighting, and never a rival. */
+		enum reac_own_echo echo = reac_own_echo_screen(&g_own_macs, &sn->own_said, frame, (size_t)n);
+		if (echo != REAC_OWN_ECHO_NONE) {
+			if (echo == REAC_OWN_ECHO_FIRST)
+				fprintf(stderr, "reac-pw: [%s] our own frames heard on %s (mirrored port or "
+				        "loop)\n", sn->name, sn->name);
+			continue;
+		}
 		/* EVERY frame in the batch is offered, not just the first that classifies.
 		 * One frame says REAC is here; WHO is here takes several — a desk's cfea
 		 * announce comes once a second between thousands of FILLER frames, and it is
@@ -3528,6 +3540,7 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 		return -1;
 	}
 	reac_capture_set_nonblock(&sn->cap, 1);
+	reac_own_macs_read(&g_own_macs, NULL);
 	struct ifreq ifr;
 	memset(&ifr, 0, sizeof ifr);
 	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", name);
@@ -4732,7 +4745,12 @@ static void topo_apply(struct hearing *h, uint64_t now)
 static void hearing_apply(struct hearing *h)
 {
 	struct reac_ifscan_event ev;
+	int own_read = 0;
 	while (reac_ifscan_next(&h->scan, &ev)) {
+		if (!own_read) {
+			reac_own_macs_read(&g_own_macs, NULL);
+			own_read = 1;
+		}
 		const struct reac_ifscan_entry *e = reac_ifscan_find(&h->scan, ev.name);
 		switch (ev.verb) {
 		case REAC_IFSCAN_LISTEN:
