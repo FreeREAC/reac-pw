@@ -1,0 +1,4 @@
+# The public facts headers a consumer pins, one per line, with who pins it. Each is installed by the
+# devel package (reac-pw-devel, reac-pw-dev) under <includedir>/reac-pw/ with every local header it
+# includes; tests/devel-package-carries-pinned-headers.sh fails when one is missing. FreeREAC/reac-pw#108.
+reac_headamp_prop.h   openmixer: the head-amp property prefix (R8), its REAC wire-facts pin conformance test

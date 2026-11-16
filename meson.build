@@ -282,6 +282,13 @@ test('libreac_is_a_bounded_package_dependency',
   find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
   args : [meson.current_source_dir()])
 
+# --- the devel package carries what consumers pin (FreeREAC/reac-pw#108) ------
+# packaging/devel-headers.txt names each public facts header a consumer pins; it and every local
+# header it includes are in devel_headers, installed under <includedir>/reac-pw with reac-pw.pc.
+test('devel_package_carries_pinned_headers',
+  find_program('tests/devel-package-carries-pinned-headers.sh'),
+  args : [meson.current_source_dir()])
+
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',
   ['tests/test_reac_ring.c', ],
