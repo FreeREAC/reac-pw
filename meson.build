@@ -220,6 +220,27 @@ reac_pw_exe = executable('reac-pw',
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep],
   install : true)
 
+# --- the devel package: the public facts headers consumers pin (FreeREAC/reac-pw#108) ---------
+# packaging/devel-headers.txt names each pinned header; this list carries it and every local
+# header it includes (tests/devel-package-carries-pinned-headers.sh keeps them in step). They
+# install flat under <includedir>/reac-pw, where their quoted #includes find one another, and
+# reac-pw.pc names that directory. The facts are the default facts/ copy, never a facts_dir one.
+devel_headers = files(
+  'src/reac_headamp_prop.h',
+  'src/reac_headamp_state.h',
+  'src/reac_facts_pw.h',
+  'facts/reac_facts.h',
+  'facts/reac_facts_undef.h',
+)
+install_headers(devel_headers, subdir : 'reac-pw')
+pkgconfig = import('pkgconfig')
+pkgconfig.generate(
+  name : 'reac-pw',
+  description : 'reac-pw public facts headers (the head-amp property keys) for consumers that pin them',
+  subdirs : 'reac-pw',
+  requires : ['libreac >= 1.11.0'],
+)
+
 # --- unit test: the layered-config PRECEDENCE law ----------------------------
 # Pins the override order declared in docs/RATE-AND-CLOCK-CONFIG.md against the
 # code that implements it. The two drifting apart is the failure this file exists

@@ -36,3 +36,13 @@ Description: PipeWire-native Roland REAC endpoint
  daemon the file capabilities it needs for raw network frames, VLAN
  sub-interfaces and real-time scheduling. A small system service keeps
  NetworkManager off the network interfaces reac-pw serves.
+
+Package: reac-pw-dev
+Architecture: any
+Multi-Arch: same
+Depends: ${misc:Depends}, libreac-dev (>= 1.11.0~)
+Description: reac-pw public facts headers for consumers that pin them
+ The public facts headers of reac-pw that other projects pin, starting with
+ reac_headamp_prop.h (the head-amp property keys inside SPA_PROP_params), with
+ every local header they include and a reac-pw.pc that names their directory,
+ so a consumer finds them with pkg-config instead of in a source checkout.

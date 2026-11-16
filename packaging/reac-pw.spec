@@ -98,6 +98,17 @@ happily and mis-decodes every downstream frame).
 
 Keep this in step with meson.build's dependency() floor.
 
+%package devel
+Summary:        reac-pw public facts headers for consumers that pin them
+# The headers #include <reac/...>: libreac's development files. Floors only (the dependency rule).
+Requires:       pkgconfig(libreac) >= 1.11.0
+
+%description devel
+The public facts headers of reac-pw that other projects pin, starting with
+reac_headamp_prop.h (the head-amp property keys inside SPA_PROP_params), with
+every local header they include and a reac-pw.pc that names their directory, so a
+consumer finds them with pkg-config instead of in a source checkout.
+
 %prep
 %autosetup -n %{name}-%{version}
 
@@ -234,6 +245,10 @@ fi
 %postun
 %systemd_user_postun reac-pw.service
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
+
+%files devel
+%{_includedir}/reac-pw/
+%{_libdir}/pkgconfig/reac-pw.pc
 
 %changelog
 * Fri Nov 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.43-1
