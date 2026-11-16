@@ -98,6 +98,20 @@ happily and mis-decodes every downstream frame).
 
 Keep this in step with meson.build's dependency() floor.
 
+%package devel
+Summary:        Facts headers of reac-pw for consumers (head-amp property prefix, protocol numbers)
+BuildArch:      noarch
+# FLOORS ONLY: reac_headamp_prop.h includes <reac/reac_headamp_tx.h> and reac_facts_pw.h the libreac
+# headers; the floor is the libreac the daemon itself is built against.
+Requires:       libreac-devel >= 1.11.0
+Requires:       pkgconf-pkg-config
+
+%description devel
+The public facts headers of reac-pw, installed under %{_includedir}/reac-pw with reac-pw.pc:
+reac_headamp_prop.h (the per-channel head-amp key prefix inside SPA_PROP_params) and the
+headers it includes. A consumer that pins those facts reads them from here instead of from
+a source checkout.
+
 %prep
 %autosetup -n %{name}-%{version}
 
@@ -181,6 +195,14 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 # Generated at run time by reac-pw-nm-unmanaged; owned here so removing the package
 # removes it.
 %ghost %config(missingok,noreplace) %{_sysconfdir}/NetworkManager/conf.d/90-reac-pw.conf
+
+%files devel
+%{_includedir}/reac-pw/reac_facts.h
+%{_includedir}/reac-pw/reac_facts_pw.h
+%{_includedir}/reac-pw/reac_facts_undef.h
+%{_includedir}/reac-pw/reac_headamp_prop.h
+%{_includedir}/reac-pw/reac_headamp_state.h
+%{_datadir}/pkgconfig/reac-pw.pc
 
 %post
 # The root service is a SYSTEM unit: its preset enables it on a fresh install.

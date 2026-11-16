@@ -282,6 +282,27 @@ test('libreac_is_a_bounded_package_dependency',
   find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
   args : [meson.current_source_dir()])
 
+# --- the facts headers, installed for consumers (reac-pw#108) ---------------
+# reac_headamp_prop.h is the public facts header openmixer's conformance test pins (the head-amp
+# property prefix); the rest are what it includes, so the installed header compiles on its own
+# against libreac-devel. They go to <includedir>/reac-pw/ and reac-pw.pc names that directory.
+# Packaged as reac-pw-devel (RPM) and reac-pw-dev (DEB); tests/devel-package-ships-the-pinned-
+# headers.sh keeps the lists and this block in step.
+install_headers(
+  'src/reac_headamp_prop.h',
+  'src/reac_headamp_state.h',
+  'src/reac_facts_pw.h',
+  'facts/reac_facts.h',
+  'facts/reac_facts_undef.h',
+  subdir : 'reac-pw')
+import('pkgconfig').generate(
+  name : 'reac-pw',
+  description : 'reac-pw facts headers (head-amp property prefix and the protocol numbers)',
+  version : meson.project_version(),
+  subdirs : 'reac-pw',
+  requires : 'libreac >= 1.11.0',
+  install_dir : get_option('datadir') / 'pkgconfig')
+
 # --- the devel package ships the headers a consumer pins (reac-pw#108) ------
 # Fails when reac_headamp_prop.h (pinned by openmixer's conformance test) or a header it includes is
 # missing from the spec's %files devel or debian/reac-pw-dev.install.
