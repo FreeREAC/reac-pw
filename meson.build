@@ -282,6 +282,13 @@ test('libreac_is_a_bounded_package_dependency',
   find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
   args : [meson.current_source_dir()])
 
+# --- the devel package ships the headers a consumer pins (reac-pw#108) ------
+# Fails when reac_headamp_prop.h (pinned by openmixer's conformance test) or a header it includes is
+# missing from the spec's %files devel or debian/reac-pw-dev.install.
+test('devel_package_ships_the_pinned_headers',
+  find_program('tests/devel-package-ships-the-pinned-headers.sh'),
+  args : [meson.current_source_dir()])
+
 # --- unit test: the lock-free ring (RT-safe SPSC), no PipeWire needed --------
 ring_test = executable('test_reac_ring',
   ['tests/test_reac_ring.c', ],
