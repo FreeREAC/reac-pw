@@ -19,6 +19,11 @@ PRECEDENCE, HIGHEST FIRST: **cli** (`--set KEY=VALUE` or a named flag) > **env**
 process environment) > **conf** (`~/.config/reac-pw/reac-pw.env`, then
 `~/.config/openmixer/reac.env`) > the built-in default.
 
+A numeric knob (`REACPW_GRANT_DWELL_MS`, `REACPW_GRANT_DWELL_S`, `REACPW_CATCHUP_MAX_SLOTS`,
+`REACPW_BOX_MASTER_PRESILENCE_MS`, `REACPW_LINK_MBIT`) must be a whole decimal number in its
+range with nothing after it. Anything else is refused at start, by name, with exit 2 --
+`5s` is not 5 and `-1` is not accepted where only a count is.
+
 ## The ROLE is not here, and neither is a VLAN declaration
 
 **`REAC_ROLE` and `REAC_ROLE_<segment>` are RETIRED** (2026-09-16). A segment's role is
