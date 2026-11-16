@@ -406,8 +406,42 @@ static void t_live_dump(void)
 	reac_ifscan_close(&s);
 }
 
+/* ---- physical only, opt-in for virtual (#101) ----------------------------------------- */
+static void t_virtual_excluded_from_scan(void)
+{
+	/* reac-ghost0 is in no sysfs: a synthetic Ethernet interface with link and no device
+	 * behind it, which is exactly what a veth looks like to the gate. Not opted in: never
+	 * enters the table. Opted in BY NAME: the same frame reaches LISTEN. */
+	struct reac_ifscan s;
+	enum reac_ifscan_verb v[8];
+	char n[8][IFNAMSIZ];
+	char buf[1024] __attribute__((aligned(8)));
+
+	reac_ifscan_set_allow_virtual(NULL);
+	reac_ifscan_init(&s);
+	size_t off = build_link(buf, RTM_NEWLINK, "reac-ghost0", 102, ARPHRD_ETHER,
+	                        IFF_UP | IFF_LOWER_UP);
+	reac_ifscan_feed(&s, buf, off, 0);
+	CHK(drain(&s, v, n, 8) == 0);
+	CHK(reac_ifscan_find(&s, "reac-ghost0") == NULL);
+	reac_ifscan_close(&s);
+
+	reac_ifscan_set_allow_virtual("other0,reac-ghost0");
+	reac_ifscan_init(&s);
+	reac_ifscan_feed(&s, buf, off, 0);
+	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_LISTEN && !strcmp(n[0], "reac-ghost0"));
+	reac_ifscan_close(&s);
+
+	reac_ifscan_set_allow_virtual("*");   /* the rest of this file's synthetic names */
+}
+
 int main(void)
 {
+	/* THIS FILE'S INTERFACES ARE SYNTHETIC (enp1s0, reac-ghost0, ... in no sysfs), and a
+	 * REAC segment is a physical NIC or a VLAN on one (#101): opted in, as the namespace
+	 * suites are. t_virtual_excluded_from_scan proves the exclusion itself. */
+	reac_ifscan_set_allow_virtual("*");
+	t_virtual_excluded_from_scan();
 	t_link_then_hear_then_hold();
 	t_never_heard_never_segment();
 	t_not_ethernet_ignored();
