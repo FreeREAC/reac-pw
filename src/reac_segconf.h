@@ -13,8 +13,8 @@
  * before there is anything to decide against, and from inside the daemon a stale file and a
  * correct one are indistinguishable.
  *
- * SO THE DEFAULT IS THE WIRE, AND THE FILE IS THE EXCEPTION. `REAC_ROLE` and
- * `REAC_ROLE_<segment>` are RETIRED as role sources in every layer (spec §2); a segment
+ * SO THE DEFAULT IS THE WIRE, AND THE FILE IS THE EXCEPTION. No environment
+ * key is a role source (spec §2); a segment
  * with nothing said about it is `auto` and the hunt elects it. This file is the only thing
  * that overrides that, and it is HAND-WRITTEN: the console never generates it, because the
  * generator's idea of the rig is exactly the thing that goes stale.

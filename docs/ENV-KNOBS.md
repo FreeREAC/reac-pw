@@ -21,11 +21,10 @@ process environment) > **conf** (`~/.config/reac-pw/reac-pw.env`, then
 
 ## The ROLE is not here, and neither is a VLAN declaration
 
-**`REAC_ROLE` and `REAC_ROLE_<segment>` are RETIRED** (2026-09-16). A segment's role is
+**No `REAC_ROLE` key exists** (2026-09-16). A segment's role is
 autodetected from the wire, and the one thing that overrides it is a hand-written
 `~/.config/reac-pw/reac-pw.conf` — see the segments design
-(`2026-09-16-segments-and-roles-are-autodetected`) and `packaging/reac-pw.conf.example`. A `REAC_ROLE*` key left on disk is read only so the
-daemon can NAME it as ignored at start; it decides nothing.
+(`2026-09-16-segments-and-roles-are-autodetected`) and `packaging/reac-pw.conf.example`.
 
 ```ini
 [segment enp131s0.11]
@@ -57,7 +56,6 @@ behaviour unchanged.
 | Knob | Effect | Default |
 |---|---|---|
 | `REAC_TX=IFNAME` | The REAC TX NIC for this segment (master: the downstream sink; slave: the upstream return + handshake socket). | the same interface as the live/RX NIC |
-| `REAC_ROLE` / `REAC_ROLE_<segment>` | **RETIRED (2026-09-16).** Read only to be NAMED at start as ignored. Use `reac-pw.conf`'s `[segment <name>] role =` above. | — |
 | `REAC_MIXER=m200\|m300\|m5000` | Master role: which desk name reac-pw logs as. Does not set the wire's pace-code byte — that comes from `--rate` alone, and grants are box-defined, so any box locks regardless of profile. | `m200` |
 | `REAC_NAME=NAME` | PipeWire node suffix (`reac-capture.NAME`, `reac-playback.NAME`) so more than one segment can coexist in the graph. | the interface name |
 | `REAC_HEADAMP="CH:PARAM:VALUE ..."` | Master role: the per-channel head-amp table the master re-asserts to the box (space or comma separated). `CH` is the head-amp channel, `PARAM` is `phantom`\|`pad`\|`sens`, `VALUE` is 0/1 for phantom/pad or a raw SENS code. | unset (nothing re-asserted) |

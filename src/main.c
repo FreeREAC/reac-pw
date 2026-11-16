@@ -125,8 +125,8 @@
 
 /* THE ONE OVERRIDE (2026-09-16-segments-and-roles-are-autodetected).
  * Read once at start, before any socket, and asked about every segment thereafter. Nothing
- * else may pin a role: `REAC_ROLE` and `REAC_ROLE_<segment>` are retired in every layer,
- * because the file that carried them is GENERATED and a generated file goes stale silently
+ * else may pin a role: no environment layer carries one,
+ * because the file that carried it was GENERATED and a generated file goes stale silently
  * — on 2026-09-16 it pinned three VLAN segments `tap` a rig ago and the desk moved no
  * audio with every node up. A LIVE role change is `reac.cfg.role` on the segment's door,
  * not a re-read of this. */
@@ -744,10 +744,6 @@ static void usage(const char *p)
 	  "  With no such file every segment is auto, which is the shipping default.\n"
 	  "    REAC_TX=IFNAME             default: the same interface (this rig's masters\n"
 	  "                               always tx == live)\n"
-	  "    REAC_ROLE / REAC_ROLE_<segment>  RETIRED (2026-09-16). Read only to be NAMED\n"
-	  "                               at start as ignored: a role written before there\n"
-	  "                               was anything to decide against outlives the rig it\n"
-	  "                               described. Use reac-pw.conf above.\n"
 	  "    REAC_MIXER=m200|m300|m5000 default: m200\n"
 	  "    REAC_NAME=NAME             node suffix; default: the interface name (the FIRST\n"
 	  "                               --live segment defaults to bare names instead,\n"
@@ -1511,9 +1507,8 @@ static void listener_cfg_from_conf(struct listener_cfg *c, const char *iface, in
 	 * the ROW and from nothing else). An env key that moved this number would put a
 	 * second width in the daemon: the frames keep the row's geometry and everything
 	 * sized from `box_channels` follows the env — wire and graph split, with no line
-	 * saying so. So under `role = box` the key is READ ONLY TO BE NAMED, exactly as
-	 * REAC_ROLE is (segment_say_env_role_retired): a key that stopped applying and
-	 * says nothing is indistinguishable from one that is working. */
+	 * saying so. So under `role = box` the key is READ ONLY TO BE NAMED: a key that
+	 * stopped applying and says nothing is indistinguishable from one that is working. */
 	{
 		enum reac_conf_layer bcl =
 			reac_conf_lookup("REAC_BOX_CHANNELS", iface, NULL, v, sizeof v);
@@ -3474,23 +3469,6 @@ static const char *segment_role_source(const char *iface)
 	               ? REAC_SEGCONF_FILE : "autodetected";
 }
 
-/* A `REAC_ROLE` KEY THAT IS STILL ON DISK IS NAMED, ONCE, AND NOT OBEYED. A key that
- * stopped applying and says nothing is indistinguishable from one that is working, which
- * is the same class of silence the whole spec is about — one level down. */
-static void segment_say_env_role_retired(const char *iface)
-{
-	char v[256];
-	enum reac_conf_layer layer = reac_conf_lookup("REAC_ROLE", iface, NULL, v, sizeof v);
-	if (layer == REAC_CONF_NONE)
-		return;
-	fprintf(stderr, "reac-pw: [%s] REAC_ROLE%s%s='%s' in %s is IGNORED: a segment's role "
-	        "is autodetected, and the one thing that overrides it is %s "
-	        "[segment %s] role= (spec 2026-09-16)\n",
-	        iface, layer == REAC_CONF_SEGMENT ? "_" : "",
-	        layer == REAC_CONF_SEGMENT ? iface : "", v, reac_conf_layer_name(layer),
-	        REAC_SEGCONF_FILE, iface);
-}
-
 /* IS THIS SEGMENT PINNED `tap`? The question segment_role_pin above cannot answer,
  * because `tap` deliberately pins no WIRE role — there is no end of the pairing to pin.
  * It is still a PIN, the operator answered for this wire, and since the Q5 ruling a pin
@@ -3615,7 +3593,6 @@ static int sniffer_open_ex(struct hearing *h, const char *name, int announce)
 	else
 		fprintf(stderr, "reac-pw: [%s] listening — role auto (autodetected): the wire "
 		        "decides\n", name);
-	segment_say_env_role_retired(name);
 	return 0;
 }
 
@@ -6112,24 +6089,6 @@ static void segconf_announce(void)
 			        sg->ignore ? sg->ignore_file : "",
 			        sg->ignore ? ")" : "");
 		}
-		/* `ignore = yes` IS HONOURED AND, SINCE #40, RARELY NEEDED. It was the #31
-		 * workaround for a trunk NIC flooded on silence; a silent wire is now listened to
-		 * and knocked on, and a trunk parent goes quiet once its VLANs' tags are heard. One
-		 * line, so a file written for the old daemon says what it still does. */
-		char ign[160] = "";
-		size_t in = 0;
-		int n_ign = 0;
-		for (int i = 0; i < g_segconf.n; i++)
-			if (g_segconf.seg[i].ignore && in + 2 < sizeof ign) {
-				in += (size_t)snprintf(ign + in, sizeof ign - in, "%s%s", n_ign ? ", " : "",
-				                       g_segconf.seg[i].name);
-				n_ign++;
-			}
-		if (n_ign)
-			fprintf(stderr, "reac-pw: `ignore = yes` on %s is honoured: never listened to, "
-			        "never sent on. It is no longer needed for a trunk NIC or a NIC with no REAC "
-			        "on it (such a wire is listened to and knocked on, never streamed at); keep "
-			        "it only to leave that NIC untouched\n", ign);
 	}
 	for (int i = 0; i < g_segconf.n_refusals; i++)
 		fprintf(stderr, "reac-pw: REFUSED %s\n", g_segconf.refusal[i]);
@@ -6137,16 +6096,6 @@ static void segconf_announce(void)
 		fprintf(stderr, "reac-pw: %u line(s) were refused in all; the first %d are "
 		        "above, each naming its own file\n",
 		        g_segconf.refused, g_segconf.n_refusals);
-	/* AND THE HOST-WIDE KEY THAT NO LONGER DOES ANYTHING. The per-segment ones are named
-	 * as each interface is met (segment_say_env_role_retired); this is the bare one, which
-	 * belongs to no interface and would otherwise never be mentioned at all. */
-	char v[256];
-	enum reac_conf_layer l = reac_conf_lookup("REAC_ROLE", NULL, NULL, v, sizeof v);
-	if (l != REAC_CONF_NONE)
-		fprintf(stderr, "reac-pw: REAC_ROLE='%s' in %s is IGNORED: there is no host-wide "
-		        "role — a role is a fact about ONE wire, and the only thing that can "
-		        "state one is %s [segment <name>] role= (spec 2026-09-16)\n",
-		        v, reac_conf_layer_name(l), REAC_SEGCONF_FILE);
 }
 
 /* REACPW_CLOCK_REF, resolved ONCE into a STATIC buffer — the same process-lifetime
