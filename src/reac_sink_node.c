@@ -309,6 +309,11 @@ struct reac_sink_node {
 	/* Cycles on_process skipped because the stream buffer was not what it needs
 	 * (reac_rt_planes.h). RT increments, main reads (reac_sink_node_bad_buffers). */
 	_Atomic uint32_t rt_bad_buffers;
+	/* Audio frames (samples per channel) the RT callback staged but the downstream ring
+	 * refused: a short reac_ring_write on the slave's upstream ring, or a
+	 * reac_pacer_submit that returned 0. RT increments, main reads
+	 * (reac_sink_node_dropped_frames). */
+	_Atomic uint32_t rt_dropped_frames;
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -2091,6 +2096,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n)
 {
 	return n ? atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed) : 0;
+}
+
+/* Frames the RT callback staged and the downstream ring refused. Any thread; the RT
+ * thread only ever increments it. */
+uint32_t reac_sink_node_dropped_frames(const struct reac_sink_node *n)
+{
+	return n ? atomic_load_explicit(&n->rt_dropped_frames, memory_order_relaxed) : 0;
 }
 
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n)

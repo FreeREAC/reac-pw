@@ -202,6 +202,9 @@ int reac_sink_node_take_reopen_rate(struct reac_sink_node *n);
 /* Cycles the RT callback skipped because the stream buffer had too few planes, an absent
  * data or chunk pointer, or a plane shorter than the cycle (reac_rt_planes.h). */
 uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n);
+/* Audio frames (samples per channel) the RT callback handed to the downstream ring
+ * (the slave's upstream ring, or the pacer's frame ring) and the ring refused. */
+uint32_t reac_sink_node_dropped_frames(const struct reac_sink_node *n);
 
 /* Take the pending accepted reac.cfg.role for a clean re-open in the other engine
  * (master<->slave), or -1 if none. Main's poll timer calls this. */

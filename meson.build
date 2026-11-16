@@ -295,6 +295,15 @@ source_rt_planes = executable('test_reac_source_rt_planes',
   include_directories : src_inc,
   c_args : rt_plane_san, link_args : rt_plane_san,
   dependencies : rt_plane_deps)
+sink_dropped = executable('test_reac_sink_dropped',
+  ['tests/test_reac_sink_dropped.c', 'src/reac_source_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+foreach c : ['upstream-ring', 'pacer-ring']
+  test('reac_sink_dropped_' + c, sink_dropped, args : [c],
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+endforeach
 foreach c : rt_plane_cases
   test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c],
     env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
