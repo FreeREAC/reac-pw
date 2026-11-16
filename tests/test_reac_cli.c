@@ -144,6 +144,23 @@ static int test_headamp_list(void)
 	return 0;
 }
 
+/* TRAILING TEXT IS NOT PART OF A VALUE. sscanf stops at the last conversion and says
+ * nothing about what is left, so "00:11:22:33:44:55zz" and "0:phantom:1x" were taken
+ * as the clean value in front of the junk: a typo on the command line started the
+ * daemon with a setting the operator did not type. */
+static int test_trailing_text_is_refused(void)
+{
+	uint8_t m[6];
+	struct reac_headamp_setting s, t[2];
+	CHK(reac_cli_parse_mac("00:11:22:33:44:55zz", m) == -1);
+	CHK(reac_cli_parse_mac("00:11:22:33:44:55:66", m) == -1);
+	CHK(reac_cli_parse_mac("00:11:22:33:44:55 ", m) == -1);
+	CHK(reac_cli_parse_headamp("0:phantom:1x", &s) == -1);
+	CHK(reac_cli_parse_headamp("0:pad:1:extra", &s) == -1);
+	CHK(reac_cli_parse_headamp_list("0:phantom:1x", t, 2) == -1);
+	return 0;
+}
+
 int main(void)
 {
 	int rc = 0;
@@ -153,6 +170,7 @@ int main(void)
 	rc |= test_headamp_cell();
 	rc |= test_headamp_refusal_leaves_the_setting();
 	rc |= test_headamp_list();
+	rc |= test_trailing_text_is_refused();
 	if (rc == 0)
 		printf("test_reac_cli: ok\n");
 	return rc;
