@@ -10,6 +10,7 @@
 #include "reac_rate_match.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 
 static int fails;
@@ -19,7 +20,7 @@ static double bound(void) { return REAC_RATE_MATCH_MAX_PPM / 1e6; }
 
 int main(void)
 {
-	_Atomic unsigned long long clamped = 0;
+	_Atomic uint32_t clamped = 0;
 
 	/* In-bound values pass through untouched and are not counted. */
 	double r = reac_rate_match_from_ppm_milli(1500.0 * 1000.0, &clamped);

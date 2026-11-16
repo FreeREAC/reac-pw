@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stdatomic.h>
+#include <stdint.h>
 
 /* Bound on the correction handed to PipeWire's resampler, in ppm. ONE constant: the
  * sink's level loop and the source's follower rate both read it. Sized so the sink's
@@ -21,7 +22,7 @@
  * 1 +- REAC_RATE_MATCH_MAX_PPM/1e6; a non-finite input is refused to nominal (1.0).
  * Either case bumps *clamped (relaxed; NULL allowed). */
 static inline double reac_rate_match_from_ppm_milli(double ppm_milli,
-                                                    _Atomic unsigned long long *clamped)
+                                                    _Atomic uint32_t *clamped)
 {
 	const double max_milli = (double)REAC_RATE_MATCH_MAX_PPM * 1000.0;
 	if (!isfinite(ppm_milli)) {

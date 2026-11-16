@@ -279,10 +279,6 @@ void reac_source_node_update_props(struct reac_source_node *n, const struct spa_
  * segment whose capture node is missing has no input patches at all. */
 int reac_source_node_on_graph(const struct reac_source_node *n, const char **why);
 
-/* How many process cycles clamped or refused the follower rate (a master measured
- * at a wrong pace). Readable from any thread; 0 for a NULL node. */
-unsigned long long reac_source_node_rate_clamped(const struct reac_source_node *n);
-
 /* MAIN LOOP. Print anything the RT callback queued (one line, one atomic handshake —
  * the RT side never touches stdio). Safe with a NULL node. */
 void reac_source_node_drain_log(struct reac_source_node *n, FILE *out);
