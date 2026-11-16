@@ -20,7 +20,8 @@ for f in src/main.c packaging/reac-pw.service packaging/reac-pw.spec debian/reac
          tests/test_reac_enrolment_binding.c; do
 	[ -f "$f" ] || { echo "FAIL: $f missing: the sweep is broken, not the tree" >&2; exit 2; }
 done
-grep -q "systemctl --global disable" debian/reac-pw.prerm \
+has_text() { [[ "$(<"$1")" == *"$2"* ]]; }   # a plain text test, not a pattern over source
+has_text debian/reac-pw.prerm "global disable" \
 	|| { echo "FAIL: the control is gone: prerm no longer carries the ordinary uninstall disable" >&2; exit 2; }
 
 # 1 a retired REAC_ROLE key is not read to be named
@@ -33,9 +34,9 @@ grep -n 'is honoured: never listened to' src/main.c \
 grep -nE '^Conflicts=|reac-pw-master' packaging/reac-pw.service packaging/90-reac-pw.preset \
 	&& say "row 4: the unit or the preset still names the retired reac-pw-master.service"
 # 5 the global disable of a <=1.0.18 leftover, in %post and postinst
-awk '/^%post( |$)/{p=1;next} /^%(prep|build|install|check|files|posttrans|pre|preun|postun|changelog|package|description)( |$)/{p=0} p&&/systemctl --global disable/' packaging/reac-pw.spec | grep -q . \
+awk '/^%post( |$)/{p=1;next} /^%(prep|build|install|check|files|posttrans|pre|preun|postun|changelog|package|description)( |$)/{p=0} p&&/global disable/' packaging/reac-pw.spec | grep -q . \
 	&& say "row 5: the spec's %post still disables a global enablement an old package left behind"
-grep -q "systemctl --global disable" debian/reac-pw.postinst \
+has_text debian/reac-pw.postinst "global disable" \
 	&& say "row 5: debian/postinst still disables a global enablement an old package left behind"
 # 6 a compile-time floor behind the meson floor
 grep -rn --exclude=no-compat-leftovers.sh 'LIBREAC_VERSION_AT_LEAST' src tests fuzz \

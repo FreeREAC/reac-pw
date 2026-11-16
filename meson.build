@@ -29,7 +29,7 @@ m_dep        = cc.find_library('m', required : false)
 
 # --- libreac: RX/measure core, the installed package ----------------------
 # libreac-devel (RPM) / libreac-dev (deb) from the FreeMixer channel, found by pkg-config and
-# linked dynamically. The floor below is also written, with a ceiling, in packaging/reac-pw.spec
+# linked dynamically. The floor below is also written, with no ceiling, in packaging/reac-pw.spec
 # and debian/control (tests/libreac-is-a-floored-package-dependency.sh keeps them so); nothing of
 # libreac is fetched, cloned or bundled. The header is <reac/reac.h>.
 # >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
@@ -104,7 +104,7 @@ m_dep        = cc.find_library('m', required : false)
 # is the one code list (src/reac_code.h is gone; 1.10.0 is the first release declaring every token this
 # daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
 # copy is gone). An older header does not compile.
-# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the packages carry the ceiling.
+# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the soname of every libreac release is its own, so the packages need no ceiling.
 libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
@@ -276,11 +276,15 @@ test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
   args : rt_single_door_args)
 
-# --- source sweep: NO PINS (reac-pw#23) --------------------------------------
-# libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
+# --- no compatibility leftover is back: nothing is kept for an older install, config or unit
+# (tests/no-compat-leftovers.sh)
 test('no_compat_leftovers',
   find_program('tests/no-compat-leftovers.sh'),
   timeout : 30)
+
+# --- source sweep: NO PINS (reac-pw#23) --------------------------------------
+# libreac is declared in the spec and debian/control as a floor, with no ceiling, and nowhere else
+# (a floored package dependency).
 
 test('libreac_is_a_floored_package_dependency',
   find_program('tests/libreac-is-a-floored-package-dependency.sh'),
@@ -680,6 +684,8 @@ fake_box_path = get_option('fake_box')
 # --- a slave declares a catalogue row: --box-channels must name a width a row has -----
 test('box_channels_names_a_row',
   find_program('tests/box-channels-names-a-row.sh'),
+  suite : 'netns',
+  is_parallel : false,
   args : [reac_pw_exe],
   timeout : 30)
 
