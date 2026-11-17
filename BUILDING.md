@@ -17,7 +17,7 @@ channel described in the [README](README.md).
 
 `libreac-devel` and `libreac-transport-devel` are hard requirements, found by pkg-config; nothing of
 libreac is fetched or bundled. The version floors are the ones `meson.build` declares, and the spec
-and `debian/control` add the ceiling (the next minor).
+and `debian/control` repeat them as floors only; no consumer ceiling.
 
 ## Build and test
 
@@ -44,7 +44,7 @@ socket. `tools/build.sh [builddir]` compiles, sets
 
 `.github/workflows/test.yml` runs `tools/ci-suite.sh` in a privileged `fedora:44`
 container, against the libreac packages of the FreeMixer channel, which `dnf builddep
-packaging/reac-pw.spec` installs at the floor and ceiling the spec declares (`libreac-devel`,
+packaging/reac-pw.spec` installs at the floor the spec declares (`libreac-devel`,
 `libreac-transport-devel` and `libreac-tests`, which carries `fake_box`, the far end several tests
 drive). The same script runs on a desk with those packages installed:
 

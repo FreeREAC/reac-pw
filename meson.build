@@ -29,7 +29,7 @@ m_dep        = cc.find_library('m', required : false)
 
 # --- libreac: RX/measure core, the installed package ----------------------
 # libreac-devel (RPM) / libreac-dev (deb) from the FreeMixer channel, found by pkg-config and
-# linked dynamically. The floor below is also written, with a ceiling, in packaging/reac-pw.spec
+# linked dynamically. The floor below is also written, as a floor only, in packaging/reac-pw.spec
 # and debian/control (tests/libreac-is-a-bounded-package-dependency.sh keeps them so); nothing of
 # libreac is fetched, cloned or bundled. The header is <reac/reac.h>.
 # >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
@@ -104,7 +104,7 @@ m_dep        = cc.find_library('m', required : false)
 # is the one code list (src/reac_code.h is gone; 1.10.0 is the first release declaring every token this
 # daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
 # copy is gone). An older header does not compile.
-# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the packages carry the ceiling.
+# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); no package carries a ceiling.
 libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
@@ -318,7 +318,7 @@ test('reac_rt_single_door',
   args : rt_single_door_args)
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
-# libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
+# libreac is declared in the spec and debian/control as a floor only (no ceiling) and nowhere else.
 test('libreac_is_a_bounded_package_dependency',
   find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
   args : [meson.current_source_dir()])
