@@ -43,9 +43,10 @@ An empty value (`REAC_RATE=`) sets nothing and falls through to the next layer. 
 layer that answers with nonsense is named and skipped, not silently dropped
 (`ignoring REAC_RATE='999' from the process environment`).
 A value is read whole: `REAC_RATE=48000abc` and `REAC_RATE=48000 # note` are both
-nonsense, because a conf file takes comments on a line of their own only (the format
-`reac_conf.h` documents; systemd's `EnvironmentFile=` hands the same text to the
-environment). Put the note on the line above.
+nonsense. libreac's conf reader (`reac_conf_read_file`, transport/src/reac_conf.c) skips a
+line only when its first non-blank character is `#`, and takes everything after the `=`
+(less one pair of surrounding quotes) as the value, so a `#` later in the line is part of
+the value. Put the note on the line above.
 
 The startup line names the layer that won, for example:
 
