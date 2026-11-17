@@ -62,9 +62,19 @@ def find_libreac(reac_pw_root):
     shared vocabulary header (2026-09-17-tunables-api-and-shared-refusal-codes) —
     not just by existing:
     an older libreac clone with no such header has nothing this scan can join.
-    Returns None, silently, when neither is found: this ratchet must not require
-    the sibling checkout to build or test reac-pw on its own."""
+    Returns None, silently, when no sibling is found and LIBREAC_SRCDIR is unset: this ratchet
+    must not require the sibling checkout to build or test reac-pw on its own. A LIBREAC_SRCDIR
+    that is set but is not a libreac checkout is refused by name (SystemExit)."""
     env_dir = os.environ.get('LIBREAC_SRCDIR')
+    # A directory somebody NAMED is never read as "no sibling": a typo or an empty clone would
+    # leave the never-emitted arm idle and the run green. It must hold what the scan reads.
+    if env_dir:
+        root = Path(env_dir)
+        missing = [r for r in ('include/reac/reac_code.h', 'src', 'transport/src')
+                   if not (root / r).exists()]
+        if missing:
+            raise SystemExit(f'LIBREAC_SRCDIR={env_dir} is not a libreac checkout '
+                             f'(missing: {", ".join(missing)})')
     candidates = [Path(env_dir)] if env_dir else [
         reac_pw_root.parent / 'libreac',
         reac_pw_root.parent / 'libreac-wt-knobs',
