@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.43
+Version:        1.0.44
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -253,6 +253,16 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Tue Nov 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
+- New reac-pw-devel package (Debian: reac-pw-dev) with the facts headers consumers pin (#108, #110).
+- Packaging declares floors only on libreac: no consumer ceiling (#111).
+- The source node's follower rate is clamped at the sink's ppm bound, and clamps are counted (#114).
+- The sink and source process callbacks check the stream buffer before reading it, an out-of-bounds fix (#116).
+- The trunk's declared VLANs are minted cold and knocked on (#99, #100).
+- reac-pw's own unit tests for main.c, the sink and the capture node, and the script-audit cuts (#117).
+- reac_ifscan's test fails by name, not SIGSEGV, on a host without the NICs it makes up (#124).
+- A threat model; fuzz checks proven; the shared workflows, commit checker and channel from Open-Mixer (#88, #89, #90, #94, #96).
+
 * Fri Nov 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.43-1
 - Built against libreac 1.11 (libreac.so.7, libreac7): libreac, libreac-transport and
   libreac-tests are declared >= 1.11.0 < 1.12 (libreac-tests keeps its 1.7.3 floor).
