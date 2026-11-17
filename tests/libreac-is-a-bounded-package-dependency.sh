@@ -15,6 +15,7 @@
 #     consumer that caps it turns every release of the library into a red build of the consumer);
 #   - a tracked file clones, fetches or pins a libreac source: LIBREAC_REF, a `git clone` of
 #     FreeREAC/libreac, the subprojects/libreac.wrap fallback, tools/build-with-libreac.sh.
+#     ONE named exception: the conformance job's sibling pin in .github/workflows/test.yml (below).
 #
 # A SWEEP THAT CANNOT SEE PROVES IT CAN: bounded() runs first on a declaration with no ceiling
 # and must call it unbounded, and the pin pattern must match a planted line.
@@ -31,7 +32,28 @@ decl() { awk -v re="$2" '$0 ~ re' <<<"$1"; }
 
 PIN='LIBREAC_REF|git clone[^|]*libreac|libreac\.wrap|build-with-libreac'
 
+# THE ONE EXCEPTION (ruling, reac-pw#117): the conformance job's sibling. tests/reac-code-conformance.py
+# joins a libreac SOURCE checkout at ../libreac and, only then, requires every code libreac declares
+# to be emitted somewhere (the never-emitted arm; with no sibling it is idle and a daemon that stops
+# emitting a code stays green). The suite job in .github/workflows/test.yml therefore fetches libreac
+# source pinned by LIBREAC_REF. Nothing BUILDS from it: the build links the packages. The exception
+# is these three lines of that one file and nothing else -- not the file as a whole, not any other
+# workflow, not meson.build, not a script: a second use of a libreac source is a new ruling.
+SIB_FILE='.github/workflows/test.yml'
+SIB_RE='^  LIBREAC_REF: [0-9a-f]{40}$|^      - name: libreac [$][{][{] env[.]LIBREAC_REF [}][}], beside the checkout$|^          git -C [.][.]/libreac fetch -q --depth 1 https://github[.]com/FreeREAC/libreac[.]git "[$]LIBREAC_REF"$'
+sibling_ok() { # <file> <line text>
+	[ "$1" = "$SIB_FILE" ] && grep -Eq "$SIB_RE" <<<"$2"
+}
+
 # --- positive controls
+sibling_ok "$SIB_FILE" '  LIBREAC_REF: 0123456789abcdef0123456789abcdef01234567' \
+	|| { echo "FAIL: self-check: the sibling pin line is not excepted" >&2; exit 1; }
+sibling_ok .github/workflows/other.yml '  LIBREAC_REF: 0123456789abcdef0123456789abcdef01234567' \
+	&& { echo "FAIL: self-check: the exception reaches another workflow" >&2; exit 1; }
+sibling_ok meson.build '  LIBREAC_REF: 0123456789abcdef0123456789abcdef01234567' \
+	&& { echo "FAIL: self-check: the exception reaches meson.build" >&2; exit 1; }
+sibling_ok "$SIB_FILE" '          git clone -q https://github.com/FreeREAC/libreac.git ../libreac' \
+	&& { echo "FAIL: self-check: the exception reaches a clone in the same file" >&2; exit 1; }
 CEILING_RE='^[^#]*libreac[-a-z]*[)]? *[(]?(<|<<|<=|=|==) '
 grep -Eq "$CEILING_RE" <<<'BuildRequires:  pkgconfig(libreac) < 1.12' \
 	|| { echo "FAIL: self-check: a planted spec ceiling was not seen" >&2; exit 1; }
@@ -93,9 +115,11 @@ hits=$(cd "$ROOT" && {
 } | grep -Ev '^(docs/|facts/)' | grep -v "^tests/$SELF$" | while read -r f; do
 	[ -f "$f" ] || continue
 	case "$f" in *libreac.wrap|*build-with-libreac.sh) echo "$f: exists"; continue ;; esac
-	grep -HnE "$PIN" "$f" 2>/dev/null
+	grep -HnE "$PIN" "$f" 2>/dev/null | while IFS= read -r l; do
+		sibling_ok "$f" "${l#*:*:}" || echo "$l"
+	done
 done)
 [ -z "$hits" ] || { say "libreac is pinned or fetched as source:"; echo "$hits" >&2; }
 
-[ "$fail" = 0 ] && echo "OK: libreac has one floor and no ceiling in spec and control, pinned nowhere"
+[ "$fail" = 0 ] && echo "OK: libreac has one floor and no ceiling in spec and control, pinned nowhere but the conformance sibling"
 exit "$fail"

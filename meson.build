@@ -488,11 +488,12 @@ test('reac_link_edge_observed',
 # than the hold changes nothing, a longer loss drops it, DELLINK drops at once.
 # The netlink half is fed kernel-shaped datagrams; the live arm dumps the real
 # host through the same parser (unprivileged).
-ifscan_test = executable('test_reac_ifscan',
-  ['tests/test_reac_ifscan.c', ],
-  include_directories : src_inc,
-  dependencies : [libreac_dep, libreac_transport_dep, m_dep])
-test('reac_ifscan', ifscan_test)
+# BUILT FROM LIBREAC'S SOURCE, NOT LINKED TO THE PACKAGE (reac-pw#124): the test opens libreac
+# main's physical-NIC gate, which the installed package does not have. SKIPs without the
+# sibling checkout (../libreac or LIBREAC_SRCDIR); the suite job has it.
+test('reac_ifscan',
+  find_program('tests/ifscan-against-libreac-main.sh'),
+  args : [meson.current_source_dir()])
 
 # --- unit test: the trunk tag classifier and the per-parent VLAN table ---------
 # Nothing in src/ read a VLAN tag before 0.5.3, so this is the first gate on the
