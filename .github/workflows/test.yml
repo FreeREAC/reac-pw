@@ -19,8 +19,8 @@
 #
 # libreac IS THE PUBLISHED PACKAGE, AND ITS SOURCE RIDES BESIDE IT. `dnf builddep packaging/reac-pw.spec`
 # installs libreac-devel, libreac-transport-devel and libreac-tests (the far end several tests
-# drive, fake_box) from the OpenMixer channel at the floor and ceiling the spec declares; that is
-# what reac-pw is built and linked against, and nothing of libreac is built here. libreac's SOURCE
+# drive, fake_box) from the OpenMixer channel at the floor the spec declares; that is what
+# reac-pw is built and linked against, and nothing of libreac is built here. libreac's SOURCE
 # is also cloned, pinned by commit, to ../libreac: tests/reac-code-conformance.py joins it to
 # require that every code libreac declares is emitted somewhere.
 #

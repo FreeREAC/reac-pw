@@ -429,7 +429,7 @@ static void on_process(void *data)
 		if (err < -1.0) err = -1.0;
 		/* depth ABOVE target => we are consuming too slowly => ask the resampler
 		 * for fewer samples per second, i.e. a rate below nominal. */
-		double ppm = -err * (double)REAC_SINK_RATE_MATCH_MAX_PPM;
+		double ppm = -err * (double)REAC_RATE_MATCH_MAX_PPM;
 		n->rate_match->rate = 1.0 + ppm / 1e6;
 		atomic_store_explicit(&n->rate_match_milli_ppm, (int)(ppm * 1000.0),
 		                      memory_order_relaxed);
