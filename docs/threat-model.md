@@ -79,7 +79,7 @@ The user's own files, environment and command line are inside the boundary.
   are `SOCK_CLOEXEC` and closed on every path.
 - **Knobs** (`src/reac_knobs.c`): at most `REAC_KNOBS_ARGV_MAX` (32) `--set` keys, each value
   cut to 256 bytes.
-- **Process**: refuses to run as root (`src/main.c`, `tests/refuses-root.sh`); exits without
+- **Process**: refuses to run as root (`src/main.c`, `tests/cli-front-door.sh`); exits without
   `CAP_NET_RAW`.
 
 The receive gate (`src/reac_rx_bind.c`) binds a non-master segment to one peer MAC: the one

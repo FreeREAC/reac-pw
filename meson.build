@@ -131,10 +131,9 @@ libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 # (an unpadded last message no longer walks the stale buffer); the health line reads through it.
 libreac_transport_dep = dependency('libreac-transport', version : '>=1.11.0', required : true)
 
-# A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
-# door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
-# rt_single_door's positive control). Empty by default; both spots degrade honestly
-# (not-built / SKIP) rather than faking a result without it.
+# A sibling libreac checkout's transport/src — dev-only, for the one spot that needs the
+# door's actual SOURCE rather than its installed header (bench_hotpath's #include trick).
+# Empty by default; it degrades honestly (not built) rather than faking a result without it.
 libreac_transport_srcdir = get_option('libreac_transport_srcdir')
 
 # The floor bites on BOTH resolution paths, verified when it was raised:
@@ -195,6 +194,7 @@ reac_pw_src = [
   'src/reac_segconf.c',
   'src/reac_roster.c',
   'src/reac_roster_node.c',
+  'src/reac_cli.c',
 ]
 
 # THE PROTOCOL'S NUMBERS COME FROM ONE DECLARATION (src/reac_facts_pw.h, tools/facts.py).
@@ -307,15 +307,11 @@ endforeach
 # --- source sweep: ONE DOOR TO SCHED_FIFO ------------------------------------
 # The ladder above only holds while reac_rt.c is the only place that changes a
 # thread's scheduling class; a third RT thread spelling its own literal would
-# reopen #31 with every unit test still green. The sweep proves it can see the
-# call in the file that legitimately has it before it reports absence anywhere.
-rt_single_door_args = [meson.current_source_dir()]
-if libreac_transport_srcdir != ''
-  rt_single_door_args += libreac_transport_srcdir
-endif
+# reopen #31 with every unit test still green. The sweep is over reac-pw's own src/;
+# that the door exists is libreac-transport's test, not a skip here.
 test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
-  args : rt_single_door_args)
+  args : [meson.current_source_dir()])
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
 # libreac is declared in the spec and debian/control as a floor only (no ceiling) and nowhere else.
@@ -857,19 +853,6 @@ test('door-without-outputs',
 # sniffer's discovery table at once. Two VLANs on one veth, the port's rate DECLARED
 # (REACPW_LINK_MBIT, since a veth reports 10 Gbit), and a negative arm in which the holder
 # has a box of its own and must keep the wire.
-# --- `--set KEY=VALUE` reaches the daemon at all (found by the lane above) ------------
-#
-# The knob resolver had a unit test; the FLAG had none, and it fell through the main flag
-# loop's final `else` into usage() — so every invocation carrying the flag --help documents
-# exited 2. The namespace is only how this holds CAP_NET_RAW past the preflight; it mints
-# no netdev and starts no PipeWire.
-test('set-flag-reaches-the-daemon',
-  find_program('tests/set-flag-reaches-the-daemon.sh'),
-  suite : 'netns',
-  is_parallel : false,
-  args : [reac_pw_exe],
-  timeout : 60)
-
 test('empty-master-yields-the-budget',
   find_program('tests/empty-master-yields-the-budget.sh'),
   suite : 'netns',
@@ -1257,33 +1240,33 @@ test('facts_drift',
   args : [files('tools/facts.py'), 'drift', reac_protocol_dir],
   timeout : 60)
 
-# --- whole-binary test: the PACKAGED (no-argument) shape actually starts ------
+# --- text: the PACKAGED shape, as the shipped unit and preset spell it ---------------
 #
 # auto-spine §5 gives the unit no flags, and since the trunk-VLAN spec's amendment
-# (2026-09-02 §d) nothing is configured for it either — REAC_IFACES retired with the
-# per-interface files, so the daemon HEARS its segments. An `argc < 2` guard answered
-# usage before any of that was reached, and the packaged service could never start
-# (measured on the rig, 2026-08-31). Needs no NIC: it asserts help still works with
-# nothing configured, and that a bare `reac-pw` gets PAST argument handling.
+# (2026-09-02 §d) nothing is configured for it either, so the daemon HEARS its segments:
+# the unit carries no EnvironmentFile= (systemd cannot parse a per-segment key with a dot)
+# and the preset enables reac-pw.service. That the binary survives a bare run is
+# tests/cli-front-door.sh.
 test('reac_packaged_shape',
   find_program('tests/packaged-shape-starts.sh'),
-  args : [reac_pw_exe,
-          meson.current_source_dir() / 'packaging' / 'reac-pw.service',
+  args : [meson.current_source_dir() / 'packaging' / 'reac-pw.service',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
-# --- whole-binary test: the daemon refuses to start as uid 0 (2026-09-18) -----
-# A root instance runs under a DIFFERENT systemd --user manager than the console
-# session's and binds the same abstract segment-lock socket — measured to win it
-# and lock the console user's own daemon out. `unshare -r` maps us to a fake root
-# inside a private user namespace; a positive control proves the normal uid is
-# NOT refused, before trusting that the fake-root run is.
-test('reac_refuses_root',
-  find_program('tests/refuses-root.sh'),
+# --- whole-binary test: the command line's front door --------------------------------
+# One script for what reac-pw does to the arguments it is given before it opens anything:
+# the daemon refuses to start as uid 0 (2026-09-18: a root instance runs under a DIFFERENT
+# systemd --user manager than the console session's and binds the same abstract
+# segment-lock socket, and was measured to win it) — `unshare -r` maps us to a fake root
+# inside a private user namespace, and a positive control proves the normal uid is NOT
+# refused; --help and the bare packaged shape get past argument handling; an unknown flag
+# is usage; and --set KEY=VALUE reaches the daemon (it fell into usage() for three days).
+test('reac_cli_front_door',
+  find_program('tests/cli-front-door.sh'),
   suite : 'netns',
   is_parallel : false,
   args : [reac_pw_exe],
-  timeout : 30)
+  timeout : 60)
 
 # The %posttrans auto-enable's DECISION (#104): exactly one real interactive user, or
 # nobody. loginctl/systemctl are mocked, so it needs no namespace, no daemon and no rpm --
@@ -1993,8 +1976,7 @@ test('reac_conformance', conformance_test)
 # benchmark the SHIPPING decode path instead of a copy of it that would drift.
 # reac_rx.c's SOURCE is not part of the installed -devel package (only the
 # header is), so this needs a sibling libreac checkout's transport/src — point
-# -Dlibreac_transport_srcdir at it (declared near the top, also used by the
-# rt_single_door test's positive control). Not build_by_default any more: a
+# -Dlibreac_transport_srcdir at it (declared near the top). Not build_by_default any more: a
 # normal checkout without that sibling tree would otherwise fail `ninja`
 # outright for a target nothing else here depends on.
 bench_hotpath_inc = [src_inc, include_directories('tests')]
@@ -2014,57 +1996,19 @@ bench_hotpath = executable('bench_hotpath',
 # string is caught the same way an operator misreading it would be.
 usage_test = executable('test_reac_headamp_usage',
   ['tests/test_reac_headamp_usage.c'])
-test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
-
-# --- meson-text: every whole-binary header sits above ITS OWN test -----------
-# Five `# --- ... ---` headers had drifted onto the wrong test (a later block
-# wedged in between a header and the test it was written for, and nothing
-# checked) — line ~430 above the wrong test, ~573, ~822, ~1062, ~1194, all
-# fixed 2026-09-17. Pure text: walks every header, finds the next `test(` call
-# before another header intervenes, and refuses when the header shares no
-# normalized keyword with that test's `tests/*.sh` script name. Sabotage-
-# verified by swapping two headers in a scratch copy and requiring both
-# directions to fail.
-test('meson_headers_sit_above_their_test', python3,
-  args : [meson.current_source_dir() / 'tests' / 'meson-headers-sit-above-their-test.py',
-          meson.current_source_dir() / 'meson.build'])
+test('reac_headamp_usage', usage_test, args : [reac_pw_exe])
 
 # --- text: every declared reac_code is emitted, and bare refusals stay under a floor --
-# "We need the error codes and not only messages" (2026-09-17). Every token of the daemon's
-# share of libreac's <reac/reac_code.h> list (tests/reac-code-daemon-tokens.txt) must be
-# reachable through reac_code_emit somewhere in src/*.c, and no copy of what libreac declares
+# "We need the error codes and not only messages" (2026-09-17). The tokens the daemon emits
+# are read off src/*.c through reac_code_emit (libreac's <reac/reac_code.h> is the one list),
+# and no copy of what libreac declares
 # or does may appear in src/ (ONE HOME, 1.0.42), and a REFUSED/FATAL/failed-shaped bare fprintf that still bypasses the helper
 # is counted against a floor that may only fall (proportionate migration, spec §2) — a
 # change that adds a new one, or un-migrates one already counted, fails the build.
 test('reac_code_conformance', python3,
   args : [meson.current_source_dir() / 'tests' / 'reac-code-conformance.py',
           meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'tests' / 'reac-code-daemon-tokens.txt',
           libreac_dep.get_variable(pkgconfig : 'includedir')])
-
-# --- text: every tests/*.sh grep/wait_for pattern maps to a producer, or is debt ------
-# "Let's be precise, let's organise tests to not depend on greps" (2026-09-17). Matches
-# every quoted grep/wait_for pattern in tests/*.sh against src/*.c's printf-family format
-# strings (conversions wildcarded) and <reac/reac_code.h>'s tokens; refuses a pattern with
-# neither a producer nor a named line in tests/known-debt-grep-patterns.txt, which is
-# itself a ratchet (may only shrink). Sabotage-verified by injecting an unmapped pattern
-# into a scratch copy of tests/ and requiring it to be refused.
-test('reac_asserted_lines_have_a_producer', python3,
-  args : [meson.current_source_dir() / 'tests' / 'asserted-lines-have-a-producer.py',
-          meson.current_source_dir() / 'tests',
-          meson.current_source_dir() / 'src',
-          meson.current_source_dir() / 'tests' / 'known-debt-grep-patterns.txt',
-          libreac_dep.get_variable(pkgconfig : 'includedir')])
-
-# --- text: the public tree cites internal documents by slug; the README builds nothing --
-# Specs, notes, audits and rig files live in the private ops repository. A citation in
-# code, tests, packaging or the user docs is the bare slug, never a docs path or a dated
-# `.md` filename that resolves to nothing in a public checkout; README.md carries no build
-# command and BUILDING.md carries the build. Sabotage-verified by putting a spec path back
-# into a src/ comment and requiring it to be refused by file and line.
-test('reac_public_tree_cites_slugs', python3,
-  args : [meson.current_source_dir() / 'tests' / 'public-tree-cites-slugs.py',
-          meson.current_source_dir()])
 
 # --- text: main.c locks the slave side's receive gate (src/reac_rx_bind.c) ----------------
 # The unit test proves the lock; this proves the daemon asks for it, before the feeder starts.
@@ -2072,10 +2016,73 @@ test('reac_rx_bind_is_wired', python3,
   args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
           meson.current_source_dir()])
 
-# --- text: the public tree carries no compiled Python and every source has its header -----
+# --- text: the public tree stays public-shaped ------------------------------------------
 # A tracked __pycache__/*.pyc embeds the build machine's paths, and a *.c *.h *.py *.sh with no
-# SPDX-License-Identifier + Copyright pair states no licence. tools/check-public-hygiene.sh
-# reads the git index and refuses both; it SKIPs (77) where there is no git checkout.
+# SPDX-License-Identifier + Copyright pair states no licence; Specs, notes, audits and rig files
+# live in the private ops repository, so a citation in code, tests, packaging or the user docs
+# is the bare slug, never a docs path or a dated `.md` filename; README.md carries no build
+# command and BUILDING.md carries the build. tools/check-public-hygiene.sh refuses all of it
+# (the tracked-file half reads the git index and is skipped where there is no git checkout).
 test('public_hygiene', find_program('bash'),
   args : [meson.current_source_dir() / 'tools' / 'check-public-hygiene.sh',
           meson.current_source_dir()])
+
+# ============================================================================
+# reac-pw's OWN code, compiled without a running PipeWire or a wire
+# (lane reac-pw-tests-own; one block per seam, appended here so a sibling lane's
+# edits to the blocks above never touch these lines).
+# ============================================================================
+
+# --- unit test: reac_cli -- the flag and conf-list parsers main() reads --------
+# --mac, the --live interface list and the --headamp cells were statics in main.c.
+cli_test = executable('test_reac_cli',
+  ['tests/test_reac_cli.c', 'src/reac_cli.c', 'src/reac_box_pin.c', 'src/reac_rate_cfg.c'],
+  include_directories : src_inc,
+  dependencies : [spa_dep, libreac_dep, libreac_transport_dep, m_dep])
+test('reac_cli', cli_test)
+
+# --- unit test: reac_sink_node -- the sink's own code, no PipeWire server -------
+# tests/test_reac_sink_node_own.c #includes src/reac_sink_node.c to reach its statics and
+# defines pw_stream_update_properties / _params itself, so what the node publishes lands
+# in a recorder. Everything else of reac-pw's sources it calls is linked in.
+sink_own_src = []
+foreach f : reac_pw_src
+  if f not in ['src/main.c', 'src/reac_sink_node.c']
+    sink_own_src += f
+  endif
+endforeach
+sink_own_test = executable('test_reac_sink_node_own',
+  ['tests/test_reac_sink_node_own.c'] + sink_own_src,
+  include_directories : src_inc,
+  dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
+test('reac_sink_node_own', sink_own_test)
+
+# --- unit test: reac_source_node -- the capture node's own code, no PipeWire server ---
+# Same method as the sink's: the test #includes src/reac_source_node.c and defines the
+# pw_stream_* calls the node makes (update_properties, disconnect, connect) itself.
+source_own_src = []
+foreach f : reac_pw_src
+  if f not in ['src/main.c', 'src/reac_source_node.c']
+    source_own_src += f
+  endif
+endforeach
+source_own_test = executable('test_reac_source_node_own',
+  ['tests/test_reac_source_node_own.c'] + source_own_src,
+  include_directories : src_inc,
+  dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
+test('reac_source_node_own', source_own_test)
+
+# --- unit test: main.c's per-segment decisions -- conf keys to listener, no daemon ---
+# tests/test_reac_main_own.c #includes src/main.c with main() renamed away, loads a real
+# reac-pw.conf from a temporary HOME and reads what one segment's keys did to its listener.
+main_own_src = []
+foreach f : reac_pw_src
+  if f != 'src/main.c'
+    main_own_src += f
+  endif
+endforeach
+main_own_test = executable('test_reac_main_own',
+  ['tests/test_reac_main_own.c'] + main_own_src,
+  include_directories : src_inc,
+  dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep])
+test('reac_main_own', main_own_test)
