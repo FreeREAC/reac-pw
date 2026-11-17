@@ -21,6 +21,7 @@
 #ifndef REAC_SINK_NODE_H
 #define REAC_SINK_NODE_H
 
+#include <stdint.h>
 #include "reac_wake.h"   /* struct reac_wake_obs — what the wake ladder reads from here */
 
 #include <stddef.h>
@@ -198,6 +199,9 @@ const struct reac_box_model *reac_sink_node_recognized_box(struct reac_sink_node
 /* Take (read+clear) the pending accepted reac.cfg.rate for a clean segment re-open,
  * 0 if none. Main's poll timer calls this; see reac_sink_node.c param_changed. */
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n);
+/* Cycles the RT callback skipped because the stream buffer had too few planes, an absent
+ * data or chunk pointer, or a plane shorter than the cycle (reac_rt_planes.h). */
+uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n);
 
 /* Take the pending accepted reac.cfg.role for a clean re-open in the other engine
  * (master<->slave), or -1 if none. Main's poll timer calls this. */
