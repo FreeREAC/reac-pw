@@ -417,8 +417,19 @@ static void t_live_dump(void)
 	reac_ifscan_close(&s);
 }
 
+/* THE NAMES IN THIS FILE ARE MADE UP (enp1s0, reac-ghost0, ...), AND THE TEST IS ABOUT THE
+ * TABLE AND THE NETLINK PARSER, NOT ABOUT THE HOST. libreac's scan lets only a physical NIC
+ * or a VLAN on one in (read from the host's /sys/class/net), so on a machine without an
+ * enp1s0 every case that goes through the gate failed. reac_ifscan_set_allow_virtual("*")
+ * is the opt-in libreac documents for exactly the namespace and unit suites; the gate's own
+ * decision is libreac's test_ifscan_physical. Weak, because a libreac without the gate has
+ * no such call and nothing to open. */
+extern void reac_ifscan_set_allow_virtual(const char *allowlist) __attribute__((weak));
+
 int main(void)
 {
+	if (reac_ifscan_set_allow_virtual)
+		reac_ifscan_set_allow_virtual("*");
 	t_link_then_hear_then_hold();
 	t_never_heard_never_segment();
 	t_not_ethernet_ignored();
