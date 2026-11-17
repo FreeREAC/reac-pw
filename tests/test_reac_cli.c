@@ -25,6 +25,33 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+/* A NUMBER THE PROTOCOL DECLARES IS NEVER SPELLED HERE: tools/facts-perturb-check.sh builds
+ * this against a fictional protocol, and a literal that agreed with the real one goes red.
+ * F() formats a command or conf string from the declared names. */
+#include <stdarg.h>
+static const char *F(const char *fmt, ...)
+{
+	static char ring[8][160];
+	static unsigned at;
+	char *o = ring[at++ & 7];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(o, sizeof ring[0], fmt, ap);
+	va_end(ap);
+	return o;
+}
+#define R44 REAC_SAMPLE_RATE_44K1
+#define R48 REAC_SAMPLE_RATE_48K
+#define R96 REAC_SAMPLE_RATE_96K
+#define RBAD (REAC_SAMPLE_RATE_96K + 1)
+/* The width cases divide by the declared pair width, as the product does. A fictional protocol
+ * that declares a pair narrower than two (the perturbed sets do: 0) makes the product's own
+ * `% REAC_BRAID_PAIR_CHANNELS` trap before any assertion, so those cases run only on a
+ * protocol with a real pair, and say so when they do not. */
+#define PAIR REAC_BRAID_PAIR_CHANNELS
+#define WIDTH_CASES_APPLY() (PAIR >= 2 ? 1 : (printf("test_reac_cli: width cases skipped, the declared pair is %d\n", PAIR), 0))
+#define WMAX ((REAC_MAX_CHANNELS / PAIR) * PAIR)
+
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 static int test_int(void)
@@ -113,12 +140,12 @@ static int test_headamp_cell(void)
 	CHK(s.ch == 3 && s.param == REAC_HEADAMP_PHANTOM && s.value == 1);
 	CHK(reac_cli_parse_headamp("0:pad:0", &s) == 0);
 	CHK(s.ch == 0 && s.param == REAC_HEADAMP_PAD && s.value == 0);
-	CHK(reac_cli_parse_headamp("47:sens:55", &s) == 0);   /* last channel, last step */
+	CHK(reac_cli_parse_headamp(F("%d:sens:%d", REAC_HEADAMP_MAX_CH - 1, REAC_HEADAMP_SENS_MAX), &s) == 0);   /* last channel, last step */
 	CHK(s.ch == REAC_HEADAMP_MAX_CH - 1 && s.param == REAC_HEADAMP_SENS &&
 	    s.value == REAC_HEADAMP_SENS_MAX);
 
-	CHK(reac_cli_parse_headamp("48:phantom:1", &s) == -1);          /* channel one past */
-	CHK(reac_cli_parse_headamp("0:sens:56", &s) == -1);             /* step one past */
+	CHK(reac_cli_parse_headamp(F("%d:phantom:1", REAC_HEADAMP_MAX_CH), &s) == -1);          /* channel one past */
+	CHK(reac_cli_parse_headamp(F("0:sens:%d", REAC_HEADAMP_SENS_MAX + 1), &s) == -1);             /* step one past */
 	CHK(reac_cli_parse_headamp("0:phantom:2", &s) == -1);           /* a switch is 0/1 */
 	CHK(reac_cli_parse_headamp("0:pad:2", &s) == -1);
 	CHK(reac_cli_parse_headamp("0:gain:1", &s) == -1);              /* unknown param */
@@ -134,9 +161,9 @@ static int test_headamp_cell(void)
 static int test_headamp_refusal_leaves_the_setting(void)
 {
 	struct reac_headamp_setting s = { .ch = 9, .param = 9, .value = 9 };
-	CHK(reac_cli_parse_headamp("48:phantom:1", &s) == -1);
+	CHK(reac_cli_parse_headamp(F("%d:phantom:1", REAC_HEADAMP_MAX_CH), &s) == -1);
 	CHK(s.ch == 9 && s.param == 9 && s.value == 9);
-	CHK(reac_cli_parse_headamp("0:sens:99", &s) == -1);
+	CHK(reac_cli_parse_headamp(F("0:sens:%d", REAC_HEADAMP_SENS_MAX + 40), &s) == -1);
 	CHK(s.ch == 9 && s.param == 9 && s.value == 9);
 	return 0;
 }
@@ -146,10 +173,10 @@ static int test_headamp_list(void)
 	struct reac_headamp_setting t[4];
 	CHK(reac_cli_parse_headamp_list("", t, 4) == 0);
 	CHK(reac_cli_parse_headamp_list(" , ", t, 4) == 0);
-	CHK(reac_cli_parse_headamp_list("0:phantom:1,1:pad:1 2:sens:10", t, 4) == 3);
+	CHK(reac_cli_parse_headamp_list(F("0:phantom:1,1:pad:1 2:sens:%d", REAC_HEADAMP_SENS_MAX / 2), t, 4) == 3);
 	CHK(t[0].ch == 0 && t[0].param == REAC_HEADAMP_PHANTOM && t[0].value == 1);
 	CHK(t[1].ch == 1 && t[1].param == REAC_HEADAMP_PAD && t[1].value == 1);
-	CHK(t[2].ch == 2 && t[2].param == REAC_HEADAMP_SENS && t[2].value == 10);
+	CHK(t[2].ch == 2 && t[2].param == REAC_HEADAMP_SENS && t[2].value == REAC_HEADAMP_SENS_MAX / 2);
 
 	/* One bad cell refuses the WHOLE list. */
 	CHK(reac_cli_parse_headamp_list("0:phantom:1,1:pad:9", t, 4) == -1);
@@ -269,14 +296,14 @@ static int test_rate(void)
 {
 	struct reac_cli c;
 	char err[1024];
-	CHK(parse_line("--rate 44100", &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == 44100);
+	CHK(parse_line(F("--rate %d", R44), &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == R44);
 	CHK(c.rate_layer == REAC_CONF_ARGV);
-	CHK(parse_line("--rate 48000", &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == 48000);
-	CHK(parse_line("--rate 96000", &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == 96000);
-	CHK(parse_line("--rate 88200", &c, err, sizeof err) == REAC_CLI_REFUSED);
-	CHK(strstr(err, "illegal --rate '88200'") && strstr(err, "re-pacing"));
+	CHK(parse_line(F("--rate %d", R48), &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == R48);
+	CHK(parse_line(F("--rate %d", R96), &c, err, sizeof err) == 0 && c.rxcfg.forced_rate == R96);
+	CHK(parse_line(F("--rate %d", RBAD), &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, F("illegal --rate '%d'", RBAD)) && strstr(err, "re-pacing"));
 	CHK(parse_line("--rate 0", &c, err, sizeof err) == REAC_CLI_REFUSED);
-	CHK(parse_line("--rate -48000", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line(F("--rate -%d", R48), &c, err, sizeof err) == REAC_CLI_REFUSED);
 	CHK(parse_line("--rate abc", &c, err, sizeof err) == REAC_CLI_REFUSED);
 	return 0;
 }
@@ -352,13 +379,15 @@ static int test_slave_width(void)
 	CHK(parse_line("--box-model s0808", &c, err, sizeof err) == 0 && c.box_channels == 8);
 	CHK(parse_line("--box-model nosuch", &c, err, sizeof err) == REAC_CLI_REFUSED);
 	CHK(strstr(err, "unknown --box-model 'nosuch'") && strstr(err, "s4000s"));
-	CHK(parse_line("--box-channels 2", &c, err, sizeof err) == 0 && c.box_channels == 2);
-	CHK(parse_line("--box-channels 40", &c, err, sizeof err) == 0 && c.box_channels == 40);
+	if (!WIDTH_CASES_APPLY())
+		return 0;
+	CHK(parse_line(F("--box-channels %d", PAIR), &c, err, sizeof err) == 0 && c.box_channels == PAIR);
+	CHK(parse_line(F("--box-channels %d", WMAX), &c, err, sizeof err) == 0 && c.box_channels == WMAX);
 	CHK(parse_line("--box-channels 0", &c, err, sizeof err) == REAC_CLI_REFUSED);
-	CHK(parse_line("--box-channels 7", &c, err, sizeof err) == REAC_CLI_REFUSED);   /* odd */
-	CHK(parse_line("--box-channels 42", &c, err, sizeof err) == REAC_CLI_REFUSED);  /* past 40 */
+	CHK(parse_line(F("--box-channels %d", PAIR + 1), &c, err, sizeof err) == REAC_CLI_REFUSED);   /* not a pair multiple */
+	CHK(parse_line(F("--box-channels %d", WMAX + PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);  /* past the fabric */
 	CHK(strstr(err, "--box-channels must be even"));
-	CHK(parse_line("--box-channels -8", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line(F("--box-channels -%d", 4 * PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);
 	return 0;
 }
 
@@ -366,10 +395,10 @@ static int test_headamp_flag(void)
 {
 	struct reac_cli c;
 	char err[1024];
-	CHK(parse_line("--headamp 1:phantom:1 --headamp 2:sens:20", &c, err, sizeof err) == 0);
+	CHK(parse_line(F("--headamp 1:phantom:1 --headamp 2:sens:%d", REAC_HEADAMP_SENS_MAX / 2), &c, err, sizeof err) == 0);
 	CHK(c.n_headamps == 2 && c.headamps[0].ch == 1 && c.headamps[1].ch == 2 &&
-	    c.headamps[1].value == 20);
-	CHK(parse_line("--headamp 99:phantom:1", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	    c.headamps[1].value == REAC_HEADAMP_SENS_MAX / 2);
+	CHK(parse_line(F("--headamp %d:phantom:1", REAC_HEADAMP_MAX_CH + 51), &c, err, sizeof err) == REAC_CLI_REFUSED);
 	CHK(strstr(err, "bad --headamp '99:phantom:1'"));
 
 	/* The table holds one slot per (channel, param); a flag past it is refused, not dropped. */
@@ -404,9 +433,9 @@ static int test_set_is_stepped_over(void)
 	char err[1024];
 	CHK(parse_line("--set REACPW_X=1 --role master", &c, err, sizeof err) == 0);
 	CHK(c.role == REAC_ROLE_MASTER && err[0] == '\0');
-	CHK(parse_line("--live eth0 --set REACPW_X=1 --set REACPW_Y=2 --rate 48000", &c, err,
+	CHK(parse_line(F("--live eth0 --set REACPW_X=1 --set REACPW_Y=2 --rate %d", R48), &c, err,
 	               sizeof err) == 0);
-	CHK(c.rxcfg.forced_rate == 48000 && !strcmp(c.rxcfg.source, "eth0"));
+	CHK(c.rxcfg.forced_rate == R48 && !strcmp(c.rxcfg.source, "eth0"));
 	return 0;
 }
 
@@ -432,12 +461,14 @@ static int test_numbers_are_whole(void)
 {
 	struct reac_cli c;
 	char err[1024];
-	CHK(parse_line("--rate 48000abc", &c, err, sizeof err) == REAC_CLI_REFUSED);
-	CHK(strstr(err, "illegal --rate '48000abc'"));
+	CHK(parse_line(F("--rate %dabc", R48), &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(strstr(err, F("illegal --rate '%dabc'", R48)));
 	CHK(parse_line("--rate 4800.0", &c, err, sizeof err) == REAC_CLI_REFUSED);
-	CHK(parse_line("--box-channels 8x", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	if (!WIDTH_CASES_APPLY())
+		return 0;
+	CHK(parse_line(F("--box-channels %dx", PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);
 	CHK(strstr(err, "--box-channels must be even"));
-	CHK(parse_line("--box-channels 8.0", &c, err, sizeof err) == REAC_CLI_REFUSED);
+	CHK(parse_line(F("--box-channels %d.0", PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);
 	return 0;
 }
 

@@ -20,6 +20,32 @@
 
 #include <ftw.h>
 
+/* A NUMBER THE PROTOCOL DECLARES IS NEVER SPELLED HERE: tools/facts-perturb-check.sh builds
+ * this against a fictional protocol, and a literal that agreed with the real one goes red.
+ * F() formats a command or conf string from the declared names. */
+#include <stdarg.h>
+static const char *F(const char *fmt, ...)
+{
+	static char ring[8][160];
+	static unsigned at;
+	char *o = ring[at++ & 7];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(o, sizeof ring[0], fmt, ap);
+	va_end(ap);
+	return o;
+}
+#define R44 REAC_SAMPLE_RATE_44K1
+#define R48 REAC_SAMPLE_RATE_48K
+#define R96 REAC_SAMPLE_RATE_96K
+#define RBAD (REAC_SAMPLE_RATE_96K + 1)
+/* The box-width key is checked by dividing by the declared pair width, as the product does; a
+ * fictional protocol that declares a pair narrower than two (the perturbed sets: 0) traps in
+ * the product's own `%` before any assertion, so those cases run only on a protocol with a real
+ * pair, and say so when they do not. */
+#define PAIR REAC_BRAID_PAIR_CHANNELS
+#define WIDTH_CASES_APPLY() (PAIR >= 2 ? 1 : (printf("test_reac_main_own: width cases skipped, the declared pair is %d\n", PAIR), 0))
+
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 static char g_home[64];
@@ -148,13 +174,15 @@ static int test_box_row(void)
 
 	/* and a segment that is not a box takes the key, within the legal widths */
 	CHK(home_with_conf("[segment eth9]\nrole = master\n") == 0);
-	setenv("REAC_BOX_CHANNELS_eth9", "8", 1);
+	if (!WIDTH_CASES_APPLY())
+		return 0;
+	setenv("REAC_BOX_CHANNELS_eth9", F("%d", PAIR), 1);
 	listener_cfg_from_conf(&c, "eth9", 1);
-	CHK(c.box_channels == 8 && c.box_model == NULL);
-	setenv("REAC_BOX_CHANNELS_eth9", "7", 1);          /* odd: refused, default kept */
+	CHK(c.box_channels == PAIR && c.box_model == NULL);
+	setenv("REAC_BOX_CHANNELS_eth9", F("%d", PAIR + 1), 1);   /* not a pair multiple: refused, default kept */
 	listener_cfg_from_conf(&c, "eth9", 1);
 	CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
-	setenv("REAC_BOX_CHANNELS_eth9", "99", 1);         /* past the box widths */
+	setenv("REAC_BOX_CHANNELS_eth9", F("%d", REAC_BOX_MAX_CHANNELS + PAIR), 1);   /* past the box widths */
 	listener_cfg_from_conf(&c, "eth9", 1);
 	CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
 	clear_env();
@@ -230,13 +258,13 @@ static int test_rate_resolution(void)
 	CHK(listener_resolve_rate(&c, &layer) == reac_rate_best_drivable(REAC_RATE_ALL_BITS));
 	CHK(layer == REAC_CONF_BUILTIN);
 
-	setenv("REAC_RATE", "44100", 1);
-	CHK(listener_resolve_rate(&c, &layer) == 44100 && layer == REAC_CONF_ENV);
-	setenv("REAC_RATE_eth9", "96000", 1);               /* per segment outranks bare */
-	CHK(listener_resolve_rate(&c, &layer) == 96000 && layer == REAC_CONF_SEGMENT);
+	setenv("REAC_RATE", F("%d", R44), 1);
+	CHK(listener_resolve_rate(&c, &layer) == R44 && layer == REAC_CONF_ENV);
+	setenv("REAC_RATE_eth9", F("%d", R96), 1);               /* per segment outranks bare */
+	CHK(listener_resolve_rate(&c, &layer) == R96 && layer == REAC_CONF_SEGMENT);
 
 	/* a layer that answers with nonsense is skipped, loudly, not obeyed */
-	setenv("REAC_RATE_eth9", "88200", 1);
+	setenv("REAC_RATE_eth9", F("%d", RBAD), 1);
 	setenv("REAC_RATE", "garbage", 1);
 	CHK(listener_resolve_rate(&c, &layer) == reac_rate_best_drivable(REAC_RATE_ALL_BITS));
 	CHK(layer == REAC_CONF_BUILTIN);
@@ -278,22 +306,24 @@ static int test_conf_values_are_whole(void)
 	enum reac_conf_layer layer = REAC_CONF_NONE;
 
 	listener_cfg_from_conf(&c, "eth9", 1);
-	setenv("REAC_RATE_eth9", "48000abc", 1);
+	setenv("REAC_RATE_eth9", F("%dabc", R48), 1);
 	CHK(listener_resolve_rate(&c, &layer) == reac_rate_best_drivable(REAC_RATE_ALL_BITS));
 	CHK(layer == REAC_CONF_BUILTIN);                     /* skipped, not obeyed */
 	clear_env();
 
 	/* a note after the value is text after the value: the conf format has comments on a
 	 * line of their own only (packaging/reac-pw.env.example writes them that way) */
-	setenv("REAC_RATE_eth9", "48000 # note", 1);
+	setenv("REAC_RATE_eth9", F("%d # note", R48), 1);
 	CHK(listener_resolve_rate(&c, &layer) == reac_rate_best_drivable(REAC_RATE_ALL_BITS));
 	CHK(layer == REAC_CONF_BUILTIN);
 	clear_env();
 
-	setenv("REAC_BOX_CHANNELS_eth9", "8x", 1);
-	listener_cfg_from_conf(&c, "eth9", 1);
-	CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
-	clear_env();
+	if (WIDTH_CASES_APPLY()) {
+		setenv("REAC_BOX_CHANNELS_eth9", F("%dx", PAIR), 1);
+		listener_cfg_from_conf(&c, "eth9", 1);
+		CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
+		clear_env();
+	}
 
 	setenv("REAC_SRC_MAC_eth9", "02:aa:bb:cc:dd:eezz", 1);
 	listener_cfg_from_conf(&c, "eth9", 1);
