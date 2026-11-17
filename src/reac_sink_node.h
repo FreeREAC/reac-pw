@@ -294,14 +294,13 @@ int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 
-/* Bound on the correction handed to PipeWire's resampler, in ppm. Sized so the
- * level loop settles WELL inside the guard band rather than against it: with the
- * pacer's measured 900 ppm deficit and a proportional loop, the steady-state depth
- * is target * (1 + drift/MAX), which at 5000 ppm is 1.18 * target — comfortably
- * below the guard's HIGH at 2 * target, so the guard never fires. 5000 ppm is
- * 0.007 of a semitone; the resampler does not care and neither does an ear. If
- * this bound is ever REACHED the loop has lost authority and the discards come
- * back, which is why the applied correction is published rather than assumed. */
-#define REAC_SINK_RATE_MATCH_MAX_PPM  5000
+/* The bound on the correction handed to PipeWire's resampler is REAC_RATE_MATCH_MAX_PPM
+ * (reac_rate_match.h), shared with the source node. Sized so the level loop settles
+ * WELL inside the guard band rather than against it: with the pacer's measured 900 ppm
+ * deficit and a proportional loop, the steady-state depth is target * (1 + drift/MAX),
+ * which at 5000 ppm is 1.18 * target, below the guard's HIGH at 2 * target. If it is
+ * ever REACHED the loop has lost authority and the discards come back, which is why the
+ * applied correction is published rather than assumed. */
+#include "reac_rate_match.h"
 
 #endif /* REAC_SINK_NODE_H */
