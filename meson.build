@@ -131,10 +131,9 @@ libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 # (an unpadded last message no longer walks the stale buffer); the health line reads through it.
 libreac_transport_dep = dependency('libreac-transport', version : '>=1.11.0', required : true)
 
-# A sibling libreac checkout's transport/src — dev-only, for the two spots that need the
-# door's actual SOURCE rather than its installed header (bench_hotpath's #include trick,
-# rt_single_door's positive control). Empty by default; both spots degrade honestly
-# (not-built / SKIP) rather than faking a result without it.
+# A sibling libreac checkout's transport/src — dev-only, for the one spot that needs the
+# door's actual SOURCE rather than its installed header (bench_hotpath's #include trick).
+# Empty by default; it degrades honestly (not built) rather than faking a result without it.
 libreac_transport_srcdir = get_option('libreac_transport_srcdir')
 
 # The floor bites on BOTH resolution paths, verified when it was raised:
@@ -1897,8 +1896,7 @@ test('reac_conformance', conformance_test)
 # benchmark the SHIPPING decode path instead of a copy of it that would drift.
 # reac_rx.c's SOURCE is not part of the installed -devel package (only the
 # header is), so this needs a sibling libreac checkout's transport/src — point
-# -Dlibreac_transport_srcdir at it (declared near the top, also used by the
-# rt_single_door test's positive control). Not build_by_default any more: a
+# -Dlibreac_transport_srcdir at it (declared near the top). Not build_by_default any more: a
 # normal checkout without that sibling tree would otherwise fail `ninja`
 # outright for a target nothing else here depends on.
 bench_hotpath_inc = [src_inc, include_directories('tests')]
