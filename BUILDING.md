@@ -73,6 +73,11 @@ commit, so only committed files reach the package build. The version is the spec
 `meson.build`'s `version:` and the newest entry of `debian/changelog`; a release bumps all three together,
 by its last digit.
 
+`reac-pw-devel` (RPM) and `reac-pw-dev` (DEB) ship the public facts headers under `<includedir>/reac-pw/`
+(`reac_headamp_prop.h` with what it includes) and `reac-pw.pc`; `tests/devel-package-ships-the-pinned-headers.sh`
+keeps the spec's `%files devel`, `debian/reac-pw-dev.install` and `meson.build`'s `install_headers` on the same
+header list, floors only.
+
 There is no changelog file: git history is the changelog. The spec's `%changelog` and `debian/changelog`
 are packaging metadata and are edited by hand with the version bump.
 

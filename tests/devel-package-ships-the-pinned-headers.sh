@@ -56,14 +56,14 @@ dinst="$ROOT/debian/reac-pw-dev.install"
 mes="$ROOT/meson.build"
 [ -f "$spec" ] && [ -f "$ctl" ] || { echo "FAIL: spec or debian/control missing" >&2; exit 1; }
 
-want=$(closure "$ROOT/src" "$ROOT/facts" "$PINNED")
-grep -qx "$PINNED" <<<"$want" || { echo "FAIL: the pinned $PINNED is not in src/ or facts/" >&2; exit 1; }
+headers=$(closure "$ROOT/src" "$ROOT/facts" "$PINNED")
+grep -qx "$PINNED" <<<"$headers" || { echo "FAIL: the pinned $PINNED is not in src/ or facts/" >&2; exit 1; }
 
 # --- RPM: %files devel
 grep -Eq '^%package +devel' "$spec" || say "spec: no '%package devel'"
 files=$(awk '/^%files +devel/{on=1; next} /^%(files|post|pre|changelog|description|package)/{on=0} on' "$spec")
 [ -n "$files" ] || say "spec: no '%files devel' list"
-for h in $want; do
+for h in $headers; do
 	grep -Eq "^[^#]*/reac-pw/$h\$" <<<"$files" \
 		|| say "spec: %files devel does not list the header $h"
 done
@@ -72,7 +72,7 @@ grep -Eq '^[^#]*/pkgconfig/reac-pw\.pc$' <<<"$files" || say "spec: %files devel 
 # --- DEB: the .install list of reac-pw-dev
 grep -Eq '^Package: reac-pw-dev$' "$ctl" || say "control: no 'Package: reac-pw-dev'"
 if [ -f "$dinst" ]; then
-	for h in $want; do
+	for h in $headers; do
 		grep -Eq "^[^#]*usr/include/reac-pw/$h\$" "$dinst" || say "debian/reac-pw-dev.install does not list the header $h"
 	done
 	grep -Eq '^[^#]*pkgconfig/reac-pw\.pc$' "$dinst" || say "debian/reac-pw-dev.install does not list reac-pw.pc"
@@ -81,7 +81,7 @@ else
 fi
 
 # --- meson installs what the lists name
-for h in $want; do
+for h in $headers; do
 	grep -Eq "(src|facts)/$h'" "$mes" && grep -q "install_headers" "$mes" \
 		|| say "meson.build does not install_headers the header $h"
 done
@@ -106,9 +106,9 @@ grep -Eq '[(][[:space:]]*(<<|<|=|>>)' <<<' libreac-dev (<< 1.12~)' \
 # --- optional: the built package's file list
 if [ -n "${RPM_DEVEL:-}" ]; then
 	list=$(rpm -qlp "$RPM_DEVEL") || say "rpm -qlp $RPM_DEVEL failed"
-	for h in $want; do grep -qx "/usr/include/reac-pw/$h" <<<"$list" || say "built RPM lacks /usr/include/reac-pw/$h"; done
+	for h in $headers; do grep -qx "/usr/include/reac-pw/$h" <<<"$list" || say "built RPM lacks /usr/include/reac-pw/$h"; done
 	grep -Eqx '/usr/share/pkgconfig/reac-pw\.pc' <<<"$list" || say "built RPM lacks reac-pw.pc"
 fi
 
-[ "$fail" = 0 ] && echo "OK: reac-pw-devel and reac-pw-dev list $(tr '\n' ' ' <<<"$want")and reac-pw.pc, floors only"
+[ "$fail" = 0 ] && echo "OK: reac-pw-devel and reac-pw-dev list $(tr '\n' ' ' <<<"$headers")and reac-pw.pc, floors only"
 exit "$fail"
