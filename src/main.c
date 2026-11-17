@@ -58,6 +58,7 @@
 
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
+#include <reac/transport/reac_pacer.h>  /* REAC_PACER_GUARD_FLOOR_MIN/MAX, the range of REACPW_GUARD_FLOOR_FRAMES */
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
 #include "reac_box_row.h"      /* a box with no declared outputs has no reac-playback */
@@ -299,6 +300,7 @@ static long g_knob_grant_dwell_ms;     /* 0 = unset; libreac range is (0, 600000
 static long g_knob_grant_dwell_s;      /* 0 = unset; libreac range is (0, 3600] */
 static int  g_knob_catchup_max_slots;  /* 0 = rate-derived default, -1 = off */
 static int  g_knob_presilence_ms;      /* 0 = start at once */
+static long g_knob_guard_floor;        /* 0 = unset: the compiled floor */
 static int knob_parse_long(const char *v, long lo, long hi, long *out);
 
 static void refuse_if_root(void)
@@ -6055,9 +6057,12 @@ static int knob_parse_long(const char *v, long lo, long hi, long *out)
 	if (!v || (*v != '-' && *v != '+' && (*v < '0' || *v > '9')))
 		return -1;               /* empty, a space, a letter: not a number */
 	char *end = NULL;
-	errno = 0;
+	/* No errno test: a number that does not fit a long comes back saturated at LONG_MAX
+	 * or LONG_MIN, and every range passed here sits strictly inside those, so the range
+	 * check below refuses it (the "99999999999999999999" cases of
+	 * tests/numeric-knobs-are-refused.sh pass with the errno arm removed). */
 	long n = strtol(v, &end, 10);
-	if (errno != 0 || end == v || *end != '\0' || n < lo || n > hi)
+	if (end == v || *end != '\0' || n < lo || n > hi)
 		return -1;
 	*out = n;
 	return 0;
@@ -6092,6 +6097,8 @@ static int numeric_knobs_door(void)
 	g_knob_catchup_max_slots = (int)v;
 	bad |= knob_numeric("REACPW_BOX_MASTER_PRESILENCE_MS", 0, 600000, 0, &v);
 	g_knob_presilence_ms = (int)v;
+	bad |= knob_numeric("REACPW_GUARD_FLOOR_FRAMES", REAC_PACER_GUARD_FLOOR_MIN,
+	                    REAC_PACER_GUARD_FLOOR_MAX, 0, &g_knob_guard_floor);
 	bad |= knob_numeric("REACPW_LINK_MBIT", 1, 1000000, 1, &junk);   /* host-wide form */
 	return bad ? 2 : 0;
 }
@@ -6116,12 +6123,7 @@ static void push_libreac_tunables(void)
 	reac_master_tunables_set(&mt);
 
 	struct reac_pacer_tunables pt = REAC_PACER_TUNABLES_DEFAULT;
-	if (reac_knobs_resolve("REACPW_GUARD_FLOOR_FRAMES", v, sizeof v) != REAC_CONF_NONE) {
-		char *end = NULL;
-		unsigned long f = strtoul(v, &end, 10);
-		if (end && *end == '\0')
-			pt.guard_floor_frames = (unsigned int)f;
-	}
+	pt.guard_floor_frames = (unsigned int)g_knob_guard_floor;   /* checked at the door */
 	pt.no_headamp = reac_knobs_resolve_flag("REACPW_NO_HEADAMP", 0);
 	reac_pacer_tunables_set(&pt);
 
