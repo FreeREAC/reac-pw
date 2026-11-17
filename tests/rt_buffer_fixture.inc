@@ -54,7 +54,7 @@ int pw_stream_update_properties(struct pw_stream *s, const struct spa_dict *dict
 		if (strcmp(it->key, REACPW_PROP_HEALTH_RT_BAD_BUFFERS) == 0) {
 			snprintf(fx_prop_val, sizeof fx_prop_val, "%s", it->value);
 			fx_prop_calls++;
-		} else if (strcmp(it->key, "reac.health.rt-dropped-frames") == 0) {
+		} else if (strcmp(it->key, REACPW_PROP_HEALTH_RT_DROPPED_FRAMES) == 0) {
 			snprintf(fx_drop_val, sizeof fx_drop_val, "%s", it->value);
 			fx_drop_calls++;
 		}
