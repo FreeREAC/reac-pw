@@ -1823,7 +1823,7 @@ static void sink_publish_latency(struct reac_sink_node *n)
  * recovers its word clock from our cadence, so its counter slope measured against
  * the host clock is exactly our own applied correction handed back: the loop's
  * residual is identically zero, it parks where it is, and the cadence cannot run
- * away (pinned in test_reac_pacer_clock).
+ * away (pinned in libreac's test_reac_pacer_clock).
  *
  * Present only once the master is ESTABLISHED with a box AND reac_rx has actually
  * closed a slope window — ppm_error_milli reads 0 both before the first estimate

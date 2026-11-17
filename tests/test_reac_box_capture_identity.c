@@ -17,7 +17,7 @@
  *      the box's address, model and width.
  *
  * No socket and no PipeWire: the pacer is built by hand with handle = NULL, and the
- * badge goes into a recording fake props dict, as in test_reac_box_identity.c. */
+ * badge goes into a recording fake props dict, as in libreac's test_reac_box_identity.c. */
 #include <reac/reac_ctrlblk.h>
 #include <reac/reac_ports.h>
 #include <reac/reac_master.h>

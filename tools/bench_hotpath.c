@@ -65,7 +65,7 @@ static int cmp_u64(const void *a, const void *b)
 
 /* A well-formed 40-channel downstream broadcast, distinct per counter so the
  * decode has real work and the dup guard never short-circuits. Same fixture
- * shape as tests/test_reac_rx_dup.c's mk_downstream. */
+ * shape as libreac's tests/test_reac_rx_dup.c mk_downstream. */
 static void mk_downstream(uint8_t *out, uint16_t counter)
 {
 	memset(out, 0, REAC_FRAME_BYTES);

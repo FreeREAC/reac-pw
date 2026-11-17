@@ -547,7 +547,7 @@ int main(int argc, char **argv)
 
 	static const uint8_t BCAST[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	/* THE BOX'S MICROPHONES, one distinct constant per channel — the same pattern
-	 * tests/test_reac_box_master_audio.c reads back by value out of the ring. A flood
+	 * libreac's tests/test_reac_box_master_audio.c reads back by value out of the ring. A flood
 	 * filler with NULL audio is silence, and a segment that decoded every frame into
 	 * silence reads exactly like one that decoded nothing: this is what makes the
 	 * frames the daemon counts frames that CARRY something. */
