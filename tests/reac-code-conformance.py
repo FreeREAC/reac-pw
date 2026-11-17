@@ -197,6 +197,28 @@ def bare_refusal_lines(src_files, start_pattern=FPRINTF_START):
     return hits
 
 
+def planted_srcdir():
+    """A LIBREAC_SRCDIR that is SET must be a libreac checkout, or the run is refused naming
+    it: a set-but-wrong directory used to mean "no sibling", the arm below quietly idle and
+    the run green. Plants an empty directory; the refusal must name it."""
+    import tempfile
+    saved = os.environ.get('LIBREAC_SRCDIR')
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            os.environ['LIBREAC_SRCDIR'] = d
+            try:
+                got = find_libreac(Path(d).parent)
+            except SystemExit as e:
+                return None if d in str(e) else f'the refusal of an empty LIBREAC_SRCDIR does not name {d}'
+            return f'an empty LIBREAC_SRCDIR ({d}) was accepted (found {got}) -- a set but wrong ' \
+                   f'directory must be refused by name, not read as "no sibling"'
+    finally:
+        if saved is None:
+            os.environ.pop('LIBREAC_SRCDIR', None)
+        else:
+            os.environ['LIBREAC_SRCDIR'] = saved
+
+
 def main(argv):
     src_dir = Path(argv[1]) if len(argv) > 1 else Path('src')
     inc = Path(argv[2]) if len(argv) > 2 else None
@@ -207,7 +229,7 @@ def main(argv):
     lib_code_h = inc / 'reac' / 'reac_code.h'
     cfg_h = inc / 'reac' / 'reac_cfg.h'
 
-    broken = planted_one_home(cfg_h)
+    broken = planted_srcdir() or planted_one_home(cfg_h)
     if broken:
         print(broken, file=sys.stderr)
         return 1
