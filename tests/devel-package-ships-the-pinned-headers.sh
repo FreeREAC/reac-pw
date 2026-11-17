@@ -82,8 +82,9 @@ fi
 
 # --- meson installs what the lists name
 for h in $headers; do
-	grep -Eq "(src|facts)/$h'" "$mes" && grep -q "install_headers" "$mes" \
-		|| say "meson.build does not install_headers the header $h"
+	if ! grep -Eq "(src|facts)/$h'" "$mes" || ! grep -q "install_headers" "$mes"; then
+		say "meson.build does not install_headers the header $h"
+	fi
 done
 # (a bash match, not a grep pattern: a grep -q pattern in tests/ is a claim about a daemon line,
 # which tests/asserted-lines-have-a-producer.py holds to a producer in src/)
