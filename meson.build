@@ -29,7 +29,7 @@ m_dep        = cc.find_library('m', required : false)
 
 # --- libreac: RX/measure core, the installed package ----------------------
 # libreac-devel (RPM) / libreac-dev (deb) from the FreeMixer channel, found by pkg-config and
-# linked dynamically. The floor below is also written, with a ceiling, in packaging/reac-pw.spec
+# linked dynamically. The floor below is also written, as a floor only, in packaging/reac-pw.spec
 # and debian/control (tests/libreac-is-a-bounded-package-dependency.sh keeps them so); nothing of
 # libreac is fetched, cloned or bundled. The header is <reac/reac.h>.
 # >=0.5.0: the braid/sample layout oracles, the upstream decode, the OHRCA
@@ -104,7 +104,7 @@ m_dep        = cc.find_library('m', required : false)
 # is the one code list (src/reac_code.h is gone; 1.10.0 is the first release declaring every token this
 # daemon emits), and reac_etf_qdisc_stats_read is the one RTM_GETQDISC counter read (src/reac_qdisc.c's
 # copy is gone). An older header does not compile.
-# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); the packages carry the ceiling.
+# >=1.11.0 SINCE 1.0.43: libreac.so.7 (struct pcap_source grew); no package carries a ceiling.
 libreac_dep = dependency('libreac', version : '>=1.11.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
@@ -220,6 +220,47 @@ reac_pw_exe = executable('reac-pw',
   dependencies : [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep],
   install : true)
 
+# --- unit tests: the node process callbacks against a bad stream buffer -------
+# on_process (sink and source) runs on the realtime thread and used to trust the
+# buffer: plane count, data pointers, chunks, plane lengths. The tests include the
+# node's own source (the callbacks are static), stub the pw_stream pool with exactly
+# sized allocations and run one cycle per named case; with AddressSanitizer the first
+# stray byte is a report. Every other object is the daemon's own, minus main.
+rt_plane_objs_common = [
+  'src/reac_knobs.c', 'src/reac_box_pin.c', 'src/reac_rx_bind.c', 'src/reac_watch.c',
+  'src/reac_wake.c', 'src/reac_knock_wire.c', 'src/reac_link_owner.c',
+  'src/reac_empty_master.c', 'src/reac_node_recover.c', 'src/reac_headamp_prop.c',
+  'src/reac_headamp_state.c', 'src/reac_rate_cfg.c', 'src/reac_role_cfg.c',
+  'src/reac_sink_format.c', 'src/reac_node_ensure.c', 'src/reac_node_graph.c',
+  'src/reac_knock_credit.c', 'src/reac_box_row.c', 'src/reac_lat.c', 'src/reac_gain.c',
+  'src/reac_qdisc.c', 'src/reac_link_alias.c', 'src/reac_served_mark.c',
+  'src/reac_link_budget.c', 'src/reac_declared_vlan.c', 'src/reac_segconf.c',
+  'src/reac_roster.c', 'src/reac_roster_node.c',
+]
+# Sanitized only on request (-Dsanitize_tests=true): the default build, and the package %check,
+# have no libasan/libubsan. The assertions on counters and samples hold either way.
+rt_plane_san = get_option('sanitize_tests') ? ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] : []
+rt_plane_cases = ['good', 'no-planes', 'few-planes', 'null-data0', 'null-data1',
+                  'short-plane', 'no-chunk0', 'no-chunk1', 'null-buffer', 'null-datas',
+                  'short-chunk', 'extra-no-chunk']
+rt_plane_deps = [pipewire_dep, spa_dep, threads_dep, m_dep, libreac_dep, libreac_transport_dep]
+sink_rt_planes = executable('test_reac_sink_rt_planes',
+  ['tests/test_reac_sink_rt_planes.c', 'src/reac_source_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+source_rt_planes = executable('test_reac_source_rt_planes',
+  ['tests/test_reac_source_rt_planes.c', 'src/reac_sink_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+foreach c : rt_plane_cases
+  test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c], suite : 'rt-planes',
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+  test('reac_source_rt_planes_' + c, source_rt_planes, args : [c], suite : 'rt-planes',
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+endforeach
+
 # --- source sweep: ONE DOOR TO SCHED_FIFO ------------------------------------
 # The ladder above only holds while reac_rt.c is the only place that changes a
 # thread's scheduling class; a third RT thread spelling its own literal would
@@ -234,9 +275,37 @@ test('reac_rt_single_door',
   args : rt_single_door_args)
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
-# libreac is declared in the spec and debian/control as a floor and a ceiling and nowhere else.
+# libreac is declared in the spec and debian/control as a floor only (no ceiling) and nowhere else.
 test('libreac_is_a_bounded_package_dependency',
   find_program('tests/libreac-is-a-bounded-package-dependency.sh'),
+  args : [meson.current_source_dir()])
+
+# --- the facts headers, installed for consumers (reac-pw#108) ---------------
+# reac_headamp_prop.h is the public facts header openmixer's conformance test pins (the head-amp
+# property prefix); the rest are what it includes, so the installed header compiles on its own
+# against libreac-devel. They go to <includedir>/reac-pw/ and reac-pw.pc names that directory.
+# Packaged as reac-pw-devel (RPM) and reac-pw-dev (DEB); tests/devel-package-ships-the-pinned-
+# headers.sh keeps the lists and this block in step.
+install_headers(
+  'src/reac_headamp_prop.h',
+  'src/reac_headamp_state.h',
+  'src/reac_facts_pw.h',
+  'facts/reac_facts.h',
+  'facts/reac_facts_undef.h',
+  subdir : 'reac-pw')
+import('pkgconfig').generate(
+  name : 'reac-pw',
+  description : 'reac-pw facts headers (head-amp property prefix and the protocol numbers)',
+  version : meson.project_version(),
+  subdirs : 'reac-pw',
+  requires : 'libreac >= 1.11.0',
+  install_dir : get_option('datadir') / 'pkgconfig')
+
+# --- the devel package ships the headers a consumer pins (reac-pw#108) ------
+# Fails when reac_headamp_prop.h (pinned by openmixer's conformance test) or a header it includes is
+# missing from the spec's %files devel or debian/reac-pw-dev.install.
+test('devel_package_ships_the_pinned_headers',
+  find_program('tests/devel-package-ships-the-pinned-headers.sh'),
   args : [meson.current_source_dir()])
 
 # --- unit test: the RX stream gate (downstream vs upstream accept) ------------
@@ -1264,6 +1333,16 @@ source_format_test = executable('test_reac_source_format',
   include_directories : src_inc,
   dependencies : [spa_dep, libreac_dep, libreac_transport_dep])
 test('reac_source_format', source_format_test)
+
+# --- unit test: the source node's follower rate stays inside the sink's bound -
+# Pure header (reac_rate_match.h): a wrong-pace master (0.5x, 2x), the extremes of the
+# published int and non-finite input must never hand the resampler more than
+# +-REAC_RATE_MATCH_MAX_PPM, and every clamp is counted.
+rate_match_test = executable('test_reac_rate_match',
+  ['tests/test_reac_rate_match.c'],
+  include_directories : src_inc,
+  dependencies : [m_dep])
+test('reac_rate_match', rate_match_test)
 
 # --- unit test: reac_node_ensure — the shared same-box-or-rebuild decision ---
 # (2026-08-26-duplicate-reac-node). Pure: no pw_stream, no
