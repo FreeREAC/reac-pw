@@ -13,6 +13,14 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* The RT thread bumps this counter: it must be a 32-bit atomic, lock-free on every
+ * target (an unsigned long long is not on 32-bit ones). Pin the helper's parameter
+ * type so a widening is a compile error, not a quiet regression. */
+_Static_assert(_Generic(&reac_rate_match_from_ppm_milli,
+                        double (*)(double, _Atomic uint32_t *): 1, default: 0),
+               "the clamp counter must be _Atomic uint32_t");
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "a 32-bit atomic must be lock-free");
+
 static int fails;
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
@@ -21,6 +29,7 @@ static double bound(void) { return REAC_RATE_MATCH_MAX_PPM / 1e6; }
 int main(void)
 {
 	_Atomic uint32_t clamped = 0;
+	CHK(atomic_is_lock_free(&clamped));
 
 	/* In-bound values pass through untouched and are not counted. */
 	double r = reac_rate_match_from_ppm_milli(1500.0 * 1000.0, &clamped);
