@@ -1995,7 +1995,7 @@ bench_hotpath = executable('bench_hotpath',
 # string is caught the same way an operator misreading it would be.
 usage_test = executable('test_reac_headamp_usage',
   ['tests/test_reac_headamp_usage.c'])
-test('reac_headamp_usage', usage_test, args : [reac_pw_exe.full_path()])
+test('reac_headamp_usage', usage_test, args : [reac_pw_exe])
 
 # --- text: every declared reac_code is emitted, and bare refusals stay under a floor --
 # "We need the error codes and not only messages" (2026-09-17). The tokens the daemon emits
