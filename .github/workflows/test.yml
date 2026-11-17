@@ -103,6 +103,12 @@ jobs:
               (cd "$T"/reac-pw-test &&
                meson setup _build >/dev/null &&
                meson test -C _build --no-suite netns --no-suite load --print-errorlogs)
+              # THE REALTIME-CALLBACK BAD-BUFFER TESTS, SANITIZED. Everywhere above they run
+              # without a sanitizer (the spec has no libasan); here, once, a read past a plane
+              # is an AddressSanitizer report.
+              dnf install -y -q --setopt=install_weak_deps=False libasan libubsan
+              (cd "$REPO" && meson setup build-san -Dsanitize_tests=true --wrap-mode=nofallback >/dev/null &&
+               meson test -C build-san --suite rt-planes --print-errorlogs)
             '
 
       - name: Keep the test logs
