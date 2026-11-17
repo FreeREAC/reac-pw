@@ -79,8 +79,8 @@ ver() { grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -1; }
 	|| { echo "FAIL: self-check: the floor pattern cannot read a planted Requires line" >&2; exit 1; }
 floors=$( {
 	grep -oE "dependency\('libreac(-transport)?', version : '>= *[0-9.]+'" "$ROOT/meson.build" | sed "s/.*>=//" | grep -oE '[0-9.]+'
-	decl "$stext" "$FLOOR_RE" | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
-	decl "$ctext" '^ *libreac(-transport)?-dev [(]>=' | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
+	decl "$stext" "$FLOOR_RE" | while read -r l; do ver <<<"${l#*>=}"; done
+	decl "$ctext" '^ *libreac(-transport)?-dev [(]>=' | while read -r l; do ver <<<"${l#*>=}"; done
 } | sort -u)
 [ "$(wc -l <<<"$floors")" = 1 ] && [ "$(wc -w <<<"$floors")" = 1 ] \
 	|| say "the libreac floor is not ONE value across meson.build, the spec and control: $(tr '\n' ' ' <<<"$floors")"
