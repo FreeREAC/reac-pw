@@ -303,7 +303,7 @@ sink_dropped = executable('test_reac_sink_dropped',
   c_args : rt_plane_san, link_args : rt_plane_san,
   dependencies : rt_plane_deps)
 foreach c : ['upstream-ring', 'pacer-ring']
-  test('reac_sink_dropped_' + c, sink_dropped, args : [c],
+  test('reac_sink_dropped_' + c, sink_dropped, args : [c], suite : 'rt-planes',
     env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
 endforeach
 foreach c : rt_plane_cases
