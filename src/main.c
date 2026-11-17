@@ -915,6 +915,7 @@ static void on_autodetect_timer(void *data, uint64_t expirations)
 	struct autodetect_ctx *c = data;
 	/* Whatever the RT callback queued for us — it never prints for itself. */
 	reac_source_node_drain_log(*c->src, stderr);
+	reac_source_node_publish_health(*c->src);
 	/* BEFORE the recognition gate, and that is the whole point: the silence this
 	 * answers is a segment with NO box recognized, which is exactly the state the
 	 * early return below leaves unattended. */

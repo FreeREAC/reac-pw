@@ -17,7 +17,7 @@ channel described in the [README](README.md).
 
 `libreac-devel` and `libreac-transport-devel` are hard requirements, found by pkg-config; nothing of
 libreac is fetched or bundled. The version floors are the ones `meson.build` declares, and the spec
-and `debian/control` add the ceiling (the next minor).
+and `debian/control` repeat them as floors only; no consumer ceiling.
 
 ## Build and test
 
@@ -44,7 +44,7 @@ socket. `tools/build.sh [builddir]` compiles, sets
 
 `.github/workflows/test.yml` runs `tools/ci-suite.sh` in a privileged `fedora:44`
 container, against the libreac packages of the FreeMixer channel, which `dnf builddep
-packaging/reac-pw.spec` installs at the floor and ceiling the spec declares (`libreac-devel`,
+packaging/reac-pw.spec` installs at the floor the spec declares (`libreac-devel`,
 `libreac-transport-devel` and `libreac-tests`, which carries `fake_box`, the far end several tests
 drive). The same script runs on a desk with those packages installed:
 
@@ -72,6 +72,11 @@ rebuild — among them `clock-drift.py` and `ring-depth.sh` (pacer/clock health)
 commit, so only committed files reach the package build. The version is the spec's `Version:`,
 `meson.build`'s `version:` and the newest entry of `debian/changelog`; a release bumps all three together,
 by its last digit.
+
+`reac-pw-devel` (RPM) and `reac-pw-dev` (DEB) ship the public facts headers under `<includedir>/reac-pw/`
+(`reac_headamp_prop.h` with what it includes) and `reac-pw.pc`; `tests/devel-package-ships-the-pinned-headers.sh`
+keeps the spec's `%files devel`, `debian/reac-pw-dev.install` and `meson.build`'s `install_headers` on the same
+header list, floors only.
 
 There is no changelog file: git history is the changelog. The spec's `%changelog` and `debian/changelog`
 are packaging metadata and are edited by hand with the version bump.
