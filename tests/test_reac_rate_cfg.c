@@ -13,7 +13,7 @@
  *
  *   2. reac_pacer_apply_rate/_request_rate/_rate_drain, driven directly on a
  *      hand-built `struct reac_pacer` with no AF_PACKET socket at all — the
- *      same style test_reac_headamp_live.c uses for the head-amp command ring.
+ *      same style libreac's test_reac_headamp_live.c uses for the head-amp command ring.
  *      Establishes a box at 48 kHz, captures the grant burst's SHAPE (count,
  *      stride, order, dwell), asserts a `reac.cfg.rate` change to 96 kHz
  *      re-establishes with the IDENTICAL shape, and that a refused rate (out
@@ -247,7 +247,7 @@ static const uint8_t SRC[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
 static const uint8_t BOX[6] = { 0x00, 0x40, 0xab, 0xc4, 0x80, 0x3b };
 #define S1608_BASE REACPW_S1608_HEADAMP_BASE
 
-/* Mirrors test_reac_master_no_enroll.c's helper of the same name: stand in the
+/* Mirrors libreac's test_reac_master_no_enroll.c helper of the same name: stand in the
  * quiet window between scene transfers so the JOIN below is not held. */
 static void deliver_scene(struct reac_master *m, uint16_t *expect_counter)
 {

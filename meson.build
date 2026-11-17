@@ -84,7 +84,7 @@ m_dep        = cc.find_library('m', required : false)
 # (operator ruling 2026-09-22 — deciding what a wire is belongs to the library; reac-pw
 # deals with enrolled nodes). Against an older libreac this build dies at main.c's
 # #include, which is a loud enough failure; the floor is raised so it arrives at configure
-# time instead, and so tests/test_reac_enrolment_binding.c's own #error has a partner.
+# time instead.
 # >=1.5.0 SINCE 1.0.24: REAC_TOPO_TAGGED_OTHER (a tag on any ethertype names a VLAN, which
 # is how a COLD one is found) and reac_topo_heard_vids() are 1.5.0 surface, and this daemon
 # reads both. An older header does not compile; the floor turns that into a configure-time
@@ -366,7 +366,7 @@ test('reac_link_up_reestablishes',
 # A STAGEBOX WITH ITS REAC MODE SWITCH ON M, for the far end of the veth pair. The daemon
 # cannot play one (its master role IS a desk: the fixed 40-channel downstream), and the
 # 0.5.1 ruling turns on exactly this peer -- joined on an unpinned wire, refused on one
-# pinned master. Same libreac builders as test_reac_hunt's own fixture.
+# pinned master. Same libreac builders as libreac's test_reac_hunt fixture.
 fake_box_master = executable('fake-box-master',
   ['tests/fake_box_master.c'],
   include_directories : src_inc,
@@ -518,7 +518,7 @@ test('reac_etf_late_is_the_wake',
 
 # --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
 # drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
-# test_reac_ifscan pins the table; this drives the real binary on a veth pair
+# libreac's test_reac_ifscan pins the table; this drives the real binary on a veth pair
 # with a second reac-pw mastering the peer end, inside an unprivileged user+net
 # namespace. Skips where that or PipeWire is unavailable. Timeout covers
 # 3 + 4 + 3 + 4.5 + 5 s of waits plus two startups, and since 2026-09-08 the three
@@ -652,7 +652,7 @@ test('door-without-outputs',
 # 2026-09-20, the home rig: a 100 Mbit trunk, every segment `auto`, and an EMPTY VLAN won
 # the 500 ms silence race. One 96 kHz master is 97% of that port, so the admission then
 # refused the only segment with a box on it -- 690 times in 30 minutes, and the S-1608
-# never enrolled. test_reac_link_budget proves the arithmetic and test_reac_hunt the
+# never enrolled. test_reac_link_budget proves the arithmetic and libreac's test_reac_hunt the
 # verdict; what was wrong is the ORDER two segments on one physical port reach the
 # admission in, which lives in the listener table, the ifscan state machine and the
 # sniffer's discovery table at once. Two VLANs on one veth, the port's rate DECLARED
@@ -1184,19 +1184,6 @@ wake_test = executable('test_reac_wake',
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_wake', wake_test)
 
-# --- BINDING test: the enrolment decisions this daemon links against -------------
-# THE TWO STATE MACHINES MOVED TO libreac 1.4.0 (its own tests/test_reac_knock.c and
-# tests/test_reac_tapwait.c assert the arithmetic, where a libreac change can see them go
-# red). What is left here is the only question reac-pw can answer and libreac cannot: does
-# the library THIS BINARY IS LINKED AGAINST still carry the two rules main.c's poll depends
-# on? It calls the installed surface -- no reac-pw source, no local header -- and asserts
-# the pair the desk paid nine minutes for on 2026-09-21:
-#
-#   a cancelled masterless observation RE-OPENS, measured from the last frame heard
-#   an unplaced sighting stops binding the hunt once it is stale
-#
-# A floor bump that silently picked up a library without them, or a libreac that reverted
-# either latch, fails HERE, at reac-pw's own gate, instead of on a desk. Pure; no socket.
 # --- unit test: THE WIRE MODEL, a silent wire is knocked on and never flooded (#40) ----
 # A fake wire counts every frame by kind; on it, nothing, fake_box, a box that answers only
 # through FILLER, or a trunk parent. Ten silent minutes carry no stream frame and not one
@@ -1267,7 +1254,7 @@ test('reac_headamp_state', headamp_state_test)
 # arithmetic, the accept/refuse decision, the SPA_PROP_params parse) plus the
 # pacer-level re-establish (reac_pacer_apply_rate/_request_rate/_rate_drain),
 # driven directly with no socket/RT privilege — same style as
-# test_reac_headamp_live. Proves: an in-list, drivable rate re-establishes with
+# libreac's test_reac_headamp_live. Proves: an in-list, drivable rate re-establishes with
 # the grant/dwell sequence byte-identical in SHAPE at the new cadence; an
 # out-of-list rate is refused and nothing moves; a slave refuses every
 # assertion; and the default is the best rate a (possibly narrowed) drivable

@@ -25,7 +25,7 @@
 # that had a box on it, 690 times in 30 minutes, and the box never enrolled.
 #
 # WHY IT NEEDS A WHOLE BINARY AND A REAL WIRE. test_reac_link_budget proves the arithmetic
-# and test_reac_hunt the verdict; neither can see the thing that was wrong, which is the
+# and libreac's test_reac_hunt the verdict; neither can see the thing that was wrong, which is the
 # ORDER two segments on one physical port reach the admission in and what the loser is
 # allowed to do about it. That lives in main.c's listener table, the ifscan state machine
 # and the sniffer's discovery table at once.

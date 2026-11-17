@@ -7,7 +7,7 @@
  * core). Unlike rate there is no pacer-level section here, because a role change
  * does not happen inside one engine: master and slave are two of them, and the
  * swap plus the answer it owes afterwards belong to reac_role_swap
- * (tests/test_reac_role_swap.c). What this file covers, completely: the parse,
+ * (libreac's tests/test_reac_role_swap.c). What this file covers, completely: the parse,
  * the same-role-is-a-no-op detection, and the state a request publishes with
  * nothing carrying it out — including that a role-changing assertion answers
  * `role_reestablish_pending` and never `applied`. */

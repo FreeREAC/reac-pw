@@ -9,7 +9,7 @@
 # TAGS ON A TRUNK, makes the sub-interface each VLAN needs, serves them as ordinary
 # segments, and takes away only the netdevs it made.
 #
-# test_reac_ifscan proves the table and test_reac_hunt the verdict. This proves the lines
+# libreac's test_reac_ifscan proves the table and test_reac_hunt the verdict. This proves the lines
 # that JOIN them to the sockets, the listeners and the GRAPH: the netlink fd on the main
 # loop, the sniffer's classify, the serve from the 200 ms poll, the drop from the hold,
 # and -- since 2026-09-08 -- that "autodetected S-1608 -> reac-capture 16 in" means a
@@ -318,7 +318,7 @@ grep -q "\[hear0\] segment up (tap, deferring to the master it heard)" "$LOG" ||
 grep -q "\[hear0\] a desk masters this segment .* — TAPPING it" "$LOG" || {
 	echo "FAIL: the journal announced a role the daemon did not take"; cat "$LOG"; exit 1; }
 # NOT ONE FRAME FROM US on a desk's wire is the whole point of the role; the absence is
-# measured with its own positive control in tests/tap-sends-nothing.sh, and asserted here
+# measured with its own positive control in libreac's tests/tap-sends-nothing.sh, and asserted here
 # as the JOURNAL's claim that no TX socket was opened at all.
 grep -q "\[hear0\] TAP up at .* NOTHING is transmitted on this segment" "$LOG" || {
 	echo "FAIL: served as a tap and never said it opened no TX side"; cat "$LOG"; exit 1; }
@@ -458,7 +458,7 @@ NODES=$(daemon_nodes $PID)
 # none — so nothing can be driven and no driver clock is ever seen. The DECISION (a
 # hardware clock is admitted and graded, a software timer and a freewheeling graph are
 # refused, an operator designation outranks the name heuristic) is pinned offline by
-# test_reac_pacer_clock; that the CAPTURE node publishes that sample at all — the fix for
+# libreac's test_reac_pacer_clock; that the CAPTURE node publishes that sample at all — the fix for
 # a reference that used to depend on somebody patching the playback side — is visible only
 # on a rig with real hardware in the graph, and is checked there.
 
@@ -914,7 +914,7 @@ esac
 # THE AUDIO IS ARRIVING, and it is the box's own frames that carry it. The counter is the
 # feeder's own (REAC_DEBUG telemetry): ok= counts frames DECODED INTO THE RING, which is
 # where reac_source_node's process() reads the port planes from. The samples themselves are
-# read by value in tests/test_reac_box_master_audio.c -- not here, because no session
+# read by value in libreac's tests/test_reac_box_master_audio.c -- not here, because no session
 # manager runs in this namespace, no node in this graph materialises a port, and nothing
 # schedules the process() that would fill one (measured: this same telemetry reads
 # active_ch=0 peak=0.000000 for the whole run while ok= climbs into the tens of thousands).
