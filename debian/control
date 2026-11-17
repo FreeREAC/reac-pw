@@ -9,11 +9,8 @@ Build-Depends: debhelper-compat (= 13),
  libpipewire-0.3-dev (>= 0.3.65),
  libspa-0.2-dev,
  libreac-dev (>= 1.11.0~),
- libreac-dev (<< 1.12~),
  libreac-transport-dev (>= 1.11.0~),
- libreac-transport-dev (<< 1.12~),
- libreac-tests (>= 1.7.3~),
- libreac-tests (<< 1.12~)
+ libreac-tests (>= 1.7.3~)
 Standards-Version: 4.6.2
 Homepage: https://github.com/FreeREAC/reac-pw
 Rules-Requires-Root: no
@@ -36,3 +33,14 @@ Description: PipeWire-native Roland REAC endpoint
  daemon the file capabilities it needs for raw network frames, VLAN
  sub-interfaces and real-time scheduling. A small system service keeps
  NetworkManager off the network interfaces reac-pw serves.
+
+Package: reac-pw-dev
+Architecture: all
+Section: libdevel
+Depends: ${misc:Depends},
+ libreac-dev (>= 1.11.0~)
+Description: PipeWire-native Roland REAC endpoint, facts headers
+ The public facts headers of reac-pw, installed under /usr/include/reac-pw
+ with reac-pw.pc: reac_headamp_prop.h (the per-channel head-amp key prefix
+ inside SPA_PROP_params) and the headers it includes. A consumer that pins
+ those facts reads them from here instead of from a source checkout.

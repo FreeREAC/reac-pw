@@ -31,6 +31,7 @@
 #include <reac/transport/reac_tx.h>
 #include <reac/transport/reac_pacer.h>
 #include "reac_gain.h"
+#include "reac_rt_planes.h"   /* what the RT callback may trust about a buffer */
 #include <spa/node/io.h>   /* struct spa_io_rate_match + SPA_IO_RateMatch */
 #include "reac_headamp_prop.h"   /* live head-amp control parse */
 #include "reac_headamp_state.h"  /* the head-amp door's READ side: asserted + refusal */
@@ -305,6 +306,10 @@ struct reac_sink_node {
 	/* 0.5.6: the slave's upstream carrier. Non-NULL = no pacer, no socket; process()
 	 * writes planar PCM here and reac_slave puts it on the wire. */
 	struct reac_ring *upstream_ring;
+	/* Cycles on_process skipped because the stream buffer was not what it needs
+	 * (reac_rt_planes.h). RT increments, main reads (reac_sink_node_bad_buffers). */
+	_Atomic uint32_t rt_bad_buffers;
+	int64_t bad_buffers_last;       /* what the door last showed; -1 = nothing yet */
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -363,6 +368,14 @@ static void on_process(void *data)
 	if (!pwb)
 		return;                 /* nothing queued this cycle */
 	struct spa_buffer *sbuf = pwb->buffer;
+	/* PLANE 0's CHUNK SIZES THE CYCLE, so a buffer without a planes array or without that
+	 * chunk costs the whole cycle (counted); every other fault costs only its own plane,
+	 * below. (reac_rt_planes.h) */
+	if (!reac_rt_buffer_usable(sbuf) || sbuf->datas[0].chunk == NULL) {
+		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
+		pw_stream_queue_buffer(n->stream, pwb);
+		return;
+	}
 	uint32_t nframes = sbuf->datas[0].chunk->size / (uint32_t)sizeof(float);
 	if (nframes > position->clock.duration)
 		nframes = position->clock.duration;
@@ -416,7 +429,7 @@ static void on_process(void *data)
 		if (err < -1.0) err = -1.0;
 		/* depth ABOVE target => we are consuming too slowly => ask the resampler
 		 * for fewer samples per second, i.e. a rate below nominal. */
-		double ppm = -err * (double)REAC_SINK_RATE_MATCH_MAX_PPM;
+		double ppm = -err * (double)REAC_RATE_MATCH_MAX_PPM;
 		n->rate_match->rate = 1.0 + ppm / 1e6;
 		atomic_store_explicit(&n->rate_match_milli_ppm, (int)(ppm * 1000.0),
 		                      memory_order_relaxed);
@@ -460,15 +473,20 @@ static void on_process(void *data)
 
 	const float *in[REAC_MAX_CHANNELS];
 	int have = 0;
+	int bad_plane = 0;
 	for (int c = 0; c < n->channels; c++) {
-		/* Belt-and-braces: a NULL port (should never happen — the constructor now
-		 * fails if add_port returns NULL) is treated as unlinked, so we never deref
-		 * NULL in the RT path; the stage just carries silence for that slot. */
-		float *b = ((uint32_t)c < sbuf->n_datas) ? sbuf->datas[c].data : NULL;
-		in[c] = b;            /* NULL if this port is unlinked this cycle */
+		/* A plane the buffer does not have, or that cannot hold this cycle by its OWN
+		 * size, is read as silence and the others play; the cycle is counted once. */
+		float *b = reac_rt_plane_ok(sbuf, c, nframes * (uint32_t)sizeof(float), true)
+		           ? sbuf->datas[c].data : NULL;
+		in[c] = b;            /* NULL if this port is unlinked or bad this cycle */
 		if (b)
 			have++;
+		else
+			bad_plane = 1;
 	}
+	if (bad_plane)
+		atomic_fetch_add_explicit(&n->rt_bad_buffers, 1, memory_order_relaxed);
 	if (have == 0) {
 		pw_stream_queue_buffer(n->stream, pwb);
 		return;               /* nothing feeding us — pacer free-runs silent FILLER */
@@ -972,6 +990,7 @@ static void sink_door_shadows_reset(struct reac_sink_node *n)
 	n->arb_rival_last = -1;
 	n->arb_conflict_last = -1;
 	n->arb_mac_last = UINT64_MAX;
+	n->bad_buffers_last = -1;
 }
 
 static void sink_door_from_capture(void *ctx, const struct spa_pod *param)
@@ -1554,6 +1573,26 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
 #define REACPW_PROP_HEALTH_WAKE_LATE_US   "reac.health.wake-late-us"
 #define REACPW_PROP_HEALTH_WAKE_LEAD_US   "reac.health.wake-lead-us"
 
+/* MAIN LOOP, every tick: the count of cycles the RT callback met a bad stream buffer in
+ * (reac_rt_planes.h), on the door beside the other health keys. Stamped when it moves
+ * (and once at 0 on a fresh door), so a quiet node costs nothing. */
+static void sink_publish_bad_buffers(struct reac_sink_node *n)
+{
+	if (!sink_has_door(n))
+		return;
+	uint32_t v = atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed);
+	if (n->bad_buffers_last == (int64_t)v)
+		return;
+	char val[16];
+	snprintf(val, sizeof val, "%u", v);
+	struct pw_properties *props = pw_properties_new(REACPW_PROP_HEALTH_RT_BAD_BUFFERS, val, NULL);
+	if (!props)
+		return;
+	sink_door_update(n, &props->dict);
+	pw_properties_free(props);
+	n->bad_buffers_last = (int64_t)v;
+}
+
 static void sink_publish_health(struct reac_sink_node *n)
 {
 	/* THE PACER IS THE GATE, NOT THE NODE. This read `!n->stream || !n->pacer_open`, and
@@ -1885,6 +1924,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	sink_publish_disco_props(n);   /* strictly AFTER the drain: it builds pacer.disco */
 	sink_publish_latency(n);
 	sink_publish_health(n);
+	sink_publish_bad_buffers(n);
 }
 
 /* Build the node DESCRIPTION for `channels` outputs labelled `label` (NULL/"" ->
@@ -2069,6 +2109,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 /* main's rate-reopen poll reads and CLEARS the pending accepted rate here; nonzero
  * means "re-open this segment at this Hz". Atomic-exchange so a second poll before
  * the re-open completes cannot act on it twice. */
+/* Cycles on_process skipped for a stream buffer it could not trust (reac_rt_planes.h).
+ * Any thread; the RT thread only ever increments it. */
+uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n)
+{
+	return n ? atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed) : 0;
+}
+
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n)
 {
 	return n ? atomic_exchange_explicit(&n->reopen_rate, 0, memory_order_relaxed) : 0;
@@ -2293,6 +2340,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->arb_rival_last = -1;
 	n->arb_conflict_last = -1;
 	n->arb_mac_last = UINT64_MAX;
+	n->bad_buffers_last = -1;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
 

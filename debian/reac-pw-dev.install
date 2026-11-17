@@ -1,0 +1,6 @@
+usr/include/reac-pw/reac_facts.h
+usr/include/reac-pw/reac_facts_pw.h
+usr/include/reac-pw/reac_facts_undef.h
+usr/include/reac-pw/reac_headamp_prop.h
+usr/include/reac-pw/reac_headamp_state.h
+usr/share/pkgconfig/reac-pw.pc
