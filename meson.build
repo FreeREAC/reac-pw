@@ -1928,6 +1928,16 @@ source_format_test = executable('test_reac_source_format',
   dependencies : [spa_dep, libreac_dep, libreac_transport_dep])
 test('reac_source_format', source_format_test)
 
+# --- unit test: the source node's follower rate stays inside the sink's bound -
+# Pure header (reac_rate_match.h): a wrong-pace master (0.5x, 2x), the extremes of the
+# published int and non-finite input must never hand the resampler more than
+# +-REAC_RATE_MATCH_MAX_PPM, and every clamp is counted.
+rate_match_test = executable('test_reac_rate_match',
+  ['tests/test_reac_rate_match.c'],
+  include_directories : src_inc,
+  dependencies : [m_dep])
+test('reac_rate_match', rate_match_test)
+
 # --- unit test: reac_node_ensure — the shared same-box-or-rebuild decision ---
 # (2026-08-26-duplicate-reac-node). Pure: no pw_stream, no
 # socket. Proves the identity comparison both reac_sink_node_ensure and
