@@ -57,6 +57,16 @@ jobs:
           git -C ../reac-protocol fetch -q --depth 1 https://github.com/FreeREAC/reac-protocol.git "$REAC_PROTOCOL_REF"
           git -C ../reac-protocol checkout -q FETCH_HEAD
 
+      # THE SIBLING tests/reac-code-conformance.py JOINS. It looks for ../libreac (or
+      # LIBREAC_SRCDIR) and, only when it finds it, requires every code libreac declares to
+      # be emitted somewhere: with no sibling that arm has nothing to compare and a daemon
+      # that stops emitting a code stays green. The container sees this directory's parent
+      # as /w, so ../libreac here is /w/libreac there.
+      - name: libreac main, beside the checkout
+        run: |
+          git clone -q --depth 1 https://github.com/FreeREAC/libreac.git ../libreac
+          git -C ../libreac log --oneline -1
+
       - name: Prepare the host for namespace tests
         run: |
           set -eux
