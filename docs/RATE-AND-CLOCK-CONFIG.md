@@ -42,6 +42,10 @@ from `~/.config/reac-pw/reac-pw.env`, keyed by its interface name
 An empty value (`REAC_RATE=`) sets nothing and falls through to the next layer. A
 layer that answers with nonsense is named and skipped, not silently dropped
 (`ignoring REAC_RATE='999' from the process environment`).
+A value is read whole: `REAC_RATE=48000abc` and `REAC_RATE=48000 # note` are both
+nonsense, because a conf file takes comments on a line of their own only (the format
+`reac_conf.h` documents; systemd's `EnvironmentFile=` hands the same text to the
+environment). Put the note on the line above.
 
 The startup line names the layer that won, for example:
 

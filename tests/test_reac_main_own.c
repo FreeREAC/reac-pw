@@ -283,6 +283,13 @@ static int test_conf_values_are_whole(void)
 	CHK(layer == REAC_CONF_BUILTIN);                     /* skipped, not obeyed */
 	clear_env();
 
+	/* a note after the value is text after the value: the conf format has comments on a
+	 * line of their own only (packaging/reac-pw.env.example writes them that way) */
+	setenv("REAC_RATE_eth9", "48000 # note", 1);
+	CHK(listener_resolve_rate(&c, &layer) == reac_rate_best_drivable(REAC_RATE_ALL_BITS));
+	CHK(layer == REAC_CONF_BUILTIN);
+	clear_env();
+
 	setenv("REAC_BOX_CHANNELS_eth9", "8x", 1);
 	listener_cfg_from_conf(&c, "eth9", 1);
 	CHK(c.box_channels == REAC_SLAVE_BOX_CHANNELS_DEFAULT);
