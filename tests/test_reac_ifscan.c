@@ -38,6 +38,18 @@ static int fails;
 
 #define S 1000000000ULL
 
+/* THE STATE OF A NAMED INTERFACE, OR A NAMED FAILURE. reac_ifscan_find() answers NULL for a
+ * name the table never took (a gate refused it, a datagram was not parsed); dereferencing
+ * that turned one failed assertion into a SIGSEGV that hid every assertion after it and said
+ * nothing about which name was missing. */
+#define STATE_IS(s, name, want) do { \
+	const struct reac_ifscan_entry *e_ = reac_ifscan_find((s), (name)); \
+	if (!e_) { fails++; fprintf(stderr, "FAIL %s:%d: \"%s\" is not in the table\n", \
+	                            __FILE__, __LINE__, (name)); } \
+	else if (e_->state != (want)) { fails++; fprintf(stderr, "FAIL %s:%d: \"%s\" is in state %d, wanted %s\n", \
+	                            __FILE__, __LINE__, (name), (int)e_->state, #want); } \
+} while (0)
+
 /* Pop every queued event into `verbs`/`names`; returns how many. */
 static int drain(struct reac_ifscan *s, enum reac_ifscan_verb *verbs, char names[][IFNAMSIZ], int cap)
 {
@@ -63,12 +75,12 @@ static void t_link_then_hear_then_hold(void)
 	/* A NIC without link: tracked, nothing to do. */
 	reac_ifscan_observe(&s, "eth0", 2, 1, 0, 0);
 	CHK(drain(&s, v, n, 8) == 0);
-	CHK(reac_ifscan_find(&s, "eth0") && reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_DOWN);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_DOWN);
 
 	/* Link comes: LISTEN, and only listen. */
 	reac_ifscan_observe(&s, "eth0", 2, 1, 1, 1 * S);
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_LISTEN && !strcmp(n[0], "eth0"));
-	CHK(reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_LINKED);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_LINKED);
 
 	/* The same observation again (a dump repeat, a flag change that is not carrier): nothing. */
 	reac_ifscan_observe(&s, "eth0", 2, 1, 1, 2 * S);
@@ -77,7 +89,7 @@ static void t_link_then_hear_then_hold(void)
 	/* REAC heard: SERVE. */
 	reac_ifscan_heard(&s, "eth0", 3 * S);
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_SERVE);
-	CHK(reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_SEGMENT);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_SEGMENT);
 	/* Heard again while served: nothing — the listener owns the wire now. */
 	reac_ifscan_heard(&s, "eth0", 4 * S);
 	CHK(drain(&s, v, n, 8) == 0);
@@ -85,15 +97,15 @@ static void t_link_then_hear_then_hold(void)
 	/* Carrier lost: HOLD, no event yet. */
 	reac_ifscan_observe(&s, "eth0", 2, 1, 0, 10 * S);
 	CHK(drain(&s, v, n, 8) == 0);
-	CHK(reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_HOLD);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_HOLD);
 	/* Inside the hold nothing falls due. */
 	reac_ifscan_tick(&s, 10 * S + REAC_IFSCAN_DOWN_HOLD_NS - 1);
 	CHK(drain(&s, v, n, 8) == 0);
 	/* Carrier back inside the hold: KEPT, the segment stands, one flap counted. */
 	reac_ifscan_observe(&s, "eth0", 2, 1, 1, 11 * S);
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_KEPT);
-	CHK(reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_SEGMENT);
-	CHK(reac_ifscan_find(&s, "eth0")->flaps == 1);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_SEGMENT);
+	CHK(reac_ifscan_find(&s, "eth0") && reac_ifscan_find(&s, "eth0")->flaps == 1);
 	reac_ifscan_tick(&s, 20 * S);
 	CHK(drain(&s, v, n, 8) == 0);
 
@@ -103,11 +115,11 @@ static void t_link_then_hear_then_hold(void)
 	CHK(drain(&s, v, n, 8) == 0);
 	reac_ifscan_tick(&s, 30 * S + REAC_IFSCAN_DOWN_HOLD_NS);
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_DROP);
-	CHK(reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_DOWN);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_DOWN);
 	/* And it is sniffed afresh when link returns — the next box is heard, not assumed. */
 	reac_ifscan_observe(&s, "eth0", 2, 1, 1, 40 * S);
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_LISTEN);
-	CHK(reac_ifscan_find(&s, "eth0")->state == REAC_IFSCAN_LINKED);
+	STATE_IS(&s, "eth0", REAC_IFSCAN_LINKED);
 }
 
 static void t_never_heard_never_segment(void)
@@ -181,8 +193,8 @@ static void t_reenumeration_is_gone_then_new(void)
 	/* Same name, new index, link up: the old segment DROPS and the new NIC is sniffed. */
 	reac_ifscan_observe(&s, "usb0", 12, 1, 1, 2 * S);
 	CHK(drain(&s, v, n, 8) == 2 && v[0] == REAC_IFSCAN_DROP && v[1] == REAC_IFSCAN_LISTEN);
-	CHK(reac_ifscan_find(&s, "usb0")->ifindex == 12);
-	CHK(reac_ifscan_find(&s, "usb0")->state == REAC_IFSCAN_LINKED);
+	CHK(reac_ifscan_find(&s, "usb0") && reac_ifscan_find(&s, "usb0")->ifindex == 12);
+	STATE_IS(&s, "usb0", REAC_IFSCAN_LINKED);
 }
 
 static void t_serve_failed_retries_later(void)
@@ -263,7 +275,7 @@ static void t_netlink_parse(void)
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_LISTEN && !strcmp(n[0], "enp1s0"));
 	CHK(reac_ifscan_find(&s, "lo") == NULL);
 	CHK(reac_ifscan_find(&s, "wg0") == NULL);
-	CHK(reac_ifscan_find(&s, "enp2s0")->state == REAC_IFSCAN_DOWN);
+	STATE_IS(&s, "enp2s0", REAC_IFSCAN_DOWN);
 
 	/* Carrier comes on the second NIC. */
 	off = build_link(buf, RTM_NEWLINK, "enp2s0", 3, ARPHRD_ETHER, IFF_UP | IFF_LOWER_UP);
@@ -375,7 +387,7 @@ static void t_wireless_excluded_from_scan(void)
 	CHK(drain(&s, v, n, 8) == 1 && v[0] == REAC_IFSCAN_LISTEN &&
 	   !strcmp(n[0], "reac-ghost0"));
 	CHK(reac_ifscan_find(&s, "wlp128s20f3") == NULL);   /* never entered the table at all */
-	CHK(reac_ifscan_find(&s, "reac-ghost0")->state == REAC_IFSCAN_LINKED);
+	STATE_IS(&s, "reac-ghost0", REAC_IFSCAN_LINKED);
 
 	/* Opt-in: the daemon-set tunable (libreac reads no environment of its own —
 	 * 2026-09-17-tunables-api-and-shared-refusal-codes) names
@@ -386,8 +398,7 @@ static void t_wireless_excluded_from_scan(void)
 	reac_ifscan_init(&s);
 	reac_ifscan_feed(&s, buf, off, 0);
 	CHK(drain(&s, v, n, 8) == 2);
-	CHK(reac_ifscan_find(&s, "wlp128s20f3") != NULL &&
-	   reac_ifscan_find(&s, "wlp128s20f3")->state == REAC_IFSCAN_LINKED);
+	STATE_IS(&s, "wlp128s20f3", REAC_IFSCAN_LINKED);
 	reac_transport_tunables_set(NULL);
 }
 
