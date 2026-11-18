@@ -28,14 +28,14 @@ jobs:
       target-repo: FreeREAC/freereac.github.io
       base-url: https://freereac.github.io
       committed-keys: false
-      signing-fingerprint: 618C08DC2CE0B56AB8789DFBA14B3E1E1F69EBF4
+      signing-fingerprint: ${{ vars.FREEREAC_RELEASE_KEY_FPR }}
       key-file: RPM-GPG-KEY-freereac
       repo-file: packaging/freereac-release/freereac.repo
       publish: ${{ github.ref_type == 'tag' }}
       needs-mod-host: false
     secrets:
-      OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.RPM_GPG_KEY }}
-      PACKAGES_SIGNING_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
+      OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.FREEREAC_PACKAGES_SIGNING_KEY }}
+      PACKAGES_SIGNING_PASSPHRASE: ${{ secrets.FREEREAC_PACKAGES_SIGNING_PASSPHRASE }}
       PAGES_TOKEN: ${{ secrets.FREEREAC_PAGES_TOKEN }}
       SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
@@ -50,15 +50,15 @@ jobs:
       target-repo: FreeREAC/freereac.github.io
       base-url: https://freereac.github.io
       committed-keys: false
-      signing-fingerprint: 618C08DC2CE0B56AB8789DFBA14B3E1E1F69EBF4
+      signing-fingerprint: ${{ vars.FREEREAC_RELEASE_KEY_FPR }}
       key-file: freereac.asc
       label: FreeREAC
       publish: ${{ github.ref_type == 'tag' }}
       dependencies: ''
       requires: libreac7 libreac-transport7
     secrets:
-      OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.RPM_GPG_KEY }}
-      PACKAGES_SIGNING_PASSPHRASE: ${{ secrets.RPM_GPG_PASSPHRASE }}
+      OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.FREEREAC_PACKAGES_SIGNING_KEY }}
+      PACKAGES_SIGNING_PASSPHRASE: ${{ secrets.FREEREAC_PACKAGES_SIGNING_PASSPHRASE }}
       PAGES_TOKEN: ${{ secrets.FREEREAC_PAGES_TOKEN }}
       SITE_GPG_KEY: ${{ secrets.OPENMIXER_CI_SIGNING_KEY }}
       DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
