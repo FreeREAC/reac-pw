@@ -27,6 +27,7 @@ jobs:
       package-name: reac-pw
       target-repo: FreeREAC/freereac.github.io
       base-url: https://freereac.github.io
+      release-package: freereac-release
       committed-keys: false
       signing-fingerprint: ${{ vars.FREEREAC_RELEASE_KEY_FPR }}
       key-file: RPM-GPG-KEY-freereac
@@ -49,6 +50,7 @@ jobs:
       package-name: reac-pw
       target-repo: FreeREAC/freereac.github.io
       base-url: https://freereac.github.io
+      release-package: freereac-release
       committed-keys: false
       signing-fingerprint: ${{ vars.FREEREAC_RELEASE_KEY_FPR }}
       key-file: freereac.asc
