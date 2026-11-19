@@ -32,7 +32,7 @@ jobs:
     # only, so the job ends well inside it
     timeout-minutes: 40
     container:
-      image: fedora:44
+      image: fedora:45
     steps:
       - name: Install clang, libFuzzer, llvm-cov and the static libc
         run: |
