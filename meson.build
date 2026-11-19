@@ -1253,6 +1253,13 @@ test('reac_packaged_shape',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
+# --- whole-binary test: a numeric knob that is not a number in range is refused at
+# start, by name, before the root refusal and the capability preflight.
+test('reac_numeric_knobs_refused',
+  find_program('tests/numeric-knobs-are-refused.sh'),
+  args : [reac_pw_exe],
+  timeout : 120)
+
 # --- whole-binary test: the command line's front door --------------------------------
 # One script for what reac-pw does to the arguments it is given before it opens anything:
 # the daemon refuses to start as uid 0 (2026-09-18: a root instance runs under a DIFFERENT
