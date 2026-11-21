@@ -13,7 +13,91 @@
 #include <errno.h>
 #include <net/if.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* ---- the hardware form is held for the daemon's life ----------------------- *
+ *
+ * CHANGING IT RESETS THE NIC. On igc (i225/i226) adding or removing an offloaded etf
+ * switches the launch queue's TSN mode, and the driver does that with an adapter reset:
+ * the link renegotiates (2 s at 100 Mbit, measured on an i226 bench 2026-11-15), the box loses its
+ * master, the segment drops, and a qdisc released with the segment resets the NIC again
+ * on the way out and once more on the way back in. That is a loop, and it was the first
+ * thing the bench showed. So the form is installed ONCE per device, kept across segment
+ * drops (it holds only REAC_ETF_QDISC_PRIO traffic on the launch queue; the knock and
+ * everything else ride the other queues untouched), adopted by the next serve without
+ * a reinstall, and removed once, when the daemon exits. */
+#define HW_MAX 32
+static int hw_owned[HW_MAX];
+static int hw_n;
+static int hw_atexit;
+
+static int hw_is_owned(int idx)
+{
+	for (int i = 0; i < hw_n; i++)
+		if (hw_owned[i] == idx)
+			return 1;
+	return 0;
+}
+
+static void hw_forget(int idx)
+{
+	for (int i = 0; i < hw_n; i++)
+		if (hw_owned[i] == idx) {
+			hw_owned[i] = hw_owned[--hw_n];
+			return;
+		}
+}
+
+void reac_qdisc_release_all(void)
+{
+	for (int i = 0; i < hw_n; i++) {
+		char name[IF_NAMESIZE] = "?";
+		(void)if_indextoname((unsigned)hw_owned[i], name);
+		if (reac_etf_qdisc_offloaded(hw_owned[i]) != 1)
+			continue;   /* not ours any more, or the device is gone */
+		int rc = reac_etf_qdisc_remove(hw_owned[i]);
+		if (rc == 0)
+			fprintf(stderr, "reac-qdisc: removed the hardware launch this daemon "
+			        "installed on %s (exit)\n", name);
+		else
+			fprintf(stderr, "reac-qdisc: could not remove %s's hardware launch on "
+			        "exit (errno %d) — %s. REMOVE IT BY HAND (`tc qdisc del dev %s "
+			        "root`)\n", name, -rc, reac_etf_qdisc_fix(rc), name);
+	}
+	hw_n = 0;
+}
+
+/* Room to remember one more? A device already held always has it. A hardware form this
+ * table could not record is one the exit could never remove, so the table being full
+ * refuses the form (by name, in reac_qdisc_arm) instead of leaving it on the NIC. */
+static int hw_has_room(int idx)
+{
+	return hw_is_owned(idx) || hw_n < HW_MAX;
+}
+
+static void hw_remember(int idx)
+{
+	if (hw_is_owned(idx))
+		return;
+	hw_owned[hw_n++] = idx;
+	if (!hw_atexit) {
+		hw_atexit = 1;
+		atexit(reac_qdisc_release_all);
+	}
+}
+
+const char *reac_qdisc_launch(int ifindex)
+{
+	if (ifindex <= 0)
+		return "none";
+	int off = reac_etf_qdisc_offloaded(ifindex);
+	if (off < 0)
+		return "unreadable";
+	if (off == 1)
+		return "hardware";
+	return reac_etf_qdisc_state(ifindex, NULL, 0) == REAC_ETF_QDISC_PRESENT ? "software" : "none";
+}
 
 int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 {
@@ -52,6 +136,8 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 		}
 		int mine = ours.installed && ours.ifindex == (int)idx;
 		int rc = reac_etf_qdisc_remove((int)idx);
+		if (rc == 0)
+			hw_forget((int)idx);
 		if (rc != 0) {
 			if (mine) {
 				/* STILL THERE AND STILL OURS. The record goes back so the exit
@@ -82,6 +168,50 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 			        "every frame it sends\n", ifname);
 		return 0;
 	}
+
+	/* THE HARDWARE FORM FIRST, WHERE THE DEVICE CAN TAKE IT. Each condition is read
+	 * (reac_qdisc.h); the first that fails is named once and the software form below
+	 * is what this device gets, exactly as before. */
+	if (hw_is_owned((int)idx) && reac_etf_qdisc_offloaded((int)idx) == 1) {
+		/* OURS, STILL ON: adopted, not reinstalled — a reinstall resets the NIC. */
+		q->ifindex   = (int)idx;
+		q->installed = 1;
+		q->offload   = 1;
+		fprintf(stderr, "reac-qdisc: HARDWARE LAUNCH on %s kept from this daemon's "
+		        "earlier serve (not reinstalled: changing it resets the NIC)\n", ifname);
+		return 0;
+	}
+	char why[200];
+	long long phc_off = 0;
+	if (!hw_has_room((int)idx)) {
+		snprintf(why, sizeof why, "this daemon already holds %d hardware launches, the most it "
+		         "can remove on exit", HW_MAX);
+	} else if (reac_qdisc_hw_capable(ifname, &phc_off, why, sizeof why)) {
+		int hrc = reac_etf_qdisc_install_offload((int)idx, REAC_ETF_QDISC_DELTA_NS);
+		if (hrc == 0 && reac_etf_qdisc_offloaded((int)idx) == 1) {
+			q->ifindex   = (int)idx;
+			q->installed = 1;
+			q->offload   = 1;
+			hw_remember((int)idx);
+			fprintf(stderr, "reac-qdisc: HARDWARE LAUNCH on %s: mqprio root, etf "
+			        "clockid CLOCK_TAI delta %u offload skip_sock_check on the launch "
+			        "queue (%s); the NIC sends each frame at its launch time; held for "
+			        "this daemon's life and removed when it exits\n", ifname,
+			        REAC_ETF_QDISC_DELTA_NS, why);
+			return 0;
+		}
+		if (hrc == 0) {
+			/* ACKed, and the kernel does not report offload on: not claimed. */
+			(void)reac_etf_qdisc_remove((int)idx);
+			snprintf(why, sizeof why, "the offload was ACKed and the kernel does not "
+			         "report it on");
+		} else {
+			snprintf(why, sizeof why, "the kernel refused `etf ... offload` here "
+			         "(errno %d, %s)", -hrc, reac_etf_qdisc_fix(hrc));
+		}
+	}
+	fprintf(stderr, "reac-qdisc: software ETF on %s, not the hardware launch: %s\n",
+	        ifname, why);
 
 	int rc = reac_etf_qdisc_install((int)idx, REAC_ETF_QDISC_DELTA_NS);
 	if (rc != 0) {
@@ -145,6 +275,11 @@ void reac_qdisc_release(struct reac_qdisc *q)
 		return;
 	}
 
+	if (q->offload && hw_is_owned(q->ifindex)) {
+		/* HELD, NOT RELEASED: removing it resets the NIC (above). The exit takes it. */
+		memset(q, 0, sizeof *q);
+		return;
+	}
 	/* VERIFY, THEN DELETE. If something else has replaced our qdisc since — an
 	 * operator, a second daemon — it is not ours to remove any more. */
 	if (reac_etf_qdisc_state(q->ifindex, NULL, 0) == REAC_ETF_QDISC_PRESENT) {

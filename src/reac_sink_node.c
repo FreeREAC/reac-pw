@@ -48,6 +48,7 @@
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing */
 #include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
+#include "reac_launch_report.h"
 #include <reac/transport/reac_etf_qdisc.h> /* REAC_ETF_QDISC_DELTA_NS — the lead's other term */
 #include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
 #include <reac/transport/reac_mac.h>
@@ -1572,6 +1573,10 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
 #define REACPW_PROP_HEALTH_QDISC_DROPS    "reac.health.qdisc-drops"
 #define REACPW_PROP_HEALTH_WAKE_LATE_US   "reac.health.wake-late-us"
 #define REACPW_PROP_HEALTH_WAKE_LEAD_US   "reac.health.wake-lead-us"
+/* WHAT LAUNCHES THE FRAMES under ETF: "hardware" (the NIC, mqprio + etf offload),
+ * "software" (the kernel's hrtimer), read back from the kernel's own qdisc flags every
+ * window; "n/a" on the thread backend. */
+#define REACPW_PROP_PACE_LAUNCH           "reac.pace.launch"
 
 /* MAIN LOOP, every tick: the count of cycles the RT callback met a bad stream buffer in
  * (reac_rt_planes.h), on the door beside the other health keys. Stamped when it moves
@@ -1638,12 +1643,34 @@ static void sink_publish_health(struct reac_sink_node *n)
 	 * the whole backend exists to avoid. */
 	const char *backend = reac_pacer_backend_name(reac_pacer_backend(&n->pacer));
 	const char *refusal = reac_pacer_backend_refusal(&n->pacer);
-	char pacer_line[192];
+	char pacer_line[384];
+	/* AND UNDER ETF, WHO LAUNCHES: read from the kernel's own TCA_ETF_PARMS flags
+	 * every window, never from what this daemon remembers asking for, so a qdisc
+	 * that lost its offload (or never had it) reads as what it is. */
+	const char *launch = reac_pacer_backend(&n->pacer) == REAC_PACER_BACKEND_ETF
+		? reac_qdisc_launch(n->qdisc.ifindex) : "n/a";
 	if (refusal)
 		snprintf(pacer_line, sizeof pacer_line, "%s (ETF refused: %s)",
 		         backend, refusal);
+	else if (reac_pacer_backend(&n->pacer) == REAC_PACER_BACKEND_ETF)
+		reac_launch_health_line(pacer_line, sizeof pacer_line, backend, launch,
+		                        n->qdisc.offload);
 	else
 		snprintf(pacer_line, sizeof pacer_line, "%s", backend);
+	/* The instrument of record, when armed (REACPW_LAUNCH_STAMPS): the NIC's TX stamp
+	 * minus the frame's launch time, over `n` sampled frames, cumulative. */
+	struct reac_pacer_launch_stamps ls;
+	if (reac_pacer_launch_stamps(&n->pacer, &ls) == 0) {
+		size_t l = strlen(pacer_line);
+		const struct reac_launch_figures f = {
+			.paired = ls.paired, .unpaired = ls.unpaired, .outside = ls.outside,
+			.every = ls.every, .mean_ns = ls.mean_ns, .sd_ns = ls.sd_ns,
+			.p50_ns = ls.p50_ns, .p99_ns = ls.p99_ns, .p999_ns = ls.p999_ns,
+			.min_ns = ls.min_ns, .max_ns = ls.max_ns,
+		};
+		reac_launch_stamps_line(pacer_line + l, sizeof pacer_line - l,
+		                        n->qdisc.ifname[0] ? n->qdisc.ifname : "?", &f);
+	}
 
 	/* THE ETF SPLIT. `late_wakes` counts one thing — the pacer THREAD waking more
 	 * than a slot period after its target — and under the two backends that one
@@ -1715,6 +1742,7 @@ static void sink_publish_health(struct reac_sink_node *n)
 	struct pw_properties *props = pw_properties_new(
 		REAC_PROP_PACE_BACKEND,       backend,
 		REAC_PROP_PACE_REFUSAL,       refusal ? refusal : "none",
+		REACPW_PROP_PACE_LAUNCH,      launch,
 		REAC_PROP_HEALTH_DRIFT_PPM,   drift,
 		REAC_PROP_HEALTH_DISCARD_FPS, dfps,
 		REAC_PROP_HEALTH_DISCARD_MS,  dms,
@@ -2364,6 +2392,32 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	 * the box's own cold-connect — no presence assumption, no timer advance
 	 * (defect #130). The graph node is created later (on recognition), but the
 	 * pacer free-runs silent FILLER meanwhile, so establishment is unaffected. */
+	/* THE INSTRUMENT OF RECORD, opt-in (libreac docs/ETF-PACING.md): every Nth frame
+	 * asks the NIC for its TX hardware stamp. Off unless REACPW_LAUNCH_STAMPS (per
+	 * segment through reac_conf's layers) names N; a refusal is said by libreac and
+	 * the pacer runs unchanged. Armed before the start: the slot loop reads it
+	 * without a lock. */
+	if (reac_pacer_backend(&n->pacer) == REAC_PACER_BACKEND_ETF) {
+		char v[24];
+		if (reac_conf_lookup("REACPW_LAUNCH_STAMPS", cfg->ifname, NULL, v, sizeof v)
+		    != REAC_CONF_NONE) {
+			unsigned every = 0;
+			if (reac_launch_stamps_parse(v, &every)) {
+				/* Setup, once, before the pacer thread exists: not the RT path. A refusal
+				 * libreac does not say itself (-EINVAL, -EBUSY, -ENOTSUP, -EALREADY,
+				 * -ENOMEM) is said here by name. */
+				int ar = reac_pacer_launch_stamps_arm(&n->pacer, every);
+				const char *why = reac_launch_stamps_refusal(ar);
+				if (why)
+					fprintf(stderr, "reac-pw: [%s] launch stamps NOT armed: %s (%d)\n",
+					        cfg->ifname, why, ar);
+			} else
+				fprintf(stderr, "reac-pw: [%s] REACPW_LAUNCH_STAMPS='%s' is not a "
+				        "frame count in [1, 1000000]: launch stamps stay off\n",
+				        cfg->ifname, v);
+		}
+	}
+
 	if (reac_pacer_start(&n->pacer) != 0) {
 		pw_log_warn("reac:playback — cannot start cadence pacer thread");
 		reac_pacer_close(&n->pacer);
