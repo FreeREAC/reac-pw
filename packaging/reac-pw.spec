@@ -263,10 +263,10 @@ fi
 
 %changelog
 * Sat Nov 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.45-1
-- The hardware launch where the NIC can take it, held for the daemon's life; the health line names what launches the frames (#102, #139).
-- reac-pw-phc2sys@.service, the hardware launch's clock (#139).
-- A bridge, veth or tun is not a REAC segment: a physical NIC or a VLAN on one (#101, #140).
-- Packaging: libreac floored at 1.12.0, the release carrying the hardware launch.
+- The hardware launch where the NIC can take it, held for the daemon's life; the health line names what launches the frames (FreeREAC/reac-pw#102, FreeREAC/reac-pw#139).
+- reac-pw-phc2sys@.service, the hardware launch's clock (FreeREAC/reac-pw#139).
+- A bridge, veth or tun is not a REAC segment: a physical NIC or a VLAN on one (FreeREAC/reac-pw#101, FreeREAC/reac-pw#140).
+- Packaging: libreac is floored at 1.12.0, the release carrying the hardware launch.
 
 * Tue Nov 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
 - New reac-pw-devel package (Debian: reac-pw-dev) with the facts headers consumers pin (#108, #110).
