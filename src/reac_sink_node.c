@@ -48,6 +48,7 @@
 #include <reac/reac_arbitration.h>
 #include "reac_lat.h"        /* ProcessLatency smoothing */
 #include "reac_qdisc.h"      /* the daemon owns the etf qdisc on the device it binds */
+#include "reac_launch_report.h"
 #include <reac/transport/reac_etf_qdisc.h> /* REAC_ETF_QDISC_DELTA_NS — the lead's other term */
 #include <reac/reac_ctrl.h>       /* struct reac_box_model (recognized-box props) */
 #include <reac/transport/reac_mac.h>
@@ -1652,9 +1653,8 @@ static void sink_publish_health(struct reac_sink_node *n)
 		snprintf(pacer_line, sizeof pacer_line, "%s (ETF refused: %s)",
 		         backend, refusal);
 	else if (reac_pacer_backend(&n->pacer) == REAC_PACER_BACKEND_ETF)
-		snprintf(pacer_line, sizeof pacer_line, "%s, launch %s%s", backend, launch,
-		         n->qdisc.offload && strcmp(launch, "hardware")
-		             ? " (THE HARDWARE FORM WAS INSTALLED AND IS NOT ON)" : "");
+		reac_launch_health_line(pacer_line, sizeof pacer_line, backend, launch,
+		                        n->qdisc.offload);
 	else
 		snprintf(pacer_line, sizeof pacer_line, "%s", backend);
 	/* The instrument of record, when armed (REACPW_LAUNCH_STAMPS): the NIC's TX stamp
@@ -1662,15 +1662,14 @@ static void sink_publish_health(struct reac_sink_node *n)
 	struct reac_pacer_launch_stamps ls;
 	if (reac_pacer_launch_stamps(&n->pacer, &ls) == 0) {
 		size_t l = strlen(pacer_line);
-		snprintf(pacer_line + l, sizeof pacer_line - l,
-		         " | launch-stamps [%s] n=%llu (1/%u, unpaired %llu, outside +-10us %llu) "
-		         "error mean %+.1f ns sd %.1f ns p50 %+lld p99 %+lld p99.9 %+lld "
-		         "min %+lld max %+lld ns",
-		         n->qdisc.ifname[0] ? n->qdisc.ifname : "?",
-		         (unsigned long long)ls.paired, ls.every,
-		         (unsigned long long)ls.unpaired, (unsigned long long)ls.outside,
-		         ls.mean_ns, ls.sd_ns, (long long)ls.p50_ns, (long long)ls.p99_ns,
-		         (long long)ls.p999_ns, (long long)ls.min_ns, (long long)ls.max_ns);
+		const struct reac_launch_figures f = {
+			.paired = ls.paired, .unpaired = ls.unpaired, .outside = ls.outside,
+			.every = ls.every, .mean_ns = ls.mean_ns, .sd_ns = ls.sd_ns,
+			.p50_ns = ls.p50_ns, .p99_ns = ls.p99_ns, .p999_ns = ls.p999_ns,
+			.min_ns = ls.min_ns, .max_ns = ls.max_ns,
+		};
+		reac_launch_stamps_line(pacer_line + l, sizeof pacer_line - l,
+		                        n->qdisc.ifname[0] ? n->qdisc.ifname : "?", &f);
 	}
 
 	/* THE ETF SPLIT. `late_wakes` counts one thing — the pacer THREAD waking more
@@ -2402,11 +2401,17 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 		char v[24];
 		if (reac_conf_lookup("REACPW_LAUNCH_STAMPS", cfg->ifname, NULL, v, sizeof v)
 		    != REAC_CONF_NONE) {
-			char *end = NULL;
-			unsigned long every = strtoul(v, &end, 10);
-			if (end != v && end && !*end && every > 0 && every <= 1000000)
-				(void)reac_pacer_launch_stamps_arm(&n->pacer, (unsigned)every);
-			else
+			unsigned every = 0;
+			if (reac_launch_stamps_parse(v, &every)) {
+				/* Setup, once, before the pacer thread exists: not the RT path. A refusal
+				 * libreac does not say itself (-EINVAL, -EBUSY, -ENOTSUP, -EALREADY,
+				 * -ENOMEM) is said here by name. */
+				int ar = reac_pacer_launch_stamps_arm(&n->pacer, every);
+				const char *why = reac_launch_stamps_refusal(ar);
+				if (why)
+					fprintf(stderr, "reac-pw: [%s] launch stamps NOT armed: %s (%d)\n",
+					        cfg->ifname, why, ar);
+			} else
 				fprintf(stderr, "reac-pw: [%s] REACPW_LAUNCH_STAMPS='%s' is not a "
 				        "frame count in [1, 1000000]: launch stamps stay off\n",
 				        cfg->ifname, v);

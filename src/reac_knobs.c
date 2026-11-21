@@ -63,6 +63,9 @@ const struct reac_knob g_reac_knobs[] = {
 	 * (REACPW_LINK_MBIT_<port>, the PHYSICAL port's name — a VLAN's budget is its
 	 * parent's), host-wide otherwise. */
 	{ "REACPW_LINK_MBIT", 1, NULL },
+	/* the hardware launch's instrument of record, opt-in (reac-pw#98): every Nth frame asks the NIC
+	 * for its TX stamp. Per segment through the conf layers, read in reac_sink_node.c. */
+	{ "REACPW_LAUNCH_STAMPS", 1, NULL },
 };
 
 const int g_reac_knobs_count = (int)(sizeof g_reac_knobs / sizeof g_reac_knobs[0]);

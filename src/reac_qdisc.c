@@ -11,18 +11,10 @@
 #include <reac/transport/reac_etf_qdisc.h>
 
 #include <errno.h>
-#include <fcntl.h>
 #include <net/if.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
-#include <linux/ethtool.h>
-#include <linux/net_tstamp.h>
-#include <linux/sockios.h>
 
 /* ---- the hardware form is held for the daemon's life ----------------------- *
  *
@@ -76,9 +68,17 @@ void reac_qdisc_release_all(void)
 	hw_n = 0;
 }
 
+/* Room to remember one more? A device already held always has it. A hardware form this
+ * table could not record is one the exit could never remove, so the table being full
+ * refuses the form (by name, in reac_qdisc_arm) instead of leaving it on the NIC. */
+static int hw_has_room(int idx)
+{
+	return hw_is_owned(idx) || hw_n < HW_MAX;
+}
+
 static void hw_remember(int idx)
 {
-	if (hw_is_owned(idx) || hw_n >= HW_MAX)
+	if (hw_is_owned(idx))
 		return;
 	hw_owned[hw_n++] = idx;
 	if (!hw_atexit) {
@@ -183,7 +183,10 @@ int reac_qdisc_arm(struct reac_qdisc *q, const char *ifname, int want_etf)
 	}
 	char why[200];
 	long long phc_off = 0;
-	if (reac_qdisc_hw_capable(ifname, &phc_off, why, sizeof why)) {
+	if (!hw_has_room((int)idx)) {
+		snprintf(why, sizeof why, "this daemon already holds %d hardware launches, the most it "
+		         "can remove on exit", HW_MAX);
+	} else if (reac_qdisc_hw_capable(ifname, &phc_off, why, sizeof why)) {
 		int hrc = reac_etf_qdisc_install_offload((int)idx, REAC_ETF_QDISC_DELTA_NS);
 		if (hrc == 0 && reac_etf_qdisc_offloaded((int)idx) == 1) {
 			q->ifindex   = (int)idx;

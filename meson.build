@@ -189,6 +189,7 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_launch_report.c',
   'src/reac_phc.c',
   'src/reac_link_alias.c',
   'src/reac_served_mark.c',
@@ -281,7 +282,7 @@ rt_plane_objs_common = [
   'src/reac_knock_credit.c', 'src/reac_box_row.c', 'src/reac_lat.c', 'src/reac_gain.c',
   'src/reac_qdisc.c', 'src/reac_link_alias.c', 'src/reac_served_mark.c',
   'src/reac_link_budget.c', 'src/reac_declared_vlan.c', 'src/reac_segconf.c',
-  'src/reac_roster.c', 'src/reac_roster_node.c',
+  'src/reac_roster.c', 'src/reac_roster_node.c', 'src/reac_launch_report.c',
 ]
 # Sanitized only on request (-Dsanitize_tests=true): the default build, and the package %check,
 # have no libasan/libubsan. The assertions on counters and samples hold either way.
@@ -314,6 +315,22 @@ endforeach
 # that the door exists is libreac-transport's test, not a skip here.
 test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
+  args : [meson.current_source_dir()])
+
+# --- unit test: reac_launch_report -- the launch words the health line and setup say (reac-pw#98) -
+launch_report_test = executable('test_reac_launch_report',
+  ['tests/test_reac_launch_report.c', 'src/reac_launch_report.c'],
+  include_directories : src_inc)
+test('reac_launch_report', launch_report_test)
+
+# --- the phc2sys template unit: a named TAI offset, and a check that reads /proc for a ptp4l (reac-pw#98) -
+test('phc2sys_unit',
+  find_program('tests/phc2sys-unit.sh'),
+  args : [meson.current_source_dir()])
+
+# --- every name read through reac_conf_lookup is a knob: in g_reac_knobs and docs/ENV-KNOBS.md ----
+test('every_conf_lookup_name_is_a_knob',
+  find_program('tests/every-conf-lookup-name-is-a-knob.sh'),
   args : [meson.current_source_dir()])
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
@@ -677,7 +694,8 @@ qdisc_test = executable('test_reac_qdisc',
                '-Wl,--wrap=reac_etf_qdisc_remove',
                '-Wl,--wrap=reac_etf_qdisc_install_offload',
                '-Wl,--wrap=reac_etf_qdisc_offloaded',
-               '-Wl,--wrap=reac_qdisc_hw_capable'],
+               '-Wl,--wrap=reac_qdisc_hw_capable',
+               '-Wl,--wrap=if_nametoindex'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
 
