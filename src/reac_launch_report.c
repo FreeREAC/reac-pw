@@ -28,7 +28,7 @@ const char *reac_launch_stamps_refusal(int r)
 	case -ENOTSUP:  return "unsupported";
 	case -EALREADY: return "already armed";
 	case -ENOMEM:   return "out of memory";
-	default:        return NULL;
+	default:        return r < 0 ? "refused" : NULL;
 	}
 }
 

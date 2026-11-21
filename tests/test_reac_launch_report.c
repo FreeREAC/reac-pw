@@ -40,7 +40,11 @@ int main(void)
 	CHECK(!strcmp(reac_launch_stamps_refusal(-EALREADY) ? reac_launch_stamps_refusal(-EALREADY) : "", "already armed"), "EALREADY");
 	CHECK(!strcmp(reac_launch_stamps_refusal(-ENOMEM) ? reac_launch_stamps_refusal(-ENOMEM) : "", "out of memory"), "ENOMEM");
 	CHECK(reac_launch_stamps_refusal(0) == NULL, "armed is not a refusal");
-	CHECK(reac_launch_stamps_refusal(-EPERM) == NULL, "a libreac-said error is not said twice");
+	CHECK(reac_launch_stamps_refusal(-EPERM) && !strcmp(reac_launch_stamps_refusal(-EPERM), "refused"),
+	      "any other negative code is a refusal, never silent");
+	CHECK(reac_launch_stamps_refusal(-9999) && !strcmp(reac_launch_stamps_refusal(-9999), "refused"),
+	      "a code a later libreac adds is a refusal too");
+	CHECK(reac_launch_stamps_refusal(1) == NULL, "a positive return is not a refusal");
 
 	/* ---- the health line's launch words */
 	reac_launch_health_line(b, sizeof b, "etf", "hardware", 1);
