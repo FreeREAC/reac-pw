@@ -32,9 +32,9 @@ BuildRequires:  pkgconfig(libreac) >= 1.12.0
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
 BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
-# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships fake_box (libreac-tests 1.7.3).
-BuildRequires:  libreac-tests >= 1.7.3
+# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): first shipped in libreac-tests
+# 1.7.3; floored at 1.12.0 with the libraries above, the libreac this daemon is built against.
+BuildRequires:  libreac-tests >= 1.12.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
