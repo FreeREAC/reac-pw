@@ -189,6 +189,7 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_phc.c',
   'src/reac_link_alias.c',
   'src/reac_served_mark.c',
   'src/reac_link_budget.c',
@@ -581,7 +582,7 @@ fake_box_master = executable('fake-box-master',
 # healthy daemon from the inside. Its own instrument (tests/etf_wire_probe.c) reads the
 # qdisc through the library's public netlink door, never by scraping `tc`.
 etf_wire_probe = executable('etf-wire-probe',
-  ['tests/etf_wire_probe.c', 'src/reac_qdisc.c'],
+  ['tests/etf_wire_probe.c', 'src/reac_qdisc.c', 'src/reac_phc.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep],
   install : false)
@@ -673,7 +674,10 @@ qdisc_test = executable('test_reac_qdisc',
   include_directories : src_inc,
   link_args : ['-Wl,--wrap=reac_etf_qdisc_state',
                '-Wl,--wrap=reac_etf_qdisc_install',
-               '-Wl,--wrap=reac_etf_qdisc_remove'],
+               '-Wl,--wrap=reac_etf_qdisc_remove',
+               '-Wl,--wrap=reac_etf_qdisc_install_offload',
+               '-Wl,--wrap=reac_etf_qdisc_offloaded',
+               '-Wl,--wrap=reac_qdisc_hw_capable'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
 
