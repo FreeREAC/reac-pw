@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.44
+Version:        1.0.45
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -264,6 +264,12 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Sat Nov 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.45-1
+- The hardware launch where the NIC can take it, held for the daemon's life; the health line names what launches the frames (FreeREAC/reac-pw#102, FreeREAC/reac-pw#139).
+- reac-pw-phc2sys@.service, the hardware launch's clock (FreeREAC/reac-pw#139).
+- A bridge, veth or tun is not a REAC segment: a physical NIC or a VLAN on one (FreeREAC/reac-pw#101, FreeREAC/reac-pw#140).
+- Packaging: libreac is floored at 1.12.0, the release carrying the hardware launch.
+
 * Tue Nov 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
 - New reac-pw-devel package (Debian: reac-pw-dev) with the facts headers consumers pin (#108, #110).
 - Packaging declares floors only on libreac: no consumer ceiling (#111).
