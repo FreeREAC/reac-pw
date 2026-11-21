@@ -147,6 +147,7 @@ install -D -m0644 packaging/90-reac-pw-nm-unmanaged.preset %{buildroot}%{_preset
 # rig (`systemctl enable --now reac-pw-phc2sys@reac0`), never by a preset: only the operator
 # knows whether ptp4l (AES67) owns that NIC's PHC instead.
 install -D -m0644 packaging/reac-pw-phc2sys@.service %{buildroot}%{_unitdir}/reac-pw-phc2sys@.service
+install -D -m0755 packaging/reac-pw-phc2sys-check.sh %{buildroot}%{_prefix}/lib/reac-pw/reac-pw-phc2sys-check
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -195,6 +196,7 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 %{_unitdir}/reac-pw-nm-unmanaged.service
 %{_unitdir}/reac-pw-phc2sys@.service
+%{_prefix}/lib/reac-pw/reac-pw-phc2sys-check
 %{_presetdir}/90-reac-pw-nm-unmanaged.preset
 # Generated at run time by reac-pw-nm-unmanaged; owned here so removing the package
 # removes it.

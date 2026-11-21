@@ -17,10 +17,11 @@
 # refuses to start there. Elsewhere this unit owns it: the source is the system clock
 # (chrony), the sink is the PHC.
 #
-# -O 37: the PHC carries TAI, the system clock UTC; 37 s is the TAI-UTC offset in force
-#   since 2017 (the kernel's own adjtimex offset on a chrony-disciplined host reads the
-#   same). If it is ever wrong reac-pw reads the PHC a second or more off TAI and refuses
-#   the hardware form, by name.
+# -O ${REAC_TAI_UTC_S}: the PHC carries TAI, the system clock UTC; 37 s is the TAI-UTC offset
+#   in force since 2017 (the kernel's own adjtimex offset on a chrony-disciplined host reads
+#   the same), named here once so a leap second is one edit, or a drop-in
+#   (Environment=REAC_TAI_UTC_S=<seconds>). If it is ever wrong reac-pw reads the PHC a
+#   second or more off TAI and refuses the hardware form, by name.
 # -S 0.00002: STEP the PHC when it is more than 20 us off. igc RESETS the adapter whenever
 #   the launch queue's qdisc changes, and the reset can move the PHC; without a step
 #   threshold phc2sys only steps at start and would slew for minutes.
@@ -35,9 +36,11 @@ Conflicts=ptp4l@%i.service
 
 [Service]
 Type=simple
-# Refuse where ptp4l already runs on this NIC: two writers on one PHC fight.
-ExecCondition=/bin/sh -c '! pgrep -f "ptp4l .*-i %I( |$)" >/dev/null'
-ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c %I -O 37 -R 8 -S 0.00002 -m -q
+Environment=REAC_TAI_UTC_S=37
+# Refuse where ptp4l already runs on this NIC, by -i or by a -f file's [<nic>] section: two
+# writers on one PHC fight. The check reads /proc itself, so the package needs no procps.
+ExecCondition=/usr/lib/reac-pw/reac-pw-phc2sys-check %I
+ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c %I -O ${REAC_TAI_UTC_S} -R 8 -S 0.00002 -m -q
 Restart=always
 RestartSec=1
 
