@@ -316,6 +316,11 @@ test('reac_rt_single_door',
   find_program('tests/rt-prio-single-door.sh'),
   args : [meson.current_source_dir()])
 
+# --- every name read through reac_conf_lookup is a knob: in g_reac_knobs and docs/ENV-KNOBS.md ----
+test('every_conf_lookup_name_is_a_knob',
+  find_program('tests/every-conf-lookup-name-is-a-knob.sh'),
+  args : [meson.current_source_dir()])
+
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
 # libreac is declared in the spec and debian/control as a floor only (no ceiling) and nowhere else.
 test('libreac_is_a_bounded_package_dependency',
