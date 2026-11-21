@@ -16,7 +16,7 @@
 int reac_launch_stamps_parse(const char *v, unsigned *every);
 
 /* The refusal of reac_pacer_launch_stamps_arm by name: "invalid", "busy", "unsupported",
- * "already armed", "out of memory" for -EINVAL, -EBUSY, -ENOTSUP, -EALREADY, -ENOMEM; NULL
+ * "already armed", "out of memory" for -EINVAL, -EBUSY, -ENOTSUP, -EALREADY, -ENOMEM;
  * "refused" for any other negative code (a later libreac errno is never silent); NULL only for
  * r >= 0 (armed). */
 const char *reac_launch_stamps_refusal(int r);
