@@ -11,18 +11,10 @@
 #include <reac/transport/reac_etf_qdisc.h>
 
 #include <errno.h>
-#include <fcntl.h>
 #include <net/if.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
-#include <linux/ethtool.h>
-#include <linux/net_tstamp.h>
-#include <linux/sockios.h>
 
 /* ---- the hardware form is held for the daemon's life ----------------------- *
  *
