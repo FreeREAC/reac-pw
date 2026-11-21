@@ -112,6 +112,14 @@ int __wrap_reac_etf_qdisc_offloaded(int ifindex)
 	return fake_offloaded;
 }
 
+/* if_nametoindex, scripted: 0 = the real one (lo), N > 0 = every name is interface N. */
+static unsigned fake_ifindex;
+unsigned __real_if_nametoindex(const char *name);
+unsigned __wrap_if_nametoindex(const char *name)
+{
+	return fake_ifindex ? fake_ifindex : __real_if_nametoindex(name);
+}
+
 /* ---- stderr, captured: the LINE is part of the contract -------------------- */
 static FILE *cap_file;
 static int cap_saved = -1;
@@ -361,6 +369,45 @@ int main(void)
 	said = capture_end();
 	CHECK(removes == 1 && fake_offloaded == 0, "the exit removes it once (removes %d)", removes);
 	free(said);
+
+	/* THE TABLE OF HELD HARDWARE FORMS IS FINITE (32). A device past it is NOT given the
+	 * hardware form: one the exit could not remove would be a form left on the NIC, so it
+	 * takes the software form, and the refusal is named. */
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = offloads = 0;
+	fake_capable = 1; fake_offload_rc = 0; fake_offload_takes = 1; fake_offloaded = 0;
+	for (unsigned i = 1; i <= 32; i++) {
+		struct reac_qdisc qi;
+		memset(&qi, 0, sizeof qi);
+		fake_ifindex = 1000 + i;
+		capture_begin();
+		rc = reac_qdisc_arm(&qi, "hwN", 1);
+		said = capture_end();
+		free(said);
+		CHECK(rc == 0 && qi.offload == 1, "hardware form %u of 32 is taken", i);
+		reac_qdisc_release(&qi);
+	}
+	{
+		struct reac_qdisc qo;
+		memset(&qo, 0, sizeof qo);
+		fake_ifindex = 2000;
+		offloads = installs = 0;
+		capture_begin();
+		rc = reac_qdisc_arm(&qo, "hwN", 1);
+		said = capture_end();
+		CHECK(rc == 0 && qo.offload == 0 && offloads == 0 && installs == 1,
+		      "the 33rd device is not given a hardware form it could never release "
+		      "(offload %d offloads %d installs %d)", qo.offload, offloads, installs);
+		CHECK(strstr(said, "32 hardware launches") != NULL,
+		      "and the refusal is named: %s", said);
+		free(said);
+		reac_qdisc_release(&qo);
+	}
+	capture_begin();
+	reac_qdisc_release_all();
+	said = capture_end();
+	free(said);
+	fake_ifindex = 0;
+	fake_state = REAC_ETF_QDISC_NONE; fake_offloaded = 0;
 
 	/* The kernel refuses the offload (a NIC without a launch engine, a veth): the
 	 * software form, and the refusal named once. */

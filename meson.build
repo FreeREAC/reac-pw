@@ -689,7 +689,8 @@ qdisc_test = executable('test_reac_qdisc',
                '-Wl,--wrap=reac_etf_qdisc_remove',
                '-Wl,--wrap=reac_etf_qdisc_install_offload',
                '-Wl,--wrap=reac_etf_qdisc_offloaded',
-               '-Wl,--wrap=reac_qdisc_hw_capable'],
+               '-Wl,--wrap=reac_qdisc_hw_capable',
+               '-Wl,--wrap=if_nametoindex'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
 
