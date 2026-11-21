@@ -1,8 +1,8 @@
 reac-pw (1.0.45) unstable; urgency=medium
 
   * The hardware launch where the NIC can take it, held for the daemon's
-    life; the health line names what launches the frames (FreeREAC/reac-
-    pw#102, FreeREAC/reac-pw#139).
+    life; the health line names what launches the frames
+    (FreeREAC/reac-pw#102, FreeREAC/reac-pw#139).
   * reac-pw-phc2sys@.service, the hardware launch's clock
     (FreeREAC/reac-pw#139).
   * A bridge, veth or tun is not a REAC segment: a physical NIC or a
