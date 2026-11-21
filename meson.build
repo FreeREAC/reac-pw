@@ -323,6 +323,11 @@ launch_report_test = executable('test_reac_launch_report',
   include_directories : src_inc)
 test('reac_launch_report', launch_report_test)
 
+# --- the phc2sys template unit: a named TAI offset, and a check that reads /proc for a ptp4l (reac-pw#98) -
+test('phc2sys_unit',
+  find_program('tests/phc2sys-unit.sh'),
+  args : [meson.current_source_dir()])
+
 # --- every name read through reac_conf_lookup is a knob: in g_reac_knobs and docs/ENV-KNOBS.md ----
 test('every_conf_lookup_name_is_a_knob',
   find_program('tests/every-conf-lookup-name-is-a-knob.sh'),
