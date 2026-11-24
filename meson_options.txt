@@ -22,3 +22,10 @@ option('facts_dir', type : 'string', value : '',
   description : 'Directory with reac_facts.h + reac_facts_undef.h (empty: the committed facts/).')
 option('reac_protocol', type : 'string', value : '../reac-protocol',
   description : 'reac-protocol checkout for the facts_drift test (relative to the source root).')
+
+# The process-callback bad-buffer tests (tests/test_reac_*_rt_planes.c) build with
+# AddressSanitizer + UndefinedBehaviorSanitizer when this is on: a read past a plane is then a
+# report, not a quiet value. Off by default so the default build and the package %check need no
+# libasan/libubsan; one CI job turns it on. Their counter and sample assertions run either way.
+option('sanitize_tests', type : 'boolean', value : false,
+  description : 'Build the realtime-callback bad-buffer tests with ASan+UBSan (needs libasan/libubsan).')
