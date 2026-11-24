@@ -4,12 +4,16 @@
 #include "reac_own_macs.h"
 
 #include <dirent.h>
+#include <net/ethernet.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "reac_facts_pw.h"
 
-#define ETH_SRC_OFF (REAC_ETHERTYPE_OFF - 6)
+/* The source address is where Ethernet puts it (IEEE 802.3), whatever the REAC payload's
+ * layout: no protocol fact moves it. */
+#define ETH_SRC_OFF offsetof(struct ether_header, ether_shost)
 
 static int read_address(const char *netdir, const char *name, uint8_t mac[6])
 {

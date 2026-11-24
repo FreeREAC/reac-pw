@@ -25,6 +25,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "reac_own_macs.h"
 #include "reac_facts_pw.h"   /* the protocol's numbers, from their one declaration */
 
 #define CHK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
@@ -168,6 +169,99 @@ static int rival_no_geometry(struct reac_hunt *h, uint64_t now)
 		r = r || c;
 	}
 	return r;
+}
+
+/* ---- OUR OWN ADDRESSES ARE NEVER A RIVAL (#8). A mirrored port hands the sniffer this
+ * host's master stream, sourced from a SECOND interface (OWN2), not the NIC it listens on
+ * (OURS). own_stream sends a desk's master stream as that port delivers it, a head-amp
+ * record and the cfea announce OWN_COPIES times from `src`, each frame through the screen
+ * first exactly as the sniffer's drain does (`scr` NULL leaves the screen out), and returns
+ * how many frames the screen dropped. The host's interface table itself is
+ * test_reac_own_macs's. */
+#define OWN_COPIES 10
+#define OWN_GAP_NS (3ULL * 1000000ULL)
+static const uint8_t OWN2[6] = { 0x34, 0x5a, 0x60, 0x9f, 0x9e, 0xc0 };  /* another NIC of this host */
+
+static int own_stream(struct reac_hunt *h, const struct reac_own_macs *scr, int *said,
+                      const uint8_t src[6], uint64_t now, int *firsts)
+{
+	static struct reac_master m;
+	reac_master_init(&m, src, NULL, REAC_PKT_RATE_96K);
+	int dropped = 0;
+	for (int k = 0; k < OWN_COPIES; k++) {
+		uint64_t t = now + (uint64_t)k * OWN_GAP_NS;
+		uint8_t f[2048];
+		size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, REACPW_S1608_HEADAMP_BASE,
+		                                   REAC_HEADAMP_PARAM_PHANTOM, 1);
+		float *none[1] = { NULL };
+		uint8_t g[2048];
+		size_t gn = (size_t)reac_downstream_build(g, none, 0, REAC_SAMPLES_PER_PKT, 7, src);
+		if (n == 0 || gn == 0 || reac_master_stamp(&m, g, REAC_M_EMIT_ANNOUNCE, 0) != 0)
+			return -1;
+		const uint8_t *fr[2] = { f, g };
+		size_t ln[2] = { n, gn };
+		for (int i = 0; i < 2; i++) {
+			if (scr) {
+				enum reac_own_echo e = reac_own_echo_screen(scr, said, fr[i], ln[i]);
+				if (e != REAC_OWN_ECHO_NONE) {
+					dropped++;
+					if (e == REAC_OWN_ECHO_FIRST && firsts)
+						(*firsts)++;
+					continue;
+				}
+			}
+			reac_hunt_observe(h, fr[i], ln[i], t, NULL);
+		}
+	}
+	return dropped;
+}
+
+static int own_addresses_never_rival(void)
+{
+	struct reac_own_macs own = { .n = 2 };
+	memcpy(own.mac[0], OURS, 6);
+	memcpy(own.mac[1], OWN2, 6);
+	uint64_t t0 = 100 * SEC;
+	struct reac_hunt h;
+
+	/* CONTROL: with the screen out of the path our own stream, sourced from the second
+	 * interface, is a foreign desk. This is the defect. */
+	reac_hunt_init(&h, OURS, t0);
+	CHK(own_stream(&h, NULL, NULL, OWN2, t0, NULL) == 0);
+	reac_hunt_step(&h, t0 + SEC / 10);
+	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
+	CHK(h.arb.rival == REAC_RIVAL_DESK);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+
+	/* THE FIX: the same stream through the screen never reaches the hunt, and the window
+	 * closes on a wire nobody else spoke on: we stay master. */
+	reac_hunt_init(&h, OURS, t0);
+	int said = 0, firsts = 0;
+	CHK(own_stream(&h, &own, &said, OWN2, t0, &firsts) == 2 * OWN_COPIES);
+	CHK(firsts == 1);
+	CHK(said == 1);
+	CHK(h.arb.state != REAC_SEGMENT_FOREIGN);
+	CHK(h.arb.rival != REAC_RIVAL_DESK);
+	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) >= 0);
+	CHK(h.verdict != REAC_HUNT_SLAVE);
+	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
+
+	/* THE LISTENING NIC'S OWN ADDRESS is dropped too. */
+	reac_hunt_init(&h, OURS, t0);
+	said = 0; firsts = 0;
+	CHK(own_stream(&h, &own, &said, OURS, t0, &firsts) == 2 * OWN_COPIES);
+	CHK(firsts == 1);
+
+	/* A REAL DESK STILL IS ONE: the screen drops our addresses and nothing else. */
+	reac_hunt_init(&h, OURS, t0);
+	said = 0; firsts = 0;
+	CHK(own_stream(&h, &own, &said, DESK, t0, &firsts) == 0);
+	CHK(firsts == 0 && said == 0);
+	reac_hunt_step(&h, t0 + SEC / 10);
+	CHK(h.arb.rival == REAC_RIVAL_DESK);
+	CHK(h.verdict == REAC_HUNT_SLAVE);
+	CHK(memcmp(h.arb.mac, DESK, 6) == 0);
+	return 0;
 }
 
 int main(void)
@@ -526,10 +620,14 @@ int main(void)
 	CHK(REAC_HUNT_WINDOW_NS == 3 * SEC);
 	CHK(REAC_HUNT_WINDOW_NS < REAC_DISCO_STALE_NS);
 
+	/* ---- Our own addresses, from any interface of this host, are never a rival (#8). */
+	CHK(own_addresses_never_rival() == 0);
+
 	printf("ok: a vacant wire is taken after %llu s, a desk is joined, a box on M is "
 	       "joined too whatever the wire is pinned to, an unreadable "
 	       "rival is refused either way, a pin drives on link with no frame at all, a wire "
-	       "proven silent is driven while evidence still outranks that, nothing latches\n",
+	       "proven silent is driven while evidence still outranks that, nothing latches, "
+	       "our own stream is never a rival\n",
 	       (unsigned long long)(REAC_HUNT_WINDOW_NS / SEC));
 	return 0;
 }

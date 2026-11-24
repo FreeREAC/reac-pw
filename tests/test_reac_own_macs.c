@@ -6,19 +6,13 @@
  * The fixture is the mirrored port: the segment we master carries OUR master frames, sourced
  * from a SECOND interface of this host, not the NIC the sniffer listens on. The host's
  * interface table is a scripted netdir (`<name>/address`), read by the same code that reads
- * /sys/class/net. The control is the same stream with the screen out of the path: it must
- * read as a foreign desk, or the fixture proves nothing.
- *
- * Frames are libreac's builders, never hand-rolled. */
+ * /sys/class/net, and the screen judges an Ethernet frame by its source address. The mirrored
+ * stream itself, libreac's frames through the hunt with the screen in and out of the path,
+ * is test_reac_hunt's: it crosses into libreac, which the perturbed-protocol check builds
+ * against the real numbers. */
 #include "reac_own_macs.h"
 
-#include <reac/reac_hunt.h>
-#include <reac/reac_arbitration.h>
-#include <reac/reac.h>
-#include <reac/reac_ctrlblk.h>
-#include <reac/reac_master.h>
-#include <reac/reac_encode.h>
-
+#include <net/ethernet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,10 +22,6 @@
 
 static int fails;
 #define CHK(c) do { if (!(c)) { fails++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
-
-#define SEC 1000000000ULL
-#define STREAM_COPIES 10
-#define STREAM_GAP_NS (3ULL * 1000000ULL)
 
 static const uint8_t LISTEN[6] = { 0x34, 0x5a, 0x60, 0x9f, 0x9e, 0xbe };  /* the NIC the sniffer is on */
 static const uint8_t SENDER[6] = { 0x34, 0x5a, 0x60, 0x9f, 0x9e, 0xc0 };  /* another NIC of this host */
@@ -60,44 +50,6 @@ static void rm_iface(const char *dir, const char *name)
 	rmdir(p);
 }
 
-/* A desk's master stream as a mirrored port delivers it: a head-amp record and the cfea
- * announce, STREAM_COPIES times, from `src`. Each frame goes through the screen first,
- * exactly as the sniffer's drain does; `scr` NULL leaves the screen out. Returns how many
- * frames the screen dropped. */
-static int stream_from(struct reac_hunt *h, const struct reac_own_macs *scr, int *said,
-                       const uint8_t src[6], uint64_t now, int *firsts)
-{
-	static struct reac_master m;
-	reac_master_init(&m, src, NULL, REAC_PKT_RATE_96K);
-	int dropped = 0;
-	for (int k = 0; k < STREAM_COPIES; k++) {
-		uint64_t t = now + (uint64_t)k * STREAM_GAP_NS;
-		uint8_t f[2048];
-		size_t n = reac_ctrl_build_headamp(f, BCAST, src, 0x30, REACPW_S1608_HEADAMP_BASE,
-		                                   REAC_HEADAMP_PARAM_PHANTOM, 1);
-		float *none[1] = { NULL };
-		uint8_t g[2048];
-		size_t gn = (size_t)reac_downstream_build(g, none, 0, REAC_SAMPLES_PER_PKT, 7, src);
-		if (n == 0 || gn == 0 || reac_master_stamp(&m, g, REAC_M_EMIT_ANNOUNCE, 0) != 0)
-			return -1;
-		const uint8_t *fr[2] = { f, g };
-		size_t ln[2] = { n, gn };
-		for (int i = 0; i < 2; i++) {
-			if (scr) {
-				enum reac_own_echo e = reac_own_echo_screen(scr, said, fr[i], ln[i]);
-				if (e != REAC_OWN_ECHO_NONE) {
-					dropped++;
-					if (e == REAC_OWN_ECHO_FIRST && firsts)
-						(*firsts)++;
-					continue;
-				}
-			}
-			reac_hunt_observe(h, fr[i], ln[i], t, NULL);
-		}
-	}
-	return dropped;
-}
-
 int main(void)
 {
 	char dir[] = "/tmp/reac-own-macs-XXXXXX";
@@ -122,52 +74,29 @@ int main(void)
 	CHK(reac_own_macs_read(&own, "/nonexistent/net") == -1);
 	CHK(own.n == 2);
 
-	uint64_t t0 = 100 * SEC;
-	struct reac_hunt h;
+	/* ---- B. THE SCREEN READS THE ETHERNET SOURCE: a frame from either of our interfaces is
+	 * dropped, said once, and a desk's is passed on. (The hunt this keeps the stream out of
+	 * runs in test_reac_hunt, whose frames are libreac's.) */
+	uint8_t fr[64] = { 0 };
+	struct ether_header *eh = (struct ether_header *)fr;
+	memcpy(eh->ether_dhost, BCAST, 6);
+	int said = 0;
+	memcpy(eh->ether_shost, SENDER, 6);
+	CHK(reac_own_echo_screen(&own, &said, fr, sizeof fr) == REAC_OWN_ECHO_FIRST);
+	said = 1;
+	CHK(reac_own_echo_screen(&own, &said, fr, sizeof fr) == REAC_OWN_ECHO_AGAIN);
+	memcpy(eh->ether_shost, LISTEN, 6);
+	CHK(reac_own_echo_screen(&own, &said, fr, sizeof fr) == REAC_OWN_ECHO_AGAIN);
+	said = 0;
+	memcpy(eh->ether_shost, DESK, 6);
+	CHK(reac_own_echo_screen(&own, &said, fr, sizeof fr) == REAC_OWN_ECHO_NONE);
+	CHK(said == 0);
 
-	/* ---- B. CONTROL: with the screen out of the path our own stream, sourced from the
-	 * second interface, is a foreign desk. This is the defect. */
-	reac_hunt_init(&h, LISTEN, t0);
-	CHK(stream_from(&h, NULL, NULL, SENDER, t0, NULL) == 0);
-	reac_hunt_step(&h, t0 + SEC / 10);
-	CHK(h.arb.state == REAC_SEGMENT_FOREIGN);
-	CHK(h.arb.rival == REAC_RIVAL_DESK);
-	CHK(h.verdict == REAC_HUNT_SLAVE);
-
-	/* ---- C. THE FIX: the same stream through the screen never reaches the hunt, and the
-	 * window closes on a wire nobody else spoke on: we stay master. */
-	reac_hunt_init(&h, LISTEN, t0);
-	int said = 0, firsts = 0;
-	CHK(stream_from(&h, &own, &said, SENDER, t0, &firsts) == 2 * STREAM_COPIES);
-	CHK(firsts == 1);
-	CHK(said == 1);
-	CHK(h.arb.state != REAC_SEGMENT_FOREIGN);
-	CHK(h.arb.rival != REAC_RIVAL_DESK);
-	CHK(reac_hunt_step(&h, t0 + REAC_HUNT_WINDOW_NS + SEC) >= 0);
-	CHK(h.verdict != REAC_HUNT_SLAVE);
-	CHK(reac_hunt_role(&h) == REAC_ROLE_MASTER);
-
-	/* ---- D. THE LISTENING NIC'S OWN ADDRESS is dropped too. */
-	reac_hunt_init(&h, LISTEN, t0);
-	said = 0; firsts = 0;
-	CHK(stream_from(&h, &own, &said, LISTEN, t0, &firsts) == 2 * STREAM_COPIES);
-	CHK(firsts == 1);
-
-	/* ---- E. A REAL DESK STILL IS ONE: the screen drops our addresses and nothing else. */
-	reac_hunt_init(&h, LISTEN, t0);
-	said = 0; firsts = 0;
-	CHK(stream_from(&h, &own, &said, DESK, t0, &firsts) == 0);
-	CHK(firsts == 0 && said == 0);
-	reac_hunt_step(&h, t0 + SEC / 10);
-	CHK(h.arb.rival == REAC_RIVAL_DESK);
-	CHK(h.verdict == REAC_HUNT_SLAVE);
-	CHK(memcmp(h.arb.mac, DESK, 6) == 0);
-
-	/* ---- F. A SHORT FRAME has no source to judge and is passed on. */
+	/* ---- C. A SHORT FRAME has no source to judge and is passed on. */
 	uint8_t shorty[8] = { 0 };
 	CHK(reac_own_echo_screen(&own, &said, shorty, sizeof shorty) == REAC_OWN_ECHO_NONE);
 
-	/* ---- G. THE TABLE IS RE-READ when interfaces change: a NIC that appears is ours from
+	/* ---- D. THE TABLE IS RE-READ when interfaces change: a NIC that appears is ours from
 	 * then on, one that is removed no longer is. */
 	static const uint8_t LATE[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
 	put_iface(dir, "usb0", "02:11:22:33:44:55");

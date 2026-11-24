@@ -1620,7 +1620,7 @@ test('reac_node_recover', recover_test)
 # on it -> we master, but only after the 3 s window; nothing heard -> never a segment.
 # Pure; no socket.
 hunt_test = executable('test_reac_hunt',
-  ['tests/test_reac_hunt.c',],
+  ['tests/test_reac_hunt.c', 'src/reac_own_macs.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt', hunt_test)
@@ -1639,13 +1639,14 @@ link_budget_test = executable('test_reac_link_budget',
 test('reac_link_budget', link_budget_test)
 
 # --- unit test: no address of this host is ever a rival (#8) -------------------
-# A mirrored port hands the sniffer our own master frames from another interface of this
-# host. The host's interface table is a scripted netdir; the control stream, with the
-# screen out of the path, must read as a foreign desk.
+# The host's interface table is a scripted netdir, and the screen judges an Ethernet frame
+# by its source address. A mirrored port handing the hunt our own master stream from
+# another interface is test_reac_hunt's (its frames are libreac's, so the perturbed-protocol
+# check lists it; this one calls nothing of libreac's and must pass under every seed).
 own_macs_test = executable('test_reac_own_macs',
   ['tests/test_reac_own_macs.c', 'src/reac_own_macs.c'],
   include_directories : src_inc,
-  dependencies : [libreac_dep, libreac_transport_dep])
+  dependencies : [libreac_dep])
 test('reac_own_macs', own_macs_test)
 
 # --- dev-only: the auto-role detection against REAL captured frames -----------
