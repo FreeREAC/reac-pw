@@ -57,7 +57,7 @@ jobs:
       label: FreeREAC
       publish: ${{ github.ref_type == 'tag' }}
       dependencies: ''
-      requires: libreac7 libreac-transport7
+      requires: libreac1.12.0 libreac-transport1.12.0
     secrets:
       OPENMIXER_PACKAGES_SIGNING_KEY: ${{ secrets.FREEREAC_PACKAGES_SIGNING_KEY }}
       PACKAGES_SIGNING_PASSPHRASE: ${{ secrets.FREEREAC_PACKAGES_SIGNING_PASSPHRASE }}
