@@ -101,8 +101,10 @@ jobs:
                 iproute iproute-tc tcpdump libcap procps-ng util-linux which findutils \
                 diffutils gawk sed grep coreutils rsync
               git config --global --add safe.directory "*"
-              # the channel, then everything the spec BuildRequires: libreac, libreac-transport, libreac-tests
-              dnf install -y --setopt=retries=10 https://www.openmixer.org/rpm/openmixer-release.noarch.rpm
+              # the FreeREAC channel (canonical for the REAC packages), then everything the spec BuildRequires:
+              # libreac, libreac-transport, libreac-tests
+              dnf install -y --setopt=retries=10 https://freereac.github.io/rpm/freereac-release.noarch.rpm
+              dnf -y --setopt=skip_if_unavailable=False makecache --repo freereac --repo freereac-noarch
               dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
               tools/ci-suite.sh build-ci ../reac-protocol
               # THE TARBALL THE RPM IS BUILT FROM, CHECKED THE WAY THE RPM CHECKS IT.

@@ -43,8 +43,11 @@ jobs:
 
       # the channel, then what the spec BuildRequires: the libreac, libreac-transport and
       # SPA headers, in the range the spec declares (it is declared there and nowhere else)
-      - name: Add the OpenMixer repository
+      - name: Add the FreeREAC repository
         uses: Open-Mixer/.github/.github/actions/add-openmixer@openmixer-v1
+        with:
+          base-url: https://freereac.github.io
+          release-package: freereac-release
 
       - name: libreac and PipeWire headers, from the spec
         run: dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
