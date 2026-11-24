@@ -21,6 +21,7 @@
 #ifndef REAC_SINK_NODE_H
 #define REAC_SINK_NODE_H
 
+#include <stdint.h>
 #include "reac_wake.h"   /* struct reac_wake_obs — what the wake ladder reads from here */
 
 #include <stddef.h>
@@ -198,6 +199,9 @@ const struct reac_box_model *reac_sink_node_recognized_box(struct reac_sink_node
 /* Take (read+clear) the pending accepted reac.cfg.rate for a clean segment re-open,
  * 0 if none. Main's poll timer calls this; see reac_sink_node.c param_changed. */
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n);
+/* Cycles the RT callback skipped because the stream buffer had too few planes, an absent
+ * data or chunk pointer, or a plane shorter than the cycle (reac_rt_planes.h). */
+uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n);
 
 /* Take the pending accepted reac.cfg.role for a clean re-open in the other engine
  * (master<->slave), or -1 if none. Main's poll timer calls this. */
@@ -287,14 +291,13 @@ int reac_sink_node_on_graph(const struct reac_sink_node *n, const char **why);
 
 void reac_sink_node_destroy(struct reac_sink_node *n);
 
-/* Bound on the correction handed to PipeWire's resampler, in ppm. Sized so the
- * level loop settles WELL inside the guard band rather than against it: with the
- * pacer's measured 900 ppm deficit and a proportional loop, the steady-state depth
- * is target * (1 + drift/MAX), which at 5000 ppm is 1.18 * target — comfortably
- * below the guard's HIGH at 2 * target, so the guard never fires. 5000 ppm is
- * 0.007 of a semitone; the resampler does not care and neither does an ear. If
- * this bound is ever REACHED the loop has lost authority and the discards come
- * back, which is why the applied correction is published rather than assumed. */
-#define REAC_SINK_RATE_MATCH_MAX_PPM  5000
+/* The bound on the correction handed to PipeWire's resampler is REAC_RATE_MATCH_MAX_PPM
+ * (reac_rate_match.h), shared with the source node. Sized so the level loop settles
+ * WELL inside the guard band rather than against it: with the pacer's measured 900 ppm
+ * deficit and a proportional loop, the steady-state depth is target * (1 + drift/MAX),
+ * which at 5000 ppm is 1.18 * target, below the guard's HIGH at 2 * target. If it is
+ * ever REACHED the loop has lost authority and the discards come back, which is why the
+ * applied correction is published rather than assumed. */
+#include "reac_rate_match.h"
 
 #endif /* REAC_SINK_NODE_H */

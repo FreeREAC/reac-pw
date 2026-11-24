@@ -17,9 +17,12 @@
 # namespaces through AppArmor, and a user namespace may not autoload a kernel module, so
 # veth, dummy, 8021q and sch_etf are loaded here, by name, before any test asks for them.
 #
-# libreac IS THE PUBLISHED PACKAGE. `dnf builddep packaging/reac-pw.spec` installs libreac-devel,
-# libreac-transport-devel and libreac-tests (the far end several tests drive, fake_box) from the
-# OpenMixer channel at the floor and ceiling the spec declares; nothing of libreac is cloned or built here.
+# libreac IS THE PUBLISHED PACKAGE, AND ITS SOURCE RIDES BESIDE IT. `dnf builddep packaging/reac-pw.spec`
+# installs libreac-devel, libreac-transport-devel and libreac-tests (the far end several tests
+# drive, fake_box) from the OpenMixer channel at the floor the spec declares; that is what
+# reac-pw is built and linked against, and nothing of libreac is built here. libreac's SOURCE
+# is also cloned, pinned by commit, to ../libreac: tests/reac-code-conformance.py joins it to
+# require that every code libreac declares is emitted somewhere.
 #
 # THE VERDICT is tools/ci-suite.sh's: any FAIL, AND any netns test that did not report OK.
 # This runner can run all of them, so a SKIP here is a test that did not run.
@@ -42,6 +45,8 @@ env:
   # reac-protocol's facts, pinned to the commit facts/ was vendored from (tools/facts.py
   # drift checks the copy against it; tools/facts-perturb-check.sh perturbs it).
   REAC_PROTOCOL_REF: 26b16db9fc844820fed8adc26a342f6b86f3a1ba
+  # libreac's source, pinned the same way: the never-emitted arm of reac-code-conformance.py reads it.
+  LIBREAC_REF: c4ff8486115c87de206f4d5ddfcd2f0fd28265c9
 
 jobs:
   suite:
@@ -51,14 +56,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Public hygiene (no tracked .pyc, every source has its SPDX + Copyright header)
-        run: bash -o pipefail tools/check-public-hygiene.sh
-
       - name: reac-protocol ${{ env.REAC_PROTOCOL_REF }}
         run: |
           git init -q ../reac-protocol
           git -C ../reac-protocol fetch -q --depth 1 https://github.com/FreeREAC/reac-protocol.git "$REAC_PROTOCOL_REF"
           git -C ../reac-protocol checkout -q FETCH_HEAD
+
+      # THE SIBLING tests/reac-code-conformance.py JOINS. It looks for ../libreac (or
+      # LIBREAC_SRCDIR) and, only when it finds it, requires every code libreac declares to
+      # be emitted somewhere: with no sibling that arm has nothing to compare and a daemon
+      # that stops emitting a code stays green. The container sees this directory's parent
+      # as /w, so ../libreac here is /w/libreac there.
+      - name: libreac ${{ env.LIBREAC_REF }}, beside the checkout
+        run: |
+          git init -q ../libreac
+          git -C ../libreac fetch -q --depth 1 https://github.com/FreeREAC/libreac.git "$LIBREAC_REF"
+          git -C ../libreac checkout -q FETCH_HEAD
+          git -C ../libreac log --oneline -1
 
       - name: Prepare the host for namespace tests
         run: |
@@ -103,6 +117,12 @@ jobs:
               (cd "$T"/reac-pw-test &&
                meson setup _build >/dev/null &&
                meson test -C _build --no-suite netns --no-suite load --print-errorlogs)
+              # THE REALTIME-CALLBACK BAD-BUFFER TESTS, SANITIZED. Everywhere above they run
+              # without a sanitizer (the spec has no libasan); here, once, a read past a plane
+              # is an AddressSanitizer report.
+              dnf install -y -q --setopt=install_weak_deps=False libasan libubsan
+              (cd "$REPO" && meson setup build-san -Dsanitize_tests=true --wrap-mode=nofallback >/dev/null &&
+               meson test -C build-san --suite rt-planes --print-errorlogs)
             '
 
       - name: Keep the test logs
@@ -113,3 +133,10 @@ jobs:
           path: build-ci/meson-logs/
           if-no-files-found: warn
           retention-days: 14
+
+  pr-fixes-issue:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: Open-Mixer/.github/.github/workflows/pr-fixes-issue.yml@openmixer-v1

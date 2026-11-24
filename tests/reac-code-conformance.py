@@ -4,11 +4,11 @@
 #
 # "We need the error codes and not only messages" (operator, 2026-09-17). Two checks:
 #
-#  1. Every token of the daemon's share of libreac's REAC_CODE_LIST (the enumerators
-#     named in tests/reac-code-daemon-tokens.txt) is USED somewhere in src/*.c through
-#     reac_code_emit, every token emitted is named there, and every name there is
-#     declared in <reac/reac_code.h> — a declared code nobody ever emits is exactly the
-#     kind of thing a conformance test exists to catch (an unreachable branch of a
+#  1. Every token this daemon emits through reac_code_emit is DERIVED from src/*.c (an
+#     enumerator libreac does not declare does not compile, so there is no hand list to
+#     keep in step), and with a libreac sibling checkout joined, every token of libreac's
+#     REAC_CODE_LIST is emitted somewhere — a declared code nobody ever emits is exactly
+#     the kind of thing a conformance test exists to catch (an unreachable branch of a
 #     vocabulary that is supposed to be closed and complete).
 #  2. A FLOOR on how many refusal/failure-shaped `fprintf(stderr, "reac-pw: ...)` lines
 #     still bypass reac_code_emit — migration here is proportionate (spec §2), not
@@ -25,8 +25,8 @@
 #     sends RTM_GETQDISC or applies the tap's tag rule. Each arm has a planted copy it
 #     must refuse.
 #
-# Run directly: `python3 tests/reac-code-conformance.py <src-dir> <daemon-tokens.txt>
-# <libreac include dir>` (meson passes the include dir libreac_dep resolved to).
+# Run directly: `python3 tests/reac-code-conformance.py <src-dir> <libreac include dir>`
+# (meson passes the include dir libreac_dep resolved to).
 
 import os
 import re
@@ -62,9 +62,19 @@ def find_libreac(reac_pw_root):
     shared vocabulary header (2026-09-17-tunables-api-and-shared-refusal-codes) —
     not just by existing:
     an older libreac clone with no such header has nothing this scan can join.
-    Returns None, silently, when neither is found: this ratchet must not require
-    the sibling checkout to build or test reac-pw on its own."""
+    Returns None, silently, when no sibling is found and LIBREAC_SRCDIR is unset: this ratchet
+    must not require the sibling checkout to build or test reac-pw on its own. A LIBREAC_SRCDIR
+    that is set but is not a libreac checkout is refused by name (SystemExit)."""
     env_dir = os.environ.get('LIBREAC_SRCDIR')
+    # A directory somebody NAMED is never read as "no sibling": a typo or an empty clone would
+    # leave the never-emitted arm idle and the run green. It must hold what the scan reads.
+    if env_dir:
+        root = Path(env_dir)
+        missing = [r for r in ('include/reac/reac_code.h', 'src', 'transport/src')
+                   if not (root / r).exists()]
+        if missing:
+            raise SystemExit(f'LIBREAC_SRCDIR={env_dir} is not a libreac checkout '
+                             f'(missing: {", ".join(missing)})')
     candidates = [Path(env_dir)] if env_dir else [
         reac_pw_root.parent / 'libreac',
         reac_pw_root.parent / 'libreac-wt-knobs',
@@ -94,16 +104,6 @@ def declared_tokens(code_h_path):
     """Every token of libreac's one REAC_CODE_LIST."""
     text = code_h_path.read_text()
     return {name: token for name, token in TOKEN_DEF.findall(text)}
-
-
-def daemon_tokens(list_path):
-    """The enumerators tests/reac-code-daemon-tokens.txt names: the daemon's share."""
-    names = []
-    for line in list_path.read_text().splitlines():
-        line = line.split('#', 1)[0].strip()
-        if line:
-            names.append(line)
-    return names
 
 
 def strip_comments(text):
@@ -207,10 +207,31 @@ def bare_refusal_lines(src_files, start_pattern=FPRINTF_START):
     return hits
 
 
+def planted_srcdir():
+    """A LIBREAC_SRCDIR that is SET must be a libreac checkout, or the run is refused naming
+    it: a set-but-wrong directory used to mean "no sibling", the arm below quietly idle and
+    the run green. Plants an empty directory; the refusal must name it."""
+    import tempfile
+    saved = os.environ.get('LIBREAC_SRCDIR')
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            os.environ['LIBREAC_SRCDIR'] = d
+            try:
+                got = find_libreac(Path(d).parent)
+            except SystemExit as e:
+                return None if d in str(e) else f'the refusal of an empty LIBREAC_SRCDIR does not name {d}'
+            return f'an empty LIBREAC_SRCDIR ({d}) was accepted (found {got}) -- a set but wrong ' \
+                   f'directory must be refused by name, not read as "no sibling"'
+    finally:
+        if saved is None:
+            os.environ.pop('LIBREAC_SRCDIR', None)
+        else:
+            os.environ['LIBREAC_SRCDIR'] = saved
+
+
 def main(argv):
     src_dir = Path(argv[1]) if len(argv) > 1 else Path('src')
-    daemon_list = Path(argv[2]) if len(argv) > 2 else Path('tests') / 'reac-code-daemon-tokens.txt'
-    inc = Path(argv[3]) if len(argv) > 3 else None
+    inc = Path(argv[2]) if len(argv) > 2 else None
     if inc is None or not (inc / 'reac' / 'reac_code.h').exists():
         print(f'no <reac/reac_code.h> under {inc} -- the scan cannot read the one list',
               file=sys.stderr)
@@ -218,11 +239,7 @@ def main(argv):
     lib_code_h = inc / 'reac' / 'reac_code.h'
     cfg_h = inc / 'reac' / 'reac_cfg.h'
 
-    if not daemon_list.exists():
-        print(f'{daemon_list} not found -- the scan is broken, not the code', file=sys.stderr)
-        return 1
-
-    broken = planted_one_home(cfg_h)
+    broken = planted_srcdir() or planted_one_home(cfg_h)
     if broken:
         print(broken, file=sys.stderr)
         return 1
@@ -234,17 +251,9 @@ def main(argv):
         return 1
 
     one_list = declared_tokens(lib_code_h)
-    ours = daemon_tokens(daemon_list)
-    if not one_list or not ours:
-        print(f'found zero tokens in {lib_code_h} or {daemon_list} -- the scan is broken',
-              file=sys.stderr)
+    if not one_list:
+        print(f'found zero tokens in {lib_code_h} -- the scan is broken', file=sys.stderr)
         return 1
-    undeclared = sorted(set(ours) - set(one_list))
-    if undeclared:
-        print(f'{len(undeclared)} name(s) in {daemon_list.name} are not in libreac\'s list: '
-              f'{undeclared}', file=sys.stderr)
-        return 1
-    declared = {n: one_list[n] for n in ours}
 
     src_files = sorted(src_dir.glob('*.c'))
     if not src_files:
@@ -252,6 +261,10 @@ def main(argv):
               file=sys.stderr)
         return 1
 
+    # What this daemon emits is read off its own source; a name libreac does not declare
+    # would not compile, so every one of these is in the one list.
+    ours = sorted(used_tokens(src_files))
+    declared = {n: one_list[n] for n in ours if n in one_list}
     all_src_files = list(src_files)
     hits = bare_refusal_lines(src_files, FPRINTF_START)
 
@@ -272,12 +285,6 @@ def main(argv):
     if unused:
         print(f'{len(unused)} declared code(s) are never emitted: {unused}', file=sys.stderr)
         return 1
-    unlisted = sorted(used_tokens(src_files) - set(ours))
-    if unlisted:
-        print(f'{len(unlisted)} code(s) emitted by src/ are not named in {daemon_list.name}: '
-              f'{unlisted}', file=sys.stderr)
-        return 1
-
     if len(hits) > FLOOR:
         print(f'{len(hits)} bare refusal/failure fprintf lines bypass reac_code_emit, '
               f'over the floor of {FLOOR}:', file=sys.stderr)

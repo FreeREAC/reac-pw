@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.43
+Version:        1.0.44
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -96,6 +96,20 @@ happily and mis-decodes every downstream frame).
 
 Keep this in step with meson.build's dependency() floor.
 
+%package devel
+Summary:        Facts headers of reac-pw for consumers (head-amp property prefix, protocol numbers)
+BuildArch:      noarch
+# FLOORS ONLY: reac_headamp_prop.h includes <reac/reac_headamp_tx.h> and reac_facts_pw.h the libreac
+# headers; the floor is the libreac the daemon itself is built against.
+Requires:       libreac-devel >= 1.12.0
+Requires:       pkgconf-pkg-config
+
+%description devel
+The public facts headers of reac-pw, installed under %{_includedir}/reac-pw with reac-pw.pc:
+reac_headamp_prop.h (the per-channel head-amp key prefix inside SPA_PROP_params) and the
+headers it includes. A consumer that pins those facts reads them from here instead of from
+a source checkout.
+
 %prep
 %autosetup -n %{name}-%{version}
 
@@ -180,6 +194,14 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 # removes it.
 %ghost %config(missingok,noreplace) %{_sysconfdir}/NetworkManager/conf.d/90-reac-pw.conf
 
+%files devel
+%{_includedir}/reac-pw/reac_facts.h
+%{_includedir}/reac-pw/reac_facts_pw.h
+%{_includedir}/reac-pw/reac_facts_undef.h
+%{_includedir}/reac-pw/reac_headamp_prop.h
+%{_includedir}/reac-pw/reac_headamp_state.h
+%{_datadir}/pkgconfig/reac-pw.pc
+
 %post
 # The root service is a SYSTEM unit: its preset enables it on a fresh install.
 %systemd_post reac-pw-nm-unmanaged.service
@@ -231,6 +253,16 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Tue Nov 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
+- New reac-pw-devel package (Debian: reac-pw-dev) with the facts headers consumers pin (#108, #110).
+- Packaging declares floors only on libreac: no consumer ceiling (#111).
+- The source node's follower rate is clamped at the sink's ppm bound, and clamps are counted (#114).
+- The sink and source process callbacks check the stream buffer before reading it, an out-of-bounds fix (#116).
+- The trunk's declared VLANs are minted cold and knocked on (#99, #100).
+- reac-pw's own unit tests for main.c, the sink and the capture node, and the script-audit cuts (#117).
+- reac_ifscan's test fails by name, not SIGSEGV, on a host without the NICs it makes up (#124).
+- A threat model; fuzz checks proven; the shared workflows, commit checker and channel from Open-Mixer (#88, #89, #90, #94, #96).
+
 * Fri Nov 06 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.43-1
 - Built against libreac 1.11 (libreac.so.7, libreac7): libreac, libreac-transport and
   libreac-tests are declared >= 1.11.0 < 1.12 (libreac-tests keeps its 1.7.3 floor).

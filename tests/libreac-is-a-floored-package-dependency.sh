@@ -2,24 +2,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# NO PINS (FreeREAC/reac-pw#23): libreac is declared in the packaging and nowhere else, as a
-# FLOOR and nothing above it.
+# NO PINS, NO CEILING (FreeREAC/reac-pw#23; the ceiling removed by the floors-only rule, #108/#110):
+# libreac is declared in the packaging and nowhere else, and a consumer declares FLOORS ONLY.
 #
 # libreac, libreac-transport and libreac-tests (fake_box) are declared in packaging/reac-pw.spec
-# and debian/control with a floor (the first release whose behaviour this daemon needs),
-# installed from the channel by `dnf builddep` / `apt-get build-dep`, and found by pkg-config.
-# THERE IS NO CEILING: libreac's soname moves with every release, so the soname dependency
-# rpm and dpkg generate from the link already ties each reac-pw build to the libreac it was
-# built against, and a hand-written upper range would only restate that, by hand, wrongly.
-# This fails when
+# and debian/control as a floor (>=), installed from the OpenMixer channel by `dnf builddep` /
+# `apt-get build-dep`, and found by pkg-config. This fails when
 #   - a package the build or the tests need has no floor, in the spec's BuildRequires, in its
 #     Requires, or in debian/control's Build-Depends;
-#   - any of them still carries a ceiling (`<` in the spec, `<<` in control);
+#   - ANY libreac* dependency carries a ceiling: a `<`, `<=`, `<<` or `=` in the spec or control
+#     (the next minor of a library is published, installed and tested by its own release; a
+#     consumer that caps it turns every release of the library into a red build of the consumer);
 #   - a tracked file clones, fetches or pins a libreac source: LIBREAC_REF, a `git clone` of
 #     FreeREAC/libreac, the subprojects/libreac.wrap fallback, tools/build-with-libreac.sh.
+#     ONE named exception: the conformance job's sibling pin in .github/workflows/test.yml (below).
 #
-# A SWEEP THAT CANNOT SEE PROVES IT CAN: the floor and ceiling patterns must read planted lines,
-# and the pin pattern must match a planted line.
+# A SWEEP THAT CANNOT SEE PROVES IT CAN: bounded() runs first on a declaration with no ceiling
+# and must call it unbounded, and the pin pattern must match a planted line.
 #
 #   tests/libreac-is-a-floored-package-dependency.sh [repo-root]
 set -uo pipefail
@@ -30,17 +29,38 @@ say() { echo "FAIL: $*" >&2; fail=1; }
 
 # decl <text> <regex>: the lines of <text> that match
 decl() { awk -v re="$2" '$0 ~ re' <<<"$1"; }
-floored() { grep -Eq "$2 *[)]? *>= " <<<"$1"; }
-ceilinged() { grep -Eq "$2 *[)]? *<<? " <<<"$1"; }
+
 PIN='LIBREAC_REF|git clone[^|]*libreac|libreac\.wrap|build-with-libreac'
 
+# THE ONE EXCEPTION (ruling, reac-pw#117): the conformance job's sibling. tests/reac-code-conformance.py
+# joins a libreac SOURCE checkout at ../libreac and, only then, requires every code libreac declares
+# to be emitted somewhere (the never-emitted arm; with no sibling it is idle and a daemon that stops
+# emitting a code stays green). The suite job in .github/workflows/test.yml therefore fetches libreac
+# source pinned by LIBREAC_REF. Nothing BUILDS from it: the build links the packages. The exception
+# is these three lines of that one file and nothing else -- not the file as a whole, not any other
+# workflow, not meson.build, not a script: a second use of a libreac source is a new ruling.
+SIB_FILE='.github/workflows/test.yml'
+SIB_RE='^  LIBREAC_REF: [0-9a-f]{40}$|^      - name: libreac [$][{][{] env[.]LIBREAC_REF [}][}], beside the checkout$|^          git -C [.][.]/libreac fetch -q --depth 1 https://github[.]com/FreeREAC/libreac[.]git "[$]LIBREAC_REF"$'
+sibling_ok() { # <file> <line text>
+	[ "$1" = "$SIB_FILE" ] && grep -Eq "$SIB_RE" <<<"$2"
+}
+
 # --- positive controls
-floored 'BuildRequires:  pkgconfig(libreac) >= 1.7.0' 'libreac' \
-	|| { echo "FAIL: self-check: a floor was not read as a floor" >&2; exit 1; }
-ceilinged 'BuildRequires:  pkgconfig(libreac) < 1.9' 'libreac' \
-	|| { echo "FAIL: self-check: a ceiling was not read as a ceiling" >&2; exit 1; }
-ceilinged 'libreac-dev << 1.9~,' 'libreac-dev' \
-	|| { echo "FAIL: self-check: a control ceiling was not read as a ceiling" >&2; exit 1; }
+sibling_ok "$SIB_FILE" '  LIBREAC_REF: 0123456789abcdef0123456789abcdef01234567' \
+	|| { echo "FAIL: self-check: the sibling pin line is not excepted" >&2; exit 1; }
+sibling_ok .github/workflows/other.yml '  LIBREAC_REF: 0123456789abcdef0123456789abcdef01234567' \
+	&& { echo "FAIL: self-check: the exception reaches another workflow" >&2; exit 1; }
+sibling_ok meson.build '  LIBREAC_REF: 0123456789abcdef0123456789abcdef01234567' \
+	&& { echo "FAIL: self-check: the exception reaches meson.build" >&2; exit 1; }
+sibling_ok "$SIB_FILE" '          git clone -q https://github.com/FreeREAC/libreac.git ../libreac' \
+	&& { echo "FAIL: self-check: the exception reaches a clone in the same file" >&2; exit 1; }
+CEILING_RE='^[^#]*libreac[-a-z]*[)]? *[(]?(<|<<|<=|=|==) '
+grep -Eq "$CEILING_RE" <<<'BuildRequires:  pkgconfig(libreac) < 1.12' \
+	|| { echo "FAIL: self-check: a planted spec ceiling was not seen" >&2; exit 1; }
+grep -Eq "$CEILING_RE" <<<' libreac-dev (<< 1.12~),' \
+	|| { echo "FAIL: self-check: a planted control ceiling was not seen" >&2; exit 1; }
+grep -Eq "$CEILING_RE" <<<'Requires:       libreac >= 1.11.0' \
+	&& { echo "FAIL: self-check: a floor read as a ceiling" >&2; exit 1; }
 grep -Eq "$PIN" <<<'LIBREAC_REF: v1.7.0' \
 	|| { echo "FAIL: self-check: the pin pattern cannot see a planted LIBREAC_REF" >&2; exit 1; }
 
@@ -55,45 +75,51 @@ ctext=$(cat "$ctl")
 
 for n in 'pkgconfig[(]libreac[)]' 'pkgconfig[(]libreac-transport[)]' 'libreac-tests'; do
 	[ -n "$(decl "$stext" "^BuildRequires: +$n")" ] || { say "spec: no BuildRequires for $n"; continue; }
-	floored "$(decl "$stext" "^BuildRequires: +$n")" "$n" || say "spec: BuildRequires $n has no floor (>=)"
-	ceilinged "$(decl "$stext" "^BuildRequires: +$n")" "$n" && say "spec: BuildRequires $n has a ceiling (<): the soname already ties the build"
+	grep -Eq "$n *[)]? *>= " <<<"$(decl "$stext" "^BuildRequires: +$n")" \
+		|| say "spec: BuildRequires $n lacks a floor (>=)"
 done
 for n in 'libreac' 'libreac-transport'; do
 	[ -n "$(decl "$stext" "^Requires: +$n ")" ] || { say "spec: no Requires for $n"; continue; }
-	floored "$(decl "$stext" "^Requires: +$n ")" "$n" || say "spec: Requires $n has no floor (>=)"
-	ceilinged "$(decl "$stext" "^Requires: +$n ")" "$n" && say "spec: Requires $n has a ceiling (<): the soname already ties the install"
+	grep -Eq "$n *>= " <<<"$(decl "$stext" "^Requires: +$n ")" \
+		|| say "spec: Requires $n lacks a floor (>=)"
 done
 for n in 'libreac-dev' 'libreac-transport-dev' 'libreac-tests'; do
 	[ -n "$(decl "$ctext" "^ *$n [(]")" ] || { say "control: no Build-Depends for $n"; continue; }
-	floored "$(decl "$ctext" "^ *$n [(]" | sed 's/(//')" "$n" || say "control: Build-Depends $n has no floor (>=)"
-	ceilinged "$(decl "$ctext" "^ *$n [(]" | sed 's/(//')" "$n" && say "control: Build-Depends $n has a ceiling (<<)"
+	grep -Eq "$n *[(]>= " <<<"$(decl "$ctext" "^ *$n [(]")" \
+		|| say "control: Build-Depends $n lacks a floor (>=)"
 done
 
-# ONE FLOOR (2026-10-28). Every site names the same libreac floor: meson.build's two
-# dependency() floors, the spec's BuildRequires and Requires, control's -dev Build-Depends
-# (libreac-tests keeps its older floor on purpose).
+# --- no libreac source pin, in the tracked tree (the tarball case: the files that exist)
+# ONE FLOOR, NO CEILING. Every site names the same libreac floor: meson.build's two dependency()
+# floors, the spec's BuildRequires and Requires, control's -dev Build-Depends. A ceiling anywhere
+# fails: 1.0.42's first RPM raised the BuildRequires and left `Requires: libreac < 1.10`, and dnf
+# then downgraded libreac under the running daemon to satisfy it; and on the day a library minor was
+# published every build of its consumer went red (deb builds, 2026-10-27).
 FLOOR_RE='^(Build)?Requires: +(pkgconfig[(])?libreac(-transport)?[)]? +>='
 ver() { grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -1; }
 [ "$(decl 'Requires:       libreac >= 1.9.0' "$FLOOR_RE" | sed 's/.*>=//' | ver)" = 1.9.0 ] \
 	|| { echo "FAIL: self-check: the floor pattern cannot read a planted Requires line" >&2; exit 1; }
 floors=$( {
 	grep -oE "dependency\('libreac(-transport)?', version : '>= *[0-9.]+'" "$ROOT/meson.build" | sed "s/.*>=//" | grep -oE '[0-9.]+'
-	decl "$stext" "$FLOOR_RE" | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
-	decl "$ctext" '^ *libreac(-transport)?-dev [(]>=' | while read -r l; do sed 's/.*>=//' <<<"$l" | ver; done
+	decl "$stext" "$FLOOR_RE" | while read -r l; do ver <<<"${l#*>=}"; done
+	decl "$ctext" '^ *libreac(-transport)?-dev [(]>=' | while read -r l; do ver <<<"${l#*>=}"; done
 } | sort -u)
 [ "$(wc -l <<<"$floors")" = 1 ] && [ "$(wc -w <<<"$floors")" = 1 ] \
 	|| say "the libreac floor is not ONE value across meson.build, the spec and control: $(tr '\n' ' ' <<<"$floors")"
-
-# --- no libreac source pin, in the tracked tree (the tarball case: the files that exist)
+# the ceiling sweep covers every dependency line of both files, comments aside
+ceil=$( { grep -nE "$CEILING_RE" "$spec" | sed "s,^,spec:,"; grep -nE "$CEILING_RE" "$ctl" | sed "s,^,control:,"; } )
+[ -z "$ceil" ] || { say "a libreac dependency carries a ceiling (floors only):"; echo "$ceil" >&2; }
 
 hits=$(cd "$ROOT" && {
 	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git ls-files; else find . -type f | sed 's,^\./,,'; fi
 } | grep -Ev '^(docs/|facts/)' | grep -v "^tests/$SELF$" | while read -r f; do
 	[ -f "$f" ] || continue
 	case "$f" in *libreac.wrap|*build-with-libreac.sh) echo "$f: exists"; continue ;; esac
-	grep -HnE "$PIN" "$f" 2>/dev/null
+	grep -HnE "$PIN" "$f" 2>/dev/null | while IFS= read -r l; do
+		sibling_ok "$f" "${l#*:*:}" || echo "$l"
+	done
 done)
 [ -z "$hits" ] || { say "libreac is pinned or fetched as source:"; echo "$hits" >&2; }
 
-[ "$fail" = 0 ] && echo "OK: libreac is a floor in spec and control, one floor everywhere, no ceiling, pinned nowhere"
+[ "$fail" = 0 ] && echo "OK: libreac has one floor and no ceiling in spec and control, pinned nowhere but the conformance sibling"
 exit "$fail"
