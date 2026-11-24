@@ -2,21 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 #
-# The PACKAGED SHAPE: `reac-pw` with NO arguments must try to START — hearing its
-# segments on every linked interface — and never answer with the usage text.
-#
-# This is the shape the unit gives the daemon (ExecStart=/usr/bin/reac-pw, no
-# flags), and nothing is configured for it: REAC_IFACES retired with the
-# per-interface files (2026-09-02). An
-# `argc < 2` guard once answered usage before anything else and made the
-# packaged service unstartable; measured 2026-08-31 on the rig.
-#
-# The test does NOT need a NIC or a capability. It asserts the two ends of the
-# decision:
-#   - `--help` still explains itself, exit 0, before any preflight;
-#   - bare `reac-pw` gets PAST argument handling: whatever stops it next (the
-#     capability preflight here, PipeWire on a host with none), it is not exit 2
-#     with the usage text.
+# The PACKAGED SHAPE, as shipped text: the unit gives the daemon no flags
+# (ExecStart=/usr/bin/reac-pw) and nothing is configured for it, and the preset enables it for
+# the console user. That the BINARY survives that shape (--help, a bare run) is
+# tests/cli-front-door.sh; this reads the two shipped files, which are the product.
 #
 # AND THE UNIT DOES NOT SECOND-GUESS THE CONF FILE (#100). A per-segment key on a
 # VLAN carries a DOT (`REAC_ROLE_enp131s0.11`), which systemd refuses as an
@@ -28,22 +17,8 @@
 # not parse at all — so the rule holds for every remaining per-segment key and now also
 # for a file that is not an environment file in the first place.
 set -u
-BIN="${1:?usage: packaged-shape-starts.sh /path/to/reac-pw [/path/to/reac-pw.service] [/path/to/90-reac-pw.preset]}"
-UNIT="${2:-}"
-PRESET="${3:-}"
-
-out=$(HOME=/nonexistent-reac-pw-test "$BIN" --help 2>&1); rc=$?
-if [ "$rc" -ne 0 ] || ! grep -q "usage:" <<<"$out"; then
-  echo "FAIL: --help must print usage and exit 0 (rc=$rc)"; exit 1
-fi
-if ! grep -q "HEARS its segments" <<<"$out"; then
-  echo "FAIL: the usage text no longer describes the packaged shape"; exit 1
-fi
-
-out=$(HOME=/nonexistent-reac-pw-test timeout 5 "$BIN" 2>&1); rc=$?
-if [ "$rc" -eq 2 ] && grep -q "usage:" <<<"$out"; then
-  echo "FAIL: bare reac-pw answered usage — the packaged shape is unreachable"; echo "$out" | head -3; exit 1
-fi
+UNIT="${1:?usage: packaged-shape-starts.sh /path/to/reac-pw.service /path/to/90-reac-pw.preset}"
+PRESET="${2:?usage: packaged-shape-starts.sh /path/to/reac-pw.service /path/to/90-reac-pw.preset}"
 
 # ---- the unit file, if it was handed to us -----------------------------------
 if [ -n "$UNIT" ]; then
@@ -76,4 +51,4 @@ if [ -n "$PRESET" ]; then
     echo "      start the daemon for the console user"; exit 1; }
 fi
 
-echo "OK: the packaged (no-argument) shape starts without a declaration"
+echo "OK: the unit carries no EnvironmentFile= and the preset enables reac-pw.service"

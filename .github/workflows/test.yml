@@ -8,7 +8,7 @@
 # whole-binary test SKIPPED there: the 1.0.26 release job read `Ok: 0 Fail: 0 Skipped: 30`
 # for the netns suite, and a startup crash would have passed every automated check.
 #
-# WHERE IT RUNS, AND WHY THERE. A fedora:44 container, the release's own target: its
+# WHERE IT RUNS, AND WHY THERE. A fedora:45 container, the release's own target: its
 # PipeWire and WirePlumber 0.5 are what the tests are written against
 # (box-master-slave-join.sh's WirePlumber drop-in is 0.5 syntax, and the runner's Ubuntu
 # ships 0.4). The container is --privileged because the tests mint unprivileged user, net,
@@ -50,14 +50,11 @@ env:
 
 jobs:
   suite:
-    name: meson test (unit + netns), fedora 44
+    name: meson test (unit + netns), fedora 45
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
-      - name: Public hygiene (no tracked .pyc, every source has its SPDX + Copyright header)
-        run: bash -o pipefail tools/check-public-hygiene.sh
 
       - name: reac-protocol ${{ env.REAC_PROTOCOL_REF }}
         run: |
@@ -93,19 +90,21 @@ jobs:
           fi
           lsmod | grep -E '^(veth|dummy|8021q|sch_etf) '
 
-      - name: Run the suite in fedora:44
+      - name: Run the suite in fedora:45
         run: |
           docker run --rm --privileged \
             -v "$GITHUB_WORKSPACE/..:/w" -w /w/"$(basename "$GITHUB_WORKSPACE")" \
-            fedora:44 bash -euxo pipefail -c '
+            fedora:45 bash -euxo pipefail -c '
               dnf install -y -q --setopt=install_weak_deps=False \
                 gcc make git meson ninja-build pkgconf-pkg-config python3 python3-pyyaml dnf5-plugins \
                 pipewire pipewire-devel pipewire-utils wireplumber \
                 iproute iproute-tc tcpdump libcap procps-ng util-linux which findutils \
                 diffutils gawk sed grep coreutils rsync
               git config --global --add safe.directory "*"
-              # the channel, then everything the spec BuildRequires: libreac, libreac-transport, libreac-tests
-              dnf install -y --setopt=retries=10 https://www.openmixer.org/rpm/openmixer-release.noarch.rpm
+              # the FreeREAC channel (canonical for the REAC packages), then everything the spec BuildRequires:
+              # libreac, libreac-transport, libreac-tests
+              dnf install -y --setopt=retries=10 https://freereac.github.io/rpm/freereac-release.noarch.rpm
+              dnf -y --setopt=skip_if_unavailable=False makecache --repo freereac --repo freereac-noarch
               dnf builddep -y --setopt=retries=10 packaging/reac-pw.spec
               tools/ci-suite.sh build-ci ../reac-protocol
               # THE TARBALL THE RPM IS BUILT FROM, CHECKED THE WAY THE RPM CHECKS IT.

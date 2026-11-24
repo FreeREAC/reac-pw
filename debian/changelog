@@ -1,3 +1,24 @@
+reac-pw (1.0.44) unstable; urgency=medium
+
+  * New reac-pw-devel package (Debian: reac-pw-dev) with the facts
+    headers consumers pin (#108, #110).
+  * Packaging declares floors only on libreac: no consumer ceiling
+    (#111).
+  * The source node's follower rate is clamped at the sink's ppm bound,
+    and clamps are counted (#114).
+  * The sink and source process callbacks check the stream buffer before
+    reading it, an out-of-bounds fix (#116).
+  * The trunk's declared VLANs are minted cold and knocked on (#99,
+    #100).
+  * reac-pw's own unit tests for main.c, the sink and the capture node,
+    and the script-audit cuts (#117).
+  * reac_ifscan's test fails by name, not SIGSEGV, on a host without the
+    NICs it makes up (#124).
+  * A threat model; fuzz checks proven; the shared workflows, commit
+    checker and channel from Open-Mixer (#88, #89, #90, #94, #96).
+
+ -- Pau Aliagas <linuxnow@gmail.com>  Tue, 17 Nov 2026 12:00:00 +0000
+
 reac-pw (1.0.43) unstable; urgency=medium
 
   * Built against libreac 1.11 (libreac.so.7, libreac7): libreac,
