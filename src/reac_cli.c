@@ -36,8 +36,8 @@ int reac_cli_parse_int(const char *s, int *out)
 	return 0;
 }
 
-/* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input
- * (text after the sixth pair included). */
+/* The captured catalogue row whose input width is `width`, or NULL when no captured row
+ * has it (no fallback to another box's row: see reac_cli.h). */
 const struct reac_box_model *reac_cli_box_row_for_width(int width)
 {
 	size_t n = 0;
@@ -48,6 +48,8 @@ const struct reac_box_model *reac_cli_box_row_for_width(int width)
 	return NULL;
 }
 
+/* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input
+ * (text after the sixth pair included). */
 int reac_cli_parse_mac(const char *s, uint8_t out[6])
 {
 	unsigned b[6];

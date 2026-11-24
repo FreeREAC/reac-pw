@@ -146,7 +146,7 @@ libreac_transport_srcdir = get_option('libreac_transport_srcdir')
 #     old checkout reports its own old version. `meson subprojects update`, or
 #     just remove subprojects/libreac and reconfigure.
 # The RPM (--wrap-mode=nofallback) has no fallback to take, so its floor is the
-# spec's BuildRequires: pkgconfig(libreac) >= 0.7.0 — keep the two in step.
+# spec's BuildRequires: pkgconfig(libreac) >= 1.12.0 — keep the two in step.
 # (That line said 0.5.0 while the spec said 0.6.0: the reminder to keep them in
 # step was itself out of step, which is why the number now appears in a comment
 # that is checked against the spec whenever either moves.)

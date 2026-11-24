@@ -63,7 +63,7 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-Links dynamically against the system libreac (>= 0.8.0), which carries the
+Links dynamically against the system libreac (>= 1.12.0), which carries the
 shared REAC byte-layout core AND, since 0.8.0, the whole CONTROL PLANE — the
 enrolment FSMs, the hunt, the grant and the frame builders behind
 <reac/reac_link.h>. This daemon is sockets, the pacer and PipeWire; it does not
