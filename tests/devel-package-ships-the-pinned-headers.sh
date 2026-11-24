@@ -104,6 +104,36 @@ grep -Ev '^Requires:[[:space:]]+[^[:space:]<=>]+([[:space:]]+>=[[:space:]]+[^[:s
 grep -Eq '[(][[:space:]]*(<<|<|=|>>)' <<<' libreac-dev (<< 1.12~)' \
 	|| { echo "FAIL: self-check: a planted Depends cap read as a floor" >&2; exit 1; }
 
+# --- the devel package depends on libreac's development files, and the daemon package still installs
+# the daemon (with two binary packages meson installs into debian/tmp, so the .install must name it).
+# Ported from lane/reac-pw-devel-package (#133): checks main's test lacked. Each is also run against a
+# sabotaged copy of the tree and must go red there (a guard never broken is decoration).
+extra() { # <root>: prints each failure
+	local r="$1" sp ct
+	sp="$r/packaging/reac-pw.spec"; ct="$r/debian/control"
+	awk '/^%package +devel/{on=1; next} /^%(description|files|prep|build|install|check|package)/{on=0} on' "$sp" \
+		| grep -Eq '^Requires:[[:space:]]+(pkgconfig\(libreac\)|libreac-devel)[[:space:]]+>=' \
+		|| echo "spec: reac-pw-devel does not require libreac's development files at a floor"
+	awk '/^Package: reac-pw-dev$/{on=1; next} /^Package:/{on=0} on' "$ct" | grep -Eq 'libreac-dev[[:space:]]*\(>=' \
+		|| echo "control: reac-pw-dev does not depend on libreac-dev (>= a floor)"
+	[[ $(<"$r/meson.build") =~ subdirs[[:space:]]*:[[:space:]]*\'reac-pw\' ]] \
+		|| echo "meson.build: reac-pw.pc is not generated with subdirs 'reac-pw'"
+	grep -qx 'usr/bin/reac-pw' "$r/debian/reac-pw.install" \
+		|| echo "debian/reac-pw.install does not take usr/bin/reac-pw (meson installs into debian/tmp)"
+}
+out=$(extra "$ROOT"); [ -z "$out" ] || { sed 's/^/FAIL: /' <<<"$out" >&2; fail=1; }
+sab() { # <what> <file> <sed expr>: the same checks on a copy broken one way must report
+	local c; c=$(mktemp -d)
+	cp -r "$ROOT/packaging" "$ROOT/debian" "$ROOT/meson.build" "$c/"
+	sed -i "$3" "$c/$2"
+	[ -n "$(extra "$c")" ] || { echo "FAIL: self-check: $1 stayed green" >&2; fail=1; }
+	rm -rf "$c"
+}
+sab "a devel Requires without libreac" packaging/reac-pw.spec '/^%package devel/,/^%description devel/{/^Requires:.*libreac/d}'
+sab "a reac-pw-dev without libreac-dev" debian/control '/^Package: reac-pw-dev$/,${/libreac-dev/d}'
+sab "a .pc without its subdirs" meson.build "s/subdirs : 'reac-pw'/subdirs : 'x'/"
+sab "a daemon install dropped from reac-pw.install" debian/reac-pw.install '/^usr\/bin\/reac-pw$/d'
+
 # --- optional: the built package's file list
 if [ -n "${RPM_DEVEL:-}" ]; then
 	list=$(rpm -qlp "$RPM_DEVEL") || say "rpm -qlp $RPM_DEVEL failed"
