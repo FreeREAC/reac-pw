@@ -26,6 +26,10 @@
 /* The node property the counter is published under (a count of cycles, since start). */
 #define REACPW_PROP_HEALTH_RT_BAD_BUFFERS "reac.health.rt-bad-buffers"
 
+/* The node property the sink's dropped-frames counter is published under: the audio
+ * frames the downstream ring refused, since start (reac_sink_node_dropped_frames). */
+#define REACPW_PROP_HEALTH_RT_DROPPED_FRAMES "reac.health.rt-dropped-frames"
+
 /* There is a planes array to look into at all. */
 static inline bool reac_rt_buffer_usable(const struct spa_buffer *b)
 {
