@@ -2,33 +2,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Pau Aliagas <linuxnow@gmail.com>
 # The commit-msg hook of a OpenMixer repository: the checker is Open-Mixer/.github's commit-message-check, read from a
-# checkout of it: OPENMIXER_DOTGITHUB, else the v1 clone ~/.cache/omx/openmixer-dotgithub (cloned on first use, fetched
-# at v1 again when its last fetch is over ten minutes old), else ../freemixer-dotgithub beside this repository. With
+# checkout of it: OPENMIXER_DOTGITHUB, else the openmixer-v1 clone ~/.cache/omx/openmixer-dotgithub (cloned on first use,
+# fetched at openmixer-v1 again when its last fetch is over ten minutes old; the release line, a branch that moves). With
 # none the commit is refused and says why: a checker that cannot run is never a pass.
 # Enable once per clone: git config core.hooksPath .githooks
-# Transitional, one pass: the old FREEMIXER_ names are still read (the new name wins, the old one says so); the old
-# names are removed in a later pass.
-if [ -z "${OPENMIXER_DOTGITHUB_URL:-}" ] && [ -n "${FREEMIXER_DOTGITHUB_URL:-}" ]; then
-  echo "commit-msg: FREEMIXER_DOTGITHUB_URL is deprecated, use OPENMIXER_DOTGITHUB_URL" >&2; OPENMIXER_DOTGITHUB_URL=$FREEMIXER_DOTGITHUB_URL
-fi
-if [ -z "${OPENMIXER_DOTGITHUB:-}" ] && [ -n "${FREEMIXER_DOTGITHUB:-}" ]; then
-  echo "commit-msg: FREEMIXER_DOTGITHUB is deprecated, use OPENMIXER_DOTGITHUB" >&2; OPENMIXER_DOTGITHUB=$FREEMIXER_DOTGITHUB
-fi
 url=${OPENMIXER_DOTGITHUB_URL:-https://github.com/Open-Mixer/.github}
+# git hands a hook GIT_DIR and GIT_INDEX_FILE (GIT_DIR absolute in a linked worktree): the cache's own commands run without
+# them, or they would act on the committing repository and write the cache's tree into the commit's index
+cg() { env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY -u GIT_PREFIX git "$@"; }
 c=$HOME/.cache/omx/openmixer-dotgithub
 d=${OPENMIXER_DOTGITHUB:-}
 if [ -z "$d" ]; then
   if [ -d "$c/.git" ]; then
     if [ -z "$(find "$c/.git/FETCH_HEAD" -mmin -10 2>/dev/null)" ]; then
-      { git -C "$c" fetch -q --depth 1 --force origin tag v1 && git -C "$c" checkout -q --detach v1; } 2>/dev/null ||
-        { touch "$c/.git/FETCH_HEAD"; echo "commit-msg: could not fetch v1 of $url; checking with the cached $(git -C "$c" rev-parse --short HEAD 2>/dev/null)" >&2; }
+      { cg -C "$c" fetch -q --depth 1 --force origin openmixer-v1 && cg -C "$c" checkout -q --detach FETCH_HEAD; } 2>/dev/null ||
+        { touch "$c/.git/FETCH_HEAD"; echo "commit-msg: could not fetch openmixer-v1 of $url; checking with the cached $(cg -C "$c" rev-parse --short HEAD 2>/dev/null)" >&2; }
     fi
   else
-    { mkdir -p "$(dirname "$c")" && git clone -q --depth 1 --branch v1 "$url" "$c" 2>/dev/null; } || rm -rf "$c"
+    { mkdir -p "$(dirname "$c")" && cg clone -q --depth 1 --branch openmixer-v1 "$url" "$c" 2>/dev/null; } || rm -rf "$c"
   fi
   [ -d "$c/.github" ] && d=$c
 fi
-[ -n "$d" ] || d=$(git rev-parse --show-toplevel)/../freemixer-dotgithub
 chk=$d/.github/actions/commit-message-check/commit-message-check.sh
-[ -x "$chk" ] || { echo "commit-msg: no commit-message checker at $chk (set OPENMIXER_DOTGITHUB, or let this hook clone $url at v1 into $c): commit refused" >&2; exit 1; }
+[ -x "$chk" ] || { echo "commit-msg: no commit-message checker at $chk (set OPENMIXER_DOTGITHUB, or let this hook clone $url at openmixer-v1 into $c): commit refused" >&2; exit 1; }
 exec "$chk" --msg-file "$1"
