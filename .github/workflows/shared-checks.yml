@@ -20,8 +20,5 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: No Fedora 44 reference in the workflows
-        run: |
-          tools/test/workflow-fedora-check.sh --self-test
-          tools/test/workflow-fedora-check.sh .
+      - uses: Open-Mixer/.github/.github/actions/fedora-workflow-check@openmixer-v1
       - uses: Open-Mixer/.github/.github/actions/no-local-copies@openmixer-v1
