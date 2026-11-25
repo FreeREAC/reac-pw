@@ -194,6 +194,7 @@ reac_pw_src = [
   'src/reac_segconf.c',
   'src/reac_roster.c',
   'src/reac_roster_node.c',
+  'src/reac_own_macs.c',
   'src/reac_cli.c',
 ]
 
@@ -1635,7 +1636,7 @@ test('reac_node_recover', recover_test)
 # on it -> we master, but only after the 3 s window; nothing heard -> never a segment.
 # Pure; no socket.
 hunt_test = executable('test_reac_hunt',
-  ['tests/test_reac_hunt.c',],
+  ['tests/test_reac_hunt.c', 'src/reac_own_macs.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt', hunt_test)
@@ -1652,6 +1653,17 @@ link_budget_test = executable('test_reac_link_budget',
   include_directories : src_inc,
   dependencies : [libreac_dep])
 test('reac_link_budget', link_budget_test)
+
+# --- unit test: no address of this host is ever a rival (#8) -------------------
+# The host's interface table is a scripted netdir, and the screen judges an Ethernet frame
+# by its source address. A mirrored port handing the hunt our own master stream from
+# another interface is test_reac_hunt's (its frames are libreac's, so the perturbed-protocol
+# check lists it; this one calls nothing of libreac's and must pass under every seed).
+own_macs_test = executable('test_reac_own_macs',
+  ['tests/test_reac_own_macs.c', 'src/reac_own_macs.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep])
+test('reac_own_macs', own_macs_test)
 
 # --- dev-only: the auto-role detection against REAL captured frames -----------
 # tests/test_reac_hunt.c drives the four outcomes from the libreac builders; this replays
@@ -2030,6 +2042,11 @@ test('reac_code_conformance', python3,
 # The unit test proves the lock; this proves the daemon asks for it, before the feeder starts.
 test('reac_rx_bind_is_wired', python3,
   args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
+          meson.current_source_dir()])
+
+# --- text: main.c screens the host's own addresses before the hunt (src/reac_own_macs.c) -----
+test('reac_own_macs_is_wired', python3,
+  args : [meson.current_source_dir() / 'tests' / 'own-macs-are-wired.py',
           meson.current_source_dir()])
 
 # --- text: the public tree stays public-shaped ------------------------------------------
