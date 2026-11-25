@@ -43,6 +43,8 @@ int pw_stream_queue_buffer(struct pw_stream *s, struct pw_buffer *b)
  * pw_stream_update_properties call carried for it, and how many calls did. */
 static char fx_prop_val[32];
 static int fx_prop_calls;
+static char fx_drop_val[32];   /* the dropped-frames key, when a test publishes it */
+static int fx_drop_calls;
 
 int pw_stream_update_properties(struct pw_stream *s, const struct spa_dict *dict)
 {
@@ -52,6 +54,9 @@ int pw_stream_update_properties(struct pw_stream *s, const struct spa_dict *dict
 		if (strcmp(it->key, REACPW_PROP_HEALTH_RT_BAD_BUFFERS) == 0) {
 			snprintf(fx_prop_val, sizeof fx_prop_val, "%s", it->value);
 			fx_prop_calls++;
+		} else if (strcmp(it->key, REACPW_PROP_HEALTH_RT_DROPPED_FRAMES) == 0) {
+			snprintf(fx_drop_val, sizeof fx_drop_val, "%s", it->value);
+			fx_drop_calls++;
 		}
 	return 0;
 }

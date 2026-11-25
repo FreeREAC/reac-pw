@@ -58,6 +58,7 @@
 
 #include <reac/transport/reac_ring.h>
 #include <reac/transport/reac_rx.h>
+#include <reac/transport/reac_pacer.h>  /* REAC_PACER_GUARD_FLOOR_MIN/MAX, the range of REACPW_GUARD_FLOOR_FRAMES */
 #include "reac_source_node.h"
 #include "reac_sink_node.h"
 #include "reac_box_row.h"      /* a box with no declared outputs has no reac-playback */
@@ -294,6 +295,14 @@ static int uid_map_is_full_host_range(void)
  * why), used earlier by the per-listener setup below. */
 static const char *resolve_clock_ref(void);
 static void push_libreac_tunables(void);
+/* The numeric knobs, resolved and range-checked once at the door (numeric_knobs_door,
+ * below); the use sites read these. */
+static long g_knob_grant_dwell_ms;     /* 0 = unset; libreac range is (0, 600000) */
+static long g_knob_grant_dwell_s;      /* 0 = unset; libreac range is (0, 3600] */
+static int  g_knob_catchup_max_slots;  /* 0 = rate-derived default, -1 = off */
+static int  g_knob_presilence_ms;      /* 0 = start at once */
+static long g_knob_guard_floor;        /* 0 = unset: the compiled floor */
+static int knob_parse_long(const char *v, long lo, long hi, long *out);
 
 static void refuse_if_root(void)
 {
@@ -1765,10 +1774,18 @@ static unsigned link_speed_mbit(const char *ifname)
 	char declared[32];
 	if (reac_knobs_resolve_port("REACPW_LINK_MBIT", dev, declared, sizeof declared)
 	    != REAC_CONF_NONE) {
-		long d = strtol(declared, NULL, 10);
-		/* Out of range is UNKNOWN, which never refuses — never a silent clamp to
-		 * some plausible-looking rate. */
-		return (d > 0 && d <= 1000000) ? (unsigned)d : 0;
+		long d = 0;
+		/* Out of range, or not a whole number, is UNKNOWN, which never refuses — never
+		 * a silent clamp to some plausible-looking rate. The host-wide form is refused
+		 * at start (numeric_knobs_door); a per-port key is only known here, so it is
+		 * said here. */
+		if (knob_parse_long(declared, 1, 1000000, &d) != 0) {
+			fprintf(stderr, "reac-pw: REACPW_LINK_MBIT='%s' for %s ignored: want a whole "
+			        "number of Mbit/s from 1 to 1000000; the link speed is treated as "
+			        "unknown\n", declared, dev);
+			return 0;
+		}
+		return (unsigned)d;
 	}
 	snprintf(path, sizeof path, "/sys/class/net/%s/speed", dev);
 	FILE *f = fopen(path, "r");
@@ -2038,12 +2055,9 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * and reac_source_node.c copies its own besides (matching
 		 * reac_sink_node.c's existing n->clock_ref[64] pattern) — the last
 		 * env-only knob exception in g_reac_knobs is gone. */
-		char v_catchup[16];
 		int clock_follow = reac_conf_flag("REACPW_CLOCK_FOLLOW", REAC_CLOCK_FOLLOW_DEFAULT);
 		const char *clock_ref = resolve_clock_ref();
-		int catchup_max_slots =
-		    reac_conf_lookup("REACPW_CATCHUP_MAX_SLOTS", NULL, NULL, v_catchup,
-		                     sizeof v_catchup) != REAC_CONF_NONE ? atoi(v_catchup) : 0;
+		int catchup_max_slots = g_knob_catchup_max_slots;   /* checked at the door */
 		int rate_match_off = reac_conf_flag("REACPW_RATE_MATCH", 0) ? 0 : -1;
 		struct reac_sink_cfg scfg = { .ifname = c->tx_if,
 		                              /* The graph filter is DEFERRED until a box is
@@ -2283,7 +2297,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		 * anything else is the ruling's 40-ch mixer frame. Read here because main
 		 * owns the environment. Layered (reac_conf_lookup) so each can also be set
 		 * in reac-pw.env, and announced at start like every other knob (§1). */
-		char v_frame[16], v_burst[16], v_fill[16], v_presil[16];
+		char v_frame[16], v_burst[16], v_fill[16];
 		int box_master_frame_box =
 		    reac_conf_lookup("REACPW_BOX_MASTER_FRAME", NULL, NULL, v_frame, sizeof v_frame)
 		        != REAC_CONF_NONE && strcmp(v_frame, "box") == 0;
@@ -2293,9 +2307,7 @@ static int listener_open(struct listener *L, struct pw_loop *loop)
 		int box_master_fill_noise =
 		    reac_conf_lookup("REACPW_BOX_MASTER_FILL", NULL, NULL, v_fill, sizeof v_fill)
 		        != REAC_CONF_NONE && strcmp(v_fill, "noise") == 0;
-		int box_master_presilence_ms =
-		    reac_conf_lookup("REACPW_BOX_MASTER_PRESILENCE_MS", NULL, NULL, v_presil,
-		                     sizeof v_presil) != REAC_CONF_NONE ? atoi(v_presil) : 0;
+		int box_master_presilence_ms = g_knob_presilence_ms;   /* checked at the door */
 		struct reac_slave_cfg slcfg = { .ifname = c->tx_if,
 		                                /* THE ROW WE DECLARE (box role); NULL on every
 		                                 * other slave, where the width keys the
@@ -6050,6 +6062,65 @@ static const char *resolve_clock_ref(void)
 	return cached;
 }
 
+/* THE NUMERIC KNOBS, REFUSED AT THE DOOR. A value is a whole decimal number, in range,
+ * with nothing after it: "5s" is not 5, "-1" is not accepted where only a count is, ""
+ * is not 0, and a number that does not fit a long is not clamped. Each is refused by
+ * NAME at start (exit 2) rather than becoming a different value silently, which is the
+ * daemon's own rule for REAC_RATE ("a layer that answered with nonsense must SAY so").
+ * Resolved ONCE through the knob table (argv > conf > env, like every other knob) into
+ * these statics; the use sites read them and parse nothing. */
+
+static int knob_parse_long(const char *v, long lo, long hi, long *out)
+{
+	if (!v || (*v != '-' && *v != '+' && (*v < '0' || *v > '9')))
+		return -1;               /* empty, a space, a letter: not a number */
+	char *end = NULL;
+	/* No errno test: a number that does not fit a long comes back saturated at LONG_MAX
+	 * or LONG_MIN, and every range passed here sits strictly inside those, so the range
+	 * check below refuses it (the "99999999999999999999" cases of
+	 * tests/numeric-knobs-are-refused.sh pass with the errno arm removed). */
+	long n = strtol(v, &end, 10);
+	if (end == v || *end != '\0' || n < lo || n > hi)
+		return -1;
+	*out = n;
+	return 0;
+}
+
+/* 0 = unset or valid (*out set, left at `dflt` when unset), -1 = refused and said so. */
+static int knob_numeric(const char *key, long lo, long hi, long dflt, long *out)
+{
+	char v[64];
+	*out = dflt;
+	enum reac_conf_layer l = reac_knobs_resolve(key, v, sizeof v);
+	if (l == REAC_CONF_NONE)
+		return 0;
+	if (knob_parse_long(v, lo, hi, out) != 0) {
+		fprintf(stderr, "reac-pw: %s='%s' from %s refused: want a whole number from %ld "
+		        "to %ld and nothing after it\n", key, v, reac_conf_layer_name(l), lo, hi);
+		*out = dflt;
+		return -1;
+	}
+	return 0;
+}
+
+/* Every numeric knob, all of them checked so one run names every bad one. Returns 0 or
+ * 2 (the exit code), before any capability is read. */
+static int numeric_knobs_door(void)
+{
+	long v, junk;
+	int bad = 0;
+	bad |= knob_numeric("REACPW_GRANT_DWELL_MS", 0, 599999, 0, &g_knob_grant_dwell_ms);
+	bad |= knob_numeric("REACPW_GRANT_DWELL_S", 0, 3600, 0, &g_knob_grant_dwell_s);
+	bad |= knob_numeric("REACPW_CATCHUP_MAX_SLOTS", -1, 100000, 0, &v);
+	g_knob_catchup_max_slots = (int)v;
+	bad |= knob_numeric("REACPW_BOX_MASTER_PRESILENCE_MS", 0, 600000, 0, &v);
+	g_knob_presilence_ms = (int)v;
+	bad |= knob_numeric("REACPW_GUARD_FLOOR_FRAMES", REAC_PACER_GUARD_FLOOR_MIN,
+	                    REAC_PACER_GUARD_FLOOR_MAX, 0, &g_knob_guard_floor);
+	bad |= knob_numeric("REACPW_LINK_MBIT", 1, 1000000, 1, &junk);   /* host-wide form */
+	return bad ? 2 : 0;
+}
+
 /* THE OTHER SIDE OF DISCOVERY AND PUBLISH: libreac reads no environment of its own
  * (libreac's 2026-09-17-tunables-api-and-shared-refusal-codes)
  * — every REACPW_* / REAC_* knob that used to be a bare getenv INSIDE reac_master.c,
@@ -6063,21 +6134,14 @@ static void push_libreac_tunables(void)
 
 	struct reac_master_tunables mt = REAC_MASTER_TUNABLES_DEFAULT;
 	mt.grant_on_declare = reac_knobs_resolve_flag("REACPW_GRANT_ON_DECLARE", 1);
-	if (reac_knobs_resolve("REACPW_GRANT_DWELL_MS", v, sizeof v) != REAC_CONF_NONE)
-		mt.grant_dwell_ms = strtol(v, NULL, 10);
-	if (reac_knobs_resolve("REACPW_GRANT_DWELL_S", v, sizeof v) != REAC_CONF_NONE)
-		mt.grant_dwell_s = strtol(v, NULL, 10);
+	mt.grant_dwell_ms = g_knob_grant_dwell_ms;   /* checked at the door */
+	mt.grant_dwell_s = g_knob_grant_dwell_s;
 	mt.no_enroll = reac_knobs_resolve_flag("REACPW_NO_ENROLL", 0);
 	mt.est_scene = reac_knobs_resolve_flag("REACPW_EST_SCENE", 0);
 	reac_master_tunables_set(&mt);
 
 	struct reac_pacer_tunables pt = REAC_PACER_TUNABLES_DEFAULT;
-	if (reac_knobs_resolve("REACPW_GUARD_FLOOR_FRAMES", v, sizeof v) != REAC_CONF_NONE) {
-		char *end = NULL;
-		unsigned long f = strtoul(v, &end, 10);
-		if (end && *end == '\0')
-			pt.guard_floor_frames = (unsigned int)f;
-	}
+	pt.guard_floor_frames = (unsigned int)g_knob_guard_floor;   /* checked at the door */
 	pt.no_headamp = reac_knobs_resolve_flag("REACPW_NO_HEADAMP", 0);
 	reac_pacer_tunables_set(&pt);
 
@@ -6137,6 +6201,14 @@ int main(int argc, char **argv)
 			return 2;
 		}
 		i++;   /* consumed the KEY=VALUE argument too */
+	}
+
+	/* A NUMERIC KNOB THAT IS NOT A NUMBER IN RANGE IS REFUSED HERE, by name, before any
+	 * capability is read: it needs none, and a typo must not wait behind the preflight. */
+	{
+		int rc = numeric_knobs_door();
+		if (rc)
+			return rc;
 	}
 
 	/* Before ANY capability is even read: uid 0 already carries every one of

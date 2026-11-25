@@ -298,6 +298,15 @@ source_rt_planes = executable('test_reac_source_rt_planes',
   include_directories : src_inc,
   c_args : rt_plane_san, link_args : rt_plane_san,
   dependencies : rt_plane_deps)
+sink_dropped = executable('test_reac_sink_dropped',
+  ['tests/test_reac_sink_dropped.c', 'src/reac_source_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+foreach c : ['upstream-ring', 'pacer-ring']
+  test('reac_sink_dropped_' + c, sink_dropped, args : [c], suite : 'rt-planes',
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+endforeach
 foreach c : rt_plane_cases
   test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c], suite : 'rt-planes',
     env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
@@ -1253,6 +1262,13 @@ test('reac_packaged_shape',
   args : [meson.current_source_dir() / 'packaging' / 'reac-pw.service',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
+
+# --- whole-binary test: a numeric knob that is not a number in range is refused at
+# start, by name, before the root refusal and the capability preflight.
+test('reac_numeric_knobs_refused',
+  find_program('tests/numeric-knobs-are-refused.sh'),
+  args : [reac_pw_exe],
+  timeout : 120)
 
 # --- whole-binary test: the command line's front door --------------------------------
 # One script for what reac-pw does to the arguments it is given before it opens anything:

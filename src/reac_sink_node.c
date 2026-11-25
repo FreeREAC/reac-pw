@@ -309,7 +309,13 @@ struct reac_sink_node {
 	/* Cycles on_process skipped because the stream buffer was not what it needs
 	 * (reac_rt_planes.h). RT increments, main reads (reac_sink_node_bad_buffers). */
 	_Atomic uint32_t rt_bad_buffers;
+	/* Audio frames (samples per channel) the RT callback staged but the downstream ring
+	 * refused: a short reac_ring_write on the slave's upstream ring, or a
+	 * reac_pacer_submit that returned 0. RT increments, main reads
+	 * (reac_sink_node_dropped_frames). */
+	_Atomic uint32_t rt_dropped_frames;
 	int64_t bad_buffers_last;       /* what the door last showed; -1 = nothing yet */
+	int64_t dropped_last;           /* same, for rt_dropped_frames */
 	/* The correction currently applied, in milli-ppm. Written by the RT thread,
 	 * read by the 200 ms property poll — one relaxed atomic each way. */
 	_Atomic int rate_match_milli_ppm;
@@ -530,14 +536,24 @@ static void on_process(void *data)
 				for (int c = 0; c < n->channels; c++)
 					memcpy(&blk[c * REAC_SAMPLES_PER_PKT], n->stage[c],
 					       REAC_SAMPLES_PER_PKT * sizeof(float));
-				reac_ring_write(n->upstream_ring, blk, REAC_SAMPLES_PER_PKT,
-				                (uint32_t)n->channels);
+				uint32_t took = reac_ring_write(n->upstream_ring, blk,
+				                                REAC_SAMPLES_PER_PKT,
+				                                (uint32_t)n->channels);
+				/* A full ring writes what fits and drops the newest rest. COUNT it:
+				 * a relaxed add, no log, no allocation (RT thread). */
+				if (took < REAC_SAMPLES_PER_PKT)
+					atomic_fetch_add_explicit(&n->rt_dropped_frames,
+					                          REAC_SAMPLES_PER_PKT - took,
+					                          memory_order_relaxed);
 			} else {
 				/* Encode audio + L2 header; counter/control are stamped by the
 				 * pacer. Counter 0 is a placeholder (overwritten on egress). */
 				reac_downstream_build(frame, planar, n->channels,
 				                      REAC_SAMPLES_PER_PKT, 0, n->src);
-				reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES);
+				if (!reac_pacer_submit(&n->pacer, frame, REAC_FRAME_BYTES))
+					atomic_fetch_add_explicit(&n->rt_dropped_frames,
+					                          REAC_SAMPLES_PER_PKT,
+					                          memory_order_relaxed);
 			}
 			n->staged = 0;
 		}
@@ -991,6 +1007,7 @@ static void sink_door_shadows_reset(struct reac_sink_node *n)
 	n->arb_conflict_last = -1;
 	n->arb_mac_last = UINT64_MAX;
 	n->bad_buffers_last = -1;
+	n->dropped_last = -1;
 }
 
 static void sink_door_from_capture(void *ctx, const struct spa_pod *param)
@@ -1573,24 +1590,40 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
 #define REACPW_PROP_HEALTH_WAKE_LATE_US   "reac.health.wake-late-us"
 #define REACPW_PROP_HEALTH_WAKE_LEAD_US   "reac.health.wake-lead-us"
 
-/* MAIN LOOP, every tick: the count of cycles the RT callback met a bad stream buffer in
- * (reac_rt_planes.h), on the door beside the other health keys. Stamped when it moves
- * (and once at 0 on a fresh door), so a quiet node costs nothing. */
-static void sink_publish_bad_buffers(struct reac_sink_node *n)
+/* MAIN LOOP, every tick: one RT-callback counter onto the door under `key`. Stamped when
+ * it moves (and once at 0 on a fresh door), so a quiet node costs nothing. `last` is what
+ * the door last showed (-1 = nothing yet). */
+static void sink_publish_counter(struct reac_sink_node *n, const _Atomic uint32_t *counter,
+				 int64_t *last, const char *key)
 {
 	if (!sink_has_door(n))
 		return;
-	uint32_t v = atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed);
-	if (n->bad_buffers_last == (int64_t)v)
+	uint32_t v = atomic_load_explicit(counter, memory_order_relaxed);
+	if (*last == (int64_t)v)
 		return;
 	char val[16];
 	snprintf(val, sizeof val, "%u", v);
-	struct pw_properties *props = pw_properties_new(REACPW_PROP_HEALTH_RT_BAD_BUFFERS, val, NULL);
+	struct pw_properties *props = pw_properties_new(key, val, NULL);
 	if (!props)
 		return;
 	sink_door_update(n, &props->dict);
 	pw_properties_free(props);
-	n->bad_buffers_last = (int64_t)v;
+	*last = (int64_t)v;
+}
+
+/* The count of cycles the RT callback met a bad stream buffer in (reac_rt_planes.h). */
+static void sink_publish_bad_buffers(struct reac_sink_node *n)
+{
+	sink_publish_counter(n, &n->rt_bad_buffers, &n->bad_buffers_last,
+			     REACPW_PROP_HEALTH_RT_BAD_BUFFERS);
+}
+
+/* The audio frames the RT callback handed to the downstream ring and the ring refused,
+ * beside rt-bad-buffers. */
+static void sink_publish_dropped_frames(struct reac_sink_node *n)
+{
+	sink_publish_counter(n, &n->rt_dropped_frames, &n->dropped_last,
+			     REACPW_PROP_HEALTH_RT_DROPPED_FRAMES);
 }
 
 static void sink_publish_health(struct reac_sink_node *n)
@@ -1925,6 +1958,7 @@ static void on_log_timer(void *data, uint64_t expirations)
 	sink_publish_latency(n);
 	sink_publish_health(n);
 	sink_publish_bad_buffers(n);
+	sink_publish_dropped_frames(n);
 }
 
 /* Build the node DESCRIPTION for `channels` outputs labelled `label` (NULL/"" ->
@@ -2114,6 +2148,13 @@ static int sink_open_filter(struct reac_sink_node *n, const char *label)
 uint32_t reac_sink_node_bad_buffers(const struct reac_sink_node *n)
 {
 	return n ? atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed) : 0;
+}
+
+/* Frames the RT callback staged and the downstream ring refused. Any thread; the RT
+ * thread only ever increments it. */
+uint32_t reac_sink_node_dropped_frames(const struct reac_sink_node *n)
+{
+	return n ? atomic_load_explicit(&n->rt_dropped_frames, memory_order_relaxed) : 0;
 }
 
 int reac_sink_node_take_reopen_rate(struct reac_sink_node *n)
@@ -2341,6 +2382,7 @@ struct reac_sink_node *reac_sink_node_new(struct pw_loop *loop,
 	n->arb_conflict_last = -1;
 	n->arb_mac_last = UINT64_MAX;
 	n->bad_buffers_last = -1;
+	n->dropped_last = -1;
 	n->link_drops_seen = 0;
 	reac_lat_init(&n->lat);
 
