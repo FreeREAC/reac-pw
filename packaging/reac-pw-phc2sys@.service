@@ -1,0 +1,48 @@
+# reac-pw-phc2sys@<nic>.service: keep <nic>'s PTP hardware clock on CLOCK_TAI, so the NIC
+# can launch REAC frames at their SCM_TXTIME (reac-pw's hardware launch, reac-pw#98).
+#
+#   systemctl enable --now reac-pw-phc2sys@reac0.service
+#
+# WHY. Under the hardware launch (mqprio + etf offload, on an i210/i225/i226) the NIC holds
+# each frame until its OWN clock reaches the frame's launch time, which reac-pw writes in
+# CLOCK_TAI. A PHC nobody aligns runs free from whatever it read at boot, and the NIC then
+# holds frames for the wrong instant: the queue fills and sendmsg fails, thousands a second
+# (an i226 bench 2026-11-15, one port: tx_errors 4000/s and every TX stamp unpaired). reac-pw reads
+# the PHC against CLOCK_TAI before it installs the hardware form and takes the software
+# form, saying so, when they are more than 1 ms apart, so this unit is what makes the
+# hardware form possible; it is never what makes audio possible.
+#
+# ONE OWNER OF THE PHC. Where ptp4l runs on this NIC (AES67), ptp4l owns the PHC and its
+# own phc2sys aligns the SYSTEM clock to it; this unit must not also steer the PHC, so it
+# refuses to start there. Elsewhere this unit owns it: the source is the system clock
+# (chrony), the sink is the PHC.
+#
+# -O ${REAC_TAI_UTC_S}: the PHC carries TAI, the system clock UTC; 37 s is the TAI-UTC offset
+#   in force since 2017 (the kernel's own adjtimex offset on a chrony-disciplined host reads
+#   the same), named here once so a leap second is one edit, or a drop-in
+#   (Environment=REAC_TAI_UTC_S=<seconds>). If it is ever wrong reac-pw reads the PHC a
+#   second or more off TAI and refuses the hardware form, by name.
+# -S 0.00002: STEP the PHC when it is more than 20 us off. igc RESETS the adapter whenever
+#   the launch queue's qdisc changes, and the reset can move the PHC; without a step
+#   threshold phc2sys only steps at start and would slew for minutes.
+# Restart=always: the same reset makes PTP_SYS_OFFSET_PRECISE time out, and phc2sys EXITS
+#   on that (an i226 bench 2026-11-15, both ports, at the first install). Restarted, it re-steps.
+[Unit]
+Description=Align %I's PTP hardware clock to CLOCK_TAI (reac-pw hardware launch)
+Documentation=man:phc2sys(8) https://github.com/FreeREAC/reac-pw
+After=chronyd.service time-sync.target sys-subsystem-net-devices-%i.device
+BindsTo=sys-subsystem-net-devices-%i.device
+Conflicts=ptp4l@%i.service
+
+[Service]
+Type=simple
+Environment=REAC_TAI_UTC_S=37
+# Refuse where ptp4l already runs on this NIC, by -i or by a -f file's [<nic>] section: two
+# writers on one PHC fight. The check reads /proc itself, so the package needs no procps.
+ExecCondition=/usr/lib/reac-pw/reac-pw-phc2sys-check %I
+ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c %I -O ${REAC_TAI_UTC_S} -R 8 -S 0.00002 -m -q
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

@@ -9,7 +9,7 @@
 # and links against the system libpipewire-0.3 / libspa-0.2 (Fedora pipewire-devel).
 
 project('reac-pw', 'c',
-  version: '1.0.44',
+  version: '1.0.45',
   license : 'GPL-3.0-or-later',
   default_options : ['c_std=c11', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -108,6 +108,8 @@ m_dep        = cc.find_library('m', required : false)
 # >=1.12.0 SINCE 1.0.44: struct reac_console_cfg and struct reac_mixer_profile call the pace-code member
 # pace_code (it was console_field), reac_ctrl_build_config_announce is gone (every announce is built from
 # a catalogue row) and the REAC_ROLE_STATE_* aliases are gone. An older header does not compile.
+# >=1.12.0 SINCE the hardware launch (reac-pw#98): reac_etf_qdisc_install_offload/_offloaded and
+# reac_pacer_launch_stamps_arm/reac_pacer_launch_stamps, and the pacer socket's SO_PRIORITY.
 libreac_dep = dependency('libreac', version : '>=1.12.0', required : true)
 
 # libreac-transport (2026-09-11-reac-transport-library): the sockets,
@@ -190,6 +192,8 @@ reac_pw_src = [
   'src/reac_lat.c',
   'src/reac_gain.c',
   'src/reac_qdisc.c',
+  'src/reac_launch_report.c',
+  'src/reac_phc.c',
   'src/reac_link_alias.c',
   'src/reac_served_mark.c',
   'src/reac_link_budget.c',
@@ -282,7 +286,7 @@ rt_plane_objs_common = [
   'src/reac_knock_credit.c', 'src/reac_box_row.c', 'src/reac_lat.c', 'src/reac_gain.c',
   'src/reac_qdisc.c', 'src/reac_link_alias.c', 'src/reac_served_mark.c',
   'src/reac_link_budget.c', 'src/reac_declared_vlan.c', 'src/reac_segconf.c',
-  'src/reac_roster.c', 'src/reac_roster_node.c',
+  'src/reac_roster.c', 'src/reac_roster_node.c', 'src/reac_launch_report.c',
 ]
 # Sanitized only on request (-Dsanitize_tests=true): the default build, and the package %check,
 # have no libasan/libubsan. The assertions on counters and samples hold either way.
@@ -331,6 +335,22 @@ test('reac_rt_single_door',
 test('no_compat_leftovers',
   find_program('tests/no-compat-leftovers.sh'),
   timeout : 30)
+
+# --- unit test: reac_launch_report -- the launch words the health line and setup say (reac-pw#98) -
+launch_report_test = executable('test_reac_launch_report',
+  ['tests/test_reac_launch_report.c', 'src/reac_launch_report.c'],
+  include_directories : src_inc)
+test('reac_launch_report', launch_report_test)
+
+# --- the phc2sys template unit: a named TAI offset, and a check that reads /proc for a ptp4l (reac-pw#98) -
+test('phc2sys_unit',
+  find_program('tests/phc2sys-unit.sh'),
+  args : [meson.current_source_dir()])
+
+# --- every name read through reac_conf_lookup is a knob: in g_reac_knobs and docs/ENV-KNOBS.md ----
+test('every_conf_lookup_name_is_a_knob',
+  find_program('tests/every-conf-lookup-name-is-a-knob.sh'),
+  args : [meson.current_source_dir()])
 
 # --- source sweep: NO PINS (reac-pw#23) --------------------------------------
 # libreac is declared in the spec and debian/control as a floor only (no ceiling) and nowhere else.
@@ -598,7 +618,7 @@ fake_box_master = executable('fake-box-master',
 # healthy daemon from the inside. Its own instrument (tests/etf_wire_probe.c) reads the
 # qdisc through the library's public netlink door, never by scraping `tc`.
 etf_wire_probe = executable('etf-wire-probe',
-  ['tests/etf_wire_probe.c', 'src/reac_qdisc.c'],
+  ['tests/etf_wire_probe.c', 'src/reac_qdisc.c', 'src/reac_phc.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep],
   install : false)
@@ -690,7 +710,11 @@ qdisc_test = executable('test_reac_qdisc',
   include_directories : src_inc,
   link_args : ['-Wl,--wrap=reac_etf_qdisc_state',
                '-Wl,--wrap=reac_etf_qdisc_install',
-               '-Wl,--wrap=reac_etf_qdisc_remove'],
+               '-Wl,--wrap=reac_etf_qdisc_remove',
+               '-Wl,--wrap=reac_etf_qdisc_install_offload',
+               '-Wl,--wrap=reac_etf_qdisc_offloaded',
+               '-Wl,--wrap=reac_qdisc_hw_capable',
+               '-Wl,--wrap=if_nametoindex'],
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_qdisc', qdisc_test)
 
@@ -729,6 +753,19 @@ test('reac_etf_late_is_the_wake',
   is_parallel : false,
   args : [reac_pw_exe, etf_wire_probe],
   timeout : 600)
+
+# --- whole-binary test: a veth is NOT a segment -------------------------------
+# THE NAMESPACE SUITES' SEGMENTS ARE VETHS, and a veth is not a REAC segment (#101, libreac's
+# reac_ifscan.h). Every test is run opted in; tests/virtual-is-not-a-segment.sh clears it to
+# prove the exclusion itself.
+add_test_setup('default', env : {'REAC_IFACES_ALLOW_VIRTUAL': '*'}, is_default : true)
+
+test('reac_virtual_is_not_a_segment',
+  find_program('tests/virtual-is-not-a-segment.sh'),
+  suite : 'netns',
+  is_parallel : false,
+  args : [reac_pw_exe],
+  timeout : 120)
 
 # --- whole-binary test: a bare daemon HEARS a segment, keeps it through a flap,
 # drops it past the hold, hears it again (trunk-VLAN spec, amendment 2026-09-02).
