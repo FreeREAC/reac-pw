@@ -197,6 +197,7 @@ reac_pw_src = [
   'src/reac_segconf.c',
   'src/reac_roster.c',
   'src/reac_roster_node.c',
+  'src/reac_own_macs.c',
   'src/reac_cli.c',
 ]
 
@@ -300,6 +301,15 @@ source_rt_planes = executable('test_reac_source_rt_planes',
   include_directories : src_inc,
   c_args : rt_plane_san, link_args : rt_plane_san,
   dependencies : rt_plane_deps)
+sink_dropped = executable('test_reac_sink_dropped',
+  ['tests/test_reac_sink_dropped.c', 'src/reac_source_node.c'] + rt_plane_objs_common,
+  include_directories : src_inc,
+  c_args : rt_plane_san, link_args : rt_plane_san,
+  dependencies : rt_plane_deps)
+foreach c : ['upstream-ring', 'pacer-ring']
+  test('reac_sink_dropped_' + c, sink_dropped, args : [c], suite : 'rt-planes',
+    env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
+endforeach
 foreach c : rt_plane_cases
   test('reac_sink_rt_planes_' + c, sink_rt_planes, args : [c], suite : 'rt-planes',
     env : ['ASAN_OPTIONS=detect_leaks=0', 'UBSAN_OPTIONS=halt_on_error=1'])
@@ -1270,6 +1280,13 @@ test('reac_packaged_shape',
           meson.current_source_dir() / 'packaging' / '90-reac-pw.preset'],
   timeout : 30)
 
+# --- whole-binary test: a numeric knob that is not a number in range is refused at
+# start, by name, before the root refusal and the capability preflight.
+test('reac_numeric_knobs_refused',
+  find_program('tests/numeric-knobs-are-refused.sh'),
+  args : [reac_pw_exe],
+  timeout : 120)
+
 # --- whole-binary test: the command line's front door --------------------------------
 # One script for what reac-pw does to the arguments it is given before it opens anything:
 # the daemon refuses to start as uid 0 (2026-09-18: a root instance runs under a DIFFERENT
@@ -1636,7 +1653,7 @@ test('reac_node_recover', recover_test)
 # on it -> we master, but only after the 3 s window; nothing heard -> never a segment.
 # Pure; no socket.
 hunt_test = executable('test_reac_hunt',
-  ['tests/test_reac_hunt.c',],
+  ['tests/test_reac_hunt.c', 'src/reac_own_macs.c'],
   include_directories : src_inc,
   dependencies : [libreac_dep, libreac_transport_dep])
 test('reac_hunt', hunt_test)
@@ -1653,6 +1670,17 @@ link_budget_test = executable('test_reac_link_budget',
   include_directories : src_inc,
   dependencies : [libreac_dep])
 test('reac_link_budget', link_budget_test)
+
+# --- unit test: no address of this host is ever a rival (#8) -------------------
+# The host's interface table is a scripted netdir, and the screen judges an Ethernet frame
+# by its source address. A mirrored port handing the hunt our own master stream from
+# another interface is test_reac_hunt's (its frames are libreac's, so the perturbed-protocol
+# check lists it; this one calls nothing of libreac's and must pass under every seed).
+own_macs_test = executable('test_reac_own_macs',
+  ['tests/test_reac_own_macs.c', 'src/reac_own_macs.c'],
+  include_directories : src_inc,
+  dependencies : [libreac_dep])
+test('reac_own_macs', own_macs_test)
 
 # --- dev-only: the auto-role detection against REAL captured frames -----------
 # tests/test_reac_hunt.c drives the four outcomes from the libreac builders; this replays
@@ -2031,6 +2059,11 @@ test('reac_code_conformance', python3,
 # The unit test proves the lock; this proves the daemon asks for it, before the feeder starts.
 test('reac_rx_bind_is_wired', python3,
   args : [meson.current_source_dir() / 'tests' / 'rx-bind-is-wired.py',
+          meson.current_source_dir()])
+
+# --- text: main.c screens the host's own addresses before the hunt (src/reac_own_macs.c) -----
+test('reac_own_macs_is_wired', python3,
+  args : [meson.current_source_dir() / 'tests' / 'own-macs-are-wired.py',
           meson.current_source_dir()])
 
 # --- text: the public tree stays public-shaped ------------------------------------------
