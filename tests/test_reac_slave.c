@@ -54,14 +54,14 @@ static struct reac_ctrl_parsed master_frame(enum reac_ctrl_kind k, const uint8_t
 
 int main(void)
 {
-	struct reac_slave_cfg cfg = { .ifname = "lo", .model = reac_box_catalogue_by_width(REAC_BOX_S1608_IN),
+	struct reac_slave_cfg cfg = { .ifname = "lo", .model = reac_box_catalogue_by_token("s1608"),
 	                              .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = NULL };
 	struct reac_slave s;
 	struct reac_slave_decision d;
 
 	/* The decision core needs no socket; init the FSM half directly. */
 	reac_slave_fsm_init(&s, &cfg);
-	CHK(s.box_channels == REAC_BOX_S1608_IN);
+	CHK(cfg.model && s.box_channels == cfg.model->in_ch);
 	CHK(s.fsm.state == FSM_PHY_DOWN);
 	CHK(!atomic_load(&s.established));
 

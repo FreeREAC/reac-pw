@@ -97,16 +97,16 @@ static FUZZ_NOINLINE void check_slots(int got, unsigned lead_us, int fps)
 {
 	/* The catch-up budget is the lead past the qdisc's delta, in slots at fps, rounded
 	 * down, at least 1 and at most 1000000; no frame rate is 1.
-	 * contract: src/reac_qdisc.h:108-129
-	 * mutant: src/reac_qdisc.c:178 `lead_us - delta_us` -> `lead_us`
+	 * contract: src/reac_qdisc.h:145-166
+	 * mutant: src/reac_qdisc.c:313 `lead_us - delta_us` -> `lead_us`
 	 * input: lead-2500-at-8000
-	 * mutant: src/reac_qdisc.c:183 `if (n < 1)` -> `if (n < 0)`
+	 * mutant: src/reac_qdisc.c:318 `if (n < 1)` -> `if (n < 0)`
 	 * input: lead-inside-delta
-	 * mutant: src/reac_qdisc.c:175 `if (fps <= 0)` -> `if (0)`
+	 * mutant: src/reac_qdisc.c:310 `if (fps <= 0)` -> `if (0)`
 	 * input: negative-rate
-	 * mutant: src/reac_qdisc.c:185 `if (n > 1000000ull)` -> `if (0)`
+	 * mutant: src/reac_qdisc.c:320 `if (n > 1000000ull)` -> `if (0)`
 	 * input: lead-max-at-max-rate
-	 * mutant: src/reac_qdisc.c:178 `unsigned usable` -> `unsigned short usable`
+	 * mutant: src/reac_qdisc.c:313 `unsigned usable` -> `unsigned short usable`
 	 * input: lead-past-16-bits */
 	if (got != slots_of(lead_us, fps))
 		abort();

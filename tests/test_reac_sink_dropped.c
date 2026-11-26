@@ -37,7 +37,7 @@ int main(int argc, char **argv)
 	}
 	if (pacer) {
 		/* 8 slots hold 7 packets: the 8th push onward is refused */
-		if (reac_frame_ring_init(&n->pacer.ring, 8, REAC_FRAME_BYTES) != 0)
+		if (reac_frame_ring_init(&n->pacer.ring, 8, REAC_PACER_SLOT_SZ) != 0)
 			return 2;
 		n->pacer_open = 1;
 	} else {

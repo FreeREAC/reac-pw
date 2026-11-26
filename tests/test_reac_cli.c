@@ -383,13 +383,21 @@ static int test_slave_width(void)
 		return 0;
 	/* A width is accepted only when a captured catalogue row has it, and that row rides
 	 * with it; a legal pair multiple that no row declares is refused, naming the rule. */
-	CHK(parse_line(F("--box-channels %d", REAC_BOX_S0808_IN), &c, err, sizeof err) == 0 &&
-	    c.box_channels == REAC_BOX_S0808_IN && c.box_row &&
-	    c.box_row == reac_cli_box_row_for_width(REAC_BOX_S0808_IN));
-	CHK(parse_line(F("--box-channels %d", REAC_BOX_S1608_IN), &c, err, sizeof err) == 0 &&
-	    c.box_channels == REAC_BOX_S1608_IN && c.box_row && c.box_row->in_ch == REAC_BOX_S1608_IN);
-	CHK(parse_line("--box-model s0808", &c, err, sizeof err) == 0 && c.box_row &&
-	    c.box_row->in_ch == 8);
+	const struct reac_box_model *m0808 = reac_box_catalogue_by_token("s0808");
+	const struct reac_box_model *m1608 = reac_box_catalogue_by_token("s1608");
+	CHK(m0808 && m1608);   /* the widths are the ones libreac's table carries */
+	/* The rows' widths are libreac's, the pair and the fabric are the protocol's: a fictional
+	 * protocol whose fabric does not hold a real row's width refuses it, rightly. */
+	if (m0808->in_ch % PAIR == 0 && m0808->in_ch <= WMAX && m1608->in_ch % PAIR == 0 &&
+	    m1608->in_ch <= WMAX) {
+		CHK(parse_line(F("--box-channels %d", m0808->in_ch), &c, err, sizeof err) == 0 &&
+		    c.box_channels == m0808->in_ch && c.box_row &&
+		    c.box_row == reac_cli_box_row_for_width(m0808->in_ch));
+		CHK(parse_line(F("--box-channels %d", m1608->in_ch), &c, err, sizeof err) == 0 &&
+		    c.box_channels == m1608->in_ch && c.box_row && c.box_row->in_ch == m1608->in_ch);
+		CHK(parse_line("--box-model s0808", &c, err, sizeof err) == 0 && c.box_row &&
+		    c.box_row->in_ch == m0808->in_ch);
+	}
 	if (!reac_cli_box_row_for_width(PAIR)) {
 		CHK(parse_line(F("--box-channels %d", PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);
 		CHK(strstr(err, "the width must be one a catalogue row has"));

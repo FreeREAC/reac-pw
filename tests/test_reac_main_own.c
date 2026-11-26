@@ -176,10 +176,13 @@ static int test_box_row(void)
 	CHK(home_with_conf("[segment eth9]\nrole = master\n") == 0);
 	if (!WIDTH_CASES_APPLY())
 		return 0;
-	setenv("REAC_BOX_CHANNELS_eth9", F("%d", REAC_BOX_S1608_IN), 1);
+	/* the S-1608's width is the one libreac's table carries, not the protocol's number */
+	const struct reac_box_model *m1608 = reac_box_catalogue_by_token("s1608");
+	CHK(m1608);
+	setenv("REAC_BOX_CHANNELS_eth9", F("%d", m1608->in_ch), 1);
 	listener_cfg_from_conf(&c, "eth9", 1);
-	CHK(c.box_channels == REAC_BOX_S1608_IN && c.box_model == NULL && c.slave_row &&
-	    c.slave_row->in_ch == REAC_BOX_S1608_IN);
+	CHK(c.box_channels == m1608->in_ch && c.box_model == NULL && c.slave_row &&
+	    c.slave_row->in_ch == m1608->in_ch);
 	if (!reac_cli_box_row_for_width(PAIR)) {   /* a pair width no captured row has: refused */
 		listener_cfg_defaults(&c);
 		setenv("REAC_BOX_CHANNELS_eth9", F("%d", PAIR), 1);
