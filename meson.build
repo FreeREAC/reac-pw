@@ -286,7 +286,7 @@ rt_plane_objs_common = [
   'src/reac_knock_credit.c', 'src/reac_box_row.c', 'src/reac_lat.c', 'src/reac_gain.c',
   'src/reac_qdisc.c', 'src/reac_link_alias.c', 'src/reac_served_mark.c',
   'src/reac_link_budget.c', 'src/reac_declared_vlan.c', 'src/reac_segconf.c',
-  'src/reac_roster.c', 'src/reac_roster_node.c', 'src/reac_launch_report.c',
+  'src/reac_roster.c', 'src/reac_roster_node.c', 'src/reac_launch_report.c', 'src/reac_phc.c',
 ]
 # Sanitized only on request (-Dsanitize_tests=true): the default build, and the package %check,
 # have no libasan/libubsan. The assertions on counters and samples hold either way.

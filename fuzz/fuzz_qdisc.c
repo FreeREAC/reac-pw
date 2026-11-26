@@ -48,6 +48,29 @@ int reac_etf_qdisc_remove(int ifindex)
 	return -EOPNOTSUPP;
 }
 
+int reac_etf_qdisc_install_offload(int ifindex, uint32_t delta_ns)
+{
+	(void)ifindex;
+	(void)delta_ns;
+	return -EOPNOTSUPP;
+}
+
+int reac_etf_qdisc_offloaded(int ifindex)
+{
+	(void)ifindex;
+	return 0;
+}
+
+/* src/reac_phc.c: whether a NIC can take the hardware launch; no host here can. */
+int reac_qdisc_hw_capable(const char *ifname, long long *phc_off_ns, char *why, size_t cap)
+{
+	(void)ifname;
+	(void)phc_off_ns;
+	if (why && cap)
+		why[0] = '\0';
+	return 0;
+}
+
 const char *reac_etf_qdisc_fix(int err)
 {
 	(void)err;
