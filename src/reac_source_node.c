@@ -286,24 +286,21 @@ uint32_t reac_source_node_bad_buffers(const struct reac_source_node *n)
 	return n ? atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed) : 0;
 }
 
+/* This node's own properties, in the shape reac_rt_counter_publish stamps through. */
+static void source_counter_stamp(void *node, const struct spa_dict *dict)
+{
+	reac_source_node_update_props(node, dict);
+}
+
 /* MAIN LOOP, every tick: the count above, as the node property
- * REACPW_PROP_HEALTH_RT_BAD_BUFFERS. Stamped when it moves (and once at 0 on a fresh
- * node). */
+ * REACPW_PROP_HEALTH_RT_BAD_BUFFERS, through the one publisher (reac_rt_planes.h). Stamped
+ * when it moves (and once at 0 on a fresh node). */
 void reac_source_node_publish_health(struct reac_source_node *n)
 {
 	if (!n || !n->stream)
 		return;
-	uint32_t v = atomic_load_explicit(&n->rt_bad_buffers, memory_order_relaxed);
-	if (n->bad_buffers_last == (int64_t)v)
-		return;
-	char val[16];
-	snprintf(val, sizeof val, "%u", v);
-	struct pw_properties *props = pw_properties_new(REACPW_PROP_HEALTH_RT_BAD_BUFFERS, val, NULL);
-	if (!props)
-		return;
-	reac_source_node_update_props(n, &props->dict);
-	pw_properties_free(props);
-	n->bad_buffers_last = (int64_t)v;
+	reac_rt_counter_publish(n, source_counter_stamp, &n->rt_bad_buffers,
+				&n->bad_buffers_last, REACPW_PROP_HEALTH_RT_BAD_BUFFERS);
 }
 
 /* PipeWire hands us the SPA_IO areas as the stream is configured. We stash the

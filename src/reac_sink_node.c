@@ -1590,25 +1590,20 @@ int reac_sink_node_rival_box(struct reac_sink_node *n, uint8_t mac[6], unsigned 
 #define REACPW_PROP_HEALTH_WAKE_LATE_US   "reac.health.wake-late-us"
 #define REACPW_PROP_HEALTH_WAKE_LEAD_US   "reac.health.wake-lead-us"
 
-/* MAIN LOOP, every tick: one RT-callback counter onto the door under `key`. Stamped when
- * it moves (and once at 0 on a fresh door), so a quiet node costs nothing. `last` is what
- * the door last showed (-1 = nothing yet). */
+/* The sink's door, in the shape reac_rt_counter_publish stamps through. */
+static void sink_counter_stamp(void *node, const struct spa_dict *dict)
+{
+	sink_door_update(node, dict);
+}
+
+/* MAIN LOOP, every tick: one RT-callback counter onto the door under `key`, through the
+ * one publisher (reac_rt_planes.h); only a sink with a door has anything to stamp. */
 static void sink_publish_counter(struct reac_sink_node *n, const _Atomic uint32_t *counter,
 				 int64_t *last, const char *key)
 {
 	if (!sink_has_door(n))
 		return;
-	uint32_t v = atomic_load_explicit(counter, memory_order_relaxed);
-	if (*last == (int64_t)v)
-		return;
-	char val[16];
-	snprintf(val, sizeof val, "%u", v);
-	struct pw_properties *props = pw_properties_new(key, val, NULL);
-	if (!props)
-		return;
-	sink_door_update(n, &props->dict);
-	pw_properties_free(props);
-	*last = (int64_t)v;
+	reac_rt_counter_publish(n, sink_counter_stamp, counter, last, key);
 }
 
 /* The count of cycles the RT callback met a bad stream buffer in (reac_rt_planes.h). */
