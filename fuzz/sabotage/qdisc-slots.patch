@@ -1,10 +1,10 @@
-Breaks the check of fuzz/fuzz_qdisc.c:89 (the catch-up budget counts the lead past the qdisc's delta, not the whole lead).
+Breaks the check of fuzz/fuzz_qdisc.c:112 (the catch-up budget counts the lead past the qdisc's delta, not the whole lead).
 Caught by the seed input "lead-2500-at-8000" of fuzz_qdisc.
 
 diff --git a/src/reac_qdisc.c b/src/reac_qdisc.c
 --- a/src/reac_qdisc.c
 +++ b/src/reac_qdisc.c
-@@ -177,3 +177,3 @@
+@@ -312,3 +312,3 @@
  	unsigned delta_us = REAC_ETF_QDISC_DELTA_NS / 1000u;
 -	unsigned usable = lead_us > delta_us ? lead_us - delta_us : 0u;
 +	unsigned usable = lead_us > delta_us ? lead_us : 0u;

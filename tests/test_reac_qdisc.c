@@ -48,6 +48,7 @@
 static enum reac_etf_qdisc_state fake_state = REAC_ETF_QDISC_NONE;
 static int fake_install_rc, fake_remove_rc;
 static int installs, removes;
+static int fake_offloaded;   /* the offload flag the kernel reports now (section 4) */
 
 enum reac_etf_qdisc_state __wrap_reac_etf_qdisc_state(int ifindex, char *kind, size_t cap)
 {
@@ -70,9 +71,53 @@ int __wrap_reac_etf_qdisc_remove(int ifindex)
 {
 	(void)ifindex;
 	removes++;
-	if (fake_remove_rc == 0)
+	if (fake_remove_rc == 0) {
 		fake_state = REAC_ETF_QDISC_NONE;
+		fake_offloaded = 0;
+	}
 	return fake_remove_rc;
+}
+
+/* The hardware form's doors (reac-pw#98): capability, the offload install, and the
+ * kernel's own report of the offload flag. Scripted the same way. */
+static int fake_capable;               /* reac_qdisc_hw_capable's verdict */
+static int fake_offload_rc;            /* what the offload install answers */
+static int fake_offload_takes = 1;     /* an ACKed offload the kernel then reports on */
+static int offloads;
+
+int __wrap_reac_qdisc_hw_capable(const char *ifname, long long *off, char *why, size_t cap)
+{
+	(void)ifname;
+	if (off)
+		*off = fake_capable ? -12 : 0;
+	snprintf(why, cap, fake_capable ? "/dev/ptp9, -12 ns off CLOCK_TAI"
+	                                : "no PTP hardware clock on this NIC");
+	return fake_capable;
+}
+
+int __wrap_reac_etf_qdisc_install_offload(int ifindex, uint32_t delta_ns)
+{
+	(void)ifindex; (void)delta_ns;
+	offloads++;
+	if (fake_offload_rc == 0) {
+		fake_state = REAC_ETF_QDISC_PRESENT;
+		fake_offloaded = fake_offload_takes;
+	}
+	return fake_offload_rc;
+}
+
+int __wrap_reac_etf_qdisc_offloaded(int ifindex)
+{
+	(void)ifindex;
+	return fake_offloaded;
+}
+
+/* if_nametoindex, scripted: 0 = the real one (lo), N > 0 = every name is interface N. */
+static unsigned fake_ifindex;
+unsigned __real_if_nametoindex(const char *name);
+unsigned __wrap_if_nametoindex(const char *name)
+{
+	return fake_ifindex ? fake_ifindex : __real_if_nametoindex(name);
 }
 
 /* ---- stderr, captured: the LINE is part of the contract -------------------- */
@@ -279,6 +324,139 @@ int main(void)
 	said = capture_end();
 	CHECK(removes == 2 && q.installed == 0, "and the exit takes it back");
 	free(said);
+
+	/* ---- 4. the hardware launch (reac-pw#98) ------------------------------------
+	 * A capable device takes the hardware form and NOT the software one; the form is
+	 * held across a segment drop and adopted by the next serve without a reinstall,
+	 * because on igc every add or remove resets the adapter and bounces the link
+	 * (measured on an i226 bench 2026-11-15: a 2 s link renegotiation per change, and released
+	 * with the segment it looped: install, bounce, box lost, release, bounce, knock,
+	 * install). The exit takes it away once. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; fake_install_rc = 0; fake_remove_rc = 0;
+	installs = removes = offloads = 0; fake_capable = 1; fake_offload_rc = 0;
+	fake_offload_takes = 1; fake_offloaded = 0;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == 0 && offloads == 1 && installs == 0 && q.installed == 1 && q.offload == 1,
+	      "a capable device takes the hardware form only (rc %d offloads %d installs %d "
+	      "installed %d offload %d)", rc, offloads, installs, q.installed, q.offload);
+	CHECK(strstr(said, "HARDWARE LAUNCH on lo") != NULL, "and says so: %s", said);
+	CHECK(!strcmp(reac_qdisc_launch(q.ifindex), "hardware"),
+	      "the launch reads hardware from the kernel, got %s", reac_qdisc_launch(q.ifindex));
+	free(said);
+
+	capture_begin();
+	reac_qdisc_release(&q);
+	said = capture_end();
+	CHECK(removes == 0 && fake_offloaded == 1,
+	      "a segment drop HOLDS the hardware form (removes %d): removing it resets the NIC",
+	      removes);
+	free(said);
+
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == 0 && offloads == 1 && installs == 0 && q.offload == 1 && q.installed == 1,
+	      "the next serve ADOPTS the held form, no reinstall (offloads %d installs %d)",
+	      offloads, installs);
+	CHECK(strstr(said, "kept from this daemon's earlier serve") != NULL, "and says so: %s", said);
+	free(said);
+
+	capture_begin();
+	reac_qdisc_release_all();
+	said = capture_end();
+	CHECK(removes == 1 && fake_offloaded == 0, "the exit removes it once (removes %d)", removes);
+	free(said);
+
+	/* THE TABLE OF HELD HARDWARE FORMS IS FINITE (32). A device past it is NOT given the
+	 * hardware form: one the exit could not remove would be a form left on the NIC, so it
+	 * takes the software form, and the refusal is named. */
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = offloads = 0;
+	fake_capable = 1; fake_offload_rc = 0; fake_offload_takes = 1; fake_offloaded = 0;
+	for (unsigned i = 1; i <= 32; i++) {
+		struct reac_qdisc qi;
+		memset(&qi, 0, sizeof qi);
+		fake_ifindex = 1000 + i;
+		capture_begin();
+		rc = reac_qdisc_arm(&qi, "hwN", 1);
+		said = capture_end();
+		free(said);
+		CHECK(rc == 0 && qi.offload == 1, "hardware form %u of 32 is taken", i);
+		reac_qdisc_release(&qi);
+	}
+	{
+		struct reac_qdisc qo;
+		memset(&qo, 0, sizeof qo);
+		fake_ifindex = 2000;
+		offloads = installs = 0;
+		capture_begin();
+		rc = reac_qdisc_arm(&qo, "hwN", 1);
+		said = capture_end();
+		CHECK(rc == 0 && qo.offload == 0 && offloads == 0 && installs == 1,
+		      "the 33rd device is not given a hardware form it could never release "
+		      "(offload %d offloads %d installs %d)", qo.offload, offloads, installs);
+		CHECK(strstr(said, "32 hardware launches") != NULL,
+		      "and the refusal is named: %s", said);
+		free(said);
+		reac_qdisc_release(&qo);
+	}
+	capture_begin();
+	reac_qdisc_release_all();
+	said = capture_end();
+	free(said);
+	fake_ifindex = 0;
+	fake_state = REAC_ETF_QDISC_NONE; fake_offloaded = 0;
+
+	/* The kernel refuses the offload (a NIC without a launch engine, a veth): the
+	 * software form, and the refusal named once. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = offloads = 0;
+	fake_capable = 1; fake_offload_rc = -EOPNOTSUPP;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == 0 && offloads == 1 && installs == 1 && q.offload == 0 && q.installed == 1,
+	      "a refused offload falls back to the software form (offloads %d installs %d)",
+	      offloads, installs);
+	CHECK(strstr(said, "software ETF on lo, not the hardware launch: the kernel refused") != NULL,
+	      "and names the refusal: %s", said);
+	CHECK(!strcmp(reac_qdisc_launch(q.ifindex), "software"),
+	      "the launch reads software, got %s", reac_qdisc_launch(q.ifindex));
+	free(said);
+	reac_qdisc_release(&q);
+
+	/* THE SABOTAGE THE ISSUE NAMES, as the kernel would show it: an offload install the
+	 * kernel ACKs and does not report on (the flag dropped). Not claimed: taken away,
+	 * the software form installed, and said. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = offloads = 0;
+	fake_capable = 1; fake_offload_rc = 0; fake_offload_takes = 0;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == 0 && offloads == 1 && removes == 1 && installs == 1 && q.offload == 0,
+	      "an offload the kernel does not report is not claimed (offloads %d removes %d "
+	      "installs %d offload %d)", offloads, removes, installs, q.offload);
+	CHECK(strstr(said, "the kernel does not report it on") != NULL, "and says so: %s", said);
+	free(said);
+	reac_qdisc_release(&q);
+
+	/* No PHC: no offload attempted at all, and the reason said. */
+	memset(&q, 0, sizeof q);
+	fake_state = REAC_ETF_QDISC_NONE; installs = removes = offloads = 0;
+	fake_capable = 0; fake_offload_takes = 1;
+	capture_begin();
+	rc = reac_qdisc_arm(&q, "lo", 1);
+	said = capture_end();
+	CHECK(rc == 0 && offloads == 0 && installs == 1,
+	      "a device with no PHC goes straight to software (offloads %d installs %d)",
+	      offloads, installs);
+	CHECK(strstr(said, "not the hardware launch: no PTP hardware clock") != NULL,
+	      "and says why: %s", said);
+	free(said);
+	reac_qdisc_release(&q);
 
 	printf(fails ? "FAIL %d\n" : "OK\n", fails);
 	return fails ? 1 : 0;

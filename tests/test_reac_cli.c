@@ -381,8 +381,27 @@ static int test_slave_width(void)
 	CHK(strstr(err, "unknown --box-model 'nosuch'") && strstr(err, "s4000s"));
 	if (!WIDTH_CASES_APPLY())
 		return 0;
-	CHK(parse_line(F("--box-channels %d", PAIR), &c, err, sizeof err) == 0 && c.box_channels == PAIR);
-	CHK(parse_line(F("--box-channels %d", WMAX), &c, err, sizeof err) == 0 && c.box_channels == WMAX);
+	/* A width is accepted only when a captured catalogue row has it, and that row rides
+	 * with it; a legal pair multiple that no row declares is refused, naming the rule. */
+	const struct reac_box_model *m0808 = reac_box_catalogue_by_token("s0808");
+	const struct reac_box_model *m1608 = reac_box_catalogue_by_token("s1608");
+	CHK(m0808 && m1608);   /* the widths are the ones libreac's table carries */
+	/* The rows' widths are libreac's, the pair and the fabric are the protocol's: a fictional
+	 * protocol whose fabric does not hold a real row's width refuses it, rightly. */
+	if (m0808->in_ch % PAIR == 0 && m0808->in_ch <= WMAX && m1608->in_ch % PAIR == 0 &&
+	    m1608->in_ch <= WMAX) {
+		CHK(parse_line(F("--box-channels %d", m0808->in_ch), &c, err, sizeof err) == 0 &&
+		    c.box_channels == m0808->in_ch && c.box_row &&
+		    c.box_row == reac_cli_box_row_for_width(m0808->in_ch));
+		CHK(parse_line(F("--box-channels %d", m1608->in_ch), &c, err, sizeof err) == 0 &&
+		    c.box_channels == m1608->in_ch && c.box_row && c.box_row->in_ch == m1608->in_ch);
+		CHK(parse_line("--box-model s0808", &c, err, sizeof err) == 0 && c.box_row &&
+		    c.box_row->in_ch == m0808->in_ch);
+	}
+	if (!reac_cli_box_row_for_width(PAIR)) {
+		CHK(parse_line(F("--box-channels %d", PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);
+		CHK(strstr(err, "the width must be one a catalogue row has"));
+	}
 	CHK(parse_line("--box-channels 0", &c, err, sizeof err) == REAC_CLI_REFUSED);
 	CHK(parse_line(F("--box-channels %d", PAIR + 1), &c, err, sizeof err) == REAC_CLI_REFUSED);   /* not a pair multiple */
 	CHK(parse_line(F("--box-channels %d", WMAX + PAIR), &c, err, sizeof err) == REAC_CLI_REFUSED);  /* past the fabric */

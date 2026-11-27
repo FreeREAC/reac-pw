@@ -583,7 +583,7 @@ int main(int argc, char **argv)
 	 * emulator is a box, so it declares n_ch. */
 	static struct reac_master ann;
 	struct reac_console_cfg ann_cfg = { .out_channels = REAC_BOX_S1608_OUT,
-	                                    .console_field = reac_pace_code(fps) };
+	                                    .pace_code = reac_pace_code(fps) };
 	reac_master_init(&ann, src, &ann_cfg, fps);
 	ann.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_TOTAL_SLOTS_OFF] = (uint8_t)n_ch;
 

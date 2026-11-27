@@ -171,7 +171,7 @@ static uint64_t upstream_corpus(void)
 					 * shown to have left the control plane alone */
 					len = reac_ctrl_build_box_hb(frame, master, src, cnt, nch);
 					absorb_len(len); absorb(frame, len);
-					len = reac_ctrl_build_config_announce(frame, master, src, cnt, nch);
+					len = reac_ctrl_build_as(frame, reac_box_catalogue_by_width(nch), REAC_BOX_BLOCK_CONFIG, master, src, cnt, NULL, 0);
 					absorb_len(len); absorb(frame, len);
 					len = reac_ctrl_build_identity_first(frame, master, src, cnt, nch);
 					absorb_len(len); absorb(frame, len);

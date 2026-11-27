@@ -36,8 +36,7 @@
  *   - `key = value`, the value without one pair of matching quotes, inside a section:
  *     role (auto|master|slave|tap|box, in any case), model (a token of the box-model
  *     table, in any case, folded), ignore (yes|true|1 or no|false|0, in any case for the
- *     words); a `knock` line is refused whatever its value (the knock takes no plan since
- *     1.0.41, reac-pw#61), and so is any other key; the last file to say a key wins it,
+ *     words); any other key is refused; the last file to say a key wins it,
  *     and names it;
  *   - once every file is read: a model on a segment that is not a box is refused and
  *     dropped, a box with no model is refused and falls back to auto;
@@ -115,7 +114,6 @@ struct mconf {
 	unsigned trunks_overflow;
 	unsigned overflow, refused;
 	char kept[KEPT_MAX][LABEL_LEN + 16];   /* the address each kept refusal starts with */
-	int kept_knock[KEPT_MAX];              /* the kept refusal was a `knock` line */
 	int n_kept;
 	int gen;
 	char reading[LABEL_LEN];
@@ -370,11 +368,6 @@ static void m_key(struct mconf *c, struct mseg *g, struct mtrunk *t, const char 
 		g->ignore = b;
 		g->ignore_set = 1;
 		snprintf(g->ignore_file, sizeof g->ignore_file, "%s", c->reading);
-	} else if (ieq(k, kn, "knock")) {
-		/* refused whatever the value: the knock takes no plan (reac-pw#61) */
-		if (c->n_kept < KEPT_MAX)
-			c->kept_knock[c->n_kept] = 1;
-		m_refuse(c, line);
 	} else {
 		m_refuse(c, line);
 	}
@@ -579,9 +572,9 @@ static FUZZ_NOINLINE void check_segments(const struct reac_segconf *c, const str
 	 * input: tab-after-keyword
 	 * mutant: src/reac_segconf.c:239 `if (close[1])` -> `if (0)`
 	 * input: text-after-header
-	 * mutant: src/reac_segconf.c:425 `return c->n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:416 `return c->n;` -> `return 0;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:468 `return n;` -> `return 0;`
+	 * mutant: src/reac_segconf.c:459 `return n;` -> `return 0;`
 	 * input: operator-file */
 	if (!segments_are(c, m) || !returned)
 		abort();
@@ -597,9 +590,9 @@ static FUZZ_NOINLINE void check_role(int got_set, enum reac_role_intent got,
 	 * input: role-in-capitals
 	 * mutant: src/reac_segconf.c:371 `cur->role = i;` -> `cur->role = REAC_ROLE_INTENT_MASTER;`
 	 * input: operator-file
-	 * mutant: src/reac_segconf.c:458 `s->role_set = 0;` -> ``
+	 * mutant: src/reac_segconf.c:449 `s->role_set = 0;` -> ``
 	 * input: box-without-model
-	 * mutant: src/reac_segconf.c:444 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
+	 * mutant: src/reac_segconf.c:435 `s->role == REAC_ROLE_INTENT_BOX` -> `1`
 	 * input: operator-file
 	 * mutant: src/reac_segconf.c:327 `unquote(trim(eq + 1))` -> `trim(eq + 1)`
 	 * input: operator-file
@@ -618,7 +611,7 @@ static FUZZ_NOINLINE void check_model(const char *got, const struct mseg *want)
 	/* A segment's model is a token of the box-model table, folded to lower case, and
 	 * only on a segment whose role is box; on any other role it is dropped.
 	 * contract: src/reac_segconf.h:92-101, 221-225
-	 * mutant: src/reac_segconf.c:445 `s->model_set && !is_box` -> `0`
+	 * mutant: src/reac_segconf.c:436 `s->model_set && !is_box` -> `0`
 	 * input: model-on-a-tap
 	 * mutant: src/reac_segconf.c:395 `"%s", low` -> `"%s", val`
 	 * input: model-in-capitals */
@@ -635,7 +628,7 @@ static FUZZ_NOINLINE void check_ignore(int got, const struct mseg *want)
 	 * input: ignore-words
 	 * mutant: src/reac_segconf.c:405 `cur->ignore = b;` -> `cur->ignore = 1;`
 	 * input: ignore-words
-	 * mutant: src/reac_segconf.c:667 `s && s->ignore` -> `s != NULL`
+	 * mutant: src/reac_segconf.c:658 `s && s->ignore` -> `s != NULL`
 	 * input: ignore-words */
 	if (got != want->ignore)
 		abort();
@@ -655,22 +648,6 @@ static FUZZ_NOINLINE void check_provenance(const char *role_file, const char *ig
 	 * input: dropin-overrides */
 	if (!same_text(role_file, want->role_set ? want->role_file : NULL) ||
 	    !same_text(ignore_file, want->ignore_set ? want->ignore_file : NULL))
-		abort();
-}
-
-static FUZZ_NOINLINE void check_knock_refused(const char *got, int was_knock)
-{
-	/* A `knock` line is refused by name with the reason, whatever its value: the knock
-	 * takes no plan since 1.0.41, and a word in a file must not be able to select the
-	 * stream (reac-pw#61). The refusal says so.
-	 * contract: src/reac_segconf.c (the `knock` branch: refused, with "takes no plan")
-	 * mutant: src/reac_segconf.c:413 `takes no plan` -> `takes a plan`
-	 * input: knock-plans
-	 * mutant: src/reac_segconf.c:413 `takes no plan` -> `takes a plan`
-	 * input: knock-long-value
-	 * mutant: src/reac_segconf.c:413 `knock takes` -> `the key takes`
-	 * input: knock-plans */
-	if (was_knock && !strstr(got, "knock takes no plan"))
 		abort();
 }
 
@@ -709,11 +686,11 @@ static FUZZ_NOINLINE void check_absent(const struct reac_segconf *c, const char 
 	 * another case, nor the empty name finds a segment.
 	 * contract: src/reac_segconf.h:194-197 (the entry for `name`, or NULL; compared case
 	 * sensitively)
-	 * mutant: src/reac_segconf.c:659 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
+	 * mutant: src/reac_segconf.c:650 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, 4) == 0`
 	 * input: absent-probes
-	 * mutant: src/reac_segconf.c:659 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, strlen(name)) == 0`
+	 * mutant: src/reac_segconf.c:650 `strcmp(c->seg[i].name, name) == 0` -> `strncmp(c->seg[i].name, name, strlen(name)) == 0`
 	 * input: absent-probes
-	 * mutant: src/reac_segconf.c:659 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
+	 * mutant: src/reac_segconf.c:650 `strcmp(c->seg[i].name, name) == 0` -> `strcasecmp(c->seg[i].name, name) == 0`
 	 * input: absent-probes */
 	if (reac_segconf_find(c, name) || reac_segconf_role(c, name, NULL) ||
 	    reac_segconf_ignored(c, name) || reac_segconf_model(c, name))
@@ -742,7 +719,7 @@ static FUZZ_NOINLINE void check_declared(int got, int want, const struct reac_de
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:73 `*n >= max` -> `*n > max`
 	 * input: vlans-full
-	 * mutant: src/reac_segconf.c:705 `if (c->seg[i].ignore)` -> `if (0)`
+	 * mutant: src/reac_segconf.c:696 `if (c->seg[i].ignore)` -> `if (0)`
 	 * input: vlans
 	 * mutant: src/reac_declared_vlan.c:58 `!name_ok(parent)` -> `0`
 	 * input: vlans */
@@ -806,7 +783,7 @@ static FUZZ_NOINLINE void check_trunk_absent(const struct reac_segconf *c, const
 {
 	/* A name no [trunk] section opened has no trunk: compared whole, byte for byte.
 	 * contract: src/reac_segconf.h (reac_segconf_trunk_find: the section, or NULL)
-	 * mutant: src/reac_segconf.c:725 `strcmp(c->trunk[i].parent, parent) == 0` -> `strncmp(c->trunk[i].parent, parent, 3) == 0`
+	 * mutant: src/reac_segconf.c:716 `strcmp(c->trunk[i].parent, parent) == 0` -> `strncmp(c->trunk[i].parent, parent, 3) == 0`
 	 * input: trunk-headers */
 	if (reac_segconf_trunk_find(c, name))
 		abort();
@@ -819,9 +796,9 @@ static FUZZ_NOINLINE void check_trunk_vlans(int got, int want, const struct reac
 	 * (parent, vid) once, less the ones a [segment] switched off, added after what the
 	 * table held; a full table stops at -1 and nothing is written past it.
 	 * contract: src/reac_segconf.h (reac_segconf_trunk_vlans)
-	 * mutant: src/reac_segconf.c:743 `if (reac_segconf_ignored(c, name))` -> `if (0)`
+	 * mutant: src/reac_segconf.c:734 `if (reac_segconf_ignored(c, name))` -> `if (0)`
 	 * input: trunk-list
-	 * mutant: src/reac_segconf.c:747 `return -1;` -> `return added;`
+	 * mutant: src/reac_segconf.c:738 `return -1;` -> `return added;`
 	 * input: trunk-full */
 	if (!vlans_are(got, want, tab, n, mt, mn, cap))
 		abort();
@@ -907,7 +884,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	check_refusals(c, m);
 	for (int i = 0; i < m->n_kept && i < c->n_refusals; i++) {
 		check_address(c->refusal[i], m->kept[i]);
-		check_knock_refused(c->refusal[i], m->kept_knock[i]);
 	}
 	/* names no section opened: each segment's with a byte more, with its last byte cut,
 	 * and with the case of its letters turned; the empty name; and one never named */

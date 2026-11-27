@@ -13,9 +13,4 @@
 # land on the same unit. Numbered ahead of the distro's catch-all
 # 99-default-disable.preset (systemd presets are first-file-wins per unit), so this
 # line decides reac-pw.service and the disable-everything default never reaches it.
-#
-# This does not fight the packaged reac-pw-master.service: that unit and this one
-# `Conflicts=` each other in the unit file itself (packaging/reac-pw.service), and
-# reac-pw-master.service was retired on 2026-09-02 -- nothing installs it any more.
-# See README.md.
 enable reac-pw.service

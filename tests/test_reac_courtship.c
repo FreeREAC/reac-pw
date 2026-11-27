@@ -135,8 +135,7 @@ static int step(struct court *c)
 			 * replayed the join was modelling a box that never introduces itself. */
 			switch (c->cc_phase++ % 8) {
 			case 4:
-				n = reac_ctrl_build_config_announce(sf, c->s.fsm.master_mac, S_SRC,
-				                                    sc, REAC_BOX_S1608_IN);
+				n = reac_ctrl_build_as(sf, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, c->s.fsm.master_mac, S_SRC, sc, NULL, 0);
 				break;
 			default:
 				n = reac_ctrl_build_coldconnect(sf, c->s.fsm.master_mac, S_SRC, sc,
@@ -203,7 +202,7 @@ static int step(struct court *c)
 static int test_quiet_wire_recorder_never_leaves_the_hunt(void)
 {
 	struct reac_slave s;
-	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
+	struct reac_slave_cfg scfg = { .ifname = NULL, .model = reac_box_catalogue_by_width(REAC_BOX_S1608_IN),
 	                               .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = S_SRC };
 	reac_slave_fsm_init(&s, &scfg);
 
@@ -212,7 +211,7 @@ static int test_quiet_wire_recorder_never_leaves_the_hunt(void)
 	CHK(reac_role_swap_request(&sw, REAC_ROLE_SLAVE) != 0);   /* the console asks */
 	reac_role_swap_closed(&sw);                      /* the master engine goes down */
 	CHK(strcmp(reac_role_swap_state(&sw, REAC_ROLE_ENGINE_DOWN),
-	           REAC_ROLE_STATE_REESTABLISH_PENDING) == 0);
+	           REAC_CFG_ROLE_STATE_PENDING) == 0);
 	reac_role_swap_opened(&sw, REAC_ROLE_SLAVE);     /* the slave engine comes up */
 
 	struct reac_slave_decision d = reac_slave_step_phy(&s, 1);
@@ -239,7 +238,7 @@ int main(void)
 	struct court c;
 	memset(&c, 0, sizeof c);
 	reac_master_init(&c.m, M_SRC, NULL, FPS);   /* S-1608 downstream (default) */
-	struct reac_slave_cfg scfg = { .ifname = NULL, .box_channels = REAC_BOX_S1608_IN,
+	struct reac_slave_cfg scfg = { .ifname = NULL, .model = reac_box_catalogue_by_width(REAC_BOX_S1608_IN),
 	                               .sample_rate = REAC_SAMPLE_RATE_96K, .src_mac = S_SRC };
 	reac_slave_fsm_init(&c.s, &scfg);
 
@@ -265,7 +264,7 @@ int main(void)
 	reac_role_swap_opened(&sw_m, REAC_ROLE_MASTER);
 	CHK(strcmp(reac_role_swap_state(&sw_m,
 	           reac_role_engine_of_master(1, c.m.state)),
-	           REAC_ROLE_STATE_APPLIED) == 0);
+	           REAC_CFG_ROLE_STATE_APPLIED) == 0);
 
 	/* 2. the box PHY comes up: it floods + JOINs; the master grants ONLY
 	 * after the cold-connect, both sides walk the golden ordering. */
@@ -336,10 +335,10 @@ int main(void)
 	reac_role_swap_opened(&sw_s, REAC_ROLE_SLAVE);
 	CHK(strcmp(reac_role_swap_state(&sw_s,
 	           reac_role_engine_of_slave(1, c.s.fsm.state == FSM_ESTABLISHED)),
-	           REAC_ROLE_STATE_APPLIED) == 0);
+	           REAC_CFG_ROLE_STATE_APPLIED) == 0);
 	CHK(strcmp(reac_role_swap_state(&sw_m,
 	           reac_role_engine_of_master(1, c.m.state)),
-	           REAC_ROLE_STATE_APPLIED) == 0);
+	           REAC_CFG_ROLE_STATE_APPLIED) == 0);
 
 	/* W1, ESTABLISHED: the recorder's node now carries the whole segment. The
 	 * MAC is the one the FSM LEARNED off the wire in this very simulation — not

@@ -2,7 +2,7 @@
 # reac-pw — PipeWire-native REAC endpoint, for the Fedora MiniPC target.
 Name:           reac-pw
 # meson.build's project version is the same number; a release tag is v<Version>.
-Version:        1.0.44
+Version:        1.0.45
 Release:        1%{?dist}
 Summary:        PipeWire-native Roland REAC endpoint (RX source + TX sink + stagebox FSM)
 
@@ -24,27 +24,34 @@ BuildRequires:  pkgconfig(libspa-0.2)
 # reac_etf_qdisc_stats_read the one counter read; the daemon's copies are gone.
 # >=1.11.0 SINCE 1.0.43: libreac's soname is libreac.so.7 (struct pcap_source grew), and the
 # master, hunt and rx bind to their peer (a second MAC's JOIN no longer re-courts an
-# established box); the tests assert that contract. Floors only: no ceiling.
-BuildRequires:  pkgconfig(libreac) >= 1.11.0
+# established box); the tests assert that contract. There is no ceiling: libreac's soname moves with every release, so the soname dependency
+# rpm generates from the link ties this build to the libreac it was built against.
+# >=1.12.0 SINCE 1.0.44: the pace-code member is pace_code (it was console_field), the width-keyed
+# reac_ctrl_build_config_announce is gone, and so are the REAC_ROLE_STATE_* aliases.
+# >=1.12.0 SINCE the hardware launch (reac-pw#98): the offload install and read, the pacer's
+# launch stamps, and the pacer socket's SO_PRIORITY that puts its frames on the launch queue.
+BuildRequires:  pkgconfig(libreac) >= 1.12.0
 # libreac-transport (2026-09-11-reac-transport-library, 0.5.11): the
 # sockets, SCHED_FIFO pacer, RT threads, VLAN/topology scan, ring and segment lock that used
 # to be built here as src/*.c now come from this package; 0.5.10 and earlier never linked it.
-BuildRequires:  pkgconfig(libreac-transport) >= 1.11.0
-# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): the first libreac release that
-# ships fake_box (libreac-tests 1.7.3), up to the ceiling the libraries above carry
-BuildRequires:  libreac-tests >= 1.7.3
+BuildRequires:  pkgconfig(libreac-transport) >= 1.12.0
+# fake_box, the stagebox emulator the whole-binary tests drive (tools/ci-suite.sh): first shipped in libreac-tests
+# 1.7.3; floored at 1.12.0 with the libraries above, the libreac this daemon is built against.
+BuildRequires:  libreac-tests >= 1.12.0
 # systemd_user_post/_preun/_postun below, and %%{_userunitdir}/%%{_userpresetdir} in
 # %%files -- the RPM now packages its own USER unit (1.0.8, this changelog entry).
 BuildRequires:  systemd-rpm-macros
 Requires:       pipewire
 # `ip` for reac-pw-nm-unmanaged (link up, link monitor).
 Requires:       iproute
-# THE SONAME IS NOT THE FLOOR. rpm generates libreac.so.1()(64bit) from the link and that
-# is all it generates: 0.7.2 carries soname 1 too, satisfies it, and the daemon then dies
-# at exec on an undefined reac_link_* -- the exact 0.6.0 failure the %%description below
-# recounts, one soname later. The version floor has to be written down.
-Requires:       libreac >= 1.11.0
-Requires:       libreac-transport >= 1.11.0
+# phc2sys, for reac-pw-phc2sys@.service: the hardware launch needs it, audio does not.
+Recommends:     linuxptp
+# THE SONAME TIES THE INSTALL TO ITS LIBRARY, and the floor says which behaviour is needed.
+# rpm generates libreac.so.<N>()(64bit) from the link, and libreac's soname moves with every
+# release, so this build runs against the libreac it was built against and no other: there is
+# no upper range to write down. The version floor is the first release whose behaviour is needed.
+Requires:       libreac >= 1.12.0
+Requires:       libreac-transport >= 1.12.0
 %{?systemd_requires}
 
 %description
@@ -60,7 +67,7 @@ carries the virtual-stagebox JOIN/HOLD connection FSM so the node can present
 local inputs to a real Roland master. Built for a Fedora MiniPC running a
 PREEMPT_RT kernel + PipeWire.
 
-Links dynamically against the system libreac (>= 0.8.0), which carries the
+Links dynamically against the system libreac (>= 1.12.0), which carries the
 shared REAC byte-layout core AND, since 0.8.0, the whole CONTROL PLANE — the
 enrolment FSMs, the hunt, the grant and the frame builders behind
 <reac/reac_link.h>. This daemon is sockets, the pacer and PipeWire; it does not
@@ -98,7 +105,7 @@ Summary:        Facts headers of reac-pw for consumers (head-amp property prefix
 BuildArch:      noarch
 # FLOORS ONLY: reac_headamp_prop.h includes <reac/reac_headamp_tx.h> and reac_facts_pw.h the libreac
 # headers; the floor is the libreac the daemon itself is built against.
-Requires:       libreac-devel >= 1.11.0
+Requires:       libreac-devel >= 1.12.0
 Requires:       pkgconf-pkg-config
 
 %description devel
@@ -139,6 +146,11 @@ install -D -m0644 packaging/reac-pw.1 %{buildroot}%{_mandir}/man1/reac-pw.1
 install -D -m0755 packaging/reac-pw-nm-unmanaged.sh %{buildroot}%{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 install -D -m0644 packaging/reac-pw-nm-unmanaged.service %{buildroot}%{_unitdir}/reac-pw-nm-unmanaged.service
 install -D -m0644 packaging/90-reac-pw-nm-unmanaged.preset %{buildroot}%{_presetdir}/90-reac-pw-nm-unmanaged.preset
+# THE HARDWARE LAUNCH'S CLOCK (reac-pw#98): a template, enabled per NIC by whoever owns the
+# rig (`systemctl enable --now reac-pw-phc2sys@reac0`), never by a preset: only the operator
+# knows whether ptp4l (AES67) owns that NIC's PHC instead.
+install -D -m0644 packaging/reac-pw-phc2sys@.service %{buildroot}%{_unitdir}/reac-pw-phc2sys@.service
+install -D -m0755 packaging/reac-pw-phc2sys-check.sh %{buildroot}%{_prefix}/lib/reac-pw/reac-pw-phc2sys-check
 
 %check
 # THE NAMESPACE TESTS RUN ONE AT A TIME. Each of them mints a veth pair, a nested network
@@ -186,6 +198,8 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 %dir %{_prefix}/lib/reac-pw
 %{_prefix}/lib/reac-pw/reac-pw-nm-unmanaged
 %{_unitdir}/reac-pw-nm-unmanaged.service
+%{_unitdir}/reac-pw-phc2sys@.service
+%{_prefix}/lib/reac-pw/reac-pw-phc2sys-check
 %{_presetdir}/90-reac-pw-nm-unmanaged.preset
 # Generated at run time by reac-pw-nm-unmanaged; owned here so removing the package
 # removes it.
@@ -216,9 +230,6 @@ meson test -C _build --no-suite load --suite netns --num-processes 1
 # This package enables the unit for NOBODY, ever, from a scriptlet. The operator runs,
 # once, as the console user (README.md, docs/install/services.md):
 #   systemctl --user enable --now reac-pw
-# Clean up any global enablement a <=1.0.18 reac-pw left behind on THIS host already --
-# harmless (a no-op, exit suppressed) if none exists.
-systemctl --global disable --no-warn reac-pw.service >/dev/null 2>&1 || :
 
 %posttrans
 # THE SAFE AUTO-ENABLE (#104). %%post above enables the unit for nobody, because a
@@ -253,6 +264,12 @@ fi
 %systemd_postun_with_restart reac-pw-nm-unmanaged.service
 
 %changelog
+* Sat Nov 21 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.45-1
+- The hardware launch where the NIC can take it, held for the daemon's life; the health line names what launches the frames (FreeREAC/reac-pw#102, FreeREAC/reac-pw#139).
+- reac-pw-phc2sys@.service, the hardware launch's clock (FreeREAC/reac-pw#139).
+- A bridge, veth or tun is not a REAC segment: a physical NIC or a VLAN on one (FreeREAC/reac-pw#101, FreeREAC/reac-pw#140).
+- Packaging: libreac is floored at 1.12.0, the release carrying the hardware launch.
+
 * Tue Nov 17 2026 Pau Aliagas <linuxnow@gmail.com> - 1.0.44-1
 - New reac-pw-devel package (Debian: reac-pw-dev) with the facts headers consumers pin (#108, #110).
 - Packaging declares floors only on libreac: no consumer ceiling (#111).

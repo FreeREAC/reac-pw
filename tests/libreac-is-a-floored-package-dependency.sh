@@ -20,7 +20,7 @@
 # A SWEEP THAT CANNOT SEE PROVES IT CAN: bounded() runs first on a declaration with no ceiling
 # and must call it unbounded, and the pin pattern must match a planted line.
 #
-#   tests/libreac-is-a-bounded-package-dependency.sh [repo-root]
+#   tests/libreac-is-a-floored-package-dependency.sh [repo-root]
 set -uo pipefail
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SELF=$(basename "$0")

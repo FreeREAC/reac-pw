@@ -61,7 +61,7 @@ int main(void)
 		/* What the S-1608 answered the knock with, in the order the knock kept it: its
 		 * commit report (config announce), then its JOIN. */
 #define KC_ANSWER() do { \
-		bn = reac_ctrl_build_config_announce(bf, KC_OUR, KC_BOX, 1, REAC_BOX_S1608_IN); \
+		bn = reac_ctrl_build_as(bf, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, KC_OUR, KC_BOX, 1, NULL, 0); \
 		reac_pacer_rx_ingest(&kc, bf, bn); \
 		bn = reac_ctrl_build_coldconnect(bf, KC_OUR, KC_BOX, 2, REAC_BOX_S1608_IN, NULL, \
 		                                 REAC_SAMPLES_PER_PKT); \
@@ -276,7 +276,7 @@ int main(void)
 		CHK(p3.master.grant_burst_len == 0);
 		CHK(atomic_load(&p3.recognized_box) == NULL);
 
-		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 3, REAC_BOX_S1608_IN);
+		bn = reac_ctrl_build_as(bf, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, OUR, BOX, 3, NULL, 0);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		const struct reac_box_model *rec = atomic_load(&p3.recognized_box);
 		CHK(rec != NULL && rec->in_ch == 16);
@@ -338,7 +338,7 @@ int main(void)
 		CHK(reac_master_has_box(&p3.master) == 0);
 		CHK(atomic_load(&p3.recognized_box) == NULL);
 
-		bn = reac_ctrl_build_config_announce(bf, OUR, BOX, 5, REAC_BOX_S1608_IN);
+		bn = reac_ctrl_build_as(bf, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, OUR, BOX, 5, NULL, 0);
 		reac_pacer_rx_ingest(&p3, bf, bn);
 		CHK(atomic_load(&p3.recognized_box) != NULL);
 		CHK(p3.master.alloc.base == REACPW_S1608_HEADAMP_BASE && p3.master.alloc.width == REAC_BOX_S1608_IN);
@@ -450,7 +450,7 @@ int main(void)
 		/* the matrix S-4000S announce (32 in), then a tail byte no row carries —
 		 * the port table at block[8..19] is untouched, so the DECLARATION still
 		 * reads 32x8 while reac_box_catalogue_match has no byte-exact match. */
-		size_t bn = reac_ctrl_build_config_announce(bf, OUR, BOX2, 7, REAC_BOX_S4000S_3208_IN);
+		size_t bn = reac_ctrl_build_as(bf, reac_box_catalogue_by_width(REAC_BOX_S4000S_3208_IN), REAC_BOX_BLOCK_CONFIG, OUR, BOX2, 7, NULL, 0);
 		CHK(bn > 0);
 		bf[REAC_CTRL_BLOCK_OFF + 26] ^= 0x5a;     /* block[26]: model tail data */
 		reac_ctrl_checksum_apply(bf);             /* keep the frame VALID */
@@ -475,7 +475,7 @@ int main(void)
 		CHK(reac_pace_code(REAC_PKT_RATE_48K) == REAC_PACE_CODE_48K);   /* 48 kHz */
 		CHK(reac_pace_code(REAC_PKT_RATE_96K) == REAC_PACE_CODE_96K);   /* 96 kHz */
 		static const uint8_t OUR[6] = { 0x00, 0x40, 0xab, 0x00, 0x00, 0x01 };
-		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .console_field = reac_pace_code(REAC_PKT_RATE_44K1) };
+		struct reac_console_cfg cfg = { .out_channels = REAC_BOX_S1608_IN, .pace_code = reac_pace_code(REAC_PKT_RATE_44K1) };
 		struct reac_master m;
 		reac_master_init(&m, OUR, &cfg, REAC_PKT_RATE_44K1);
 		CHK(m.announce_blk[REAC_TYPE_WORD_BYTES + REAC_ANNOUNCE_PACE_OFF] == REAC_PACE_CODE_44K1);     /* the byte a box paces by */

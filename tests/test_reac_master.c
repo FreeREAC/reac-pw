@@ -737,8 +737,8 @@ int main(void)
 		const struct reac_mixer_profile *m300 = reac_mixer_profile_by_name("m300");
 		const struct reac_mixer_profile *m5000 = reac_mixer_profile_by_name("m5000");
 		CHK(m200 && m300 && m5000);
-		CHK(m200->console_field == 0 && m300->console_field == 0);
-		CHK(m5000->console_field == 1);
+		CHK(m200->pace_code == 0 && m300->pace_code == 0);
+		CHK(m5000->pace_code == 1);
 
 		int clamped;
 
@@ -785,7 +785,7 @@ int main(void)
 
 		/* the master FSM itself scales purely off fps for both profiles (no 48k
 		 * assumption baked into reac_master_init: cycle_len/chanmap_off/etc are
-		 * fps*K/4000, see reac_master_init). console_field only changes the
+		 * fps*K/4000, see reac_master_init). pace_code only changes the
 		 * stamped identity bytes, not the cadence math. */
 		struct reac_master mm200, mm5000;
 		/* any source MAC does — the cadence math under test is MAC-independent */

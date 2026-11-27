@@ -36,6 +36,18 @@ int reac_cli_parse_int(const char *s, int *out)
 	return 0;
 }
 
+/* The captured catalogue row whose input width is `width`, or NULL when no captured row
+ * has it (no fallback to another box's row: see reac_cli.h). */
+const struct reac_box_model *reac_cli_box_row_for_width(int width)
+{
+	size_t n = 0;
+	const struct reac_box_model *t = reac_box_catalogue(&n);
+	for (size_t i = 0; t && i < n; i++)
+		if (t[i].origin == REAC_BOX_CAPTURED && t[i].in_ch == width)
+			return &t[i];
+	return NULL;
+}
+
 /* Parse "aa:bb:cc:dd:ee:ff" into out[6]; returns 0, or -1 on malformed input
  * (text after the sixth pair included). */
 int reac_cli_parse_mac(const char *s, uint8_t out[6])
@@ -165,6 +177,7 @@ int reac_cli_parse(int argc, char **argv, struct reac_cli *c)
 	uint8_t src_mac[6] = { 0 };
 	int src_mac_set = 0;
 	int box_channels = REAC_SLAVE_BOX_CHANNELS_DEFAULT;  /* slave: our input width */
+	const struct reac_box_model *box_row = reac_cli_box_row_for_width(REAC_SLAVE_BOX_CHANNELS_DEFAULT);  /* its row */
 	const struct reac_box_model *pin_model = NULL;  /* --box: pinned NODE geometry     */
 	const char *pin_label = NULL;                   /* --box: pinned node label        */
 	const char *box_pin_spec = NULL;      /* --box verbatim, for the wire-wins notice
@@ -292,16 +305,19 @@ int reac_cli_parse(int argc, char **argv, struct reac_cli *c)
 				return REAC_CLI_REFUSED;
 			}
 			box_channels = m->in_ch;
+			box_row = m;
 		} else if (!strcmp(argv[i], "--box-channels") && i + 1 < argc) {
 			if (reac_cli_parse_int(argv[++i], &box_channels) != 0)
 				box_channels = 0;   /* not a number: refused below like any odd width */
+			box_row = reac_cli_box_row_for_width(box_channels);
 			if (box_channels < REAC_BRAID_PAIR_CHANNELS || box_channels > REAC_MAX_CHANNELS ||
-			    box_channels % REAC_BRAID_PAIR_CHANNELS) {
+			    box_channels % REAC_BRAID_PAIR_CHANNELS || !box_row) {
 				fprintf(stderr, "reac-pw: --box-channels must be even, "
 				        REACPW_STR(REAC_BRAID_PAIR_CHANNELS) "..%d "
 				        "(e.g. " REACPW_STR(REAC_BOX_S0808_IN) " = S-0808, "
 				        REACPW_STR(REAC_BOX_S1608_IN) " = S-1608, "
-				        REACPW_STR(REAC_BOX_S4000S_3208_IN) " = S-4000S)\n", REAC_MAX_CHANNELS);
+				        REACPW_STR(REAC_BOX_S4000S_3208_IN) " = S-4000S; the width must be one a "
+				        "catalogue row has)\n", REAC_MAX_CHANNELS);
 				return REAC_CLI_REFUSED;
 			}
 		} else if (!strcmp(argv[i], "--box") && i + 1 < argc) {
@@ -391,6 +407,7 @@ int reac_cli_parse(int argc, char **argv, struct reac_cli *c)
 	memcpy(c->src_mac, src_mac, sizeof src_mac);
 	c->src_mac_set = src_mac_set;
 	c->box_channels = box_channels;
+	c->box_row = box_row;
 	c->pin_model = pin_model;
 	c->pin_label = pin_label;
 	c->box_pin_spec = box_pin_spec;

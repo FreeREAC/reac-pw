@@ -150,7 +150,7 @@ int main(void)
 	CHK(reac_ctrl_build_upstream_filler(f, MASTER, SRC, 0x2222, 15, pl, REAC_SAMPLES_PER_PKT) == 0);
 
 	/* 3. experimental JOIN builders: checksum invariant holds */
-	reac_ctrl_build_config_announce(f, MASTER, SRC, 1, REAC_BOX_S1608_IN);
+	reac_ctrl_build_as(f, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, MASTER, SRC, 1, NULL, 0);
 	CHK(reac_ctrl_checksum_verify(f) == 0);
 	reac_ctrl_build_coldconnect(f, MASTER, SRC, 1, REAC_BOX_S1608_IN, NULL, REAC_SAMPLES_PER_PKT);
 	CHK(reac_ctrl_checksum_verify(f) == 0 && REACPW_BE16(f + REAC_CTRL_BLOCK_OFF) == REAC_OP_DT1_CONTAINER);
@@ -251,7 +251,7 @@ int main(void)
 	CHK(ev == REAC_M_RX_BOX_UNICAST);
 	/* a config-announce (cdea 01 03 0010) is the box's SETUP DECLARATION — its
 	 * own event so the master FSM can establish on it (warm relink). */
-	n = reac_ctrl_build_config_announce(f, OUR_MAC, SRC, 9, REAC_BOX_S1608_IN);
+	n = reac_ctrl_build_as(f, reac_box_catalogue_by_width(REAC_BOX_S1608_IN), REAC_BOX_BLOCK_CONFIG, OUR_MAC, SRC, 9, NULL, 0);
 	CHK(reac_ctrl_classify_box_frame(f, n, OUR_MAC, &p, &ev) == 0);
 	CHK(ev == REAC_M_RX_BOX_CONFIG);
 	/* a unicast between OTHER parties is not ours */
@@ -265,7 +265,7 @@ int main(void)
 		{ "s4000s", REAC_BOX_S4000S_3208_IN },
 	};
 	for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
-		n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, cases[i].in_ch);
+		n = reac_ctrl_build_as(f, reac_box_catalogue_by_width(cases[i].in_ch), REAC_BOX_BLOCK_CONFIG, MASTER, SRC, 0x55, NULL, 0);
 		const struct reac_box_model *m = reac_box_catalogue_match(f, n);
 		CHK(m != NULL);
 		CHK(strcmp(m->token, cases[i].tok) == 0);
@@ -275,7 +275,7 @@ int main(void)
 	n = reac_ctrl_build_box_hb(f, MASTER, SRC, 0x55, REAC_BOX_S1608_IN);
 	CHK(reac_box_catalogue_match(f, n) == NULL);
 	/* an unknown 0x84 descriptor (mutate one descriptor byte) -> NULL (falls back) */
-	n = reac_ctrl_build_config_announce(f, MASTER, SRC, 0x55, REAC_BOX_S0808_IN);
+	n = reac_ctrl_build_as(f, reac_box_catalogue_by_width(REAC_BOX_S0808_IN), REAC_BOX_BLOCK_CONFIG, MASTER, SRC, 0x55, NULL, 0);
 	f[REAC_CTRL_BLOCK_OFF + REAC_PORTS_TABLE_OFF] ^= 0xff;   /* corrupt a descriptor byte */
 	CHK(reac_box_catalogue_match(f, n) == NULL);
 

@@ -23,6 +23,11 @@
 #define REAC_PW_MAX_LISTENERS 8
 
 int reac_cli_parse_int(const char *s, int *out);
+/* The captured catalogue row whose input width is `width`, or NULL when no captured row has
+ * it. Unlike reac_box_catalogue_by_width it never answers with the S-1608 for a width it
+ * does not know: a width nothing declares is refused where it is read, not given another
+ * box's declaration. */
+const struct reac_box_model *reac_cli_box_row_for_width(int width);
 int reac_cli_parse_mac(const char *s, uint8_t out[6]);
 int reac_cli_split_list(const char *s, char out[][IFNAMSIZ + 1], int max);
 int reac_cli_parse_headamp(const char *s, struct reac_headamp_setting *out);
@@ -45,6 +50,7 @@ struct reac_cli {
 	uint8_t src_mac[6];                  /* --src-mac */
 	int src_mac_set;
 	int box_channels;                    /* --box-channels / --box-model: a slave's own width */
+	const struct reac_box_model *box_row;     /* the captured row that width or model names */
 	const struct reac_box_model *pin_model;   /* --box MODEL[:LABEL] */
 	const char *pin_label;
 	const char *box_pin_spec;            /* --box verbatim */

@@ -52,6 +52,7 @@ const struct reac_knob g_reac_knobs[] = {
 	{ "REACPW_NO_ENROLL", 1, NULL },
 	{ "REACPW_EST_SCENE", 1, NULL },
 	{ "REAC_IFACES_ALLOW_WIRELESS", 1, NULL },
+	{ "REAC_IFACES_ALLOW_VIRTUAL", 1, NULL },
 	{ "REACPW_GUARD_FLOOR_FRAMES", 1, NULL },
 	{ "REACPW_NO_HEADAMP", 1, NULL },
 	/* WHAT THE PHYSICAL PORT ACTUALLY CARRIES, when sysfs cannot say or when the
@@ -62,6 +63,9 @@ const struct reac_knob g_reac_knobs[] = {
 	 * (REACPW_LINK_MBIT_<port>, the PHYSICAL port's name — a VLAN's budget is its
 	 * parent's), host-wide otherwise. */
 	{ "REACPW_LINK_MBIT", 1, NULL },
+	/* the hardware launch's instrument of record, opt-in (reac-pw#98): every Nth frame asks the NIC
+	 * for its TX stamp. Per segment through the conf layers, read in reac_sink_node.c. */
+	{ "REACPW_LAUNCH_STAMPS", 1, NULL },
 };
 
 const int g_reac_knobs_count = (int)(sizeof g_reac_knobs / sizeof g_reac_knobs[0]);

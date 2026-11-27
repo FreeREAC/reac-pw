@@ -201,13 +201,15 @@ for t in a b d e; do
 done
 has a 'trunkA' || fail "arm a never mentions trunkA: the daemon did not see the interfaces this test made"
 
-# A. NOTHING IS PINNED BY AN ENV KEY, AND THE STALE KEYS ARE NAMED.
+# A. NOTHING IS PINNED BY AN ENV KEY.
 for i in trunkA trunkA.11 trunkA.12; do
 	has a "\[$i\].*role auto \(autodetected\)" \
 		|| fail "arm a: [$i] did not resolve to auto with no conf — a stale REAC_ROLE_<segment> is still deciding this wire: $(arm a | grep -a "\[$i\]" | head -2)"
 done
-has a 'REAC_ROLE_trunkA\.11.*IGNORED' \
-	|| fail "arm a: the stale REAC_ROLE_trunkA.11 was dropped in SILENCE — a key that stopped applying must say so"
+# A KEY THIS DAEMON NO LONGER READS IS NOT READ: REAC_ROLE_trunkA.11 changed nothing above and
+# is not named at start either, like any other key the daemon has no use for.
+has a 'REAC_ROLE.*IGNORED' \
+	&& fail "arm a: a retired REAC_ROLE key is still read, only to be named: $(arm a | grep -a 'REAC_ROLE.*IGNORED' | head -2)"
 # NOT "no `tap` anywhere": the veth PEERS in this namespace hear our own masters and
 # elect tap for themselves, correctly. The claim is about the three interfaces this arm
 # is about, and it is made per interface above.
@@ -226,6 +228,10 @@ has b 'trunkA\.12.*IGNORED by reac-pw\.conf' \
 # proves the opposite — a search that matches its own answer.
 arm b | grep -a 'trunkA\.12' | grep -va 'IGNORED by' | grep -qaE 'listening —|REAC heard|segment up' \
 	&& fail "arm c: an IGNORED segment was still listened on or served: $(arm b | grep -a 'trunkA\.12' | grep -va 'IGNORED by' | head -2)"
+
+# C1. `ignore = yes` IS HONOURED AND SAYS NOTHING EXTRA: no notice about whom it was written for.
+has b 'ignore = yes. on .* is honoured' \
+	&& fail "arm c: the ignore = yes notice is still printed: $(arm b | grep -a 'is honoured' | head -2)"
 
 # C2. A REFUSAL IS BY NAME. `role = nonsense` must be reported and must not stop the daemon.
 has b 'nonsense' \

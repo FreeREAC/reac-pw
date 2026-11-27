@@ -326,21 +326,21 @@ static int test_role_props(void)
 	struct reac_sink_node *n = new_node(8);
 	CHK(n);
 	n->stream = FAKE_STREAM;
-	n->role_state = REAC_ROLE_STATE_APPLIED;
+	n->role_state = REAC_CFG_ROLE_STATE_APPLIED;
 	n->role_refused = REAC_ROLE_REFUSE_NONE;
 	rec_reset();
 	sink_publish_role_props(n);
 	CHK(g_updates == 1);
 	CHK(!strcmp(rec_get(REAC_PROP_ROLE), "0"));      /* REAC_CFG_ROLE_VALUE_MASTER */
-	CHK(!strcmp(rec_get(REAC_PROP_ROLE_STATE), REAC_ROLE_STATE_APPLIED));
+	CHK(!strcmp(rec_get(REAC_PROP_ROLE_STATE), REAC_CFG_ROLE_STATE_APPLIED));
 
 	sink_publish_role_props(n);
 	CHK(g_updates == 1);                              /* unchanged */
 
-	n->role_state = REAC_ROLE_STATE_REESTABLISH_PENDING;
+	n->role_state = REAC_CFG_ROLE_STATE_PENDING;
 	sink_publish_role_props(n);
 	CHK(g_updates == 2);
-	CHK(!strcmp(rec_get(REAC_PROP_ROLE_STATE), REAC_ROLE_STATE_REESTABLISH_PENDING));
+	CHK(!strcmp(rec_get(REAC_PROP_ROLE_STATE), REAC_CFG_ROLE_STATE_PENDING));
 	CHK(!strcmp(rec_get(REAC_PROP_ROLE), "0"));      /* still master: never the request */
 
 	n->role_refused = REAC_ROLE_REFUSE_MALFORMED;    /* a refusal alone is a change */
@@ -350,9 +350,9 @@ static int test_role_props(void)
 
 	/* No door: nothing is said and the shadow stays, so the answer is owed later. */
 	n->stream = NULL;
-	n->role_state = REAC_ROLE_STATE_APPLIED;
+	n->role_state = REAC_CFG_ROLE_STATE_APPLIED;
 	sink_publish_role_props(n);
-	CHK(g_updates == 3 && n->role_state_last == REAC_ROLE_STATE_REESTABLISH_PENDING);
+	CHK(g_updates == 3 && n->role_state_last == REAC_CFG_ROLE_STATE_PENDING);
 	free(n);
 	return 0;
 }
