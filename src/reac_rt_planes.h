@@ -18,10 +18,18 @@
  * or the sink's missing plane-0 chunk (which sizes the cycle), costs the whole cycle.
  * Either way the cycle is counted once, in the node's atomic counter, which the main
  * loop reads and publishes as REACPW_PROP_HEALTH_RT_BAD_BUFFERS. Nothing aborts, logs or
- * allocates: header-only, no syscall, no state of its own. */
+ * allocates: header-only, no syscall, no state of its own.
+ *
+ * The main-loop half of every such counter is here too (reac_rt_counter_publish): the
+ * sink's two counters and the source's one are stamped onto their doors through the one
+ * publisher, so the next RT counter is a call and not a fourth copy of the shape.
+ * tests/reac-code-conformance.py keeps the shape here and nowhere else. */
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <spa/buffer/buffer.h>
+#include <pipewire/properties.h>
 
 /* The node property the counter is published under (a count of cycles, since start). */
 #define REACPW_PROP_HEALTH_RT_BAD_BUFFERS "reac.health.rt-bad-buffers"
@@ -47,6 +55,32 @@ static inline bool reac_rt_plane_ok(const struct spa_buffer *b, int c, uint32_t 
 	if (d->data == NULL || d->chunk == NULL || d->maxsize < bytes)
 		return false;
 	return !valid || d->chunk->size >= bytes;
+}
+
+/* How a node stamps a dict onto its door: the sink's door update, the source's own
+ * property merge. Called with the node the counter belongs to. */
+typedef void (*reac_rt_counter_stamp_fn)(void *node, const struct spa_dict *dict);
+
+/* MAIN LOOP, every tick: one RT-callback counter onto `node`'s door under `key`. Stamped
+ * when it moves (and once at 0 on a fresh door), so a quiet node costs nothing. `last` is
+ * what the door last showed (-1 = nothing yet); it is remembered only once the stamp was
+ * handed over, so a stamp that could not be built is retried next tick. The caller has
+ * already decided the node has a door to stamp. */
+static inline void reac_rt_counter_publish(void *node, reac_rt_counter_stamp_fn stamp,
+					   const _Atomic uint32_t *counter, int64_t *last,
+					   const char *key)
+{
+	uint32_t v = atomic_load_explicit(counter, memory_order_relaxed);
+	if (*last == (int64_t)v)
+		return;
+	char val[16];
+	snprintf(val, sizeof val, "%u", v);
+	struct pw_properties *props = pw_properties_new(key, val, NULL);
+	if (!props)
+		return;
+	stamp(node, &props->dict);
+	pw_properties_free(props);
+	*last = (int64_t)v;
 }
 
 #endif
