@@ -25,6 +25,14 @@
 #     sends RTM_GETQDISC or applies the tap's tag rule. Each arm has a planted copy it
 #     must refuse.
 #
+#  4. ONE PUBLISHER for the RT counters. The main-loop shape that loads a relaxed atomic,
+#     formats it with "%u", builds a one-key pw_properties and stamps it onto a door is
+#     reac_rt_planes.h's reac_rt_counter_publish; the sink's two counters and the source's
+#     one all go through it (the source node had grown a third copy). So: that helper is
+#     defined once, in reac_rt_planes.h; no other src/ file formats a "%u" counter into
+#     its own pw_properties_new; and both node files reach the helper. A planted copy is
+#     refused.
+#
 # Run directly: `python3 tests/reac-code-conformance.py <src-dir> <libreac include dir>`
 # (meson passes the include dir libreac_dep resolved to).
 
@@ -179,6 +187,78 @@ def planted_one_home(cfg_h):
     return None
 
 
+RT_COUNTER_HOME = 'reac_rt_planes.h'
+RT_COUNTER_HELPER = 'reac_rt_counter_publish'
+RT_COUNTER_NODES = ('reac_sink_node.c', 'reac_source_node.c')
+RT_COUNTER_DEF = re.compile(r'\bstatic\s+inline\s+void\s+' + RT_COUNTER_HELPER + r'\s*\(')
+RT_COUNTER_CALL = re.compile(r'\b' + RT_COUNTER_HELPER + r'\s*\(')
+COUNTER_FMT = re.compile(r'\bsnprintf\s*\([^;]*"%u"')
+PROPS_NEW = re.compile(r'\bpw_properties_new\s*\(')
+
+
+def rt_counter_offences(src_dir):
+    """Arm 4. Returns a list of 'file:line: why' strings: a second definition of the
+    publisher, a "%u" counter formatted into a pw_properties_new of its own within the six
+    lines before it (the shape the publisher owns), or a node file that reaches the
+    publisher nowhere."""
+    out = []
+    defs = 0
+    callers = set()
+    for path in sorted(src_dir.glob('*.[ch]')):
+        lines = strip_comments(path.read_text()).splitlines()
+        for i, line in enumerate(lines, 1):
+            if RT_COUNTER_DEF.search(line):
+                defs += 1
+                if path.name != RT_COUNTER_HOME:
+                    out.append(f'{path.name}:{i}: defines {RT_COUNTER_HELPER}; its home is '
+                               f'{RT_COUNTER_HOME}')
+            elif RT_COUNTER_CALL.search(line):
+                callers.add(path.name)
+            if path.name != RT_COUNTER_HOME and PROPS_NEW.search(line) \
+                    and COUNTER_FMT.search('\n'.join(lines[max(0, i - 7):i - 1])):
+                out.append(f'{path.name}:{i}: formats a "%u" counter into its own '
+                           f'pw_properties_new; the one publisher is {RT_COUNTER_HOME}: '
+                           f'{RT_COUNTER_HELPER}()')
+    if defs != 1:
+        out.append(f'{RT_COUNTER_HELPER} is defined {defs} times under {src_dir}; want one, '
+                   f'in {RT_COUNTER_HOME}')
+    for node in RT_COUNTER_NODES:
+        if (src_dir / node).exists() and node not in callers:
+            out.append(f'{node}: publishes no RT counter through {RT_COUNTER_HELPER}()')
+    return out
+
+
+def planted_rt_counter():
+    """The detector must pass a planted tree with the one publisher and its two callers,
+    and refuse each planted copy."""
+    import tempfile
+    helper = 'static inline void reac_rt_counter_publish(void *n) { }\n'
+    caller = 'void p(void) { reac_rt_counter_publish(n); }\n'
+    copy = ('void q(void)\n{\n\tchar val[16];\n\tsnprintf(val, sizeof val, "%u", v);\n'
+            '\tstruct pw_properties *props = pw_properties_new(key, val, NULL);\n}\n')
+    other = ('void r(void)\n{\n\tstruct pw_properties *props = pw_properties_new("a", "b", NULL);\n}\n')
+    cases = {
+        'good': ({RT_COUNTER_HOME: helper, 'reac_sink_node.c': caller,
+                  'reac_source_node.c': caller + other}, 0),
+        'copy': ({RT_COUNTER_HOME: helper, 'reac_sink_node.c': caller,
+                  'reac_source_node.c': caller, 'reac_x.c': copy}, 1),
+        'twice': ({RT_COUNTER_HOME: helper, 'reac_sink_node.c': caller + helper,
+                   'reac_source_node.c': caller}, 1),
+        'uncalled': ({RT_COUNTER_HOME: helper, 'reac_sink_node.c': caller,
+                      'reac_source_node.c': other}, 1),
+    }
+    for name, (files, want) in cases.items():
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for fname, text in files.items():
+                (d / fname).write_text('/* snprintf(val, sizeof val, "%u", v); in prose */\n' + text)
+            got = len(rt_counter_offences(d))
+            if (got > 0) != bool(want):
+                return f'the RT counter publisher arm {"passed" if want else "refused"} its ' \
+                       f'planted {name} tree -- the arm is broken'
+    return None
+
+
 def used_tokens(src_files):
     used = set()
     for path in src_files:
@@ -239,13 +319,19 @@ def main(argv):
     lib_code_h = inc / 'reac' / 'reac_code.h'
     cfg_h = inc / 'reac' / 'reac_cfg.h'
 
-    broken = planted_srcdir() or planted_one_home(cfg_h)
+    broken = planted_srcdir() or planted_one_home(cfg_h) or planted_rt_counter()
     if broken:
         print(broken, file=sys.stderr)
         return 1
     offences = one_home_offences(src_dir, cfg_h)
     if offences:
         print(f'{len(offences)} copy/copies of what libreac declares or does:', file=sys.stderr)
+        for o in offences:
+            print(f'  {o}', file=sys.stderr)
+        return 1
+    offences = rt_counter_offences(src_dir)
+    if offences:
+        print(f'{len(offences)} RT counter publisher offence(s):', file=sys.stderr)
         for o in offences:
             print(f'  {o}', file=sys.stderr)
         return 1
@@ -293,6 +379,7 @@ def main(argv):
         return 1
 
     print(f'OK: one home (no list, literal, tap read or qdisc dump copied); '
+          f'one RT counter publisher ({RT_COUNTER_HOME}, reached by both nodes); '
           f'{len(declared)} codes all emitted at least once; '
           f'{len(hits)} bare refusal line(s) left (floor {FLOOR}){joined_note}.')
     return 0
